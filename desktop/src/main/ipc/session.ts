@@ -5,9 +5,29 @@ import { log as _log } from '../logger'
 import { state, sessionPlane, engineBridge, activeAssistantMessages, DEBUG_MODE } from '../state'
 import { terminalManager } from '../terminal-manager-instance'
 import { getRemoteTabStates } from '../remote/snapshot'
+import { expandSlashCommand } from '../cli-compat/slash-expand'
+import { readSettings, SETTINGS_DEFAULTS } from '../settings-store'
 
 function log(msg: string): void {
   _log('main', msg)
+}
+
+/** Expand slash commands in-place on RunOptions when claudeCompat is enabled. */
+async function applySlashExpansion(options: RunOptions): Promise<void> {
+  let claudeCompat = SETTINGS_DEFAULTS.enableClaudeCompat
+  try {
+    const s = readSettings()
+    claudeCompat = s.enableClaudeCompat ?? claudeCompat
+  } catch { /* use default */ }
+  if (!claudeCompat) return
+
+  const expansion = await expandSlashCommand(options.prompt, options.projectPath)
+  if (expansion.expanded) {
+    options.prompt = expansion.userPrompt
+    options.appendSystemPrompt = options.appendSystemPrompt
+      ? options.appendSystemPrompt + '\n\n' + expansion.systemPrompt
+      : expansion.systemPrompt
+  }
 }
 
 export function registerSessionIpc(): void {
@@ -67,6 +87,7 @@ export function registerSessionIpc(): void {
     }
 
     try {
+      await applySlashExpansion(options)
       await sessionPlane.submitPrompt(tabId, requestId, options)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -87,6 +108,7 @@ export function registerSessionIpc(): void {
 
   ipcMain.handle(IPC.RETRY, async (_event, { tabId, requestId, options }: { tabId: string; requestId: string; options: RunOptions }) => {
     log(`IPC RETRY: tab=${tabId} req=${requestId}`)
+    await applySlashExpansion(options)
     return sessionPlane.retry(tabId, requestId, options)
   })
 
