@@ -42,32 +42,87 @@ done
 if [[ -z "$DEVICE_ID" ]]; then
   echo "==> Detecting connected iPhone..."
 
-  # List physical devices (filter out simulators and this Mac)
-  DEVICE_LINE=$(xcrun xctrace list devices 2>/dev/null \
-    | grep -v "Simulator" \
-    | grep -v "^==" \
-    | grep -v "^$" \
-    | grep -vE "^$(scutil --get ComputerName 2>/dev/null || hostname -s)" \
-    | head -1)
+  # Prefer devicectl (CoreDevice) — it reports availability and provides
+  # the UUID that xcodebuild actually understands on modern Xcode.
+  # Fall back to xctrace only when devicectl is unavailable.
+  DEVICECTL_TMP=$(mktemp /tmp/devicectl.XXXXXX.json)
+  xcrun devicectl list devices --json-output "$DEVICECTL_TMP" >/dev/null 2>&1 || true
 
-  if [[ -z "$DEVICE_LINE" ]]; then
-    echo "✗ No connected iPhone found."
-    echo
-    echo "  Connect an iPhone via USB or ensure Wi-Fi pairing is active."
-    echo "  To list devices: xcrun xctrace list devices"
-    exit 1
+  if [[ -s "$DEVICECTL_TMP" ]]; then
+    # Find the first physical iPhone from devicectl JSON output
+    DEVICE_RESULT=$(python3 -c "
+import json, sys
+data = json.load(open('$DEVICECTL_TMP'))
+devices = data.get('result', {}).get('devices', [])
+for d in devices:
+    hw = d.get('hardwareProperties', {})
+    conn = d.get('connectionProperties', {})
+    props = d.get('deviceProperties', {})
+    # Only physical iPhones
+    if hw.get('reality') != 'physical':
+        continue
+    if hw.get('deviceType', '') != 'iPhone':
+        continue
+    udid = d.get('identifier', '')
+    name = props.get('name', hw.get('marketingName', 'iPhone'))
+    tunnel = conn.get('tunnelState', 'unavailable')
+    available = 'available' if tunnel not in ['unavailable'] else 'unavailable'
+    print(f'{available}|{udid}|{name}')
+    break
+" 2>/dev/null || true)
+    rm -f "$DEVICECTL_TMP"
+
+    if [[ -n "$DEVICE_RESULT" ]]; then
+      DEV_STATE=$(echo "$DEVICE_RESULT" | cut -d'|' -f1)
+      DEVICE_ID=$(echo "$DEVICE_RESULT" | cut -d'|' -f2)
+      DEV_NAME=$(echo "$DEVICE_RESULT" | cut -d'|' -f3)
+      echo "  Found: $DEV_NAME ($DEVICE_ID)"
+
+      if [[ "$DEV_STATE" != "available" ]]; then
+        echo
+        echo "✗ Device is connected but not available (tunnel: unavailable)."
+        echo
+        echo "  Try these steps:"
+        echo "    1. Unlock the phone and keep it unlocked"
+        echo "    2. Unplug USB and plug back in"
+        echo "    3. Tap 'Trust' if prompted on the phone"
+        echo "    4. Open Xcode.app and wait for device preparation"
+        echo "    5. Run: xcrun devicectl list devices | grep iPhone"
+        echo "       Wait until it shows 'available', then retry."
+        exit 1
+      fi
+    fi
+  else
+    rm -f "$DEVICECTL_TMP"
   fi
 
-  # Extract device ID from parenthesized UDID at end of line
-  DEVICE_ID=$(echo "$DEVICE_LINE" | grep -oE '[0-9A-Fa-f-]{20,}' | tail -1)
-
+  # Fallback: xctrace (for older Xcode or when devicectl has no results)
   if [[ -z "$DEVICE_ID" ]]; then
-    echo "✗ Could not parse device ID from: $DEVICE_LINE"
-    exit 1
-  fi
+    DEVICE_LINE=$(xcrun xctrace list devices 2>/dev/null \
+      | grep -v "Simulator" \
+      | grep -v "^==" \
+      | grep -v "^$" \
+      | grep -vE "^$(scutil --get ComputerName 2>/dev/null || hostname -s)" \
+      | head -1)
 
-  DEVICE_NAME=$(echo "$DEVICE_LINE" | sed 's/ (.*//') 
-  echo "  Found: $DEVICE_NAME ($DEVICE_ID)"
+    if [[ -z "$DEVICE_LINE" ]]; then
+      echo "✗ No connected iPhone found."
+      echo
+      echo "  Connect an iPhone via USB or ensure Wi-Fi pairing is active."
+      echo "  To list devices: xcrun devicectl list devices"
+      exit 1
+    fi
+
+    DEVICE_ID=$(echo "$DEVICE_LINE" | grep -oE '[0-9A-Fa-f-]{20,}' | tail -1)
+
+    if [[ -z "$DEVICE_ID" ]]; then
+      echo "✗ Could not parse device ID from: $DEVICE_LINE"
+      exit 1
+    fi
+
+    DEVICE_NAME=$(echo "$DEVICE_LINE" | sed 's/ (.*//')
+    echo "  Found: $DEVICE_NAME ($DEVICE_ID)"
+  fi
 fi
 
 DESTINATION="id=$DEVICE_ID"
