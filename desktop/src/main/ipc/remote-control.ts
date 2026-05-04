@@ -79,11 +79,12 @@ export function registerRemoteControlIpc(): void {
     }
   })
 
+  relayDiscovery.on('relays-changed', (relays: DiscoveredRelay[]) => {
+    state.mainWindow?.webContents.send(IPC.REMOTE_RELAYS_CHANGED, relays)
+  })
+
   ipcMain.handle(IPC.REMOTE_DISCOVER_RELAYS, () => {
     relayDiscovery.startBrowsing()
-    relayDiscovery.on('relays-changed', (relays: DiscoveredRelay[]) => {
-      state.mainWindow?.webContents.send(IPC.REMOTE_RELAYS_CHANGED, relays)
-    })
     return relayDiscovery.relays
   })
 
