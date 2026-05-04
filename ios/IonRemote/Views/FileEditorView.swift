@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Full-screen file editor with monospace TextEditor, save button, and dirty state tracking.
-/// Pushed onto the NavigationStack from FileExplorerView when a file is tapped.
+/// File viewer/editor pushed onto the NavigationStack from FileExplorerView.
+/// Opens in read-only preview mode by default. Markdown files render richly
+/// using `MarkdownContentView`. Tap "Edit" to switch to the TextEditor.
 struct FileEditorView: View {
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(\.dismiss) private var dismiss
@@ -12,7 +13,7 @@ struct FileEditorView: View {
     @State private var editedContent: String = ""
     @State private var originalContent: String = ""
     @State private var isLoaded = false
-    @State private var isReadOnly = false
+    @State private var isEditing = false
     @State private var showUnsavedAlert = false
     @State private var saveMessage: String?
 
@@ -26,6 +27,11 @@ struct FileEditorView: View {
 
     private var fileError: String? {
         viewModel.fileContent[filePath]?.error
+    }
+
+    private var isMarkdown: Bool {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        return ext == "md" || ext == "markdown" || ext == "mdx"
     }
 
     var body: some View {
@@ -59,7 +65,11 @@ struct FileEditorView: View {
         } else if let error = fileError {
             errorView(error)
         } else if isLoaded {
-            editorView
+            if isEditing {
+                editorView
+            } else {
+                previewView
+            }
         } else {
             Color.clear
         }
@@ -75,23 +85,61 @@ struct FileEditorView: View {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            HStack(spacing: 12) {
+            if isEditing {
+                editingToolbar
+            } else {
                 Button {
-                    isReadOnly.toggle()
+                    isEditing = true
                 } label: {
-                    Image(systemName: isReadOnly ? "lock.fill" : "lock.open")
+                    Label("Edit", systemImage: "pencil")
                         .font(.subheadline)
-                        .foregroundStyle(isReadOnly ? .orange : .secondary)
                 }
+            }
+        }
+    }
 
-                Button {
-                    save()
-                } label: {
-                    Text("Save")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(isDirty ? Color(hex: 0x2EB8A6) : .secondary)
+    private var editingToolbar: some View {
+        HStack(spacing: 12) {
+            Button {
+                if isDirty {
+                    showUnsavedAlert = true
+                } else {
+                    isEditing = false
                 }
-                .disabled(!isDirty)
+            } label: {
+                Image(systemName: "eye")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                save()
+            } label: {
+                Text("Save")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(isDirty ? Color(hex: 0x2EB8A6) : .secondary)
+            }
+            .disabled(!isDirty)
+        }
+    }
+
+    // MARK: - Preview View
+
+    private var previewView: some View {
+        ScrollView {
+            if isMarkdown {
+                MarkdownContentView(blocks: MarkdownFormatter.parse(editedContent))
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(editedContent)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
             }
         }
     }
@@ -100,13 +148,12 @@ struct FileEditorView: View {
 
     private var editorView: some View {
         ZStack(alignment: .topTrailing) {
-            TextEditor(text: isReadOnly ? .constant(editedContent) : $editedContent)
+            TextEditor(text: $editedContent)
                 .font(.system(.body, design: .monospaced))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .scrollContentBackground(.hidden)
                 .background(Color(.systemBackground))
-                .disabled(isReadOnly)
 
             if let msg = saveMessage {
                 saveMessageBadge(msg)
