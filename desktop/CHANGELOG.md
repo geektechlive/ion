@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.9.3](https://github.com/dsswift/ion/compare/desktop-v1.9.2...desktop-v1.9.3) (2026-05-04)
+
+### Bug Fixes
+
+* **desktop:** add vite/client types for css imports ([4a7e444](https://github.com/dsswift/ion/commit/4a7e444d89c0a46ea18e183eeb8a7620ba5985a6))
+
 ## [1.9.2](https://github.com/dsswift/ion/compare/desktop-v1.9.1...desktop-v1.9.2) (2026-05-04)
 
 ## [1.9.1](https://github.com/dsswift/ion/compare/desktop-v1.9.0...desktop-v1.9.1) (2026-05-03)
