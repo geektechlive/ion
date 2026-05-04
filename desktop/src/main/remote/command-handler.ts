@@ -46,6 +46,11 @@ import {
   handleGitUnstage,
   handleGitCommit,
 } from './handlers/git'
+import {
+  handleFsListDir,
+  handleFsReadFile,
+  handleFsWriteFile,
+} from './handlers/files'
 import type { RemoteCommand } from './protocol'
 
 function log(msg: string): void {
@@ -93,6 +98,9 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'git_stage': await handleGitStage(cmd); break
     case 'git_unstage': await handleGitUnstage(cmd); break
     case 'git_commit': await handleGitCommit(cmd); break
+    case 'fs_list_dir': await handleFsListDir(cmd); break
+    case 'fs_read_file': await handleFsReadFile(cmd); break
+    case 'fs_write_file': await handleFsWriteFile(cmd); break
     case 'unpair': handleUnpair(deviceId); break
   }
 }
