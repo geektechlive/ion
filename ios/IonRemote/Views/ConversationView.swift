@@ -9,6 +9,7 @@ struct ConversationView: View {
     @State private var scrollTask: Task<Void, Never>?
     @State private var scrollProxy: ScrollViewProxy?
     @State private var showGitPane = false
+    @State private var showFileExplorer = false
 
     private var tab: RemoteTabState? {
         viewModel.tab(for: tabId)
@@ -135,6 +136,13 @@ struct ConversationView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 12) {
                     Button {
+                        showFileExplorer = true
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.subheadline)
+                    }
+
+                    Button {
                         showGitPane = true
                     } label: {
                         Image(systemName: "arrow.triangle.branch")
@@ -197,6 +205,10 @@ struct ConversationView: View {
         .animation(.default, value: pendingPermission?.id)
         .fullScreenCover(isPresented: $showGitPane) {
             GitPaneView(tabId: tabId)
+                .environment(viewModel)
+        }
+        .fullScreenCover(isPresented: $showFileExplorer) {
+            FileExplorerView(tabId: tabId)
                 .environment(viewModel)
         }
     }

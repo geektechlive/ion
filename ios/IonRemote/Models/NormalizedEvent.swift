@@ -67,6 +67,10 @@ enum RemoteEvent: Codable, Sendable {
     case gitChangesResponse(directory: String, response: GitChangesResponse)
     case gitGraphResponse(directory: String, response: GitGraphResponse)
     case gitDiffResponse(response: GitDiffResponse)
+    // File explorer events
+    case fsDirListing(directory: String, response: FsDirListingResponse)
+    case fsFileContent(filePath: String, response: FsFileContentResponse)
+    case fsWriteResult(filePath: String, response: FsWriteResultResponse)
 
     // MARK: - Codable keys
 
@@ -119,6 +123,9 @@ enum RemoteEvent: Codable, Sendable {
         case gitChangesResponse = "git_changes_response"
         case gitGraphResponse = "git_graph_response"
         case gitDiffResponse = "git_diff_response"
+        case fsDirListing = "fs_dir_listing"
+        case fsFileContent = "fs_file_content"
+        case fsWriteResult = "fs_write_result"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -136,6 +143,7 @@ enum RemoteEvent: Codable, Sendable {
         case tabGroupMode, tabGroups
         case directory, files, branch, isGitRepo, ahead, behind
         case commits, totalCount, diff, fileName
+        case entries, filePath, ok, error
     }
 
     // MARK: - Decoder
@@ -168,6 +176,10 @@ enum RemoteEvent: Codable, Sendable {
             self = event
             return
         }
+        if let event = try Self.decodeFiles(type: type, container: container) {
+            self = event
+            return
+        }
         // Should be unreachable: every TypeKey must be handled by exactly one family.
         throw DecodingError.dataCorruptedError(
             forKey: .type,
@@ -187,6 +199,7 @@ enum RemoteEvent: Codable, Sendable {
         if try encodeTerminal(into: &container) { return }
         if try encodeEngine(into: &container) { return }
         if try encodeGit(into: &container) { return }
+        if try encodeFiles(into: &container) { return }
         // Unreachable: every case must be encoded by exactly one family.
     }
 }

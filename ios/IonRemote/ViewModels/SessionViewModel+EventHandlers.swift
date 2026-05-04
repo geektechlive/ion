@@ -249,6 +249,18 @@ extension SessionViewModel {
         case .gitDiffResponse(let response):
             gitDiffResult = response
             gitDiffLoading = false
+
+        // File explorer events
+        case .fsDirListing(let directory, let response):
+            fileListings[directory] = response
+            fileListingLoading.remove(directory)
+
+        case .fsFileContent(let filePath, let response):
+            fileContent[filePath] = response
+            fileContentLoading.remove(filePath)
+
+        case .fsWriteResult(_, let response):
+            fileWriteResult = response
         }
     }
 

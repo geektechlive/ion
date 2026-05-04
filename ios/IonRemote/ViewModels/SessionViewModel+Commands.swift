@@ -290,6 +290,22 @@ extension SessionViewModel {
         send(.gitCommit(directory: directory, message: message))
     }
 
+    // MARK: - File Explorer Commands
+
+    func requestFsListDir(directory: String) {
+        fileListingLoading.insert(directory)
+        send(.fsListDir(directory: directory))
+    }
+
+    func requestFsReadFile(filePath: String) {
+        fileContentLoading.insert(filePath)
+        send(.fsReadFile(filePath: filePath))
+    }
+
+    func requestFsWriteFile(filePath: String, content: String) {
+        send(.fsWriteFile(filePath: filePath, content: content))
+    }
+
     // MARK: - Send
 
     func send(_ command: RemoteCommand) {
