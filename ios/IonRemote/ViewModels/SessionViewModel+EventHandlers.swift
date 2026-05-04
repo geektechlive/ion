@@ -50,7 +50,9 @@ extension SessionViewModel {
 
     @MainActor
     func handleEvent(_ event: RemoteEvent) {
-        print("[Ion] handleEvent: \(event)")
+        if case .heartbeat = event { /* skip noisy log */ } else {
+            print("[Ion] handleEvent: \(event)")
+        }
         switch event {
         case .unpair:
             handleUnpair()
@@ -62,6 +64,10 @@ extension SessionViewModel {
             if connectionState == .connected {
                 connectionState = .reconnecting
             }
+
+        case .heartbeat(let senderTs, let buffered):
+            connectionQuality.transportState = transport?.state ?? .disconnected
+            connectionQuality.recordHeartbeat(senderTs: senderTs, buffered: buffered)
 
         case .peerDisconnected:
             // Tear down and let the auto-retry in IonRemoteApp reconnect.
@@ -294,6 +300,7 @@ extension SessionViewModel {
         if connectionState != .connected {
             connectionState = .connected
         }
+        connectionQuality.transportState = transport?.state ?? .disconnected
         if !recentDirs.isEmpty {
             recentDirectories = recentDirs
         }

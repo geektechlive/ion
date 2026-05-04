@@ -202,6 +202,10 @@ final class SessionViewModel {
     var relayURL: String = ""
     var relayAPIKey: String = ""
 
+    // MARK: - Connection Quality
+
+    let connectionQuality = ConnectionQuality()
+
     // MARK: - Transport
 
     var transportState: TransportState { transport?.state ?? .disconnected }

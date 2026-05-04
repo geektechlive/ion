@@ -54,6 +54,16 @@ extension SessionViewModel {
     /// Connect directly to an Ion LAN server (no relay).
     /// Uses TransportManager with LAN auth handshake.
     func connectLAN(host: String, port: UInt16) {
+        // Tear down any existing transport before creating a new one.
+        if transport != nil {
+            eventTask?.cancel()
+            eventTask = nil
+            flushTask?.cancel()
+            flushTask = nil
+            transport?.stop()
+            transport = nil
+        }
+
         guard let device = pairedDevices.first else { return }
 
         let sharedKey = SymmetricKey(data: device.sharedSecret)
@@ -133,6 +143,8 @@ extension SessionViewModel {
         activeTools = [:]
         tabGroupMode = "auto"
         tabGroups = []
+        connectionQuality.reset()
+        connectionQuality.transportState = .disconnected
     }
 
     // MARK: - Device Management

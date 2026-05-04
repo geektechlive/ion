@@ -35,6 +35,8 @@ enum RemoteEvent: Codable, Sendable {
     /// Synthesized by TransportManager during the disconnect grace period
     /// (transports dropped but may recover within 4s).
     case transportReconnecting
+    /// Heartbeat from the desktop with sender timestamp and queue depth.
+    case heartbeat(senderTs: Double, buffered: Int)
     /// Desktop is prefilling input text (after rewind or fork).
     case inputPrefill(tabId: String, text: String, switchTo: Bool)
     // Terminal events
@@ -144,6 +146,7 @@ enum RemoteEvent: Codable, Sendable {
         case directory, files, branch, isGitRepo, ahead, behind
         case commits, totalCount, diff, fileName
         case entries, filePath, ok, error
+        case ts, buffered
     }
 
     // MARK: - Decoder

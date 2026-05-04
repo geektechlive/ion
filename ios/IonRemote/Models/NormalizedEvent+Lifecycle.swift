@@ -45,8 +45,9 @@ extension RemoteEvent {
             return .transportReconnecting
 
         case .heartbeat:
-            // Silently absorbed; should not normally reach the decoder.
-            return .error(tabId: "", message: "")
+            let senderTs = try container.decodeIfPresent(Double.self, forKey: .ts) ?? 0
+            let buffered = try container.decodeIfPresent(Int.self, forKey: .buffered) ?? 0
+            return .heartbeat(senderTs: senderTs, buffered: buffered)
 
         case .error:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -109,6 +110,12 @@ extension RemoteEvent {
 
         case .transportReconnecting:
             try container.encode(TypeKey.transportReconnecting, forKey: .type)
+            return true
+
+        case .heartbeat(let senderTs, let buffered):
+            try container.encode(TypeKey.heartbeat, forKey: .type)
+            try container.encode(senderTs, forKey: .ts)
+            try container.encode(buffered, forKey: .buffered)
             return true
 
         default:
