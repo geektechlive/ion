@@ -265,6 +265,7 @@ export class LANServer extends EventEmitter {
       try { ws.close() } catch { /* ignore */ }
     }
     this.clients.clear()
+    this.failedAuth.clear()
 
     if (this.wss) {
       this.wss.close()
