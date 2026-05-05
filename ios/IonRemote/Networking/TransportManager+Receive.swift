@@ -13,11 +13,9 @@ extension TransportManager {
         guard let relay else { return }
         relayListenTask?.cancel()
         relayListenTask = Task { [weak self] in
-            guard let self else { return }
+            guard let relay = self?.relay else { return }
             for await data in relay.messages {
-                guard !Task.isCancelled else { break }
-                // In lanPreferred mode, still check for relay control frames
-                // but skip data messages.
+                guard !Task.isCancelled, let self else { break }
                 self.handleIncomingData(data, isRelay: true)
             }
         }
@@ -55,17 +53,17 @@ extension TransportManager {
     func startLANListener() {
         lanListenTask?.cancel()
         lanListenTask = Task { [weak self] in
-            guard let self else { return }
-            for await data in self.lan.messages {
-                guard !Task.isCancelled else { break }
+            guard let lan = self?.lan else { return }
+            for await data in lan.messages {
+                guard !Task.isCancelled, let self else { break }
                 self.handleIncomingData(data, isRelay: false)
             }
             // LAN stream ended -- the WebSocket closed.
             // Emit peerDisconnected if we have no relay fallback.
-            if self.relay == nil || !(self.relay?.isConnected ?? false) {
+            if let self, self.relay == nil || !(self.relay?.isConnected ?? false) {
                 self.eventContinuation.yield(.peerDisconnected)
             }
-            self.updateState()
+            self?.updateState()
         }
     }
 
@@ -147,9 +145,13 @@ extension TransportManager {
             return
         }
 
-        // Check for heartbeat: track but don't surface to the app
+        // Check for heartbeat: extract ts/buffered and surface to the app
+        // for connection quality tracking.
         if let json = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
            let type = json["type"] as? String, type == "heartbeat" {
+            let senderTs = json["ts"] as? Double ?? 0
+            let buffered = json["buffered"] as? Int ?? 0
+            eventContinuation.yield(.heartbeat(senderTs: senderTs, buffered: buffered))
             return
         }
 

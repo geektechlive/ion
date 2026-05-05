@@ -40,6 +40,9 @@ enum RemoteCommand: Codable, Sendable {
     case gitStage(directory: String, paths: [String])
     case gitUnstage(directory: String, paths: [String])
     case gitCommit(directory: String, message: String)
+    case fsListDir(directory: String)
+    case fsReadFile(filePath: String)
+    case fsWriteFile(filePath: String, content: String)
 
     // MARK: - Codable
 
@@ -81,6 +84,9 @@ enum RemoteCommand: Codable, Sendable {
         case gitStage = "git_stage"
         case gitUnstage = "git_unstage"
         case gitCommit = "git_commit"
+        case fsListDir = "fs_list_dir"
+        case fsReadFile = "fs_read_file"
+        case fsWriteFile = "fs_write_file"
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -88,7 +94,7 @@ enum RemoteCommand: Codable, Sendable {
         case workingDirectory, tabId, text, questionId, optionId, mode, before, origin
         case instanceId, data, cols, rows, customTitle, label, messageId
         case dialogId, value, profileId, model, groupId
-        case directory, path, staged, paths, skip, limit, message
+        case directory, path, staged, paths, skip, limit, message, filePath, content
     }
 
     init(from decoder: Decoder) throws {
@@ -279,6 +285,19 @@ enum RemoteCommand: Codable, Sendable {
             let directory = try container.decode(String.self, forKey: .directory)
             let message = try container.decode(String.self, forKey: .message)
             self = .gitCommit(directory: directory, message: message)
+
+        case .fsListDir:
+            let directory = try container.decode(String.self, forKey: .directory)
+            self = .fsListDir(directory: directory)
+
+        case .fsReadFile:
+            let filePath = try container.decode(String.self, forKey: .filePath)
+            self = .fsReadFile(filePath: filePath)
+
+        case .fsWriteFile:
+            let filePath = try container.decode(String.self, forKey: .filePath)
+            let content = try container.decode(String.self, forKey: .content)
+            self = .fsWriteFile(filePath: filePath, content: content)
         }
     }
 
@@ -469,6 +488,19 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(TypeKey.gitCommit, forKey: .type)
             try container.encode(directory, forKey: .directory)
             try container.encode(message, forKey: .message)
+
+        case .fsListDir(let directory):
+            try container.encode(TypeKey.fsListDir, forKey: .type)
+            try container.encode(directory, forKey: .directory)
+
+        case .fsReadFile(let filePath):
+            try container.encode(TypeKey.fsReadFile, forKey: .type)
+            try container.encode(filePath, forKey: .filePath)
+
+        case .fsWriteFile(let filePath, let content):
+            try container.encode(TypeKey.fsWriteFile, forKey: .type)
+            try container.encode(filePath, forKey: .filePath)
+            try container.encode(content, forKey: .content)
         }
     }
 }

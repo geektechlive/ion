@@ -104,6 +104,9 @@ export type RemoteCommand =
   | { type: 'git_stage'; directory: string; paths: string[] }
   | { type: 'git_unstage'; directory: string; paths: string[] }
   | { type: 'git_commit'; directory: string; message: string }
+  | { type: 'fs_list_dir'; directory: string }
+  | { type: 'fs_read_file'; filePath: string }
+  | { type: 'fs_write_file'; filePath: string; content: string }
 
 // ─── Ion → iOS events ───
 
@@ -154,6 +157,9 @@ export type RemoteEvent =
   | { type: 'git_changes_response'; directory: string; files: Array<{ path: string; status: string; staged: boolean; oldPath?: string }>; branch: string; isGitRepo: boolean; ahead: number; behind: number }
   | { type: 'git_graph_response'; directory: string; commits: Array<{ hash: string; fullHash: string; parents: string[]; authorName: string; authorDate: string; subject: string; refs: Array<{ name: string; type: string; isCurrent: boolean }> }>; isGitRepo: boolean; totalCount: number }
   | { type: 'git_diff_response'; diff: string; fileName: string }
+  | { type: 'fs_dir_listing'; directory: string; entries: Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedMs: number }>; error?: string }
+  | { type: 'fs_file_content'; filePath: string; content: string | null; error?: string }
+  | { type: 'fs_write_result'; filePath: string; ok: boolean; error?: string }
 
 // ─── Relay control frames (injected by relay, not by Ion) ───
 

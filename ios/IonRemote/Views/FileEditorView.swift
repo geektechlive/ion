@@ -1,0 +1,220 @@
+import SwiftUI
+
+/// File viewer/editor pushed onto the NavigationStack from FileExplorerView.
+/// Opens in read-only preview mode by default. Markdown files render richly
+/// using `MarkdownContentView`. Tap "Edit" to switch to the TextEditor.
+struct FileEditorView: View {
+    @Environment(SessionViewModel.self) private var viewModel
+    @Environment(\.dismiss) private var dismiss
+
+    let filePath: String
+    let fileName: String
+
+    @State private var editedContent: String = ""
+    @State private var originalContent: String = ""
+    @State private var isLoaded = false
+    @State private var isEditing = false
+    @State private var showUnsavedAlert = false
+    @State private var saveMessage: String?
+
+    private var isDirty: Bool {
+        isLoaded && editedContent != originalContent
+    }
+
+    private var isLoading: Bool {
+        viewModel.fileContentLoading.contains(filePath)
+    }
+
+    private var fileError: String? {
+        viewModel.fileContent[filePath]?.error
+    }
+
+    private var isMarkdown: Bool {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        return ext == "md" || ext == "markdown" || ext == "mdx"
+    }
+
+    var body: some View {
+        contentView
+            .navigationTitle(fileName)
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(isDirty)
+            .toolbar { toolbarContent }
+            .task { viewModel.requestFsReadFile(filePath: filePath) }
+            .onChange(of: viewModel.fileContent[filePath]?.content) { _, newContent in
+                handleContentLoaded(newContent)
+            }
+            .onChange(of: viewModel.fileWriteResult) { _, result in
+                handleWriteResult(result)
+            }
+            .alert("Unsaved Changes", isPresented: $showUnsavedAlert) {
+                Button("Discard", role: .destructive) { dismiss() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You have unsaved changes. Discard them?")
+            }
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var contentView: some View {
+        if isLoading && !isLoaded {
+            ProgressView("Loading file…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = fileError {
+            errorView(error)
+        } else if isLoaded {
+            if isEditing {
+                editorView
+            } else {
+                previewView
+            }
+        } else {
+            Color.clear
+        }
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if isDirty {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Cancel") { showUnsavedAlert = true }
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            if isEditing {
+                editingToolbar
+            } else {
+                Button {
+                    isEditing = true
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                        .font(.subheadline)
+                }
+            }
+        }
+    }
+
+    private var editingToolbar: some View {
+        HStack(spacing: 12) {
+            Button {
+                if isDirty {
+                    showUnsavedAlert = true
+                } else {
+                    isEditing = false
+                }
+            } label: {
+                Image(systemName: "eye")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                save()
+            } label: {
+                Text("Save")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(isDirty ? Color(hex: 0x2EB8A6) : .secondary)
+            }
+            .disabled(!isDirty)
+        }
+    }
+
+    // MARK: - Preview View
+
+    private var previewView: some View {
+        ScrollView {
+            if isMarkdown {
+                MarkdownContentView(blocks: MarkdownFormatter.parse(editedContent))
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(editedContent)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    // MARK: - Editor View
+
+    private var editorView: some View {
+        ZStack(alignment: .topTrailing) {
+            TextEditor(text: $editedContent)
+                .font(.system(.body, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .scrollContentBackground(.hidden)
+                .background(Color(.systemBackground))
+
+            if let msg = saveMessage {
+                saveMessageBadge(msg)
+            }
+        }
+    }
+
+    private func saveMessageBadge(_ msg: String) -> some View {
+        Text(msg)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(msg == "Saved" ? Color.green.opacity(0.15) : Color.red.opacity(0.15))
+            .foregroundStyle(msg == "Saved" ? .green : .red)
+            .clipShape(Capsule())
+            .padding(8)
+    }
+
+    // MARK: - Error View
+
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+
+    // MARK: - Actions
+
+    private func save() {
+        guard isDirty else { return }
+        saveMessage = nil
+        viewModel.requestFsWriteFile(filePath: filePath, content: editedContent)
+    }
+
+    private func handleContentLoaded(_ newContent: String?) {
+        if let content = newContent, !isLoaded {
+            originalContent = content
+            editedContent = content
+            isLoaded = true
+        }
+    }
+
+    private func handleWriteResult(_ result: FsWriteResultResponse?) {
+        guard let result, result.filePath == filePath else { return }
+        if result.ok {
+            originalContent = editedContent
+            saveMessage = "Saved"
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(2))
+                if saveMessage == "Saved" { saveMessage = nil }
+            }
+        } else {
+            saveMessage = result.error ?? "Save failed"
+        }
+    }
+}

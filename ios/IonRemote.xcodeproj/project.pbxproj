@@ -68,6 +68,13 @@
 		A1B2C3D4E5F60001000307AA /* GitChangesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000306AA /* GitChangesListView.swift */; };
 		A1B2C3D4E5F60001000309AA /* GitGraphListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000308AA /* GitGraphListView.swift */; };
 		A1B2C3D4E5F60001000311AA /* GitDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000310AA /* GitDiffView.swift */; };
+		A1B2C3D4E5F60001000401AA /* FileTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000400AA /* FileTypes.swift */; };
+		A1B2C3D4E5F60001000403AA /* NormalizedEvent+Files.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000402AA /* NormalizedEvent+Files.swift */; };
+		A1B2C3D4E5F60001000405AA /* FileExplorerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000404AA /* FileExplorerView.swift */; };
+		A1B2C3D4E5F60001000407AA /* FileExplorerRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000406AA /* FileExplorerRowView.swift */; };
+		A1B2C3D4E5F60001000409AA /* FileEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000408AA /* FileEditorView.swift */; };
+		A1B2C3D4E5F60001000501AA /* ConnectionQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000500AA /* ConnectionQuality.swift */; };
+		A1B2C3D4E5F60001000503AA /* ConnectionQualityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000502AA /* ConnectionQualityView.swift */; };
 		A1B2C3D4E5F60001000240AA /* NormalizedEventStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000241AA /* NormalizedEventStreamTests.swift */; };
 		A1B2C3D4E5F60001000242AA /* NormalizedEventPermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000243AA /* NormalizedEventPermissionTests.swift */; };
 		A1B2C3D4E5F60001000244AA /* NormalizedEventLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */; };
@@ -149,6 +156,13 @@
 		A1B2C3D4E5F60001000306AA /* GitChangesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitChangesListView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000308AA /* GitGraphListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitGraphListView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000310AA /* GitDiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitDiffView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000400AA /* FileTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypes.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000402AA /* NormalizedEvent+Files.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NormalizedEvent+Files.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000404AA /* FileExplorerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileExplorerView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000406AA /* FileExplorerRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileExplorerRowView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000408AA /* FileEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileEditorView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000500AA /* ConnectionQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionQuality.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000502AA /* ConnectionQualityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionQualityView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000241AA /* NormalizedEventStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventStreamTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000243AA /* NormalizedEventPermissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventPermissionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventLifecycleTests.swift; sourceTree = "<group>"; };
@@ -219,6 +233,7 @@
 				A1B2C3D4E5F60001000237AA /* NormalizedEvent+Terminal.swift */,
 				A1B2C3D4E5F60001000239AA /* NormalizedEvent+Engine.swift */,
 				A1B2C3D4E5F60001000302AA /* NormalizedEvent+Git.swift */,
+				A1B2C3D4E5F60001000402AA /* NormalizedEvent+Files.swift */,
 				A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */,
 				A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */,
 				A1B2C3D4E5F6000100000AAA /* PairedDevice.swift */,
@@ -226,6 +241,8 @@
 				A1B2C3D4E5F60001000093AA /* MessageAttachment.swift */,
 				A1B2C3D4E5F600010000F1AA /* EngineProfile.swift */,
 				A1B2C3D4E5F60001000300AA /* GitTypes.swift */,
+				A1B2C3D4E5F60001000400AA /* FileTypes.swift */,
+				A1B2C3D4E5F60001000500AA /* ConnectionQuality.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -278,6 +295,10 @@
 				A1B2C3D4E5F60001000306AA /* GitChangesListView.swift */,
 				A1B2C3D4E5F60001000308AA /* GitGraphListView.swift */,
 				A1B2C3D4E5F60001000310AA /* GitDiffView.swift */,
+				A1B2C3D4E5F60001000404AA /* FileExplorerView.swift */,
+				A1B2C3D4E5F60001000406AA /* FileExplorerRowView.swift */,
+				A1B2C3D4E5F60001000408AA /* FileEditorView.swift */,
+				A1B2C3D4E5F60001000502AA /* ConnectionQualityView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -475,6 +496,11 @@
 				A1B2C3D4E5F60001000307AA /* GitChangesListView.swift in Sources */,
 				A1B2C3D4E5F60001000309AA /* GitGraphListView.swift in Sources */,
 				A1B2C3D4E5F60001000311AA /* GitDiffView.swift in Sources */,
+				A1B2C3D4E5F60001000401AA /* FileTypes.swift in Sources */,
+				A1B2C3D4E5F60001000403AA /* NormalizedEvent+Files.swift in Sources */,
+				A1B2C3D4E5F60001000405AA /* FileExplorerView.swift in Sources */,
+				A1B2C3D4E5F60001000407AA /* FileExplorerRowView.swift in Sources */,
+				A1B2C3D4E5F60001000409AA /* FileEditorView.swift in Sources */,
 				A1B2C3D4E5F600010000A0AA /* TerminalOutputRouter.swift in Sources */,
 				A1B2C3D4E5F600010000A2AA /* SwiftTermWrapper.swift in Sources */,
 				A1B2C3D4E5F600010000A4AA /* RemoteTerminalView.swift in Sources */,
@@ -489,6 +515,8 @@
 				A1B2C3D4E5F600010000F6AA /* MarkdownFormatter.swift in Sources */,
 				A1B2C3D4E5F600010000F8AA /* PlanFullScreenView.swift in Sources */,
 				A1B2C3D4E5F600010000FAAA /* MarkdownContentView.swift in Sources */,
+				A1B2C3D4E5F60001000501AA /* ConnectionQuality.swift in Sources */,
+				A1B2C3D4E5F60001000503AA /* ConnectionQualityView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

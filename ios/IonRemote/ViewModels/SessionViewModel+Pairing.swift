@@ -111,6 +111,7 @@ extension SessionViewModel {
                 )
 
                 ws.cancel(with: .normalClosure, reason: nil)
+                session.invalidateAndCancel()
 
                 await MainActor.run {
                     self.pairedDevices = [device]
@@ -175,6 +176,7 @@ extension SessionViewModel {
                   let peerPublicKeyData = Data(base64Encoded: peerPublicKeyB64) else {
                 // Desktop rejected recovery (pair_error response) -- not a known device.
                 ws.cancel(with: .normalClosure, reason: nil)
+                session.invalidateAndCancel()
                 return false
             }
 
@@ -200,6 +202,7 @@ extension SessionViewModel {
             )
 
             ws.cancel(with: .normalClosure, reason: nil)
+            session.invalidateAndCancel()
 
             await MainActor.run {
                 self.pairedDevices = [device]

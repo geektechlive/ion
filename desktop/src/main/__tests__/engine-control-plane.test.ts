@@ -158,6 +158,25 @@ describe('EngineControlPlane', () => {
       expect(errors[0].err.message).toBe('connection refused')
       expect(mockBridge.sendPrompt).not.toHaveBeenCalled()
     })
+
+    it('passes appendSystemPrompt through to sendPrompt', async () => {
+      const tabId = cp.createTab()
+      await cp.submitPrompt(
+        tabId,
+        'req-1',
+        makeRunOptions({
+          prompt: '/spec-issue expanded args',
+          appendSystemPrompt: 'Analyze the GitHub issue and create a spec.',
+        }),
+      )
+
+      expect(mockBridge.sendPrompt).toHaveBeenCalledWith(
+        tabId,
+        '/spec-issue expanded args',
+        undefined,
+        'Analyze the GitHub issue and create a spec.',
+      )
+    })
   })
 
   describe('engine event handling', () => {

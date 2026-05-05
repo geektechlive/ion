@@ -167,6 +167,13 @@ final class SessionViewModel {
     var gitDiffResult: GitDiffResponse? = nil
     var gitDiffLoading = false
 
+    // File explorer state (per directory/path)
+    var fileListings: [String: FsDirListingResponse] = [:]   // directory -> listing
+    var fileContent: [String: FsFileContentResponse] = [:]    // filePath -> content
+    var fileWriteResult: FsWriteResultResponse? = nil
+    var fileListingLoading: Set<String> = []
+    var fileContentLoading: Set<String> = []
+
     /// Tab group mode synced from the desktop: "off", "auto", or "manual".
     var tabGroupMode: String = "auto"
     /// Manual tab group definitions from the desktop (only meaningful when tabGroupMode == "manual").
@@ -194,6 +201,10 @@ final class SessionViewModel {
 
     var relayURL: String = ""
     var relayAPIKey: String = ""
+
+    // MARK: - Connection Quality
+
+    let connectionQuality = ConnectionQuality()
 
     // MARK: - Transport
 
