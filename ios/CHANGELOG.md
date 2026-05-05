@@ -10,6 +10,12 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.8.0](https://github.com/dsswift/ion/compare/ios-v1.7.0...ios-v1.8.0) (2026-05-05)
+
+### Features
+
+* **ios:** add show hidden files toggle to file explorer ([07bcae5](https://github.com/dsswift/ion/commit/07bcae52ae633e061a5d76303bb0e58e6f856042))
+
 ## [1.7.0](https://github.com/dsswift/ion/compare/ios-v1.6.0...ios-v1.7.0) (2026-05-05)
 
 ### Features

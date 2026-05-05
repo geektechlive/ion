@@ -10,6 +10,17 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.11.0](https://github.com/dsswift/ion/compare/desktop-v1.10.0...desktop-v1.11.0) (2026-05-05)
+
+### Features
+
+* **ios:** add show hidden files toggle to file explorer ([07bcae5](https://github.com/dsswift/ion/commit/07bcae52ae633e061a5d76303bb0e58e6f856042))
+* **desktop:** auto-switch plan to auto for slash commands ([a84b2b5](https://github.com/dsswift/ion/commit/a84b2b5869b681bfd8df167e7e167dfb7264537c))
+
+### Bug Fixes
+
+* **desktop:** kill orphaned dns-sd and disable safeStorage ([d506eae](https://github.com/dsswift/ion/commit/d506eaef5bb1f69826215ce5a327fdf0eb84108c))
+
 ## [1.10.0](https://github.com/dsswift/ion/compare/desktop-v1.9.3...desktop-v1.10.0) (2026-05-05)
 
 ### Features
