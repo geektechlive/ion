@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useSessionStore } from '../stores/sessionStore'
+import { usePreferencesStore } from '../preferences'
 import { IPC, type NormalizedEvent } from '../../shared/types'
 
 /**
@@ -104,13 +105,27 @@ export function useEngineEvents() {
     }
     window.ion.on(IPC.REMOTE_BASH_COMMAND, remoteBashCommandHandler)
 
-    // Remote permission mode change (from iOS toggle) — update store without calling back to main
+    // Remote permission mode change (from iOS toggle or slash-command expansion) —
+    // update store without calling back to main, then re-evaluate auto group placement
     const remoteSetModeHandler = (_e: any, data: { tabId: string; mode: 'auto' | 'plan' }) => {
       useSessionStore.setState((s) => ({
         tabs: s.tabs.map((t) =>
           t.id === data.tabId ? { ...t, permissionMode: data.mode } : t
         ),
       }))
+
+      // Re-evaluate auto group movement after the mode change
+      const { autoGroupMovement, tabGroupMode, planningGroupId, inProgressGroupId } = usePreferencesStore.getState()
+      if (autoGroupMovement && tabGroupMode === 'manual') {
+        const tab = useSessionStore.getState().tabs.find((t) => t.id === data.tabId)
+        if (tab) {
+          if (data.mode === 'plan' && planningGroupId && tab.groupId !== planningGroupId) {
+            useSessionStore.getState().moveTabToGroup(data.tabId, planningGroupId)
+          } else if (data.mode === 'auto' && inProgressGroupId && tab.groupId !== inProgressGroupId) {
+            useSessionStore.getState().moveTabToGroup(data.tabId, inProgressGroupId)
+          }
+        }
+      }
     }
     window.ion.on(IPC.REMOTE_SET_PERMISSION_MODE, remoteSetModeHandler)
 
