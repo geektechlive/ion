@@ -338,7 +338,15 @@ extension SessionViewModel {
                !existing.permissionQueue.isEmpty {
                 // Keep existing local queue entries that aren't in the snapshot
                 let snapshotIds = Set(merged[i].permissionQueue.map(\.questionId))
-                let localOnly = existing.permissionQueue.filter { !snapshotIds.contains($0.questionId) }
+                let isRunning = merged[i].status == .running
+                let localOnly = existing.permissionQueue.filter { entry in
+                    if snapshotIds.contains(entry.questionId) { return false }
+                    // Don't re-inject stale plan/question cards once a new task is running
+                    if isRunning && (entry.toolName == "ExitPlanMode" || entry.toolName == "AskUserQuestion") {
+                        return false
+                    }
+                    return true
+                }
                 merged[i].permissionQueue.append(contentsOf: localOnly)
                 // Prefer local entry when it has richer data (e.g. planContent from live event)
                 for local in existing.permissionQueue where snapshotIds.contains(local.questionId) {
@@ -419,6 +427,13 @@ extension SessionViewModel {
     private func handleTabStatus(tabId: String, status: TabStatus) {
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].status = status
+            if status == .running {
+                // A new task started — any previous ExitPlanMode/AskUserQuestion
+                // entries are stale (plan was implemented or user moved on).
+                tabs[idx].permissionQueue.removeAll {
+                    $0.toolName == "ExitPlanMode" || $0.toolName == "AskUserQuestion"
+                }
+            }
             if status == .idle || status == .completed || status == .failed || status == .dead {
                 // Capture preview from liveText before clearing — if tabStatus
                 // arrives before taskComplete, this preserves the lastMessage.
