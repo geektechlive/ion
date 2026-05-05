@@ -329,19 +329,20 @@ struct MessageBubble: View {
                     }
                     .foregroundStyle(.secondary)
                 }
-                Text(message.content)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(hex: 0x4ECDC4).opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        message.content.hasPrefix("! ")
-                            ? RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color(hex: 0xF472B6, opacity: 0.5), lineWidth: 2)
-                            : nil
-                    )
+                MarkdownContentView(
+                    blocks: MarkdownBlockCache.shared.blocks(for: message.content)
+                )
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(hex: 0x4ECDC4).opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    message.content.hasPrefix("! ")
+                        ? RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(hex: 0xF472B6, opacity: 0.5), lineWidth: 2)
+                        : nil
+                )
             }
             .padding(.trailing, 12)
             .padding(.vertical, 2)
