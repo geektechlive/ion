@@ -3,14 +3,12 @@ import { app, safeStorage } from 'electron'
 const ENC_PREFIX = 'enc:v1:'
 
 // isSafeStorageReady reports whether Electron's safeStorage backend is
-// available. Returns false on Linux without a keyring or before app.isReady().
+// available. Always returns false: ad-hoc code signing means every rebuild
+// invalidates the macOS Keychain grant, triggering a blocking password dialog
+// that freezes the app (and locks out remote sessions). We rely on filesystem
+// permissions (0o600) on the settings file instead.
 export function isSafeStorageReady(): boolean {
-  if (!app.isReady()) return false
-  try {
-    return safeStorage.isEncryptionAvailable()
-  } catch {
-    return false
-  }
+  return false
 }
 
 // encryptForDisk returns ciphertext with the enc:v1: prefix when safeStorage
@@ -30,7 +28,12 @@ export function encryptForDisk(plaintext: string): string {
 // next write.
 export function decryptFromDisk(value: string): string {
   if (!value || !value.startsWith(ENC_PREFIX)) return value
-  if (!isSafeStorageReady()) return value
+  if (!isSafeStorageReady()) {
+    console.warn(
+      '[secretStore] found encrypted value but safeStorage disabled; value cleared — re-enter in settings',
+    )
+    return ''
+  }
   try {
     const buf = Buffer.from(value.slice(ENC_PREFIX.length), 'base64')
     return safeStorage.decryptString(buf)

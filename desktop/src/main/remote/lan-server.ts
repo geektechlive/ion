@@ -9,7 +9,7 @@
 
 import { EventEmitter } from 'events'
 import { createServer, type Server } from 'http'
-import { spawn, type ChildProcess } from 'child_process'
+import { execSync, spawn, type ChildProcess } from 'child_process'
 import { hostname } from 'os'
 import WebSocket, { WebSocketServer } from 'ws'
 import { log as _log } from '../logger'
@@ -347,6 +347,13 @@ export class LANServer extends EventEmitter {
   private _advertiseBonjour(): void {
     // Use macOS dns-sd to register through the system's mDNSResponder.
     // This is the only reliable way to be visible to Apple's NWBrowser.
+    //
+    // Kill any orphaned dns-sd processes from prior app instances first.
+    // When the app is force-killed or crashes, _unadvertiseBonjour never
+    // runs and the old dns-sd child lives on. Hundreds of stale registrations
+    // confuse mDNSResponder and make the service undiscoverable on iOS.
+    this._killOrphanedDnssd()
+
     const name = hostname().replace(/\.local$/, '')
     log(`Bonjour: spawning dns-sd -R ${name} _ion._tcp local ${this.port}`)
     try {
@@ -375,6 +382,35 @@ export class LANServer extends EventEmitter {
       log(`Bonjour: advertising ${name}._ion._tcp on port ${this.port} (pid=${this.dnssdProc.pid})`)
     } catch (err) {
       log(`Bonjour unavailable: ${(err as Error).message}`)
+    }
+  }
+
+  /**
+   * Kill orphaned dns-sd processes from previous app instances.
+   * Spares the process we own (this.dnssdProc) if one exists.
+   */
+  private _killOrphanedDnssd(): void {
+    try {
+      const myPid = this.dnssdProc?.pid
+      const raw = execSync(
+        'pgrep -f "dns-sd -R .* _ion._tcp"',
+        { encoding: 'utf8', timeout: 3000 },
+      ).trim()
+      if (!raw) return
+      const pids = raw.split('\n').map(Number).filter(Boolean)
+      let killed = 0
+      for (const pid of pids) {
+        if (pid === myPid) continue
+        try {
+          process.kill(pid, 'SIGTERM')
+          killed++
+        } catch { /* already dead */ }
+      }
+      if (killed > 0) {
+        log(`Bonjour: killed ${killed} orphaned dns-sd process(es)`)
+      }
+    } catch {
+      // pgrep returns exit code 1 when no matches — expected on fresh start.
     }
   }
 
