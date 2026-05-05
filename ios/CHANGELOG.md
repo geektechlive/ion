@@ -10,6 +10,23 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.7.0](https://github.com/dsswift/ion/compare/ios-v1.6.0...ios-v1.7.0) (2026-05-05)
+
+### Features
+
+* **ios:** add file explorer ui and file editing ([877844c](https://github.com/dsswift/ion/commit/877844ce779add00c755a1ea91e42f67220a5439))
+* **ios:** add connection quality monitoring ([e958259](https://github.com/dsswift/ion/commit/e9582593213cf11982ebbd6d91dcf2b7f24b2da5))
+* **ios:** enhance file editor with improved ui ([9ccdaef](https://github.com/dsswift/ion/commit/9ccdaef2aad664db4b612bec81590f5e07cf0577))
+* **ios:** update tab list view ([28bd571](https://github.com/dsswift/ion/commit/28bd57128db6403a7200c04b7c7f1b2bfcd245bf))
+* **ios:** improve app lifecycle handling ([7f19091](https://github.com/dsswift/ion/commit/7f190911dd6a9d3712065a793c99d5e4ba697183))
+
+### Bug Fixes
+
+* **ios:** clean accidental transcription from comment ([264c249](https://github.com/dsswift/ion/commit/264c24987ee375fb2cbc31a1501334b1b1c95633))
+* **ios:** use devicectl for device detection and availability ([6d7bcf3](https://github.com/dsswift/ion/commit/6d7bcf312561c9e321a5a480300d5708977e3a6d))
+* **ios:** fallback to ios-deploy when tunnel unavailable ([4a04c5e](https://github.com/dsswift/ion/commit/4a04c5ef3fa057926e8e58548a4df55927603782))
+* **ios:** clear stale plan card when new task starts ([c80f1a4](https://github.com/dsswift/ion/commit/c80f1a486e082e2ec1120d1d33a044727ac6f947))
+
 ## [1.6.0](https://github.com/dsswift/ion/compare/ios-v1.5.0...ios-v1.6.0) (2026-05-03)
 
 ### Features

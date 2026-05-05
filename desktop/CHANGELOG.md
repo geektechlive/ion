@@ -10,6 +10,20 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.10.0](https://github.com/dsswift/ion/compare/desktop-v1.9.3...desktop-v1.10.0) (2026-05-05)
+
+### Features
+
+* **desktop:** add slash command expansion support ([37b7f4c](https://github.com/dsswift/ion/commit/37b7f4c912dbbd2f9bc553f8e089880df69a3cc4))
+* **desktop:** add file system operation handlers ([abcd40a](https://github.com/dsswift/ion/commit/abcd40a57bccd0e983a7b41e46e3a41fec11add3))
+
+### Bug Fixes
+
+* **desktop:** stop terminal flushing when remote disabled ([96f882a](https://github.com/dsswift/ion/commit/96f882aa8aa9e167bf210f0f95b6b24da409f585))
+* **desktop:** clear failed auth on lan server stop ([393ec5d](https://github.com/dsswift/ion/commit/393ec5de1788fa5b8a86ba8f58a64cd6761ad9b6))
+* **desktop:** clean up duplicate device map entries ([eb4ba73](https://github.com/dsswift/ion/commit/eb4ba7338f798d3851c7f323fc0ee694484dc85c))
+* **desktop:** move relay event listener setup earlier ([fa01612](https://github.com/dsswift/ion/commit/fa01612ec7058235a38795ed4b09ce3a9be24c4d))
+
 ## [1.9.3](https://github.com/dsswift/ion/compare/desktop-v1.9.2...desktop-v1.9.3) (2026-05-04)
 
 ### Bug Fixes
