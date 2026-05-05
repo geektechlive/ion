@@ -217,7 +217,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 	log.Printf("channel=%s role=%s disconnected", channelID, role)
 	h.removeIfEmpty(channelID)
 	close(done)
-	conn.Close()
+	_ = conn.Close()
 }
 
 func (ch *Channel) getPeerLocked(myRole string) *SafeConn {
