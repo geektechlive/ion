@@ -74,8 +74,8 @@ final class TransportManager {
 
     // MARK: - Init (Relay + LAN)
 
-    init(relayURL: URL, apiKey: String, channelId: String, sharedKey: SymmetricKey) {
-        self.relay = RelayClient(relayURL: relayURL, apiKey: apiKey, channelId: channelId)
+    init(relayURL: URL, apiKey: String, channelId: String, sharedKey: SymmetricKey, apnsToken: String? = nil) {
+        self.relay = RelayClient(relayURL: relayURL, apiKey: apiKey, channelId: channelId, apnsToken: apnsToken)
         self.lan = LANClient()
         self.bonjour = BonjourBrowser()
         self.sharedKey = sharedKey

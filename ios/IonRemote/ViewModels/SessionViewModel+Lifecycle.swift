@@ -40,7 +40,8 @@ extension SessionViewModel {
             relayURL: url,
             apiKey: effectiveAPIKey,
             channelId: channelId,
-            sharedKey: sharedKey
+            sharedKey: sharedKey,
+            apnsToken: apnsToken
         )
         self.transport = tm
         connectionState = .connecting
