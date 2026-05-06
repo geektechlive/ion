@@ -113,7 +113,9 @@ func sendControl(conn *SafeConn, msgType string) {
 
 // relayMessage wraps a forwarded payload to check for push flags.
 type relayMessage struct {
-	Push bool `json:"push,omitempty"`
+	Push      bool   `json:"push,omitempty"`
+	PushTitle string `json:"pushTitle,omitempty"`
+	PushBody  string `json:"pushBody,omitempty"`
 }
 
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID, role string, pusher *APNsPusher) {
@@ -190,7 +192,15 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 			// Peer not connected. Check if this message requests a push notification.
 			var msg relayMessage
 			if json.Unmarshal(data, &msg) == nil && msg.Push {
-				pusher.Send(apnsToken, "Ion needs your attention", "Permission approval required")
+				title := msg.PushTitle
+				body := msg.PushBody
+				if title == "" {
+					title = "Ion needs your attention"
+				}
+				if body == "" {
+					body = "Approval required"
+				}
+				pusher.Send(apnsToken, title, body)
 			}
 		}
 	}
