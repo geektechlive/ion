@@ -126,6 +126,10 @@ export interface IonAPI {
   on(channel: string, callback: (...args: any[]) => void): void
   off(channel: string, callback: (...args: any[]) => void): void
 
+  // ─── Auto-update ───
+  installUpdate(): void
+  onUpdateDownloaded(callback: (info: { version: string }) => void): () => void
+
   // ─── Window management ───
   resizeHeight(height: number): void
   setWindowWidth(width: number): void
@@ -289,6 +293,15 @@ const api: IonAPI = {
   remoteStopDiscovery: () => ipcRenderer.send(IPC.REMOTE_STOP_DISCOVERY),
   remoteTestRelay: (url, key) => ipcRenderer.invoke(IPC.REMOTE_TEST_RELAY, url, key),
   remoteSetLanDisabled: (disabled) => ipcRenderer.invoke(IPC.REMOTE_SET_LAN_DISABLED, disabled),
+
+  // ─── Auto-update ───
+  installUpdate: () => ipcRenderer.send(IPC.INSTALL_UPDATE),
+  onUpdateDownloaded: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, info: { version: string }) => callback(info)
+    ipcRenderer.on(IPC.UPDATE_DOWNLOADED, handler)
+    return () => ipcRenderer.removeListener(IPC.UPDATE_DOWNLOADED, handler)
+  },
+
   on: (channel, callback) => {
     const handler = (_e: Electron.IpcRendererEvent, ...args: any[]) => callback(_e, ...args)
     ipcRenderer.on(channel, handler)

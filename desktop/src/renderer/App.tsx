@@ -15,6 +15,7 @@ import { FileEditor } from './components/FileEditor'
 import { QuickToolsTray } from './components/QuickToolsTray'
 import { PopoverLayerProvider } from './components/PopoverLayer'
 import { CloseTabConfirmDialog } from './components/CloseTabConfirmDialog'
+import { UpdateBanner } from './components/UpdateBanner'
 import { useEngineEvents } from './hooks/useEngineEvents'
 import { useHealthReconciliation } from './hooks/useHealthReconciliation'
 import { useThemeSync } from './hooks/useThemeSync'
@@ -365,6 +366,9 @@ export default function App() {
         {isTerminalBigScreen && (
           <TerminalBigScreen tabId={activeTabId} />
         )}
+
+        {/* Auto-update notification */}
+        <UpdateBanner />
       </div>
     </PopoverLayerProvider>
   )
