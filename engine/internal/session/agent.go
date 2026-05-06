@@ -25,22 +25,22 @@ func (m *Manager) AbortAgent(key, agentName string, subtree bool) {
 		m.mu.RUnlock()
 		return
 	}
+	m.mu.RUnlock()
 
 	var pidsToKill []int
 
 	if subtree {
-		// Collect all agents whose parentAgent chain includes agentName
-		for name, handle := range s.agentRegistry {
-			if name == agentName || isDescendant(s.agentRegistry, name, agentName) {
+		all := s.agents.AllHandles()
+		for name, handle := range all {
+			if name == agentName || s.agents.IsDescendant(name, agentName) {
 				pidsToKill = append(pidsToKill, handle.PID)
 			}
 		}
 	} else {
-		if handle, exists := s.agentRegistry[agentName]; exists {
+		if handle, exists := s.agents.LookupHandle(agentName); exists {
 			pidsToKill = append(pidsToKill, handle.PID)
 		}
 	}
-	m.mu.RUnlock()
 
 	for _, pid := range pidsToKill {
 		killProcess(pid)
@@ -82,10 +82,9 @@ func (m *Manager) SteerAgent(key, agentName, message string) {
 		}
 		return
 	}
-
-	handle, exists := s.agentRegistry[agentName]
 	m.mu.RUnlock()
 
+	handle, exists := s.agents.LookupHandle(agentName)
 	if !exists {
 		return
 	}
@@ -100,23 +99,15 @@ func (m *Manager) SteerAgent(key, agentName, message string) {
 // retries resolution on the same call. Returns (spec, true) on success, or
 // (zero, false) when no match is registered after the hook runs.
 func (m *Manager) resolveAgentSpec(s *engineSession, key, name string) (types.AgentSpec, bool) {
-	m.mu.RLock()
-	if spec, ok := s.agentSpecs[name]; ok {
-		m.mu.RUnlock()
+	if spec, ok := s.agents.LookupSpec(name); ok {
 		return spec, true
 	}
-	m.mu.RUnlock()
 
 	if s.extGroup == nil {
 		return types.AgentSpec{}, false
 	}
 
-	known := make([]string, 0, len(s.agentSpecs))
-	m.mu.RLock()
-	for n := range s.agentSpecs {
-		known = append(known, n)
-	}
-	m.mu.RUnlock()
+	known := s.agents.AllSpecNames()
 
 	extCtx := m.newExtContext(s, key)
 	for _, h := range s.extGroup.Hosts() {
@@ -127,8 +118,5 @@ func (m *Manager) resolveAgentSpec(s *engineSession, key, name string) (types.Ag
 	}
 
 	// Retry — handler may have called ctx.RegisterAgentSpec.
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	spec, ok := s.agentSpecs[name]
-	return spec, ok
+	return s.agents.LookupSpec(name)
 }

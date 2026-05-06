@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/extension"
+	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -13,23 +14,13 @@ import (
 func (m *Manager) SendDialogResponse(key, dialogID string, value interface{}) {
 	m.mu.RLock()
 	s, ok := m.sessions[key]
+	m.mu.RUnlock()
 	if !ok {
-		m.mu.RUnlock()
 		utils.Log("Session", fmt.Sprintf("dialog response for unknown session %s", key))
 		return
 	}
-
-	ch, exists := s.pendingDialogs[dialogID]
-	m.mu.RUnlock()
-
-	if !exists {
+	if !s.pending.ResolveDialog(dialogID, value) {
 		utils.Log("Session", fmt.Sprintf("no pending dialog %s for session %s", dialogID, key))
-		return
-	}
-	// Non-blocking send -- if nobody is waiting, drop silently.
-	select {
-	case ch <- value:
-	default:
 	}
 }
 
@@ -47,15 +38,8 @@ func (m *Manager) elicit(s *engineSession, key string, info extension.Elicitatio
 		info.RequestID = requestID
 	}
 
-	ch := make(chan elicitReply, 1)
-	m.mu.Lock()
-	s.pendingElicit[requestID] = ch
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		delete(s.pendingElicit, requestID)
-		m.mu.Unlock()
-	}()
+	ch := s.pending.RegisterElicit(requestID)
+	defer s.pending.UnregisterElicit(requestID)
 
 	// Fan out to clients.
 	m.emit(key, types.EngineEvent{
@@ -67,7 +51,7 @@ func (m *Manager) elicit(s *engineSession, key string, info extension.Elicitatio
 	})
 
 	// Fire the extension hook in parallel — extensions can also reply.
-	hookCh := make(chan elicitReply, 1)
+	hookCh := make(chan pending.ElicitReply, 1)
 	go func() {
 		extCtx := m.newExtContext(s, key)
 		if s.extGroup == nil {
@@ -78,7 +62,7 @@ func (m *Manager) elicit(s *engineSession, key string, info extension.Elicitatio
 			resp, err := h.SDK().FireElicitationRequest(extCtx, info)
 			if err == nil && resp != nil {
 				select {
-				case hookCh <- elicitReply{response: resp}:
+				case hookCh <- pending.ElicitReply{Response: resp}:
 				default:
 				}
 				return
@@ -94,13 +78,13 @@ func (m *Manager) elicit(s *engineSession, key string, info extension.Elicitatio
 		if s.extGroup != nil {
 			s.extGroup.FireElicitationResult(m.newExtContext(s, key), extension.ElicitationResultInfo{
 				RequestID: requestID,
-				Response:  reply.response,
-				Cancelled: reply.cancelled,
+				Response:  reply.Response,
+				Cancelled: reply.Cancelled,
 			})
 		}
-		return reply.response, reply.cancelled, nil
+		return reply.Response, reply.Cancelled, nil
 	case reply := <-hookCh:
-		return reply.response, false, nil
+		return reply.Response, false, nil
 	case <-time.After(timeout):
 		return nil, true, fmt.Errorf("elicitation %s timed out", requestID)
 	}
@@ -111,19 +95,12 @@ func (m *Manager) elicit(s *engineSession, key string, info extension.Elicitatio
 func (m *Manager) HandleElicitationResponse(key, requestID string, response map[string]interface{}, cancelled bool) {
 	m.mu.RLock()
 	s, ok := m.sessions[key]
+	m.mu.RUnlock()
 	if !ok {
-		m.mu.RUnlock()
 		utils.Log("Session", fmt.Sprintf("elicitation_response for unknown session %s", key))
 		return
 	}
-	ch, exists := s.pendingElicit[requestID]
-	m.mu.RUnlock()
-	if !exists {
+	if !s.pending.ResolveElicit(requestID, pending.ElicitReply{Response: response, Cancelled: cancelled}) {
 		utils.Log("Session", fmt.Sprintf("no pending elicitation %s for session %s", requestID, key))
-		return
-	}
-	select {
-	case ch <- elicitReply{response: response, cancelled: cancelled}:
-	default:
 	}
 }

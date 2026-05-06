@@ -6,6 +6,8 @@ import (
 	"github.com/dsswift/ion/engine/internal/mcp"
 	"github.com/dsswift/ion/engine/internal/permissions"
 	"github.com/dsswift/ion/engine/internal/recorder"
+	"github.com/dsswift/ion/engine/internal/session/agents"
+	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/telemetry"
 	"github.com/dsswift/ion/engine/internal/types"
 )
@@ -26,11 +28,8 @@ type engineSession struct {
 	config        types.EngineConfig
 	requestID     string // empty when no active run
 	conversationID string
-	agentRegistry      map[string]types.AgentHandle
-	agentSpecs         map[string]types.AgentSpec
-	agentStates        []types.AgentStateUpdate
-	lastExtAgentStates []types.AgentStateUpdate
-	extensionName      string // friendly name broadcast by the extension
+	agents         *agents.Registry
+	extensionName  string // friendly name broadcast by the extension
 	suppressedTools    []string
 	childPIDs     map[int]struct{}
 	planMode           bool
@@ -41,16 +40,14 @@ type engineSession struct {
 	maxQueueDepth int // default 32
 
 	// Wired subsystems (populated in StartSession)
-	extGroup       *extension.ExtensionGroup
-	mcpConns       []*mcp.Connection
-	permEngine     *permissions.Engine
-	telemetry      *telemetry.Collector
-	recorder       *recorder.Recorder
-	toolServer     *backend.ToolServer
-	procRegistry   *extension.ProcessRegistry
-	pendingDialogs     map[string]chan interface{}
-	pendingPermissions map[string]chan string
-	pendingElicit      map[string]chan elicitReply
+	extGroup     *extension.ExtensionGroup
+	mcpConns     []*mcp.Connection
+	permEngine   *permissions.Engine
+	telemetry    *telemetry.Collector
+	recorder     *recorder.Recorder
+	toolServer   *backend.ToolServer
+	procRegistry *extension.ProcessRegistry
+	pending      *pending.Broker
 
 	// Last-known context usage state, carried forward across status
 	// emissions so the footer always reflects the most recent data.
@@ -64,8 +61,4 @@ type engineSession struct {
 	cliTurnActive  bool // true between turn_start and turn_end
 }
 
-// elicitReply carries a client's response to an engine_elicitation_request event.
-type elicitReply struct {
-	response  map[string]interface{}
-	cancelled bool
-}
+
