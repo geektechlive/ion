@@ -31,11 +31,13 @@ func (m *Manager) TestSetExtGroup(key string, group *extension.ExtensionGroup) {
 // TestRegisterAgentSpec registers an agent spec on the session.
 // Exported for integration tests only.
 func (m *Manager) TestRegisterAgentSpec(key string, spec types.AgentSpec) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if s, ok := m.sessions[key]; ok {
-		s.agentSpecs[spec.Name] = spec
+	m.mu.RLock()
+	s, ok := m.sessions[key]
+	m.mu.RUnlock()
+	if !ok {
+		return
 	}
+	s.agents.RegisterSpec(spec)
 }
 
 // TestWireAgentToolServer calls wireAgentToolServer for the given session.

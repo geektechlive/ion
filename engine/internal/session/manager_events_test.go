@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dsswift/ion/engine/internal/session/agents"
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -731,74 +732,68 @@ func TestTranslateToEngineEvent_UsageNilTokens(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// isDescendant tests
+// isDescendant tests (via agents.Registry)
 // ---------------------------------------------------------------------------
 
 func TestIsDescendant_DirectChild(t *testing.T) {
-	reg := map[string]types.AgentHandle{
-		"parent": {PID: 1},
-		"child":  {PID: 2, ParentAgent: "parent"},
-	}
-	if !isDescendant(reg, "child", "parent") {
+	r := agents.NewRegistry()
+	r.RegisterHandle("parent", types.AgentHandle{PID: 1})
+	r.RegisterHandle("child", types.AgentHandle{PID: 2, ParentAgent: "parent"})
+	if !r.IsDescendant("child", "parent") {
 		t.Error("child should be descendant of parent")
 	}
 }
 
 func TestIsDescendant_GrandChild(t *testing.T) {
-	reg := map[string]types.AgentHandle{
-		"root":       {PID: 1},
-		"child":      {PID: 2, ParentAgent: "root"},
-		"grandchild": {PID: 3, ParentAgent: "child"},
-	}
-	if !isDescendant(reg, "grandchild", "root") {
+	r := agents.NewRegistry()
+	r.RegisterHandle("root", types.AgentHandle{PID: 1})
+	r.RegisterHandle("child", types.AgentHandle{PID: 2, ParentAgent: "root"})
+	r.RegisterHandle("grandchild", types.AgentHandle{PID: 3, ParentAgent: "child"})
+	if !r.IsDescendant("grandchild", "root") {
 		t.Error("grandchild should be descendant of root")
 	}
 }
 
 func TestIsDescendant_NotRelated(t *testing.T) {
-	reg := map[string]types.AgentHandle{
-		"a": {PID: 1},
-		"b": {PID: 2},
-	}
-	if isDescendant(reg, "b", "a") {
+	r := agents.NewRegistry()
+	r.RegisterHandle("a", types.AgentHandle{PID: 1})
+	r.RegisterHandle("b", types.AgentHandle{PID: 2})
+	if r.IsDescendant("b", "a") {
 		t.Error("b should not be descendant of a")
 	}
 }
 
 func TestIsDescendant_CycleProtection(t *testing.T) {
-	reg := map[string]types.AgentHandle{
-		"a": {PID: 1, ParentAgent: "b"},
-		"b": {PID: 2, ParentAgent: "a"},
-	}
+	r := agents.NewRegistry()
+	r.RegisterHandle("a", types.AgentHandle{PID: 1, ParentAgent: "b"})
+	r.RegisterHandle("b", types.AgentHandle{PID: 2, ParentAgent: "a"})
 	// Should not loop forever
-	result := isDescendant(reg, "a", "c")
+	result := r.IsDescendant("a", "c")
 	if result {
 		t.Error("should not be descendant when ancestor not in cycle")
 	}
 }
 
 func TestIsDescendant_SelfNotDescendant(t *testing.T) {
-	reg := map[string]types.AgentHandle{
-		"a": {PID: 1},
-	}
-	if isDescendant(reg, "a", "a") {
+	r := agents.NewRegistry()
+	r.RegisterHandle("a", types.AgentHandle{PID: 1})
+	if r.IsDescendant("a", "a") {
 		t.Error("a should not be descendant of itself")
 	}
 }
 
 func TestIsDescendant_DeepChain(t *testing.T) {
-	reg := map[string]types.AgentHandle{
-		"n0": {PID: 1},
-		"n1": {PID: 2, ParentAgent: "n0"},
-		"n2": {PID: 3, ParentAgent: "n1"},
-		"n3": {PID: 4, ParentAgent: "n2"},
-		"n4": {PID: 5, ParentAgent: "n3"},
-		"n5": {PID: 6, ParentAgent: "n4"},
-	}
-	if !isDescendant(reg, "n5", "n0") {
+	r := agents.NewRegistry()
+	r.RegisterHandle("n0", types.AgentHandle{PID: 1})
+	r.RegisterHandle("n1", types.AgentHandle{PID: 2, ParentAgent: "n0"})
+	r.RegisterHandle("n2", types.AgentHandle{PID: 3, ParentAgent: "n1"})
+	r.RegisterHandle("n3", types.AgentHandle{PID: 4, ParentAgent: "n2"})
+	r.RegisterHandle("n4", types.AgentHandle{PID: 5, ParentAgent: "n3"})
+	r.RegisterHandle("n5", types.AgentHandle{PID: 6, ParentAgent: "n4"})
+	if !r.IsDescendant("n5", "n0") {
 		t.Error("n5 should be descendant of n0")
 	}
-	if isDescendant(reg, "n0", "n5") {
+	if r.IsDescendant("n0", "n5") {
 		t.Error("n0 should not be descendant of n5")
 	}
 }
