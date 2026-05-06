@@ -136,7 +136,7 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 	m.mu.Lock()
 	if s, ok := m.sessions[key]; ok {
 		s.requestID = ""
-		s.agentStates = nil
+		s.agents.ClearStates()
 		if sessionID != "" {
 			s.conversationID = sessionID
 		}

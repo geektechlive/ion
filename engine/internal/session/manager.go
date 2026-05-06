@@ -217,17 +217,17 @@ func (m *Manager) StopSession(key string) error {
 	}
 	if extGroup != nil && !extGroup.IsEmpty() {
 		ctx := m.newExtContext(s, key)
-		extGroup.FireSessionEnd(ctx)
+		_ = extGroup.FireSessionEnd(ctx)
 		extGroup.Close()
 	}
 	for _, conn := range mcpConns {
-		conn.Close()
+		_ = conn.Close()
 	}
 	if telemCollector != nil {
-		telemCollector.Flush()
+		_ = telemCollector.Flush()
 	}
 	if sessionRecorder != nil {
-		sessionRecorder.Close()
+		_ = sessionRecorder.Close()
 	}
 
 	m.emit(key, types.EngineEvent{Type: "engine_dead"})

@@ -13,7 +13,7 @@ import (
 
 // wireAgentSpawner installs the AgentSpawner closure on runCfg. The spawner
 // runs a child backend synchronously, observes parent context cancellation,
-// and updates s.agentStates with progress so the harness can render an agent
+// and updates s.agents with progress so the harness can render an agent
 // pill.
 func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel string, runCfg *backend.RunConfig) {
 	capturedModel := parentModel
@@ -34,7 +34,7 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 				return "", fmt.Errorf("agent %q is not registered (capability_match returned no match)", requestedName)
 			}
 		}
-		m.mu.Lock()
+
 		agentCounter++
 		agentName := fmt.Sprintf("agent-%d", agentCounter)
 		if specMatched {
@@ -57,7 +57,7 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			}
 		}
 
-		s.agentStates = append(s.agentStates, types.AgentStateUpdate{
+		s.agents.AppendState(types.AgentStateUpdate{
 			Name:   agentName,
 			Status: "running",
 			Metadata: map[string]interface{}{
@@ -68,8 +68,7 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 				"task":        prompt,
 			},
 		})
-		snapshot := mergeAgentStates(s.lastExtAgentStates, s.agentStates)
-		m.mu.Unlock()
+		snapshot := s.agents.MergedSnapshot()
 
 		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
 
@@ -119,8 +118,6 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		child.StartRun(childRequestID, runOpts)
 
 		// Wait for child to finish OR parent context to cancel.
-		// Without this select, the goroutine would block on childDone.Wait()
-		// even after the parent run is interrupted.
 		doneCh := make(chan struct{})
 		go func() {
 			childDone.Wait()
@@ -138,34 +135,29 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 
 		elapsed := time.Since(start).Seconds()
 
-		m.mu.Lock()
-		for i := range s.agentStates {
-			if s.agentStates[i].Name == agentName {
-				if s.agentStates[i].Metadata == nil {
-					s.agentStates[i].Metadata = map[string]interface{}{}
-				}
-				if cancelled {
-					s.agentStates[i].Status = "cancelled"
-				} else if childErr != nil {
-					s.agentStates[i].Status = "error"
-					s.agentStates[i].Metadata["lastWork"] = childErr.Error()
-				} else {
-					s.agentStates[i].Status = "done"
-					if len(result) > 100 {
-						s.agentStates[i].Metadata["lastWork"] = result[:100]
-					} else {
-						s.agentStates[i].Metadata["lastWork"] = result
-					}
-				}
-				s.agentStates[i].Metadata["elapsed"] = elapsed
-				if childConvID != "" {
-					s.agentStates[i].Metadata["conversationId"] = childConvID
-				}
-				break
+		s.agents.UpdateState(agentName, func(state *types.AgentStateUpdate) {
+			if state.Metadata == nil {
+				state.Metadata = map[string]interface{}{}
 			}
-		}
-		snapshot2 := mergeAgentStates(s.lastExtAgentStates, s.agentStates)
-		m.mu.Unlock()
+			if cancelled {
+				state.Status = "cancelled"
+			} else if childErr != nil {
+				state.Status = "error"
+				state.Metadata["lastWork"] = childErr.Error()
+			} else {
+				state.Status = "done"
+				if len(result) > 100 {
+					state.Metadata["lastWork"] = result[:100]
+				} else {
+					state.Metadata["lastWork"] = result
+				}
+			}
+			state.Metadata["elapsed"] = elapsed
+			if childConvID != "" {
+				state.Metadata["conversationId"] = childConvID
+			}
+		})
+		snapshot2 := s.agents.MergedSnapshot()
 
 		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot2})
 

@@ -7,20 +7,19 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
+	"github.com/dsswift/ion/engine/internal/session/agents"
+	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
 // newCliSession creates a minimal engineSession for CLI hook tests.
 func newCliSession(key string) *engineSession {
 	return &engineSession{
-		key:                key,
-		config:             defaultConfig(),
-		agentRegistry:      make(map[string]types.AgentHandle),
-		agentSpecs:         make(map[string]types.AgentSpec),
-		childPIDs:          make(map[int]struct{}),
-		pendingDialogs:     make(map[string]chan interface{}),
-		pendingPermissions: make(map[string]chan string),
-		pendingElicit:      make(map[string]chan elicitReply),
+		key:       key,
+		config:    defaultConfig(),
+		agents:    agents.NewRegistry(),
+		childPIDs: make(map[int]struct{}),
+		pending:   pending.New(),
 	}
 }
 
@@ -616,12 +615,12 @@ func TestWireAgentToolServer_SpecResolution(t *testing.T) {
 	s := newCliSession("agent-ts4")
 
 	// Register an agent spec
-	s.agentSpecs["researcher"] = types.AgentSpec{
+	s.agents.RegisterSpec(types.AgentSpec{
 		Name:         "researcher",
 		Model:        "test-model",
 		SystemPrompt: "You are a researcher.",
 		Tools:        []string{"Read", "Grep"},
-	}
+	})
 
 	mgr.mu.Lock()
 	mgr.sessions["agent-ts4"] = s

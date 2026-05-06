@@ -36,25 +36,20 @@ func (m *Manager) SendAbort(key string) {
 // exit) or the user interrupts so dispatched agents do not continue
 // running standalone and burning model budget.
 func (m *Manager) abortAllDescendants(key, reason string) {
-	m.mu.Lock()
+	m.mu.RLock()
 	s, ok := m.sessions[key]
 	if !ok {
-		m.mu.Unlock()
+		m.mu.RUnlock()
 		return
 	}
-	var pids []int
-	var names []string
-	for name, handle := range s.agentRegistry {
-		pids = append(pids, handle.PID)
-		names = append(names, name)
-	}
-	s.agentRegistry = map[string]types.AgentHandle{}
 	hasExt := s.extGroup != nil && !s.extGroup.IsEmpty()
-	m.mu.Unlock()
+	m.mu.RUnlock()
 
+	pids, names := s.agents.ClearHandles()
 	if len(pids) == 0 {
 		return
 	}
+
 	utils.Warn("Session", fmt.Sprintf("aborting %d descendant agent(s) (%s): key=%s names=%v", len(pids), reason, key, names))
 	for _, pid := range pids {
 		killProcess(pid)

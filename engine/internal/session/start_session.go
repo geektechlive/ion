@@ -1,23 +1,20 @@
 package session
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-	"sync"
-	"time"
 
-	"github.com/dsswift/ion/engine/internal/agentdiscovery"
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
 	"github.com/dsswift/ion/engine/internal/modelconfig"
 	"github.com/dsswift/ion/engine/internal/permissions"
+	"github.com/dsswift/ion/engine/internal/session/agents"
+	"github.com/dsswift/ion/engine/internal/session/extcontext"
+	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/skills"
 	"github.com/dsswift/ion/engine/internal/telemetry"
-	"github.com/dsswift/ion/engine/internal/tools"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -28,474 +25,110 @@ type StartSessionResult struct {
 	ConversationID string `json:"conversationId,omitempty"`
 }
 
-// newExtContext builds a fully-populated extension Context for the given session.
-// All functional callbacks are wired to the session manager's internals.
-func (m *Manager) newExtContext(s *engineSession, key string) *extension.Context {
-	ctx := &extension.Context{
-		SessionKey: key,
-		Cwd:        s.config.WorkingDirectory,
-		Emit: func(ev types.EngineEvent) {
-			// Cache extension-emitted agent states so the built-in Agent tool
-			// spawner can merge them into its own snapshots.
-			if ev.Type == "engine_agent_state" {
-				m.mu.Lock()
-				s.lastExtAgentStates = make([]types.AgentStateUpdate, len(ev.Agents))
-				copy(s.lastExtAgentStates, ev.Agents)
-				m.mu.Unlock()
-			}
-			m.emit(key, ev)
-		},
-		Abort: func() { m.SendAbort(key) },
-		RegisterAgent: func(name string, handle types.AgentHandle) {
-			m.mu.Lock()
-			s.agentRegistry[name] = handle
-			m.mu.Unlock()
-		},
-		DeregisterAgent: func(name string) {
-			m.mu.Lock()
-			delete(s.agentRegistry, name)
-			m.mu.Unlock()
-		},
-		RegisterAgentSpec: func(spec types.AgentSpec) {
-			if spec.Name == "" {
-				return
-			}
-			m.mu.Lock()
-			s.agentSpecs[spec.Name] = spec
-			m.mu.Unlock()
-		},
-		DeregisterAgentSpec: func(name string) {
-			m.mu.Lock()
-			delete(s.agentSpecs, name)
-			m.mu.Unlock()
-		},
-		LookupAgentSpec: func(name string) (types.AgentSpec, bool) {
-			m.mu.RLock()
-			defer m.mu.RUnlock()
-			spec, ok := s.agentSpecs[name]
-			return spec, ok
-		},
-		ResolveTier: func(name string) string {
-			return modelconfig.ResolveTier(name)
-		},
-		SuppressTool: func(name string) {
-			m.mu.Lock()
-			s.suppressedTools = append(s.suppressedTools, name)
-			m.mu.Unlock()
-		},
-		Elicit: func(info extension.ElicitationRequestInfo) (map[string]interface{}, bool, error) {
-			return m.elicit(s, key, info)
-		},
-		CallTool: func(toolName string, input map[string]interface{}) (string, bool, error) {
-			return m.callToolFromExtension(s, key, toolName, input)
-		},
-		SendPrompt: func(text string, model string) error {
-			var overrides *PromptOverrides
-			if model != "" {
-				overrides = &PromptOverrides{Model: model}
-			}
-			return m.SendPrompt(key, text, overrides)
-		},
-	}
-	// Wire process lifecycle management
-	if s.procRegistry != nil {
-		reg := s.procRegistry
-		ctx.RegisterProcess = func(name string, pid int, task string) error {
-			return reg.Register(name, pid, task)
-		}
-		ctx.DeregisterProcess = func(name string) {
-			reg.Deregister(name)
-		}
-		ctx.ListProcesses = func() []extension.ProcessInfo {
-			return reg.List()
-		}
-		ctx.TerminateProcess = func(name string) error {
-			return reg.Terminate(name)
-		}
-		ctx.CleanStaleProcesses = func() int {
-			return reg.CleanStale()
-		}
-	}
-
-	// Wire engine-native agent dispatch
-	ctx.DispatchAgent = func(opts extension.DispatchAgentOpts) (*extension.DispatchAgentResult, error) {
-		start := time.Now()
-
-		// Determine model and project path
-		model := opts.Model
-		if model == "" && m.config != nil {
-			model = m.config.DefaultModel
-		}
-		projectPath := opts.ProjectPath
-		if projectPath == "" {
-			projectPath = s.config.WorkingDirectory
-		}
-
-		// Create child backend matching the parent session's backend type.
-		// Uses the factory so CliBackend sessions spawn CLI children.
-		child := m.newChildBackend()
-		var childCfg *backend.RunConfig
-
-		// Load extension if specified
-		var childExtHost *extension.Host
-		if opts.ExtensionDir != "" {
-			childExtHost = extension.NewHost()
-			extCfg := &extension.ExtensionConfig{
-				ExtensionDir:     opts.ExtensionDir,
-				Model:            model,
-				WorkingDirectory: projectPath,
-			}
-			if err := childExtHost.Load(opts.ExtensionDir, extCfg); err != nil {
-				utils.Log("Session", "child extension load failed: "+err.Error())
-				childExtHost = nil
-			} else {
-				// Fire session_start on child extension
-				childCtx := m.newExtContext(s, key)
-				_ = childExtHost.FireSessionStart(childCtx)
-
-				// Wire before_agent_start for system prompt
-				basCtx := m.newExtContext(s, key)
-				extSysPrompt, _ := childExtHost.FireBeforeAgentStart(basCtx, extension.AgentInfo{
-					Name: opts.Name,
-					Task: opts.Task,
-				})
-				if extSysPrompt != "" {
-					if opts.SystemPrompt != "" {
-						opts.SystemPrompt = opts.SystemPrompt + "\n\n" + extSysPrompt
-					} else {
-						opts.SystemPrompt = extSysPrompt
-					}
-				}
-
-				// Wire tool_call hook for damage-control etc.
-				childCfg = &backend.RunConfig{
-					Hooks: backend.RunHooks{
-						OnToolCall: func(info backend.ToolCallInfo) (*backend.ToolCallResult, error) {
-							tcCtx := m.newExtContext(s, key)
-							result, _ := childExtHost.FireToolCall(tcCtx, extension.ToolCallInfo{
-								ToolName: info.ToolName,
-								ToolID:   info.ToolID,
-								Input:    info.Input,
-							})
-							if result != nil && result.Block {
-								return &backend.ToolCallResult{Block: true, Reason: result.Reason}, nil
-							}
-							return nil, nil
-						},
-					},
-				}
-			}
-		}
-
-		// Track child cost/tokens and forward events to extension callback
-		var totalCost float64
-		var totalInputTokens, totalOutputTokens int
-		var childSessionID string
-
-		var result string
-		var childErr error
-		var childDone sync.WaitGroup
-		childDone.Add(1)
-
-		child.OnNormalized(func(_ string, ev types.NormalizedEvent) {
-			// Translate child events but do NOT broadcast to the parent socket
-			// stream. The extension already receives every child event via the
-			// private opts.OnEvent channel (dispatch_event JSON-RPC notification)
-			// and decides what to surface by calling ctx.emit(). This matches the
-			// built-in AgentSpawner which also never broadcasts child streaming
-			// events.
-			ee := translateToEngineEvent(ev, 0)
-			if ee.Type != "" {
-				if opts.OnEvent != nil {
-					opts.OnEvent(ee)
-				}
-			}
-			// Capture final result, cost, and session ID from TaskCompleteEvent
-			if tc, ok := ev.Data.(*types.TaskCompleteEvent); ok {
-				result = tc.Result
-				totalCost = tc.CostUsd
-				if tc.Usage.InputTokens != nil {
-					totalInputTokens = *tc.Usage.InputTokens
-				}
-				if tc.Usage.OutputTokens != nil {
-					totalOutputTokens = *tc.Usage.OutputTokens
-				}
-				if tc.SessionID != "" {
-					childSessionID = tc.SessionID
-				}
-			}
-		})
-		child.OnExit(func(_ string, _ *int, _ *string, _ string) {
-			childDone.Done()
-		})
-		child.OnError(func(_ string, err error) {
-			childErr = err
-		})
-
-		runOpts := types.RunOptions{
-			Prompt:      opts.Task,
-			Model:       model,
-			ProjectPath: projectPath,
-		}
-		if opts.SystemPrompt != "" {
-			runOpts.AppendSystemPrompt = opts.SystemPrompt
-		}
-		if opts.SessionID != "" {
-			runOpts.SessionID = opts.SessionID
-		}
-		if opts.MaxTurns > 0 {
-			runOpts.MaxTurns = opts.MaxTurns
-		}
-
-		childReqID := fmt.Sprintf("%s-dispatch-%s", key, opts.Name)
-		if apiChild, ok := child.(*backend.ApiBackend); ok && childCfg != nil {
-			apiChild.StartRunWithConfig(childReqID, runOpts, childCfg)
-		} else {
-			child.StartRun(childReqID, runOpts)
-		}
-		childDone.Wait()
-
-		elapsed := time.Since(start).Seconds()
-
-		// Cleanup child extension
-		if childExtHost != nil {
-			childExtHost.Dispose()
-		}
-
-		exitCode := 0
-		if childErr != nil {
-			exitCode = 1
-			return &extension.DispatchAgentResult{
-				Output:       childErr.Error(),
-				ExitCode:     exitCode,
-				Elapsed:      elapsed,
-				Cost:         totalCost,
-				InputTokens:  totalInputTokens,
-				OutputTokens: totalOutputTokens,
-				SessionID:    childSessionID,
-			}, childErr
-		}
-
-		return &extension.DispatchAgentResult{
-			Output:       result,
-			ExitCode:     0,
-			Elapsed:      elapsed,
-			Cost:         totalCost,
-			InputTokens:  totalInputTokens,
-			OutputTokens: totalOutputTokens,
-			SessionID:    childSessionID,
-		}, nil
-	}
-
-	// Populate extension config if available
-	if s.extGroup != nil && !s.extGroup.IsEmpty() {
-		ctx.Config = &extension.ExtensionConfig{
-			WorkingDirectory: s.config.WorkingDirectory,
-		}
-	}
-
-	// Wire agent discovery
-	ctx.DiscoverAgents = func(opts extension.DiscoverAgentsOpts) (*extension.DiscoverAgentsResult, error) {
-		sources := opts.Sources
-		if len(sources) == 0 {
-			sources = []string{"extension", "user", "project"}
-		}
-
-		// Build ordered directory list. Later dirs override earlier (reverse of WalkOptions
-		// where first-seen wins). We reverse the source order before passing to WalkAgentFiles
-		// so that later sources in the harness engineer's list take precedence.
-		var dirs []string
-		sourceMap := make(map[string]string) // dir -> source label
-
-		home, _ := os.UserHomeDir()
-		extDir := ""
-		if ctx.Config != nil {
-			extDir = ctx.Config.ExtensionDir
-		}
-
-		for _, src := range sources {
-			var dir string
-			switch src {
-			case "extension":
-				if extDir != "" {
-					dir = filepath.Join(extDir, "agents")
-				}
-			case "user":
-				if home != "" {
-					dir = filepath.Join(home, ".ion", "agents")
-				}
-			case "project":
-				if s.config.WorkingDirectory != "" {
-					dir = filepath.Join(s.config.WorkingDirectory, ".ion", "agents")
-				}
-			default:
-				continue
-			}
-			if dir != "" {
-				if opts.BundleName != "" {
-					dir = filepath.Join(dir, opts.BundleName)
-				}
-				dirs = append(dirs, dir)
-				sourceMap[dir] = src
-			}
-		}
-
-		// Add extra dirs
-		for _, d := range opts.ExtraDirs {
-			dirs = append(dirs, d)
-			sourceMap[d] = "extra"
-		}
-
-		// Reverse dirs so last source wins dedup (WalkAgentFiles uses first-seen-wins)
-		for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
-			dirs[i], dirs[j] = dirs[j], dirs[i]
-		}
-
-		recursive := true
-		if opts.Recursive != nil {
-			recursive = *opts.Recursive
-		}
-
-		walkOpts := agentdiscovery.WalkOptions{
-			ExtraDirs: dirs,
-			Recursive: recursive,
-		}
-
-		graph, err := agentdiscovery.Discover(walkOpts)
-		if err != nil {
-			return nil, err
-		}
-
-		var result []extension.DiscoveredAgent
-		for _, def := range graph.Agents {
-			// Determine source from path
-			source := "unknown"
-			for dir, label := range sourceMap {
-				if strings.HasPrefix(def.Path, dir) {
-					source = label
-					break
-				}
-			}
-			result = append(result, extension.DiscoveredAgent{
-				Name:         def.Name,
-				Path:         def.Path,
-				Source:       source,
-				Parent:       def.Parent,
-				Description:  def.Description,
-				Model:        def.Model,
-				Tools:        def.Tools,
-				SystemPrompt: def.SystemPrompt,
-				Meta:         def.Meta,
-			})
-		}
-		return &extension.DiscoverAgentsResult{Agents: result}, nil
-	}
-
-	return ctx
+// sessionAccessor adapts *Manager + *engineSession to the
+// extcontext.SessionAccessor interface. Each method delegates to the manager
+// and session with appropriate locking.
+type sessionAccessor struct {
+	m   *Manager
+	s   *engineSession
+	key string
 }
 
-// callToolFromExtension dispatches an extension-initiated tool call through
-// the session's tool registry: built-in tools, MCP-registered tools, and
-// extension-registered tools (any host in the loaded group).
-//
-// Permission policy (s.permEngine) gates the call: deny rules return an
-// error result, "ask" decisions auto-deny because extension calls cannot
-// block on user elicitation. Per-tool hooks (`bash_tool_call`, etc.) and
-// `permission_request` are NOT fired -- they would re-enter the calling
-// extension and create surprising recursion.
-//
-// Returns (content, isError, err). A non-nil err is reserved for unknown
-// tool names so the SDK can surface a Promise rejection on what is almost
-// always a programming error. Tool-internal failures resolve as
-// (errorMessage, true, nil).
-func (m *Manager) callToolFromExtension(s *engineSession, sessionKey, toolName string, input map[string]interface{}) (string, bool, error) {
-	if input == nil {
-		input = map[string]interface{}{}
+func (a *sessionAccessor) SessionKey() string       { return a.key }
+func (a *sessionAccessor) WorkingDirectory() string  { return a.s.config.WorkingDirectory }
+
+func (a *sessionAccessor) Emit(ev types.EngineEvent) { a.m.emit(a.key, ev) }
+
+func (a *sessionAccessor) SendAbort() { a.m.SendAbort(a.key) }
+
+func (a *sessionAccessor) SendPrompt(text string, model string) error {
+	var overrides *PromptOverrides
+	if model != "" {
+		overrides = &PromptOverrides{Model: model}
 	}
+	return a.m.SendPrompt(a.key, text, overrides)
+}
 
-	// Permission gate.
-	if s.permEngine != nil {
-		result := s.permEngine.Check(permissions.CheckInfo{
-			Tool:      toolName,
-			Input:     input,
-			Cwd:       s.config.WorkingDirectory,
-			SessionID: sessionKey,
-		})
-		switch result.Decision {
-		case "allow":
-			// proceed
-		case "deny":
-			reason := result.Reason
-			if reason == "" {
-				reason = "denied by policy"
-			}
-			return fmt.Sprintf("Permission denied: %s", reason), true, nil
-		case "ask":
-			return fmt.Sprintf(
-				"Permission requires user approval (rule: %s); extension calls cannot block on elicitation. Configure an explicit allow rule for %q in your permission policy.",
-				result.Reason, toolName,
-			), true, nil
-		default:
-			return fmt.Sprintf("Permission engine returned unknown decision: %q", result.Decision), true, nil
-		}
-	}
+func (a *sessionAccessor) Elicit(info extension.ElicitationRequestInfo) (map[string]interface{}, bool, error) {
+	return a.m.elicit(a.s, a.key, info)
+}
 
-	cwd := s.config.WorkingDirectory
+func (a *sessionAccessor) SuppressTool(name string) {
+	a.m.mu.Lock()
+	a.s.suppressedTools = append(a.s.suppressedTools, name)
+	a.m.mu.Unlock()
+}
 
-	// 1. Built-in tools (Read, Write, Edit, Bash, Grep, Glob, Agent, etc).
-	if tools.GetTool(toolName) != nil {
-		toolResult, err := tools.ExecuteTool(context.Background(), toolName, input, cwd)
-		if err != nil {
-			return "", true, err
-		}
-		if toolResult == nil {
-			return "", false, nil
-		}
-		return toolResult.Content, toolResult.IsError, nil
-	}
+func (a *sessionAccessor) CacheExtAgentStates(agentStates []types.AgentStateUpdate) {
+	a.s.agents.CacheExtStates(agentStates)
+}
 
-	// 2. MCP-registered tools (mcp__server__tool prefix).
-	if strings.HasPrefix(toolName, "mcp__") {
-		m.mu.RLock()
-		mcpConns := s.mcpConns
-		m.mu.RUnlock()
-		parts := strings.SplitN(toolName, "__", 3)
-		if len(parts) != 3 {
-			return fmt.Sprintf("Invalid MCP tool name: %s", toolName), true, nil
-		}
-		serverName := parts[1]
-		innerName := parts[2]
-		for _, conn := range mcpConns {
-			if conn.Name() == serverName {
-				content, err := conn.CallTool(innerName, input)
-				if err != nil {
-					return "", true, err
-				}
-				return content, false, nil
-			}
-		}
-		return fmt.Sprintf("MCP server %q not connected", serverName), true, nil
-	}
+func (a *sessionAccessor) RegisterAgent(name string, handle types.AgentHandle) {
+	a.s.agents.RegisterHandle(name, handle)
+}
 
-	// 3. Extension-registered tools (any host in the loaded group).
-	if s.extGroup != nil {
-		for _, tool := range s.extGroup.Tools() {
-			if tool.Name == toolName {
-				ctx := m.newExtContext(s, sessionKey)
-				result, err := tool.Execute(input, ctx)
-				if err != nil {
-					return "", true, err
-				}
-				if result == nil {
-					return "", false, nil
-				}
-				return result.Content, result.IsError, nil
-			}
+func (a *sessionAccessor) DeregisterAgent(name string) {
+	a.s.agents.DeregisterHandle(name)
+}
+
+func (a *sessionAccessor) RegisterAgentSpec(spec types.AgentSpec) {
+	a.s.agents.RegisterSpec(spec)
+}
+
+func (a *sessionAccessor) DeregisterAgentSpec(name string) {
+	a.s.agents.DeregisterSpec(name)
+}
+
+func (a *sessionAccessor) LookupAgentSpec(name string) (types.AgentSpec, bool) {
+	return a.s.agents.LookupSpec(name)
+}
+
+func (a *sessionAccessor) ExtGroup() *extension.ExtensionGroup { return a.s.extGroup }
+
+func (a *sessionAccessor) ExtConfig() *extension.ExtensionConfig {
+	if a.s.extGroup != nil && !a.s.extGroup.IsEmpty() {
+		return &extension.ExtensionConfig{
+			WorkingDirectory: a.s.config.WorkingDirectory,
 		}
 	}
+	return nil
+}
 
-	// 4. Unknown -- programming error in the calling extension.
-	return "", true, fmt.Errorf("unknown tool: %s", toolName)
+func (a *sessionAccessor) ProcRegistry() *extension.ProcessRegistry { return a.s.procRegistry }
+
+func (a *sessionAccessor) NewChildBackend() backend.RunBackend { return a.m.newChildBackend() }
+
+func (a *sessionAccessor) EngineConfig() *types.EngineRuntimeConfig { return a.m.config }
+
+func (a *sessionAccessor) ResolveTier(name string) string { return modelconfig.ResolveTier(name) }
+
+func (a *sessionAccessor) PermissionCheck(toolName string, input map[string]interface{}) (string, string) {
+	if a.s.permEngine == nil {
+		return "", ""
+	}
+	result := a.s.permEngine.Check(permissions.CheckInfo{
+		Tool:      toolName,
+		Input:     input,
+		Cwd:       a.s.config.WorkingDirectory,
+		SessionID: a.key,
+	})
+	return result.Decision, result.Reason
+}
+
+func (a *sessionAccessor) McpConnections() []*mcp.Connection {
+	a.m.mu.RLock()
+	defer a.m.mu.RUnlock()
+	return a.s.mcpConns
+}
+
+func (a *sessionAccessor) TranslateEvent(ev types.NormalizedEvent, contextWindow int) types.EngineEvent {
+	return translateToEngineEvent(ev, contextWindow)
+}
+
+// newExtContext builds a fully-populated extension Context for the given session.
+// All functional callbacks are wired through the extcontext.SessionAccessor interface.
+func (m *Manager) newExtContext(s *engineSession, key string) *extension.Context {
+	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key})
 }
 
 // StartSession creates a new session with the given config.
@@ -523,12 +156,9 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		key:            key,
 		config:         config,
 		conversationID:  config.SessionID,
-		agentRegistry:  make(map[string]types.AgentHandle),
-		agentSpecs:     make(map[string]types.AgentSpec),
+		agents:         agents.NewRegistry(),
 		childPIDs:      make(map[int]struct{}),
-		pendingDialogs:     make(map[string]chan interface{}),
-		pendingPermissions: make(map[string]chan string),
-		pendingElicit:      make(map[string]chan elicitReply),
+		pending:        pending.New(),
 		maxQueueDepth:  32,
 	}
 
@@ -673,10 +303,7 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 		})
 		host.SetPersistentEmit(func(ev types.EngineEvent) {
 			if ev.Type == "engine_agent_state" {
-				m.mu.Lock()
-				s.lastExtAgentStates = make([]types.AgentStateUpdate, len(ev.Agents))
-				copy(s.lastExtAgentStates, ev.Agents)
-				m.mu.Unlock()
+				s.agents.CacheExtStates(ev.Agents)
 			}
 			if ev.Type == "engine_status" && ev.Fields != nil && ev.Fields.ExtensionName != "" {
 				m.mu.Lock()

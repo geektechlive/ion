@@ -6,6 +6,8 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
+	"github.com/dsswift/ion/engine/internal/session/agents"
+	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -61,13 +63,14 @@ func (m *Manager) ForkSession(key string, messageIndex int) (string, error) {
 
 	newKey := fmt.Sprintf("%s-fork-%d", key, time.Now().UnixMilli())
 	newSession := &engineSession{
-		key:           newKey,
-		config:        s.config,
+		key:            newKey,
+		config:         s.config,
 		conversationID: forked.ID,
-		agentRegistry: make(map[string]types.AgentHandle),
-		childPIDs:     make(map[int]struct{}),
-		planMode:      s.planMode,
-		planModeTools: s.planModeTools,
+		agents:         agents.NewRegistry(),
+		childPIDs:      make(map[int]struct{}),
+		pending:        pending.New(),
+		planMode:       s.planMode,
+		planModeTools:  s.planModeTools,
 	}
 	m.sessions[newKey] = newSession
 	m.mu.Unlock()

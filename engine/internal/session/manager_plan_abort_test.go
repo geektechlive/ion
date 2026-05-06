@@ -104,7 +104,7 @@ func TestAbortAgent_KillsByName(t *testing.T) {
 	// Since engineSession is internal, we access via the manager's lock.
 	mgr.mu.Lock()
 	s := mgr.sessions["agent-abort"]
-	s.agentRegistry["worker-1"] = types.AgentHandle{PID: 99999, ParentAgent: ""}
+	s.agents.RegisterHandle("worker-1", types.AgentHandle{PID: 99999, ParentAgent: ""})
 	mgr.mu.Unlock()
 
 	// AbortAgent with subtree=false targets only the named agent.
@@ -120,11 +120,11 @@ func TestAbortAgent_SubtreeTraversal(t *testing.T) {
 
 	mgr.mu.Lock()
 	s := mgr.sessions["tree"]
-	s.agentRegistry["root"] = types.AgentHandle{PID: 90001, ParentAgent: ""}
-	s.agentRegistry["child1"] = types.AgentHandle{PID: 90002, ParentAgent: "root"}
-	s.agentRegistry["child2"] = types.AgentHandle{PID: 90003, ParentAgent: "root"}
-	s.agentRegistry["grandchild"] = types.AgentHandle{PID: 90004, ParentAgent: "child1"}
-	s.agentRegistry["unrelated"] = types.AgentHandle{PID: 90005, ParentAgent: ""}
+	s.agents.RegisterHandle("root", types.AgentHandle{PID: 90001, ParentAgent: ""})
+	s.agents.RegisterHandle("child1", types.AgentHandle{PID: 90002, ParentAgent: "root"})
+	s.agents.RegisterHandle("child2", types.AgentHandle{PID: 90003, ParentAgent: "root"})
+	s.agents.RegisterHandle("grandchild", types.AgentHandle{PID: 90004, ParentAgent: "child1"})
+	s.agents.RegisterHandle("unrelated", types.AgentHandle{PID: 90005, ParentAgent: ""})
 	mgr.mu.Unlock()
 
 	// subtree=true on "root" should attempt to kill root, child1, child2, grandchild
@@ -157,12 +157,12 @@ func TestResolveAgentSpec_DirectMatch(t *testing.T) {
 
 	mgr.mu.Lock()
 	s := mgr.sessions["self-hire-direct"]
-	s.agentSpecs["travel-planner"] = types.AgentSpec{
+	s.agents.RegisterSpec(types.AgentSpec{
 		Name:         "travel-planner",
 		Description:  "Plan trips",
 		Model:        "claude-sonnet-4-6",
 		SystemPrompt: "You plan trips.",
-	}
+	})
 	mgr.mu.Unlock()
 
 	spec, ok := mgr.resolveAgentSpec(s, "self-hire-direct", "travel-planner")
@@ -260,15 +260,15 @@ func TestAbortAllDescendants_ClearsRegistryAndEmits(t *testing.T) {
 
 	mgr.mu.Lock()
 	s := mgr.sessions["reap"]
-	s.agentRegistry["a"] = types.AgentHandle{PID: 99991, ParentAgent: ""}
-	s.agentRegistry["b"] = types.AgentHandle{PID: 99992, ParentAgent: "a"}
+	s.agents.RegisterHandle("a", types.AgentHandle{PID: 99991, ParentAgent: ""})
+	s.agents.RegisterHandle("b", types.AgentHandle{PID: 99992, ParentAgent: "a"})
 	mgr.mu.Unlock()
 
 	mgr.abortAllDescendants("reap", "test")
 
 	mgr.mu.RLock()
 	defer mgr.mu.RUnlock()
-	if got := len(mgr.sessions["reap"].agentRegistry); got != 0 {
+	if got := mgr.sessions["reap"].agents.HandleCount(); got != 0 {
 		t.Fatalf("expected empty registry after abort, got %d", got)
 	}
 	if !emittedAgentState {
@@ -344,14 +344,14 @@ func TestSteerAgent_WritesToStdin(t *testing.T) {
 	var written string
 	mgr.mu.Lock()
 	s := mgr.sessions["steer"]
-	s.agentRegistry["steerable"] = types.AgentHandle{
+	s.agents.RegisterHandle("steerable", types.AgentHandle{
 		PID:         12345,
 		ParentAgent: "",
 		StdinWrite: func(msg string) bool {
 			written = msg
 			return true
 		},
-	}
+	})
 	mgr.mu.Unlock()
 
 	mgr.SteerAgent("steer", "steerable", "new direction")
@@ -383,7 +383,7 @@ func TestSteerAgent_NilStdinWriteNoPanic(t *testing.T) {
 
 	mgr.mu.Lock()
 	s := mgr.sessions["steer3"]
-	s.agentRegistry["no-stdin"] = types.AgentHandle{PID: 1, StdinWrite: nil}
+	s.agents.RegisterHandle("no-stdin", types.AgentHandle{PID: 1, StdinWrite: nil})
 	mgr.mu.Unlock()
 
 	mgr.SteerAgent("steer3", "no-stdin", "msg")
