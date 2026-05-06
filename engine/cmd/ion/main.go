@@ -31,6 +31,8 @@ func main() {
 		cmdRecord(flags)
 	case "rpc":
 		cmdRpc()
+	case "upgrade":
+		cmdUpgrade()
 	case "version":
 		fmt.Printf("ion-engine %s\n", version)
 	default:
@@ -59,6 +61,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  health                   Probe daemon liveness (exit 0=ok, 1=down)")
 	fmt.Fprintln(os.Stderr, "  record --output          Record session to NDJSON")
 	fmt.Fprintln(os.Stderr, "  rpc                      JSON-RPC over stdin/stdout")
+	fmt.Fprintln(os.Stderr, "  upgrade                  Upgrade to latest release")
 	fmt.Fprintln(os.Stderr, "  version                  Show version")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Options:")
