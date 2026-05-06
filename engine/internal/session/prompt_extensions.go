@@ -59,10 +59,7 @@ func (m *Manager) lateLoadExtensions(s *engineSession, key string, overrides *Pr
 		})
 		host.SetPersistentEmit(func(ev types.EngineEvent) {
 			if ev.Type == "engine_agent_state" {
-				m.mu.Lock()
-				s.lastExtAgentStates = make([]types.AgentStateUpdate, len(ev.Agents))
-				copy(s.lastExtAgentStates, ev.Agents)
-				m.mu.Unlock()
+				s.agents.CacheExtStates(ev.Agents)
 			}
 			m.emit(capturedKey, ev)
 		})

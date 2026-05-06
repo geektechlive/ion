@@ -110,14 +110,7 @@ func (m *Manager) wireToolServer(s *engineSession, key string, opts *types.RunOp
 }
 
 // wireAgentToolServer registers an ion_agent tool on the ToolServer for CLI
-// backend sessions. This exposes the engine's agent-spec system (spec
-// resolution from ~/.ion/agents/, capability_match hooks, model/system-prompt
-// overrides from spec frontmatter) to the CLI subprocess via MCP. The tool
-// appears as mcp__ion-extensions__ion_agent to the LLM.
-//
-// If wireToolServer already created a ToolServer (because extension tools
-// exist), the ion_agent tool is added to it. Otherwise a new ToolServer is
-// created and started.
+// backend sessions.
 func (m *Manager) wireAgentToolServer(s *engineSession, key string, opts *types.RunOptions) {
 	if _, isCli := m.backend.(*backend.CliBackend); !isCli {
 		return
@@ -156,8 +149,7 @@ func (m *Manager) wireAgentToolServer(s *engineSession, key string, opts *types.
 }
 
 // buildAgentToolHandler returns a ToolHandler closure that resolves ion agent
-// specs and runs child agents synchronously. It mirrors the spawner logic in
-// wireAgentSpawner but runs over MCP so the CLI subprocess can invoke it.
+// specs and runs child agents synchronously.
 func (m *Manager) buildAgentToolHandler(s *engineSession, key string) backend.ToolHandler {
 	return func(input map[string]interface{}) (*types.ToolResult, error) {
 		prompt, _ := input["prompt"].(string)
