@@ -10,6 +10,15 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.10.0](https://github.com/dsswift/ion/compare/ios-v1.9.0...ios-v1.10.0) (2026-05-06)
+
+### Features
+
+* **ios:** add copy path context menu to file explorer ([5ae1ded](https://github.com/dsswift/ion/commit/5ae1dedff645793df351759598e108ec1b4bab95))
+* **ios:** add table support to markdown rendering ([450267b](https://github.com/dsswift/ion/commit/450267b4676d58e988d2ff458bd41ba0c364a489))
+* **ios:** extract message bubble into reusable component ([68d7e1b](https://github.com/dsswift/ion/commit/68d7e1b965dbe6a34507df4ba40f4cd5fe0b66d3))
+* **ios:** add tool grouping for conversation display ([d019979](https://github.com/dsswift/ion/commit/d0199793fac86ad0b3b6654c9ef05e939efaa75a))
+
 ## [1.9.0](https://github.com/dsswift/ion/compare/ios-v1.8.0...ios-v1.9.0) (2026-05-06)
 
 ### Features
