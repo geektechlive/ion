@@ -6,6 +6,8 @@ struct TabListView: View {
     @State private var showNewTab = false
     @State private var navigationPath = NavigationPath()
     @State private var enginePickerDirectory: String? = nil
+    @State private var renamingTabId: String?
+    @State private var renameText: String = ""
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -17,6 +19,12 @@ struct TabListView: View {
                                 TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual")
                             }
                             .contextMenu {
+                                Button {
+                                    renameText = tab.displayTitle
+                                    renamingTabId = tab.id
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
                                 if viewModel.tabGroupMode == "manual" {
                                     let targets = viewModel.tabGroups.filter { $0.id != tab.groupId }
                                     if !targets.isEmpty {
@@ -76,6 +84,24 @@ struct TabListView: View {
                 }
             }
             .navigationTitle("Ion")
+            .alert("Rename Tab", isPresented: .init(
+                get: { renamingTabId != nil },
+                set: { if !$0 { renamingTabId = nil } }
+            )) {
+                TextField("Name", text: $renameText)
+                Button("Rename") {
+                    if let id = renamingTabId {
+                        let title = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        viewModel.renameTab(tabId: id, customTitle: title.isEmpty ? nil : title)
+                    }
+                    renamingTabId = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    renamingTabId = nil
+                }
+            } message: {
+                Text("Enter a new name for this tab.")
+            }
             .navigationDestination(for: String.self) { tabId in
                 if viewModel.tab(for: tabId)?.isEngine == true {
                     EngineView(tabId: tabId)

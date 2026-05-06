@@ -329,13 +329,20 @@ struct MessageBubble: View {
                     }
                     .foregroundStyle(.secondary)
                 }
-                Text(message.content)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(hex: 0x4ECDC4).opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                MarkdownContentView(
+                    blocks: MarkdownBlockCache.shared.blocks(for: message.content)
+                )
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(hex: 0x4ECDC4).opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    message.content.hasPrefix("! ")
+                        ? RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(hex: 0xF472B6, opacity: 0.5), lineWidth: 2)
+                        : nil
+                )
             }
             .padding(.trailing, 12)
             .padding(.vertical, 2)
@@ -380,15 +387,10 @@ struct MessageBubble: View {
     private var assistantBubble: some View {
         VStack(alignment: .leading, spacing: 4) {
             if !message.content.isEmpty {
-                if let attributed = MarkdownCache.shared.attributedString(for: message.content) {
-                    Text(attributed)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(message.content)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                MarkdownContentView(
+                    blocks: MarkdownBlockCache.shared.blocks(for: message.content)
+                )
+                .textSelection(.enabled)
             }
 
             // Blinking cursor for streaming
@@ -537,34 +539,31 @@ extension Color {
     }
 }
 
-// MARK: - MarkdownCache
+// MARK: - MarkdownBlockCache
 
-/// Caches parsed AttributedStrings so markdown is only parsed once per unique
-/// content string, not on every SwiftUI re-render.
+/// Caches parsed `[MarkdownBlock]` arrays so full block-level markdown is only
+/// parsed once per unique content string, not on every SwiftUI re-render.
 @MainActor
-final class MarkdownCache {
-    static let shared = MarkdownCache()
+final class MarkdownBlockCache {
+    static let shared = MarkdownBlockCache()
 
     private let cache = NSCache<NSString, CacheEntry>()
 
     private class CacheEntry {
-        let value: AttributedString
-        init(_ value: AttributedString) { self.value = value }
+        let value: [MarkdownBlock]
+        init(_ value: [MarkdownBlock]) { self.value = value }
     }
 
     init() {
         cache.countLimit = 200
     }
 
-    func attributedString(for content: String) -> AttributedString? {
+    func blocks(for content: String) -> [MarkdownBlock] {
         let key = content as NSString
         if let entry = cache.object(forKey: key) {
             return entry.value
         }
-        guard let result = try? AttributedString(
-            markdown: content,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) else { return nil }
+        let result = MarkdownFormatter.parse(content)
         cache.setObject(CacheEntry(result), forKey: key)
         return result
     }

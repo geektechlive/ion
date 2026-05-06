@@ -1,10 +1,11 @@
 import React, { useEffect, useRef } from 'react'
-import { Terminal } from '@xterm/xterm'
+import { Terminal, ILinkProvider, ILink } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { useSessionStore } from '../stores/sessionStore'
+import { LINK_RE, isCmdHeld, EDITABLE_EXTS } from '../hooks/useNavigableLinks'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalEntry {
@@ -16,6 +17,7 @@ interface TerminalEntry {
   hostEl: HTMLDivElement
   unsubData: () => void
   unsubExit: () => void
+  unsubLinks: () => void
 }
 
 // Module-level pool: one xterm instance per compound key, survives React re-renders
@@ -26,6 +28,7 @@ export function destroyTerminalInstance(key: string): void {
   if (entry) {
     entry.unsubData()
     entry.unsubExit()
+    entry.unsubLinks()
     entry.hostEl.remove()
     entry.terminal.dispose()
     terminalInstances.delete(key)
@@ -60,6 +63,75 @@ export function serializeTerminalBuffer(key: string): string | undefined {
     return entry.serializeAddon.serialize()
   } catch {
     return undefined
+  }
+}
+
+// ─── Cmd+Click link provider for file paths & URLs in terminal output ───
+
+function registerTerminalLinks(terminal: Terminal, cwd: string, tabId: string): () => void {
+  const provider: ILinkProvider = {
+    provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void) {
+      const line = terminal.buffer.active.getLine(bufferLineNumber - 1)
+      if (!line) { callback(undefined); return }
+      const text = line.translateToString()
+      if (!text.trim()) { callback(undefined); return }
+
+      const links: ILink[] = []
+      // Reset lastIndex since LINK_RE is a global regex
+      const re = new RegExp(LINK_RE.source, 'g')
+      let match: RegExpExecArray | null
+      while ((match = re.exec(text)) !== null) {
+        const raw = match[0]
+        const trimmed = raw.replace(/[.,;:!?)]+$/, '')
+        const isUrl = trimmed.startsWith('http')
+        const startX = match.index + 1 // 1-based
+        const endX = match.index + trimmed.length
+
+        const decorations = { pointerCursor: isCmdHeld(), underline: isCmdHeld() }
+        links.push({
+          range: {
+            start: { x: startX, y: bufferLineNumber },
+            end: { x: endX, y: bufferLineNumber },
+          },
+          text: trimmed,
+          decorations,
+          activate(event: MouseEvent, linkText: string) {
+            if (!event.metaKey) return
+            if (isUrl) {
+              window.ion.openExternal(linkText)
+            } else {
+              openTerminalFile(linkText, cwd, tabId)
+            }
+          },
+          hover() {
+            decorations.pointerCursor = isCmdHeld()
+            decorations.underline = isCmdHeld()
+          },
+          leave() {
+            decorations.pointerCursor = false
+            decorations.underline = false
+          },
+        })
+      }
+
+      callback(links.length > 0 ? links : undefined)
+    },
+  }
+
+  const disposable = terminal.registerLinkProvider(provider)
+  return () => disposable.dispose()
+}
+
+function openTerminalFile(path: string, cwd: string, tabId: string): void {
+  const homeDir = useSessionStore.getState().staticInfo?.homePath
+    || '/Users/' + (process.env.USER || 'user')
+  const expanded = path.startsWith('~/') ? homeDir + path.slice(1) : path
+  const resolved = expanded.startsWith('/') ? expanded : cwd + '/' + expanded
+  const ext = resolved.includes('.') ? '.' + resolved.split('.').pop()!.toLowerCase() : ''
+  if (EDITABLE_EXTS.has(ext)) {
+    useSessionStore.getState().openFileInEditor(cwd, tabId, resolved)
+  } else {
+    window.ion.fsOpenNative(resolved)
   }
 }
 
@@ -146,6 +218,9 @@ export function TerminalInstanceView({ tabId, instanceId, cwd, readOnly }: Props
         terminal.write(restoredBuffer)
       }
 
+      // Cmd+Click link provider for file paths & URLs
+      const unsubLinks = registerTerminalLinks(terminal, cwd, tabId)
+
       // Module-level IPC listeners -- stay active even when component is unmounted
       const unsubData = window.ion.onTerminalData((k, data) => {
         if (k === key) terminal.write(data)
@@ -161,7 +236,7 @@ export function TerminalInstanceView({ tabId, instanceId, cwd, readOnly }: Props
         })
       })
 
-      entry = { terminal, fitAddon, serializeAddon, created: false, cwd, hostEl, unsubData, unsubExit }
+      entry = { terminal, fitAddon, serializeAddon, created: false, cwd, hostEl, unsubData, unsubExit, unsubLinks }
       terminalInstances.set(key, entry)
     }
 

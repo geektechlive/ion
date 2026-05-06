@@ -24,13 +24,18 @@ export function useCmdHeld(): boolean {
   )
 }
 
+/** Non-React getter for CMD key state (use in non-component code like xterm link providers) */
+export function isCmdHeld(): boolean {
+  return _cmdHeld
+}
+
 // ─── Text segmentation — detect file paths and URLs in plain text ───
 
 type TextSegment = { type: 'plain' | 'file' | 'url'; value: string }
 
 // Matches: URLs (https://...), absolute paths (/foo/bar), home-relative paths (~/foo/bar), and relative paths (src/foo/bar.ext)
 // Relative paths require a file extension to avoid false positives on plain text with slashes
-const LINK_RE = /(https?:\/\/[^\s<>"')\]]+|~\/(?:[a-zA-Z0-9._~-]+\/)*[a-zA-Z0-9._~-]+|\/(?:[a-zA-Z0-9._~-]+\/)+[a-zA-Z0-9._~-]+|[a-zA-Z0-9._~-]+(?:\/[a-zA-Z0-9._~-]+)+\.[a-zA-Z0-9]+)/g
+export const LINK_RE = /(https?:\/\/[^\s<>"')\]]+|~\/(?:[a-zA-Z0-9._~-]+\/)*[a-zA-Z0-9._~-]+|\/(?:[a-zA-Z0-9._~-]+\/)+[a-zA-Z0-9._~-]+|[a-zA-Z0-9._~-]+(?:\/[a-zA-Z0-9._~-]+)+\.[a-zA-Z0-9]+)/g
 
 function segmentText(text: string): TextSegment[] {
   const segments: TextSegment[] = []
