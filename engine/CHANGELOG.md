@@ -13,6 +13,18 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.9.0](https://github.com/dsswift/ion/compare/engine-v1.8.2...engine-v1.9.0) (2026-05-06)
+
+### Features
+
+* **engine:** extract agent registry into separate module ([1c9fa91](https://github.com/dsswift/ion/commit/1c9fa91a302e7d81cc9b223acf46bcd72914a0d5))
+* **engine:** add compaction tests for tool results ([7fdf70c](https://github.com/dsswift/ion/commit/7fdf70c7575ed3f1eaed22f227004e5080ba7dd8))
+* **engine:** wire plan mode sparse reminder ([e2aa77d](https://github.com/dsswift/ion/commit/e2aa77d4d39edad73e0326f11665bcc090f19436))
+
+### Bug Fixes
+
+* **engine:** correct event translation return value ([b91d0bf](https://github.com/dsswift/ion/commit/b91d0bf78849c06075cea9f1ca3c69417ee75f7f))
+
 ## [1.8.2](https://github.com/dsswift/ion/compare/engine-v1.8.1...engine-v1.8.2) (2026-05-03)
 
 ### Bug Fixes
