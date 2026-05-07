@@ -106,7 +106,7 @@ export function useTabRestoration() {
                     restoredEngineMessages.set(key, saved.map((m) => ({
                       id: crypto.randomUUID(),
                       role: m.role as Message['role'],
-                      content: m.content,
+                      content: m.content || '',
                       toolName: m.toolName,
                       toolId: m.toolId,
                       toolStatus: m.toolStatus as Message['toolStatus'],
@@ -246,7 +246,7 @@ export function useTabRestoration() {
               const msgs = history.map((m) => ({
                 id: crypto.randomUUID(),
                 role: m.role as Message['role'],
-                content: m.content,
+                content: m.content || '',
                 toolName: m.toolName,
                 toolId: m.toolId,
                 toolInput: m.toolInput,
@@ -298,7 +298,7 @@ export function useTabRestoration() {
               const msgs = history.map((m) => ({
                 id: crypto.randomUUID(),
                 role: m.role as Message['role'],
-                content: m.content,
+                content: m.content || '',
                 toolName: m.toolName,
                 toolId: m.toolId,
                 toolInput: m.toolInput,

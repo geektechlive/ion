@@ -175,7 +175,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
         const messages: Message[] = history.map((m) => ({
           id: nextMsgId(),
           role: m.role as Message['role'],
-          content: m.content,
+          content: m.content || '',
           toolName: m.toolName,
           toolId: m.toolId,
           toolInput: m.toolInput,
@@ -249,7 +249,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
             allMessages.push({
               id: nextMsgId(),
               role: m.role as Message['role'],
-              content: m.content,
+              content: m.content || '',
               toolName: m.toolName,
               toolId: m.toolId,
               toolInput: m.toolInput,
@@ -266,7 +266,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           allMessages.push({
             id: nextMsgId(),
             role: m.role as Message['role'],
-            content: m.content,
+            content: m.content || '',
             toolName: m.toolName,
             toolId: m.toolId,
             toolInput: m.toolInput,
