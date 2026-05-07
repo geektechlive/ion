@@ -264,6 +264,10 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Build app
+        working-directory: desktop
+        run: npx electron-vite build --mode production
+
       - name: Import signing certificate
         env:
           APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
