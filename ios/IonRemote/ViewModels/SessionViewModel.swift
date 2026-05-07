@@ -200,6 +200,9 @@ final class SessionViewModel {
         set { UserDefaults.standard.set(newValue, forKey: "defaultBaseDirectory") }
     }
 
+    /// APNs device token (set by AppDelegate on registration success).
+    var apnsToken: String?
+
     // MARK: - Settings (persisted via paired device)
 
     var relayURL: String = ""
@@ -224,6 +227,11 @@ final class SessionViewModel {
 
     func tab(for id: String) -> RemoteTabState? {
         tabs.first { $0.id == id }
+    }
+
+    /// Navigate to a specific tab (e.g. from a push notification tap).
+    func navigateToTab(_ tabId: String) {
+        pendingNavigationTabId = tabId
     }
 
     /// Compute the compound key for the active engine instance.

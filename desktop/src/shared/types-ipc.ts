@@ -185,6 +185,10 @@ export const IPC = {
   ENGINE_STOP: 'ion:engine-stop',
   ENGINE_EVENT: 'ion:engine-event',
 
+  // Auto-update
+  INSTALL_UPDATE: 'ion:install-update',
+  UPDATE_DOWNLOADED: 'ion:update-downloaded',
+
   // Legacy (kept for backward compat during migration)
   STREAM_EVENT: 'ion:stream-event',
   RUN_COMPLETE: 'ion:run-complete',

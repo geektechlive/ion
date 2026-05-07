@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct IonRemoteApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewModel = SessionViewModel()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -10,6 +11,9 @@ struct IonRemoteApp: App {
             ContentView()
                 .environment(viewModel)
                 .preferredColorScheme(.dark)
+                .onAppear {
+                    appDelegate.sessionViewModel = viewModel
+                }
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
                     case .active:

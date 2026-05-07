@@ -23,6 +23,7 @@ final class RelayClient {
     private let relayURL: URL
     private let apiKey: String
     private let channelId: String
+    private let apnsToken: String?
 
     // MARK: - Internals
 
@@ -43,10 +44,11 @@ final class RelayClient {
 
     // MARK: - Init
 
-    init(relayURL: URL, apiKey: String, channelId: String) {
+    init(relayURL: URL, apiKey: String, channelId: String, apnsToken: String? = nil) {
         self.relayURL = relayURL
         self.apiKey = apiKey
         self.channelId = channelId
+        self.apnsToken = apnsToken
 
         var continuation: AsyncStream<Data>.Continuation!
         self.messages = AsyncStream { continuation = $0 }
@@ -124,6 +126,9 @@ final class RelayClient {
         components.queryItems = [
             URLQueryItem(name: "role", value: "mobile"),
         ]
+        if let token = apnsToken, !token.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "apns_token", value: token))
+        }
 
         guard let url = components.url else {
             print("[Ion] RelayClient: failed to build URL from components")
