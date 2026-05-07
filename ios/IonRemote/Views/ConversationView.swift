@@ -326,9 +326,13 @@ struct ConversationView: View {
 
         case .assistant(let message):
             let isLast = message.id == conversationMessages.last?.id
+            let combined = consecutiveAssistantContent(
+                for: message.id, in: conversationMessages
+            )
             MessageBubble(
                 message: message,
-                isRunning: isRunning && isLast
+                isRunning: isRunning && isLast,
+                copyableContent: combined
             )
             .id(message.id)
 
