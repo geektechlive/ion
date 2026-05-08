@@ -243,7 +243,7 @@ export function useTabRestoration() {
             const allHistoricalMessages: Message[] = []
             for (const hid of historicalIds) {
               const history = await window.ion.loadSession(hid, st.workingDirectory).catch(() => [])
-              const msgs = history.map((m) => ({
+              const msgs = history.filter((m: any) => !m.internal).map((m) => ({
                 id: crypto.randomUUID(),
                 role: m.role as Message['role'],
                 content: m.content || '',
@@ -295,7 +295,7 @@ export function useTabRestoration() {
           if (!st.conversationId && historicalIds.length === 0 && st.lastKnownSessionId) {
             const history = await window.ion.loadSession(st.lastKnownSessionId, st.workingDirectory).catch(() => [])
             if (history.length > 0) {
-              const msgs = history.map((m) => ({
+              const msgs = history.filter((m: any) => !m.internal).map((m) => ({
                 id: crypto.randomUUID(),
                 role: m.role as Message['role'],
                 content: m.content || '',
