@@ -58,8 +58,10 @@ extension TransportManager {
                 guard !Task.isCancelled, let self else { break }
                 self.handleIncomingData(data, isRelay: false)
             }
-            // LAN stream ended -- the WebSocket closed.
-            // Emit peerDisconnected if we have no relay fallback.
+            // LAN stream ended naturally -- emit peerDisconnected if no relay fallback.
+            // Skip if cancelled (transport.stop() was called): yielding peerDisconnected
+            // here would call disconnect() and clobber a new connection being set up.
+            guard !Task.isCancelled else { return }
             if let self, self.relay == nil || !(self.relay?.isConnected ?? false) {
                 self.eventContinuation.yield(.peerDisconnected)
             }
