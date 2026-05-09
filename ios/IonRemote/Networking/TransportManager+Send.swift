@@ -27,8 +27,24 @@ extension TransportManager {
 
     /// Perform challenge-response authentication on the active LAN connection.
     /// Waits for AuthChallenge from Ion, proves we hold the shared secret,
-    /// and waits for AuthResult.
+    /// and waits for AuthResult. Races against an 8-second timeout.
     func performLANAuth() async -> Bool {
+        await withTaskGroup(of: Bool.self) { [weak self] group in
+            guard let self else { return false }
+            group.addTask { await self.performLANAuthCore() }
+            group.addTask { [weak self] in
+                try? await Task.sleep(for: .seconds(8))
+                guard !Task.isCancelled else { return false }
+                self?.lan.disconnect()
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func performLANAuthCore() async -> Bool {
         // Wait for the first message (should be AuthChallenge).
         for await data in lan.messages {
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -77,10 +93,10 @@ extension TransportManager {
     // MARK: - Wire message builder
 
     func buildWireMessage(payload: Data) throws -> WireMessage {
-        seqLock.lock()
-        seq += 1
-        let currentSeq = seq
-        seqLock.unlock()
+        let currentSeq = _seqLock.withLock { state -> UInt64 in
+            state += 1
+            return state
+        }
 
         let (nonce, ciphertext) = try E2ECrypto.encrypt(plaintext: payload, key: sharedKey)
         return WireMessage(

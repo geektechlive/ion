@@ -20,7 +20,10 @@ extension SessionViewModel {
                 await self.eventBatcher.enqueue(event)
             }
 
-            // Stream ended -- flush any remaining events then wipe state
+            // Stream ended naturally -- flush remaining events and wipe state.
+            // Skip if cancelled (disconnect/reconnect): connect() may have already
+            // advanced connectionState to .connecting and we must not clobber it.
+            guard !Task.isCancelled else { return }
             let remaining = await self.eventBatcher.drain()
             await MainActor.run {
                 for event in remaining {
