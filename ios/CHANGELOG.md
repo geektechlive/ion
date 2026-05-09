@@ -10,6 +10,18 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.13.1](https://github.com/dsswift/ion/compare/ios-v1.13.0...ios-v1.13.1) (2026-05-09)
+
+### Bug Fixes
+
+* **ios:** dispatch BonjourBrowser calls to main actor to fix crash ([7544ece](https://github.com/dsswift/ion/commit/7544ecefd636d083f699429909389d313d5e42ab))
+* **ios:** skip Bonjour restart on first path monitor callback and when LAN connected ([bc49a39](https://github.com/dsswift/ion/commit/bc49a39e039f086e0da47215fa8cfb1f8c0ba94a))
+* **ios:** send sync after Bonjour LAN auth; add auth timeout; fix install script ([7c46580](https://github.com/dsswift/ion/commit/7c465806431f3e21e7badcfd50f1df2b29191d2f))
+* **ios:** guard against lan.disconnect() firing after auth timeout is cancelled ([28d7192](https://github.com/dsswift/ion/commit/28d7192b3fb5da59c009abf8e6f18c91ae582b15))
+* **ios:** skip cleanup on cancelled tasks to prevent connect/disconnect loop ([c82bdca](https://github.com/dsswift/ion/commit/c82bdca3a02aea1b8ad11e0487dff4bf61cb140d))
+* **ios:** set isConnected on first message; replace seqLock with OSAllocatedUnfairLock ([12dd811](https://github.com/dsswift/ion/commit/12dd811efdff9e81c7dce5e0dc009dc8ab8773cc))
+* **ios:** fix reconnect after screen lock and stuck connecting state ([309e30e](https://github.com/dsswift/ion/commit/309e30ef75ef2776a87fadfe28e05ebbaf4c5996))
+
 ## [1.13.0](https://github.com/dsswift/ion/compare/ios-v1.12.1...ios-v1.13.0) (2026-05-08)
 
 ### Features
