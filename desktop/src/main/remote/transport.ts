@@ -545,6 +545,9 @@ export class RemoteTransport extends EventEmitter {
 
   /** Get the LAN connectionId for a device, if it has an authenticated LAN connection. */
   private _getLanConnectionForDevice(deviceId: string): string | null {
+    // After auth, rekeyClient() moves the WebSocket from "lan-N" to device.id
+    // in LANServer.clients. Prefer device.id directly so send() finds the socket.
+    if (this.lanDeviceMap.has(deviceId)) return deviceId
     for (const [connectionId, devId] of this.lanDeviceMap) {
       if (devId === deviceId) return connectionId
     }
