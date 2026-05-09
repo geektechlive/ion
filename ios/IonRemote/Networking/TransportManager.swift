@@ -325,23 +325,25 @@ final class TransportManager {
         let monitor = NWPathMonitor()
         self.pathMonitor = monitor
 
+        var isFirstUpdate = true
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self, !self.isStopped else { return }
+            defer { isFirstUpdate = false }
 
             if path.status == .satisfied {
                 // Network restored. Reconnect relay if needed.
                 if let relay, !relay.isConnected, !relay.isConnecting {
-                    print("[Ion] networkMonitor: path satisfied, relay NOT connected -- reconnecting")
-                    Task { @MainActor in
-                        await relay.connect()
-                    }
-                } else {
-                    print("[Ion] networkMonitor: path satisfied, relay connected=\(self.relay?.isConnected ?? false) connecting=\(self.relay?.isConnecting ?? false)")
+                    Task { @MainActor in await relay.connect() }
                 }
-                // Restart Bonjour to re-discover LAN hosts.
-                self.bonjour.startBrowsing()
+                // Restart Bonjour only when recovering from a real outage:
+                // - Skip the first callback (fires immediately on monitor.start(),
+                //   resetting browsers we just started in start()).
+                // - Skip when LAN is already connected (path changes as TCP
+                //   establishes would clear discoveredHosts and fake a disconnect).
+                if !isFirstUpdate && self.state != .lanPreferred {
+                    self.bonjour.startBrowsing()
+                }
             } else {
-                // Network lost.
                 self.updateState()
             }
         }
