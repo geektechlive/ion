@@ -137,8 +137,6 @@ final class TransportManager {
     func startLANWithAuth(host: String, port: UInt16) async -> Bool {
         await lan.connect(host: host, port: port)
 
-        guard lan.isConnected else { return false }
-
         let success = await performLANAuth()
         if success {
             // Record as current LAN host so Bonjour observation doesn't re-discover and clobber us.
