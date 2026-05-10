@@ -12,13 +12,15 @@ Subsequent versions will be auto-generated from conventional commit messages.
 
 ## [1.1.2](https://github.com/dsswift/ion/compare/relay-v1.1.1...relay-v1.1.2) (2026-05-08)
 
+Dependency updates only.
+
 ## [1.1.1](https://github.com/dsswift/ion/compare/relay-v1.1.0...relay-v1.1.1) (2026-05-07)
 
 ### Bug Fixes
 
 * **relay:** correct push notification log message ([982969c](https://github.com/dsswift/ion/commit/982969c8d7975747f7ba1115359d82c925dfc045))
 
-## [1.1.0](https://github.com/dsswift/ion/compare/relay-v1.0.2...relay-v1.1.0) (2026-05-05)
+## [1.1.0](https://github.com/dsswift/ion/compare/relay-v1.0.3...relay-v1.1.0) (2026-05-05)
 
 ### Features
 
@@ -28,7 +30,15 @@ Subsequent versions will be auto-generated from conventional commit messages.
 
 * **relay:** check error return from conn.Close ([632c089](https://github.com/dsswift/ion/commit/632c089f0a078e68fcb6556ff98e925611b44d8a))
 
+## [1.0.3](https://github.com/dsswift/ion/compare/relay-v1.0.2...relay-v1.0.3) (2026-05-03)
+
+Dependency updates only.
+
 ## [1.0.2](https://github.com/dsswift/ion/compare/relay-v1.0.1...relay-v1.0.2) (2026-05-03)
 
+Dependency updates only.
+
 ## [1.0.1](https://github.com/dsswift/ion/compare/relay-v1.0.0...relay-v1.0.1) (2026-04-30)
+
+Version bump only (cross-component release).
 

@@ -143,7 +143,5 @@ Subsequent versions will be auto-generated from conventional commit messages.
 
 ## [1.1.0](https://github.com/dsswift/ion/compare/ios-v1.0.0...ios-v1.1.0) (2026-04-30)
 
-### Features
-
-* **engine:** add tool stall detection and events ([205e32d](https://github.com/dsswift/ion/commit/205e32d83dfb59c05a701d8446403db18b3daaca))
+Version bump only (cross-component release).
 

@@ -8,15 +8,17 @@ import (
 )
 
 // SanitizeMessages fixes issues in loaded conversations that would cause API
-// errors. The Anthropic API requires strict tool_use/tool_result pairing:
+// errors. The Anthropic API requires strict tool pairing:
 //   - Every tool_use in an assistant message must have a tool_result in the next user message
 //   - Every tool_result in a user message must reference a tool_use in the previous assistant message
+//   - Every server_tool_use in an assistant message must have a web_search_tool_result in the same message
 //   - No thinking blocks (not valid for re-submission)
 //
 // Strategy: two passes.
 //   - Pass 1: normalize all content to []LlmContentBlock, remove thinking blocks
-//   - Pass 2: for each assistant message, collect tool_use IDs. Check the next
-//     message for matching tool_results. Remove unmatched from both sides.
+//   - Pass 2: for each assistant message, enforce cross-message tool_use ↔ tool_result
+//     pairing and intra-message server_tool_use ↔ web_search_tool_result pairing.
+//     Remove unmatched blocks from both sides.
 func SanitizeMessages(messages []types.LlmMessage) []types.LlmMessage {
 	if len(messages) == 0 {
 		return messages
@@ -43,6 +45,9 @@ func SanitizeMessages(messages []types.LlmMessage) []types.LlmMessage {
 			if b.Type == "tool_use" && b.Input == nil {
 				b.Input = map[string]any{}
 			}
+			if b.Type == "server_tool_use" && b.Input == nil {
+				b.Input = map[string]any{}
+			}
 			filtered = append(filtered, b)
 		}
 		if len(filtered) == 0 {
@@ -59,16 +64,18 @@ func SanitizeMessages(messages []types.LlmMessage) []types.LlmMessage {
 		blocks := contentToBlockSlice(msg.Content)
 
 		if msg.Role == "assistant" && blocks != nil {
-			// Collect tool_use IDs in this assistant message
+			current := blocks
+			changed := false
+
+			// --- client tool pairing: tool_use ↔ tool_result (cross-message) ---
 			toolUseIDs := make(map[string]bool)
-			for _, b := range blocks {
+			for _, b := range current {
 				if b.Type == "tool_use" && b.ID != "" {
 					toolUseIDs[b.ID] = true
 				}
 			}
 
 			if len(toolUseIDs) > 0 {
-				// Check next message for matching tool_results
 				matchedIDs := make(map[string]bool)
 				if i+1 < len(normalized) && normalized[i+1].Role == "user" {
 					nextBlocks := contentToBlockSlice(normalized[i+1].Content)
@@ -79,23 +86,74 @@ func SanitizeMessages(messages []types.LlmMessage) []types.LlmMessage {
 					}
 				}
 
-				// Keep only tool_use blocks that have matching tool_results (or non-tool_use blocks)
 				if len(matchedIDs) < len(toolUseIDs) {
 					var filtered []types.LlmContentBlock
-					for _, b := range blocks {
+					for _, b := range current {
 						if b.Type == "tool_use" && b.ID != "" && !matchedIDs[b.ID] {
 							removed++
 							continue
 						}
 						filtered = append(filtered, b)
 					}
-					if len(filtered) == 0 {
-						removed++
-						continue
+					current = filtered
+					changed = true
+				}
+			}
+
+			// --- server tool pairing: server_tool_use ↔ web_search_tool_result (intra-message) ---
+			serverIDs := make(map[string]bool)
+			resultIDs := make(map[string]bool)
+			for _, b := range current {
+				if b.Type == "server_tool_use" && b.ID != "" {
+					serverIDs[b.ID] = true
+				}
+				if b.Type == "web_search_tool_result" && b.ToolUseID != "" {
+					resultIDs[b.ToolUseID] = true
+				}
+			}
+
+			if len(serverIDs) > 0 || len(resultIDs) > 0 {
+				hasOrphan := false
+				for id := range serverIDs {
+					if !resultIDs[id] {
+						hasOrphan = true
+						break
 					}
-					result = append(result, types.LlmMessage{Role: msg.Role, Content: filtered})
+				}
+				if !hasOrphan {
+					for id := range resultIDs {
+						if !serverIDs[id] {
+							hasOrphan = true
+							break
+						}
+					}
+				}
+
+				if hasOrphan {
+					var filtered []types.LlmContentBlock
+					for _, b := range current {
+						if b.Type == "server_tool_use" && b.ID != "" && !resultIDs[b.ID] {
+							removed++
+							continue
+						}
+						if b.Type == "web_search_tool_result" && b.ToolUseID != "" && !serverIDs[b.ToolUseID] {
+							removed++
+							continue
+						}
+						filtered = append(filtered, b)
+					}
+					current = filtered
+					changed = true
+				}
+			}
+
+			if changed {
+				if len(current) == 0 {
+					removed++
 					continue
 				}
+				result = append(result, types.LlmMessage{Role: msg.Role, Content: current})
+				continue
 			}
 
 			result = append(result, msg)

@@ -39,7 +39,7 @@ Subsequent versions will be auto-generated from conventional commit messages.
 
 * **engine:** add upgrade command ([aba5ff2](https://github.com/dsswift/ion/commit/aba5ff29baa01269f98a4465bfedbc0b816918ae))
 
-## [1.9.0](https://github.com/dsswift/ion/compare/engine-v1.8.2...engine-v1.9.0) (2026-05-06)
+## [1.9.0](https://github.com/dsswift/ion/compare/engine-v1.8.3...engine-v1.9.0) (2026-05-06)
 
 ### Features
 
@@ -50,6 +50,10 @@ Subsequent versions will be auto-generated from conventional commit messages.
 ### Bug Fixes
 
 * **engine:** correct event translation return value ([b91d0bf](https://github.com/dsswift/ion/commit/b91d0bf78849c06075cea9f1ca3c69417ee75f7f))
+
+## [1.8.3](https://github.com/dsswift/ion/compare/engine-v1.8.2...engine-v1.8.3) (2026-05-03)
+
+Dependency updates only.
 
 ## [1.8.2](https://github.com/dsswift/ion/compare/engine-v1.8.1...engine-v1.8.2) (2026-05-03)
 
@@ -84,6 +88,8 @@ Subsequent versions will be auto-generated from conventional commit messages.
 * **engine:** add extensionName to engine status for friendly display ([0c1886f](https://github.com/dsswift/ion/commit/0c1886ff661e891578a1bb507895ea6e3e7e086a))
 
 ## [1.5.1](https://github.com/dsswift/ion/compare/engine-v1.5.0...engine-v1.5.1) (2026-05-01)
+
+Internal refactoring and documentation only.
 
 ## [1.5.0](https://github.com/dsswift/ion/compare/engine-v1.4.0...engine-v1.5.0) (2026-04-30)
 
