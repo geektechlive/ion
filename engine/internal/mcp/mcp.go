@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/dsswift/ion/engine/internal/types"
 )
@@ -84,13 +85,16 @@ func ReadMcpResource(serverName, uri string) (*McpResourceContent, error) {
 	return conn.ReadResource(uri)
 }
 
+const mcpCallTimeout = 60 * time.Second
+
 // Connection is an active MCP server connection.
 type Connection struct {
-	name      string
-	tools     []ToolDef
-	transport mcpTransport
-	nextID    atomic.Int64
-	mu        sync.Mutex
+	name        string
+	tools       []ToolDef
+	transport   mcpTransport
+	nextID      atomic.Int64
+	mu          sync.Mutex
+	callTimeout time.Duration
 }
 
 // mcpTransport abstracts stdio vs SSE communication.
@@ -168,6 +172,9 @@ func Connect(name string, config types.McpServerConfig) (*Connection, error) {
 		name:      name,
 		transport: transport,
 	}
+	if config.TimeoutSeconds > 0 {
+		conn.callTimeout = time.Duration(config.TimeoutSeconds) * time.Second
+	}
 
 	// Initialize the connection.
 	if err := conn.initialize(); err != nil {
@@ -231,6 +238,11 @@ func (c *Connection) call(method string, params any) (json.RawMessage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	timeout := c.callTimeout
+	if timeout == 0 {
+		timeout = mcpCallTimeout
+	}
+
 	id := c.nextID.Add(1)
 	req := jsonRPCRequest{
 		JSONRPC: "2.0",
@@ -248,26 +260,43 @@ func (c *Connection) call(method string, params any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("send: %w", err)
 	}
 
-	// Read responses until we get one matching our ID.
-	for {
-		respData, err := c.transport.Receive()
-		if err != nil {
-			return nil, fmt.Errorf("receive: %w", err)
-		}
+	// Read responses in a goroutine so we can enforce a timeout.
+	type callResult struct {
+		data json.RawMessage
+		err  error
+	}
+	ch := make(chan callResult, 1)
+	go func() {
+		for {
+			respData, err := c.transport.Receive()
+			if err != nil {
+				ch <- callResult{nil, fmt.Errorf("receive: %w", err)}
+				return
+			}
 
-		var resp jsonRPCResponse
-		if err := json.Unmarshal(respData, &resp); err != nil {
-			continue // Skip non-response messages (notifications).
-		}
+			var resp jsonRPCResponse
+			if err := json.Unmarshal(respData, &resp); err != nil {
+				continue // Skip non-response messages (notifications).
+			}
 
-		if resp.ID != id {
-			continue // Skip responses for other requests.
-		}
+			if resp.ID != id {
+				continue // Skip responses for other requests.
+			}
 
-		if resp.Error != nil {
-			return nil, fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)
+			if resp.Error != nil {
+				ch <- callResult{nil, fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)}
+				return
+			}
+			ch <- callResult{resp.Result, nil}
+			return
 		}
-		return resp.Result, nil
+	}()
+
+	select {
+	case r := <-ch:
+		return r.data, r.err
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("mcp call %s: timeout after %s", method, timeout)
 	}
 }
 

@@ -113,13 +113,14 @@ type LimitsConfig struct {
 
 // McpServerConfig defines an MCP server connection.
 type McpServerConfig struct {
-	Type    string            `json:"type"`
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	OAuth   *McpOAuthConfig   `json:"oauth,omitempty"`
+	Type           string            `json:"type"`
+	Command        string            `json:"command,omitempty"`
+	Args           []string          `json:"args,omitempty"`
+	URL            string            `json:"url,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	OAuth          *McpOAuthConfig   `json:"oauth,omitempty"`
+	TimeoutSeconds int               `json:"timeoutSeconds,omitempty"`
 }
 
 // McpOAuthConfig holds OAuth 2.0 settings for an MCP server.
