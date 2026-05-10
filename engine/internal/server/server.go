@@ -620,6 +620,15 @@ func (s *Server) broadcast(line string) {
 	for _, cw := range clients {
 		select {
 		case cw.queue <- payload:
+			// If events were previously dropped, notify the client now that the queue has room.
+			if n := atomic.LoadInt64(&cw.dropped); n > 0 {
+				select {
+				case cw.queue <- eventsDroppedLine(n):
+					atomic.StoreInt64(&cw.dropped, 0)
+				default:
+					// Queue full again — notification will be retried on the next successful send.
+				}
+			}
 		default:
 			n := atomic.AddInt64(&cw.dropped, 1)
 			if n == 1 || n%256 == 0 {
@@ -631,6 +640,13 @@ func (s *Server) broadcast(line string) {
 	for _, lh := range listeners {
 		select {
 		case lh.queue <- line:
+			if n := atomic.LoadInt64(&lh.dropped); n > 0 {
+				select {
+				case lh.queue <- string(eventsDroppedLine(n)):
+					atomic.StoreInt64(&lh.dropped, 0)
+				default:
+				}
+			}
 		default:
 			n := atomic.AddInt64(&lh.dropped, 1)
 			if n == 1 || n%256 == 0 {
@@ -638,6 +654,11 @@ func (s *Server) broadcast(line string) {
 			}
 		}
 	}
+}
+
+// eventsDroppedLine returns a JSON line notifying the client that events were dropped.
+func eventsDroppedLine(count int64) []byte {
+	return []byte(fmt.Sprintf("{\"type\":\"engine_events_dropped\",\"count\":%d}\n", count))
 }
 
 // writeToClient routes a single line to the given conn through its queue, so
