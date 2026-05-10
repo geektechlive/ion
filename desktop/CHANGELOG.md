@@ -10,6 +10,13 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.17.0](https://github.com/dsswift/ion/compare/desktop-v1.16.0...desktop-v1.17.0) (2026-05-10)
+
+### Features
+
+* **engine:** add system hint to engine config ([79fa965](https://github.com/dsswift/ion/commit/79fa965e4a32ce4528ace67b32d60502ab4f2082))
+* **desktop:** add plan mode event to normalized events ([2acfea2](https://github.com/dsswift/ion/commit/2acfea23d8cffc91e35c3775e616e2e8e0dcb8c3))
+
 ## [1.16.0](https://github.com/dsswift/ion/compare/desktop-v1.15.3...desktop-v1.16.0) (2026-05-10)
 
 ### Features

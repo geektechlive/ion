@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.14.0](https://github.com/dsswift/ion/compare/engine-v1.13.0...engine-v1.14.0) (2026-05-10)
+
+### Features
+
+* **engine:** add system hint to engine config ([79fa965](https://github.com/dsswift/ion/commit/79fa965e4a32ce4528ace67b32d60502ab4f2082))
+
 ## [1.13.0](https://github.com/dsswift/ion/compare/engine-v1.12.0...engine-v1.13.0) (2026-05-10)
 
 ### Features

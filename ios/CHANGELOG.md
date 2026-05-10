@@ -10,6 +10,12 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.14.0](https://github.com/dsswift/ion/compare/ios-v1.13.2...ios-v1.14.0) (2026-05-10)
+
+### Features
+
+* **engine:** add system hint to engine config ([79fa965](https://github.com/dsswift/ion/commit/79fa965e4a32ce4528ace67b32d60502ab4f2082))
+
 ## [1.13.2](https://github.com/dsswift/ion/compare/ios-v1.13.1...ios-v1.13.2) (2026-05-10)
 
 ### Bug Fixes
