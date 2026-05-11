@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -114,6 +115,9 @@ type Connection struct {
 	nextID      atomic.Int64
 	mu          sync.Mutex
 	callTimeout time.Duration
+	dead        chan struct{} // closed when connection is marked dead (e.g. timeout)
+	deadOnce    sync.Once
+	deadErr     error // the error that caused the connection to be marked dead
 }
 
 // mcpTransport abstracts stdio vs SSE communication.
@@ -142,6 +146,14 @@ type jsonRPCResponse struct {
 type jsonRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// jsonRPCNotification is a JSON-RPC 2.0 notification (no "id" field).
+// Per the spec, notifications MUST NOT include an "id" member.
+type jsonRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
 }
 
 // Connect establishes a connection to an MCP server.
@@ -190,6 +202,7 @@ func Connect(name string, config types.McpServerConfig) (*Connection, error) {
 	conn := &Connection{
 		name:      name,
 		transport: transport,
+		dead:      make(chan struct{}),
 	}
 	if config.TimeoutSeconds > 0 {
 		conn.callTimeout = time.Duration(config.TimeoutSeconds) * time.Second
@@ -232,7 +245,7 @@ func (c *Connection) initialize() error {
 	_ = resp
 
 	// Send initialized notification (no response expected).
-	notif := jsonRPCRequest{
+	notif := jsonRPCNotification{
 		JSONRPC: "2.0",
 		Method:  "notifications/initialized",
 	}
@@ -258,6 +271,13 @@ func (c *Connection) listTools() ([]ToolDef, error) {
 }
 
 func (c *Connection) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	// Fast-fail if the connection was previously marked dead.
+	select {
+	case <-c.dead:
+		return nil, fmt.Errorf("mcp connection %s is dead: %w", c.name, c.deadErr)
+	default:
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -319,13 +339,22 @@ func (c *Connection) call(ctx context.Context, method string, params any) (json.
 	case r := <-ch:
 		return r.data, r.err
 	case <-ctx.Done():
-		return nil, fmt.Errorf("mcp call %s: %w", method, ctx.Err())
+		c.markDead(fmt.Errorf("mcp call %s: %w", method, ctx.Err()))
+		return nil, c.deadErr
 	case <-time.After(timeout):
-		// Note: the goroutine running Receive() may leak if the transport
-		// truly hangs, but this is strictly better than the caller also
-		// hanging indefinitely (the previous behavior).
-		return nil, fmt.Errorf("mcp call %s: timeout after %s", method, timeout)
+		c.markDead(fmt.Errorf("mcp call %s: timeout after %s", method, timeout))
+		return nil, c.deadErr
 	}
+}
+
+// markDead marks the connection as permanently failed. Subsequent calls will
+// fast-fail. The leaked Receive goroutine will be cleaned up when Close() is
+// called on the transport.
+func (c *Connection) markDead(err error) {
+	c.deadOnce.Do(func() {
+		c.deadErr = err
+		close(c.dead)
+	})
 }
 
 // CallTool invokes a tool on the MCP server and returns the text result.
@@ -346,7 +375,7 @@ func (c *Connection) CallTool(ctx context.Context, toolName string, params map[s
 		IsError bool `json:"isError"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return string(resp), nil
+		return "", fmt.Errorf("unexpected tool response format: %w (raw: %.200s)", err, resp)
 	}
 
 	if result.IsError {
@@ -435,8 +464,11 @@ func newStdioTransport(config types.McpServerConfig) (*stdioTransport, error) {
 	}
 
 	cmd := exec.Command(config.Command, config.Args...)
-	for k, v := range config.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+	if len(config.Env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range config.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -483,17 +515,23 @@ func (t *stdioTransport) Receive() (json.RawMessage, error) {
 }
 
 func (t *stdioTransport) Close() error {
-	t.stdin.Close()
-	return t.cmd.Process.Kill()
+	_ = t.stdin.Close()
+	_ = t.cmd.Process.Kill()
+	// Wait reaps the child process to prevent zombies. The error from Wait is
+	// always non-nil after Kill, so we ignore it.
+	_ = t.cmd.Wait()
+	return nil
 }
 
 // --- SSE transport ---
 
 type sseTransport struct {
-	baseURL string
-	msgCh   chan json.RawMessage
-	client  *http.Client
-	done    chan struct{}
+	baseURL   string
+	msgCh     chan json.RawMessage
+	client    *http.Client
+	done      chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 func newSSETransport(config types.McpServerConfig) (*sseTransport, error) {
@@ -508,10 +546,62 @@ func newSSETransport(config types.McpServerConfig) (*sseTransport, error) {
 		done:    make(chan struct{}),
 	}
 
+	// Start SSE event stream reader goroutine.
+	t.wg.Add(1)
+	go t.readEventStream()
+
 	return t, nil
 }
 
+// readEventStream connects to the SSE endpoint and reads events into msgCh.
+func (t *sseTransport) readEventStream() {
+	defer t.wg.Done()
+
+	req, err := http.NewRequest(http.MethodGet, t.baseURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		select {
+		case <-t.done:
+			return
+		default:
+		}
+
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		data = strings.TrimSpace(data)
+		if len(data) == 0 || !json.Valid([]byte(data)) {
+			continue
+		}
+
+		select {
+		case t.msgCh <- json.RawMessage(data):
+		case <-t.done:
+			return
+		}
+	}
+}
+
 func (t *sseTransport) Send(msg json.RawMessage) error {
+	select {
+	case <-t.done:
+		return fmt.Errorf("SSE transport closed")
+	default:
+	}
+
 	req, err := http.NewRequest(http.MethodPost, t.baseURL+"/message", strings.NewReader(string(msg)))
 	if err != nil {
 		return err
@@ -522,11 +612,24 @@ func (t *sseTransport) Send(msg json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("SSE send error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Some MCP servers return inline JSON-RPC responses in the POST body
+	// rather than via the event stream. Queue them like stream events.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil // Send succeeded; read failure is non-fatal.
+	}
+	if len(body) > 0 && json.Valid(body) {
+		select {
+		case t.msgCh <- json.RawMessage(body):
+		case <-t.done:
+		}
 	}
 
 	return nil
@@ -541,6 +644,12 @@ func (t *sseTransport) Receive() (json.RawMessage, error) {
 }
 
 func (t *sseTransport) Close() error {
-	close(t.done)
+	t.closeOnce.Do(func() {
+		close(t.done)
+		// Wait for the reader goroutine to exit before closing msgCh
+		// to prevent send-on-closed-channel panic.
+		t.wg.Wait()
+		close(t.msgCh)
+	})
 	return nil
 }

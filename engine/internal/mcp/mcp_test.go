@@ -409,6 +409,7 @@ func TestCall_Timeout(t *testing.T) {
 		name:        "timeout-test",
 		transport:   st,
 		callTimeout: 100 * time.Millisecond,
+		dead:        make(chan struct{}),
 	}
 
 	_, err := conn.call(context.Background(), "tools/list", nil)
@@ -446,6 +447,7 @@ func TestCall_ReceiveError(t *testing.T) {
 		name:        "error-test",
 		transport:   et,
 		callTimeout: 5 * time.Second,
+		dead:        make(chan struct{}),
 	}
 
 	_, err := conn.call(context.Background(), "tools/list", nil)
@@ -454,5 +456,35 @@ func TestCall_ReceiveError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "connection reset") {
 		t.Errorf("expected 'connection reset' in error, got: %s", err)
+	}
+}
+
+func TestCall_DeadAfterTimeout(t *testing.T) {
+	st := &slowTransport{done: make(chan struct{})}
+	defer st.Close()
+
+	conn := &Connection{
+		name:        "dead-test",
+		transport:   st,
+		callTimeout: 50 * time.Millisecond,
+		dead:        make(chan struct{}),
+	}
+
+	// First call should timeout and mark connection dead.
+	_, err := conn.call(context.Background(), "tools/list", nil)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timeout") {
+		t.Errorf("expected 'timeout' in error, got: %s", err)
+	}
+
+	// Second call should immediately fail with dead connection error.
+	_, err = conn.call(context.Background(), "tools/list", nil)
+	if err == nil {
+		t.Fatal("expected dead connection error")
+	}
+	if !strings.Contains(err.Error(), "dead") {
+		t.Errorf("expected 'dead' in error, got: %s", err)
 	}
 }
