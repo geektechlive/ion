@@ -10,6 +10,8 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.14.1](https://github.com/dsswift/ion/compare/ios-v1.14.0...ios-v1.14.1) (2026-05-11)
+
 ## [1.14.0](https://github.com/dsswift/ion/compare/ios-v1.13.2...ios-v1.14.0) (2026-05-10)
 
 ### Features
