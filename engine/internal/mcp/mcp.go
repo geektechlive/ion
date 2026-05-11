@@ -145,6 +145,14 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
+// jsonRPCNotification is a JSON-RPC 2.0 notification (no "id" field).
+// Per the spec, notifications MUST NOT include an "id" member.
+type jsonRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
 // Connect establishes a connection to an MCP server.
 func Connect(name string, config types.McpServerConfig) (*Connection, error) {
 	var transport mcpTransport
@@ -233,7 +241,7 @@ func (c *Connection) initialize() error {
 	_ = resp
 
 	// Send initialized notification (no response expected).
-	notif := jsonRPCRequest{
+	notif := jsonRPCNotification{
 		JSONRPC: "2.0",
 		Method:  "notifications/initialized",
 	}
