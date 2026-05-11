@@ -115,6 +115,9 @@ type Connection struct {
 	nextID      atomic.Int64
 	mu          sync.Mutex
 	callTimeout time.Duration
+	dead        chan struct{} // closed when connection is marked dead (e.g. timeout)
+	deadOnce    sync.Once
+	deadErr     error // the error that caused the connection to be marked dead
 }
 
 // mcpTransport abstracts stdio vs SSE communication.
@@ -199,6 +202,7 @@ func Connect(name string, config types.McpServerConfig) (*Connection, error) {
 	conn := &Connection{
 		name:      name,
 		transport: transport,
+		dead:      make(chan struct{}),
 	}
 	if config.TimeoutSeconds > 0 {
 		conn.callTimeout = time.Duration(config.TimeoutSeconds) * time.Second
@@ -267,6 +271,13 @@ func (c *Connection) listTools() ([]ToolDef, error) {
 }
 
 func (c *Connection) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	// Fast-fail if the connection was previously marked dead.
+	select {
+	case <-c.dead:
+		return nil, fmt.Errorf("mcp connection %s is dead: %w", c.name, c.deadErr)
+	default:
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -328,13 +339,22 @@ func (c *Connection) call(ctx context.Context, method string, params any) (json.
 	case r := <-ch:
 		return r.data, r.err
 	case <-ctx.Done():
-		return nil, fmt.Errorf("mcp call %s: %w", method, ctx.Err())
+		c.markDead(fmt.Errorf("mcp call %s: %w", method, ctx.Err()))
+		return nil, c.deadErr
 	case <-time.After(timeout):
-		// Note: the goroutine running Receive() may leak if the transport
-		// truly hangs, but this is strictly better than the caller also
-		// hanging indefinitely (the previous behavior).
-		return nil, fmt.Errorf("mcp call %s: timeout after %s", method, timeout)
+		c.markDead(fmt.Errorf("mcp call %s: timeout after %s", method, timeout))
+		return nil, c.deadErr
 	}
+}
+
+// markDead marks the connection as permanently failed. Subsequent calls will
+// fast-fail. The leaked Receive goroutine will be cleaned up when Close() is
+// called on the transport.
+func (c *Connection) markDead(err error) {
+	c.deadOnce.Do(func() {
+		c.deadErr = err
+		close(c.dead)
+	})
 }
 
 // CallTool invokes a tool on the MCP server and returns the text result.
