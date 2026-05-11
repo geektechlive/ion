@@ -3,6 +3,9 @@ import { unlink } from 'fs/promises'
 import { basename, join } from 'path'
 import { IPC } from '../../shared/types'
 import { runGit } from '../git-runner'
+import { error as _error } from '../logger'
+
+const logError = (msg: string): void => { _error('git-ipc', msg) }
 
 export function registerGitIpc(): void {
   ipcMain.handle(IPC.GIT_IS_REPO, async (_event, directory: string) => {
@@ -292,6 +295,7 @@ export function registerGitIpc(): void {
       await runGit(directory, ['add', '--', ...paths])
       return { ok: true }
     } catch (err: any) {
+      logError(`stage failed: ${err.message}`)
       return { ok: false, error: err.message }
     }
   })
@@ -301,6 +305,7 @@ export function registerGitIpc(): void {
       await runGit(directory, ['restore', '--staged', '--', ...paths])
       return { ok: true }
     } catch (err: any) {
+      logError(`unstage failed: ${err.message}`)
       return { ok: false, error: err.message }
     }
   })
@@ -335,6 +340,7 @@ export function registerGitIpc(): void {
       }
       return { ok: true }
     } catch (err: any) {
+      logError(`discard failed: ${err.message}`)
       return { ok: false, error: err.message }
     }
   })

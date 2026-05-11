@@ -28,6 +28,13 @@ export function GitChangesSection({
   const [diffFile, setDiffFile] = useState<{ path: string; staged: boolean } | null>(null)
   const [diffData, setDiffData] = useState<{ diff: string; fileName: string } | null>(null)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!error) return
+    const t = setTimeout(() => setError(null), 5_000)
+    return () => clearTimeout(t)
+  }, [error])
 
   const stagedFiles = files.filter((f) => f.staged)
   const unstagedFiles = files.filter((f) => !f.staged)
@@ -65,12 +72,14 @@ export function GitChangesSection({
   }, [])
 
   const handleStage = async (path: string) => {
-    await window.ion.gitStage(directory, [path])
+    const result = await window.ion.gitStage(directory, [path])
+    if (!result.ok) { setError(result.error || 'Failed to stage file'); return }
     onRefresh()
   }
 
   const handleUnstage = async (path: string) => {
-    await window.ion.gitUnstage(directory, [path])
+    const result = await window.ion.gitUnstage(directory, [path])
+    if (!result.ok) { setError(result.error || 'Failed to unstage file'); return }
     onRefresh()
   }
 
@@ -80,15 +89,17 @@ export function GitChangesSection({
   }
   const confirmDiscard = async () => {
     if (!discardConfirm) return
-    await window.ion.gitDiscard(directory, [discardConfirm])
+    const result = await window.ion.gitDiscard(directory, [discardConfirm])
     setDiscardConfirm(null)
+    if (!result.ok) { setError(result.error || 'Failed to discard changes'); return }
     onRefresh()
   }
 
   const handleStageAll = async () => {
     const paths = unstagedFiles.map((f) => f.path)
     if (paths.length > 0) {
-      await window.ion.gitStage(directory, paths)
+      const result = await window.ion.gitStage(directory, paths)
+      if (!result.ok) { setError(result.error || 'Failed to stage files'); return }
       onRefresh()
     }
   }
@@ -96,7 +107,8 @@ export function GitChangesSection({
   const handleUnstageAll = async () => {
     const paths = stagedFiles.map((f) => f.path)
     if (paths.length > 0) {
-      await window.ion.gitUnstage(directory, paths)
+      const result = await window.ion.gitUnstage(directory, paths)
+      if (!result.ok) { setError(result.error || 'Failed to unstage files'); return }
       onRefresh()
     }
   }
@@ -220,6 +232,23 @@ export function GitChangesSection({
           </div>
         )}
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div
+          className="flex items-center justify-between px-2 py-1.5"
+          style={{ borderTop: `1px solid ${colors.containerBorder}`, background: colors.surfacePrimary, flexShrink: 0 }}
+        >
+          <span className="text-[10px] truncate" style={{ color: '#c47060' }}>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0"
+            style={{ color: colors.textTertiary }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Discard confirmation */}
       {discardConfirm && (

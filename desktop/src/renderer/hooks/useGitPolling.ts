@@ -23,8 +23,8 @@ export const useGitPollingStore = create<GitPollingState>((set, get) => ({
   refresh: () => set((s) => ({ refreshKey: s.refreshKey + 1 })),
   _update: (data) => {
     const prev = get()
-    const sig = data.branch + '\n' + data.files.map((f) => f.status + f.path).join('\n')
-    const prevSig = prev.branch + '\n' + prev.files.map((f) => f.status + f.path).join('\n')
+    const sig = data.branch + '\n' + data.files.map((f) => `${f.staged}:${f.status}:${f.path}`).join('\n')
+    const prevSig = prev.branch + '\n' + prev.files.map((f) => `${f.staged}:${f.status}:${f.path}`).join('\n')
     const changed = sig !== prevSig || data.ahead !== prev.ahead || data.behind !== prev.behind
     if (changed) {
       set({
