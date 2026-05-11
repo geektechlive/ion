@@ -379,6 +379,11 @@ export class EngineBridge extends EventEmitter {
     this._send({ cmd: 'abort', key })
   }
 
+  sendSteer(key: string, message: string): void {
+    log(`sendSteer: key=${key} len=${message.length}`)
+    this._send({ cmd: 'steer_agent', key, agentName: '', message })
+  }
+
   sendAbortAgent(key: string, agentName: string, subtree: boolean): void {
     log(`sendAbortAgent: key=${key} agent=${agentName} subtree=${subtree} connected=${this.connected}`)
     this._send({ cmd: 'abort_agent', key, agentName, subtree })

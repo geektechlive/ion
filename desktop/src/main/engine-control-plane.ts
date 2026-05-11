@@ -224,6 +224,12 @@ export class EngineControlPlane extends EventEmitter {
     return true
   }
 
+  steerSession(tabId: string, message: string): void {
+    if (!this.tabs.has(tabId)) return
+    log(`steerSession: tab=${tabId} len=${message.length}`)
+    this.bridge.sendSteer(tabId, message)
+  }
+
   async retry(tabId: string, requestId: string, options: RunOptions): Promise<void> {
     return this.submitPrompt(tabId, requestId, options)
   }

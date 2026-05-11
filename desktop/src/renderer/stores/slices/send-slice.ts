@@ -125,9 +125,16 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
               title,
               attachments: [],
               bashResults: [],
-              queuedPrompts: withEffectiveBase.queuedPrompts.length > 0
-                ? [withEffectiveBase.queuedPrompts[0] + '\n\n' + prompt]
-                : [prompt],
+              messages: [
+                ...withEffectiveBase.messages,
+                {
+                  id: nextMsgId(),
+                  role: 'user' as const,
+                  content: prompt,
+                  attachments: msgAttachments.length > 0 ? msgAttachments : undefined,
+                  timestamp: Date.now(),
+                },
+              ],
             }
           }
           return {
@@ -153,6 +160,11 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
           }
         }),
       }))
+
+      if (isBusy) {
+        window.ion.steer(activeTabId, fullPrompt)
+        return
+      }
 
       const preferredModel = usePreferencesStore.getState().preferredModel
 
@@ -236,7 +248,14 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         tabs: s.tabs.map((t) => {
           if (t.id !== tabId) return t
           if (isBusy) {
-            return { ...t, title, queuedPrompts: t.queuedPrompts.length > 0 ? [t.queuedPrompts[0] + '\n\n' + prompt] : [prompt] }
+            return {
+              ...t,
+              title,
+              messages: [
+                ...t.messages,
+                { id: nextMsgId(), role: 'user' as const, content: prompt, timestamp: Date.now(), source: 'remote' as const },
+              ],
+            }
           }
           return {
             ...t,
@@ -253,6 +272,11 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
           }
         }),
       }))
+
+      if (isBusy) {
+        window.ion.steer(tabId, prompt)
+        return
+      }
 
       let remoteExtensions: string[] | undefined
       if (tab.isEngine && tab.engineProfileId) {

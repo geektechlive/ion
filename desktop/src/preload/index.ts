@@ -8,6 +8,7 @@ export interface IonAPI {
   createTab(): Promise<{ tabId: string }>
   prompt(tabId: string, requestId: string, options: RunOptions): Promise<void>
   cancel(requestId: string): Promise<boolean>
+  steer(tabId: string, message: string): void
   stopTab(tabId: string): Promise<boolean>
   retry(tabId: string, requestId: string, options: RunOptions): Promise<void>
   status(): Promise<HealthReport>
@@ -154,6 +155,7 @@ const api: IonAPI = {
   createTab: () => ipcRenderer.invoke(IPC.CREATE_TAB),
   prompt: (tabId, requestId, options) => ipcRenderer.invoke(IPC.PROMPT, { tabId, requestId, options }),
   cancel: (requestId) => ipcRenderer.invoke(IPC.CANCEL, requestId),
+  steer: (tabId, message) => ipcRenderer.send(IPC.STEER, { tabId, message }),
   stopTab: (tabId) => ipcRenderer.invoke(IPC.STOP_TAB, tabId),
   retry: (tabId, requestId, options) => ipcRenderer.invoke(IPC.RETRY, { tabId, requestId, options }),
   status: () => ipcRenderer.invoke(IPC.STATUS),
