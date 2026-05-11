@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.18.1](https://github.com/dsswift/ion/compare/desktop-v1.18.0...desktop-v1.18.1) (2026-05-11)
+
+### Bug Fixes
+
+* **desktop:** add x64ArchFiles for node-pty universal build ([f04f6e1](https://github.com/dsswift/ion/commit/f04f6e1b911b8bee9e86b795c1e1548fb100d5aa))
+
 ## [1.18.0](https://github.com/dsswift/ion/compare/desktop-v1.17.0...desktop-v1.18.0) (2026-05-11)
 
 ### Features
