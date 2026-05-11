@@ -526,10 +526,12 @@ func (t *stdioTransport) Close() error {
 // --- SSE transport ---
 
 type sseTransport struct {
-	baseURL string
-	msgCh   chan json.RawMessage
-	client  *http.Client
-	done    chan struct{}
+	baseURL   string
+	msgCh     chan json.RawMessage
+	client    *http.Client
+	done      chan struct{}
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 func newSSETransport(config types.McpServerConfig) (*sseTransport, error) {
@@ -544,10 +546,62 @@ func newSSETransport(config types.McpServerConfig) (*sseTransport, error) {
 		done:    make(chan struct{}),
 	}
 
+	// Start SSE event stream reader goroutine.
+	t.wg.Add(1)
+	go t.readEventStream()
+
 	return t, nil
 }
 
+// readEventStream connects to the SSE endpoint and reads events into msgCh.
+func (t *sseTransport) readEventStream() {
+	defer t.wg.Done()
+
+	req, err := http.NewRequest(http.MethodGet, t.baseURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := t.client.Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		select {
+		case <-t.done:
+			return
+		default:
+		}
+
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		data = strings.TrimSpace(data)
+		if len(data) == 0 || !json.Valid([]byte(data)) {
+			continue
+		}
+
+		select {
+		case t.msgCh <- json.RawMessage(data):
+		case <-t.done:
+			return
+		}
+	}
+}
+
 func (t *sseTransport) Send(msg json.RawMessage) error {
+	select {
+	case <-t.done:
+		return fmt.Errorf("SSE transport closed")
+	default:
+	}
+
 	req, err := http.NewRequest(http.MethodPost, t.baseURL+"/message", strings.NewReader(string(msg)))
 	if err != nil {
 		return err
@@ -558,11 +612,24 @@ func (t *sseTransport) Send(msg json.RawMessage) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("SSE send error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Some MCP servers return inline JSON-RPC responses in the POST body
+	// rather than via the event stream. Queue them like stream events.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil // Send succeeded; read failure is non-fatal.
+	}
+	if len(body) > 0 && json.Valid(body) {
+		select {
+		case t.msgCh <- json.RawMessage(body):
+		case <-t.done:
+		}
 	}
 
 	return nil
@@ -577,6 +644,12 @@ func (t *sseTransport) Receive() (json.RawMessage, error) {
 }
 
 func (t *sseTransport) Close() error {
-	close(t.done)
+	t.closeOnce.Do(func() {
+		close(t.done)
+		// Wait for the reader goroutine to exit before closing msgCh
+		// to prevent send-on-closed-channel panic.
+		t.wg.Wait()
+		close(t.msgCh)
+	})
 	return nil
 }
