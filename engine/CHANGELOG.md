@@ -13,6 +13,16 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.16.0](https://github.com/dsswift/ion/compare/engine-v1.15.0...engine-v1.16.0) (2026-05-11)
+
+### Features
+
+* **engine:** add web search mode configuration ([05b25f5](https://github.com/dsswift/ion/commit/05b25f524d7019af038ef146fe41ce72a1e498f5))
+
+### Bug Fixes
+
+* **engine:** cap cache_control blocks to anthropic limit of 4 ([bfabbd2](https://github.com/dsswift/ion/commit/bfabbd21c421ebf3627e62463c17124139bd91d9))
+
 ## [1.15.0](https://github.com/dsswift/ion/compare/engine-v1.14.0...engine-v1.15.0) (2026-05-11)
 
 ### Features

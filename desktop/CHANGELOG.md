@@ -10,6 +10,18 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.19.0](https://github.com/dsswift/ion/compare/desktop-v1.18.1...desktop-v1.19.0) (2026-05-11)
+
+### Features
+
+* **desktop:** wire steer_agent for mid-run messages ([82b883b](https://github.com/dsswift/ion/commit/82b883b18be93420f16b0189d6df523f9b4ef32a))
+
+### Bug Fixes
+
+* **desktop:** emit session_init for queued prompt transitions ([371208b](https://github.com/dsswift/ion/commit/371208bd3b4173a0f78e0d6bc5f2d1e25b079cc9))
+* **desktop:** detect staged flag in git polling diff ([1a49387](https://github.com/dsswift/ion/commit/1a4938792f58379bf59bbf38837148f8ebcc7d48))
+* **desktop:** move commit input to dedicated row ([6d17a2c](https://github.com/dsswift/ion/commit/6d17a2c30b77cd297d7cd4b5cf63ce1ef07a2d74))
+
 ## [1.18.1](https://github.com/dsswift/ion/compare/desktop-v1.18.0...desktop-v1.18.1) (2026-05-11)
 
 ### Bug Fixes
