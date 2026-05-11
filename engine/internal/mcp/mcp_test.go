@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -410,7 +411,7 @@ func TestCall_Timeout(t *testing.T) {
 		callTimeout: 100 * time.Millisecond,
 	}
 
-	_, err := conn.call("tools/list", nil)
+	_, err := conn.call(context.Background(), "tools/list", nil)
 	if err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
@@ -447,7 +448,7 @@ func TestCall_ReceiveError(t *testing.T) {
 		callTimeout: 5 * time.Second,
 	}
 
-	_, err := conn.call("tools/list", nil)
+	_, err := conn.call(context.Background(), "tools/list", nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

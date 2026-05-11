@@ -1,8 +1,10 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	ionconfig "github.com/dsswift/ion/engine/internal/config"
@@ -196,7 +198,9 @@ func (m *Manager) wireExternalTools(s *engineSession, key string, extGroup *exte
 			toolName := parts[2]
 			for _, conn := range mcpConns {
 				if conn.Name() == serverName {
-					content, err := conn.CallTool(toolName, input)
+					callCtx, callCancel := context.WithTimeout(context.Background(), 60*time.Second)
+					content, err := conn.CallTool(callCtx, toolName, input)
+					callCancel()
 					if err != nil {
 						return "", true, err
 					}

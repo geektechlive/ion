@@ -82,10 +82,8 @@ func (r *RelayTransport) connectLoop(handler func(conn Conn)) {
 
 			r.mu.Lock()
 			r.attempt++
-			if r.attempt > 100 {
-				r.mu.Unlock()
-				utils.Log("Relay", "max reconnection attempts reached")
-				return
+			if r.attempt > 0 && r.attempt%50 == 0 {
+				utils.Warn("Relay", fmt.Sprintf("still trying to reconnect (attempt %d)", r.attempt))
 			}
 			r.mu.Unlock()
 			continue

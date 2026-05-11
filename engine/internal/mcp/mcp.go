@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,7 +74,9 @@ func ListMcpResources(serverName string) ([]McpResource, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("MCP server %q not connected", serverName)
 	}
-	return conn.ListResources()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return conn.ListResources(ctx)
 }
 
 // ReadMcpResource reads a resource from a connected MCP server by name and URI.
@@ -82,7 +85,9 @@ func ReadMcpResource(serverName, uri string) (*McpResourceContent, error) {
 	if conn == nil {
 		return nil, fmt.Errorf("MCP server %q not connected", serverName)
 	}
-	return conn.ReadResource(uri)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return conn.ReadResource(ctx, uri)
 }
 
 const mcpCallTimeout = 60 * time.Second
@@ -197,7 +202,9 @@ func Connect(name string, config types.McpServerConfig) (*Connection, error) {
 }
 
 func (c *Connection) initialize() error {
-	resp, err := c.call("initialize", map[string]any{
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
 		"clientInfo": map[string]any{
@@ -220,7 +227,9 @@ func (c *Connection) initialize() error {
 }
 
 func (c *Connection) listTools() ([]ToolDef, error) {
-	resp, err := c.call("tools/list", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := c.call(ctx, "tools/list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +243,7 @@ func (c *Connection) listTools() ([]ToolDef, error) {
 	return result.Tools, nil
 }
 
-func (c *Connection) call(method string, params any) (json.RawMessage, error) {
+func (c *Connection) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -295,14 +304,19 @@ func (c *Connection) call(method string, params any) (json.RawMessage, error) {
 	select {
 	case r := <-ch:
 		return r.data, r.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("mcp call %s: %w", method, ctx.Err())
 	case <-time.After(timeout):
+		// Note: the goroutine running Receive() may leak if the transport
+		// truly hangs, but this is strictly better than the caller also
+		// hanging indefinitely (the previous behavior).
 		return nil, fmt.Errorf("mcp call %s: timeout after %s", method, timeout)
 	}
 }
 
 // CallTool invokes a tool on the MCP server and returns the text result.
-func (c *Connection) CallTool(toolName string, params map[string]interface{}) (string, error) {
-	resp, err := c.call("tools/call", map[string]any{
+func (c *Connection) CallTool(ctx context.Context, toolName string, params map[string]interface{}) (string, error) {
+	resp, err := c.call(ctx, "tools/call", map[string]any{
 		"name":      toolName,
 		"arguments": params,
 	})
@@ -346,8 +360,8 @@ func (c *Connection) Tools() []ToolDef {
 }
 
 // ListResources returns resources available on the MCP server.
-func (c *Connection) ListResources() ([]McpResource, error) {
-	resp, err := c.call("resources/list", nil)
+func (c *Connection) ListResources(ctx context.Context) ([]McpResource, error) {
+	resp, err := c.call(ctx, "resources/list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -362,8 +376,8 @@ func (c *Connection) ListResources() ([]McpResource, error) {
 }
 
 // ReadResource reads a specific resource by URI from the MCP server.
-func (c *Connection) ReadResource(uri string) (*McpResourceContent, error) {
-	resp, err := c.call("resources/read", map[string]any{
+func (c *Connection) ReadResource(ctx context.Context, uri string) (*McpResourceContent, error) {
+	resp, err := c.call(ctx, "resources/read", map[string]any{
 		"uri": uri,
 	})
 	if err != nil {
