@@ -25,11 +25,21 @@ type Channel struct {
 type Hub struct {
 	mu       sync.RWMutex
 	channels map[string]*Channel
+
+	// Configurable timeouts and limits (set at construction, read-only after).
+	WriteTimeout   time.Duration // forward write deadline (default 10s)
+	PingInterval   time.Duration // keepalive ping interval (default 30s)
+	PingTimeout    time.Duration // pong wait deadline (default 10s)
+	MaxMessageSize int64         // read limit in bytes (default 1MB)
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		channels: make(map[string]*Channel),
+		channels:       make(map[string]*Channel),
+		WriteTimeout:   10 * time.Second,
+		PingInterval:   30 * time.Second,
+		PingTimeout:    10 * time.Second,
+		MaxMessageSize: 1024 * 1024,
 	}
 }
 
@@ -87,9 +97,9 @@ type controlMessage struct {
 	Type string `json:"type"`
 }
 
-func sendControl(conn *websocket.Conn, msgType string) {
+func sendControl(conn *websocket.Conn, msgType string, timeout time.Duration) {
 	msg, _ := json.Marshal(controlMessage{Type: msgType})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := conn.Write(ctx, websocket.MessageText, msg); err != nil {
 		log.Printf("sendControl(%s) error: %v", msgType, err)
@@ -121,8 +131,8 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 		return
 	}
 
-	// Allow messages up to 1MB (default is 32KB).
-	conn.SetReadLimit(1024 * 1024)
+	// Allow messages up to the configured max (default 1MB).
+	conn.SetReadLimit(h.MaxMessageSize)
 
 	ch := h.getOrCreateChannel(channelID)
 
@@ -152,7 +162,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 	// Notify peer that the other side connected.
 	peer := ch.getPeerLocked(role)
 	if peer != nil {
-		sendControl(peer, "relay:peer-reconnected")
+		sendControl(peer, "relay:peer-reconnected", h.WriteTimeout)
 	}
 
 	ch.mu.Unlock()
@@ -163,7 +173,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 	// NAT timeouts, load balancer idle limits, and mobile network switches
 	// can silently kill connections.
 	done := make(chan struct{})
-	go ping(conn, done)
+	go ping(conn, done, h.PingInterval, h.PingTimeout)
 
 	// Read loop: forward messages to the peer.
 	for {
@@ -178,7 +188,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 		ch.mu.Unlock()
 
 		if peer != nil {
-			writeCtx, writeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			writeCtx, writeCancel := context.WithTimeout(context.Background(), h.WriteTimeout)
 			if err := peer.Write(writeCtx, msgType, data); err != nil {
 				log.Printf("channel=%s forward error: %v", channelID, err)
 			}
@@ -216,7 +226,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 	ch.mu.Unlock()
 
 	if peer != nil {
-		sendControl(peer, "relay:peer-disconnected")
+		sendControl(peer, "relay:peer-disconnected", h.WriteTimeout)
 	}
 
 	log.Printf("channel=%s role=%s disconnected", channelID, role)
@@ -232,18 +242,18 @@ func (ch *Channel) getPeerLocked(myRole string) *websocket.Conn {
 	return ch.ion
 }
 
-// ping sends WebSocket pings every 30s to detect dead connections.
-// If a pong is not received within 10s, the connection is closed,
+// ping sends WebSocket pings at the configured interval to detect dead connections.
+// If a pong is not received within pingTimeout, the connection is closed,
 // which causes the read loop to exit.
-func ping(conn *websocket.Conn, done <-chan struct{}) {
-	ticker := time.NewTicker(30 * time.Second)
+func ping(conn *websocket.Conn, done <-chan struct{}, interval, pingTimeout time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-done:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 			err := conn.Ping(ctx)
 			cancel()
 			if err != nil {
