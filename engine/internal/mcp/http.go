@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 )
 
 // httpTransport implements mcpTransport for StreamableHTTP MCP servers.
@@ -17,6 +18,8 @@ type httpTransport struct {
 	sessionID string
 	mu        sync.Mutex
 	respCh    chan json.RawMessage
+	closed    atomic.Bool
+	closeOnce sync.Once
 }
 
 func newHTTPTransport(baseURL string, headers map[string]string) (*httpTransport, error) {
@@ -72,7 +75,9 @@ func (t *httpTransport) Send(msg json.RawMessage) error {
 	}
 
 	if len(body) > 0 && json.Valid(body) {
-		t.respCh <- json.RawMessage(body)
+		if !t.closed.Load() {
+			t.respCh <- json.RawMessage(body)
+		}
 	}
 
 	return nil
@@ -87,24 +92,28 @@ func (t *httpTransport) Receive() (json.RawMessage, error) {
 }
 
 func (t *httpTransport) Close() error {
-	t.mu.Lock()
-	sid := t.sessionID
-	t.mu.Unlock()
+	t.closeOnce.Do(func() {
+		t.closed.Store(true)
 
-	if sid != "" {
-		req, err := http.NewRequest(http.MethodDelete, t.baseURL, nil)
-		if err == nil {
-			req.Header.Set("Mcp-Session-Id", sid)
-			for k, v := range t.headers {
-				req.Header.Set(k, v)
-			}
-			resp, err := t.client.Do(req)
+		t.mu.Lock()
+		sid := t.sessionID
+		t.mu.Unlock()
+
+		if sid != "" {
+			req, err := http.NewRequest(http.MethodDelete, t.baseURL, nil)
 			if err == nil {
-				resp.Body.Close()
+				req.Header.Set("Mcp-Session-Id", sid)
+				for k, v := range t.headers {
+					req.Header.Set(k, v)
+				}
+				resp, err := t.client.Do(req)
+				if err == nil {
+					_ = resp.Body.Close()
+				}
 			}
 		}
-	}
 
-	close(t.respCh)
+		close(t.respCh)
+	})
 	return nil
 }

@@ -14,9 +14,10 @@ import (
 
 // wsTransport implements mcpTransport over a WebSocket connection.
 type wsTransport struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
-	done chan struct{}
+	conn      *websocket.Conn
+	mu        sync.Mutex
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func newWSTransport(url string, headers map[string]string) (*wsTransport, error) {
@@ -72,6 +73,10 @@ func (t *wsTransport) Receive() (json.RawMessage, error) {
 }
 
 func (t *wsTransport) Close() error {
-	close(t.done)
-	return t.conn.Close(websocket.StatusNormalClosure, "closing")
+	var err error
+	t.closeOnce.Do(func() {
+		close(t.done)
+		err = t.conn.Close(websocket.StatusNormalClosure, "closing")
+	})
+	return err
 }
