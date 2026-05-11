@@ -6,6 +6,7 @@ export const IPC = {
   CREATE_TAB: 'ion:create-tab',
   PROMPT: 'ion:prompt',
   CANCEL: 'ion:cancel',
+  STEER: 'ion:steer',
   STOP_TAB: 'ion:stop-tab',
   RETRY: 'ion:retry',
   STATUS: 'ion:status',

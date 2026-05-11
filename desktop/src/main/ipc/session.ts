@@ -107,6 +107,11 @@ export function registerSessionIpc(): void {
     return sessionPlane.cancel(requestId)
   })
 
+  ipcMain.on(IPC.STEER, (_event, { tabId, message }: { tabId: string; message: string }) => {
+    log(`IPC STEER: tab=${tabId}`)
+    sessionPlane.steerSession(tabId, message)
+  })
+
   ipcMain.handle(IPC.STOP_TAB, (_event, tabId: string) => {
     log(`IPC STOP_TAB: ${tabId}`)
     return sessionPlane.cancelTab(tabId)
