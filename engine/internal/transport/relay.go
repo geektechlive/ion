@@ -130,12 +130,15 @@ func (r *RelayTransport) dial() error {
 		HTTPHeader: http.Header{
 			"Authorization": []string{"Bearer " + r.apiKey},
 		},
+		CompressionMode: websocket.CompressionContextTakeover,
 	}
 
 	conn, _, err := websocket.Dial(context.Background(), dialURL, opts)
 	if err != nil {
 		return fmt.Errorf("websocket dial: %w", err)
 	}
+
+	conn.SetReadLimit(1024 * 1024) // 1MB, matching relay server limit
 
 	r.mu.Lock()
 	r.conn = conn
@@ -207,7 +210,9 @@ func (r *RelayTransport) Broadcast(data []byte) {
 		return
 	}
 
-	err := conn.Write(context.Background(), websocket.MessageText, data)
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer writeCancel()
+	err := conn.Write(writeCtx, websocket.MessageText, data)
 	if err != nil {
 		utils.Log("Relay", fmt.Sprintf("broadcast write error: %v", err))
 	}

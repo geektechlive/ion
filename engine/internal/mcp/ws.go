@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -46,7 +47,9 @@ func newWSTransport(url string, headers map[string]string) (*wsTransport, error)
 func (t *wsTransport) Send(msg json.RawMessage) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.conn.Write(context.Background(), websocket.MessageText, msg)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return t.conn.Write(ctx, websocket.MessageText, msg)
 }
 
 func (t *wsTransport) Receive() (json.RawMessage, error) {
