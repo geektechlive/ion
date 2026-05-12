@@ -139,9 +139,11 @@ final class TransportManager {
     /// Connect to a LAN host with challenge-response auth handshake.
     /// Returns `true` if auth succeeded, `false` if rejected.
     func startLANWithAuth(host: String, port: UInt16) async -> Bool {
+        DiagnosticLog.log("LAN-AUTH: start \(host):\(port) devId=\(deviceId?.prefix(8) ?? "nil")")
         await lan.connect(host: host, port: port)
 
         let success = await performLANAuth()
+        DiagnosticLog.log("LAN-AUTH: result=\(success ? "OK" : "FAIL") \(host):\(port)")
         if success {
             // Record as current LAN host so Bonjour observation doesn't re-discover and clobber us.
             currentLANHost = DiscoveredHost(
@@ -200,6 +202,7 @@ final class TransportManager {
     func setState(_ newState: TransportState) {
         guard state != newState else { return }
         print("[Ion] TransportManager: \(state) -> \(newState)")
+        DiagnosticLog.log("TM-STATE: \(state) -> \(newState)")
         state = newState
     }
 
@@ -234,6 +237,7 @@ final class TransportManager {
     ///   doesn't mean the peer is reachable.
     func startDisconnectGracePeriod(force: Bool = false) {
         guard disconnectGraceTask == nil else { return }
+        DiagnosticLog.log("GRACE: start force=\(force)")
         eventContinuation.yield(.transportReconnecting)
         disconnectGraceTask = Task { [weak self] in
             try? await Task.sleep(for: Self.disconnectGracePeriod)
@@ -280,6 +284,7 @@ final class TransportManager {
 
                 // Detect LAN socket disconnect even if Bonjour hasn't noticed yet.
                 if self.currentLANHost != nil, !self.lan.isConnected {
+                    DiagnosticLog.log("BONJOUR: LAN socket lost, clearing host")
                     self.currentLANHost = nil
                     self.lanListenTask?.cancel()
                     self.lanListenTask = nil
@@ -287,6 +292,7 @@ final class TransportManager {
                 }
 
                 let needsConnect = self.currentLANHost == nil && !self.lan.isConnected
+                if needsConnect { DiagnosticLog.log("BONJOUR: needsConnect=true") }
 
                 // When disconnected with no hosts visible, restart the Bonjour
                 // browser once to force NWBrowser to re-discover services.
@@ -301,6 +307,7 @@ final class TransportManager {
                 if countChanged || needsConnect {
                     if let host = self.matchingLANHost(hosts),
                        !self.lan.isConnected {
+                        DiagnosticLog.log("BONJOUR: connecting to \(host.name) \(host.host):\(host.port)")
                         self.currentLANHost = host
                         let authed = await self.startLANWithAuth(host: host.host, port: host.port)
                         if authed {
@@ -335,7 +342,11 @@ final class TransportManager {
     private func matchingLANHost(_ hosts: [DiscoveredService]) -> DiscoveredService? {
         let ionHosts = hosts.filter { $0.kind == .ionDirect }
         if let name = deviceName {
-            return ionHosts.first { $0.name == name }
+            let match = ionHosts.first { $0.name == name }
+            if match == nil && !ionHosts.isEmpty {
+                DiagnosticLog.log("BONJOUR-MATCH: filter=\(name) no match in \(ionHosts.map(\.name))")
+            }
+            return match
         }
         // Fallback: no name filter (single desktop / legacy).
         return ionHosts.first

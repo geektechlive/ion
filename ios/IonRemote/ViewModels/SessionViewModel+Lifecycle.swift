@@ -15,6 +15,7 @@ extension SessionViewModel {
 
         guard let device = activeDevice else {
             ionLog.warning("connect: no paired devices")
+            DiagnosticLog.log("CONNECT: no paired devices")
             return
         }
 
@@ -29,6 +30,7 @@ extension SessionViewModel {
            let host = url.host(percentEncoded: false),
            let port = url.port {
             ionLog.info("connect: device=\(device.name) via LAN-only (\(host):\(port))")
+            DiagnosticLog.log("CONNECT: LAN-direct \(device.name) \(host):\(port) id=\(device.id.prefix(8))")
             restoreCachedLayout(for: device.id)
             connectLAN(host: host, port: UInt16(port))
             return
@@ -38,6 +40,7 @@ extension SessionViewModel {
         let channelId = E2ECrypto.deriveChannelId(sharedSecret: sharedKey)
 
         ionLog.info("connect: device=\(device.name) relayURL=\(effectiveRelayURL) channelId=\(channelId.prefix(8))...")
+        DiagnosticLog.log("CONNECT: relay \(device.name) url=\(effectiveRelayURL) ch=\(channelId.prefix(8))")
 
         guard !effectiveRelayURL.isEmpty,
               let url = URL(string: effectiveRelayURL) else {
@@ -72,6 +75,7 @@ extension SessionViewModel {
         guard let device = activeDevice else { return }
 
         ionLog.info("connectLAN: device=\(device.name) host=\(host):\(port)")
+        DiagnosticLog.log("LAN-CONNECT: \(device.name) \(host):\(port) id=\(device.id.prefix(8))")
 
         let sharedKey = SymmetricKey(data: device.sharedSecret)
         let tm = TransportManager(sharedKey: sharedKey, deviceId: device.id)
@@ -83,12 +87,14 @@ extension SessionViewModel {
             let authed = await tm.startLANWithAuth(host: host, port: port)
             if authed {
                 ionLog.info("connectLAN: auth succeeded for \(device.name)")
+                DiagnosticLog.log("LAN-CONNECT: auth OK \(device.name)")
                 await MainActor.run {
                     self.connectionState = .connected
                     self.send(.sync)
                 }
             } else {
                 ionLog.error("connectLAN: auth FAILED for \(device.name)")
+                DiagnosticLog.log("LAN-CONNECT: auth FAILED \(device.name)")
                 await MainActor.run {
                     self.connectionState = .authFailed
                     self.transport?.stop()
@@ -111,6 +117,7 @@ extension SessionViewModel {
         let effectiveAPIKey = device.relayAPIKey ?? relayAPIKey
 
         ionLog.info("softReconnect: device=\(device.name) apiKey=\(effectiveAPIKey) relayURL=\(effectiveRelayURL)")
+        DiagnosticLog.log("SOFT-RECONN: \(device.name) key=\(effectiveAPIKey.prefix(8)) url=\(effectiveRelayURL)")
 
         // LAN-only device: reconnect directly without a relay.
         if effectiveAPIKey == "lan-direct",
@@ -130,6 +137,7 @@ extension SessionViewModel {
               let url = URL(string: effectiveRelayURL) else { return }
 
         connectionState = .reconnecting
+        DiagnosticLog.log("SOFT-RECONN: relay path \(effectiveRelayURL)")
 
         let tm = TransportManager(
             relayURL: url,
@@ -157,6 +165,7 @@ extension SessionViewModel {
 
     /// Stop the transport without wiping state. Called when the app backgrounds.
     func suspendTransport() {
+        DiagnosticLog.log("SUSPEND: tearing down transport")
         tearDownTransport()
         // Keep connectionState as-is (not .disconnected) so the view
         // hierarchy stays intact and doesn't flash the pairing screen.
@@ -165,6 +174,7 @@ extension SessionViewModel {
     /// Rebuild the transport after suspend. Called when the app foregrounds.
     func resumeTransport() {
         guard !pairedDevices.isEmpty else { return }
+        DiagnosticLog.log("RESUME: transport=\(transport == nil ? "nil" : "exists")")
         if transport == nil {
             softReconnect()
         }
@@ -176,6 +186,7 @@ extension SessionViewModel {
     func switchToDevice(id: String) {
         guard id != activeDevice?.id else { return }
         ionLog.info("switchToDevice: \(id)")
+        DiagnosticLog.log("SWITCH: \(activeDevice?.id.prefix(8) ?? "nil") → \(id.prefix(8))")
         disconnect()
         activeDeviceId = id
         restoreCachedLayout(for: id)
@@ -205,6 +216,7 @@ extension SessionViewModel {
 
     /// Disconnect from the current transport and wipe all transient state.
     func disconnect() {
+        DiagnosticLog.log("DISCONNECT: tearing down")
         reconnectSafetyTask?.cancel()
         reconnectSafetyTask = nil
         tearDownTransport()

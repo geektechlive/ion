@@ -51,6 +51,7 @@ extension TransportManager {
                   let type = json["type"] as? String else { continue }
 
             if type == "auth_challenge", let nonceB64 = json["nonce"] as? String {
+                DiagnosticLog.log("AUTH: challenge received")
                 guard let nonceData = Data(base64Encoded: nonceB64) else { return false }
                 let proof = E2ECrypto.createAuthProof(nonce: nonceData, sharedSecret: sharedKey)
 
@@ -74,13 +75,17 @@ extension TransportManager {
                           let rType = resultJson["type"] as? String else { continue }
 
                     if rType == "auth_result" {
-                        return resultJson["success"] as? Bool == true
+                        let ok = resultJson["success"] as? Bool == true
+                        DiagnosticLog.log("AUTH: result success=\(ok)")
+                        return ok
                     }
                     // Also check for WireMessage wrapping an auth_result
                     if let payload = resultJson["payload"] as? String,
                        let inner = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
                        inner["type"] as? String == "auth_result" {
-                        return inner["success"] as? Bool == true
+                        let ok = inner["success"] as? Bool == true
+                        DiagnosticLog.log("AUTH: result(wire) success=\(ok)")
+                        return ok
                     }
                 }
                 return false

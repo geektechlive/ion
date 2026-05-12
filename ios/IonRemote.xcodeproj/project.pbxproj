@@ -91,6 +91,8 @@
 		A1B2C3D4E5F60001001000AA /* LayoutCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001001AA /* LayoutCache.swift */; };
 		A1B2C3D4E5F60001001002AA /* PeerStatusPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001003AA /* PeerStatusPoller.swift */; };
 		A1B2C3D4E5F60001001004AA /* DesktopPickerMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001005AA /* DesktopPickerMenu.swift */; };
+		A1B2C3D4E5F60001001006AA /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */; };
+		A1B2C3D4E5F60001001008AA /* DiagnosticLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -191,6 +193,8 @@
 		A1B2C3D4E5F60001001001AA /* LayoutCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutCache.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001003AA /* PeerStatusPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerStatusPoller.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001005AA /* DesktopPickerMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopPickerMenu.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLog.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLogView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -331,6 +335,7 @@
 				A1B2C3D4E5F60001000703AA /* ToolGroupView.swift */,
 				A1B2C3D4E5F60001000801AA /* ActivityIndicatorView.swift */,
 				A1B2C3D4E5F60001001005AA /* DesktopPickerMenu.swift */,
+					A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -389,6 +394,7 @@
 				A1B2C3D4E5F600010000F7AA /* MarkdownFormatter.swift */,
 				A1B2C3D4E5F60001000705AA /* ToolGrouping.swift */,
 				A1B2C3D4E5F60001001001AA /* LayoutCache.swift */,
+				A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -564,6 +570,8 @@
 				A1B2C3D4E5F60001001000AA /* LayoutCache.swift in Sources */,
 				A1B2C3D4E5F60001001002AA /* PeerStatusPoller.swift in Sources */,
 				A1B2C3D4E5F60001001004AA /* DesktopPickerMenu.swift in Sources */,
+				A1B2C3D4E5F60001001006AA /* DiagnosticLog.swift in Sources */,
+				A1B2C3D4E5F60001001008AA /* DiagnosticLogView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

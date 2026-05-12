@@ -67,6 +67,7 @@ extension SessionViewModel {
             handleRelayConfig(relayUrl: relayUrl, relayApiKey: relayApiKey)
 
         case .transportReconnecting:
+            DiagnosticLog.log("EVENT: transportReconnecting was=\(connectionState)")
             if connectionState == .connected {
                 connectionState = .reconnecting
             }
@@ -77,6 +78,7 @@ extension SessionViewModel {
             connectionQuality.recordHeartbeat(senderTs: senderTs, buffered: buffered)
 
         case .peerDisconnected:
+            DiagnosticLog.log("EVENT: peerDisconnected was=\(connectionState)")
             // Don't tear down the transport — the relay auto-reconnects and
             // startRelayStateObservation re-sends sync when the peer returns.
             if connectionState == .connected || connectionState == .connecting {
@@ -317,6 +319,7 @@ extension SessionViewModel {
         // A legitimate relay upgrade must provide both values.
         if let device = activeDevice, device.relayAPIKey == "lan-direct" {
             guard !relayUrl.isEmpty, !relayApiKey.isEmpty else {
+                DiagnosticLog.log("RELAY-CFG: rejected empty for lan-direct \(device.name)")
                 print("[Ion] handleRelayConfig: ignoring incomplete relay config for LAN-direct device \(device.name)")
                 return
             }
@@ -330,6 +333,7 @@ extension SessionViewModel {
             pairedDevices[idx].relayURL = relayUrl
             pairedDevices[idx].relayAPIKey = relayApiKey
             savePairedDevices()
+            DiagnosticLog.log("RELAY-CFG: accepted for \(device.id.prefix(8))")
         }
     }
 

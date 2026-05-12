@@ -171,6 +171,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            NavigationLink("Diagnostic Log") {
+                DiagnosticLogView()
+            }
+
             Button(role: .destructive) {
                 dismiss()
                 viewModel.resetAll()
