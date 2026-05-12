@@ -144,6 +144,9 @@ final class RelayClient {
         let urlSession = URLSession(configuration: .default)
         self.session = urlSession
         let wsTask = urlSession.webSocketTask(with: request)
+        // Default maximumMessageSize is 1 MiB. Encrypted snapshots can
+        // exceed that, causing EMSGSIZE ("Message too long").
+        wsTask.maximumMessageSize = 16 * 1024 * 1024
         self.task = wsTask
 
         wsTask.resume()

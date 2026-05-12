@@ -81,6 +81,10 @@ final class LANClient {
         let urlSession = URLSession(configuration: .default)
         self.session = urlSession
         let wsTask = urlSession.webSocketTask(with: url)
+        // Default maximumMessageSize is 1 MiB. Encrypted snapshots with
+        // many tabs or large plan files can exceed that, causing an
+        // EMSGSIZE ("Message too long") receive failure.
+        wsTask.maximumMessageSize = 16 * 1024 * 1024
         self.task = wsTask
 
         wsTask.resume()
