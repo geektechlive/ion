@@ -20,16 +20,15 @@ extension SessionViewModel {
                 await self.eventBatcher.enqueue(event)
             }
 
-            // Stream ended naturally -- flush remaining events and wipe state.
-            // Skip if cancelled (disconnect/reconnect): connect() may have already
-            // advanced connectionState to .connecting and we must not clobber it.
+            // Stream ended naturally -- flush remaining events.
+            // Don't wipe state here: softReconnect keeps state alive.
+            // Only wipe if cancelled explicitly via disconnect().
             guard !Task.isCancelled else { return }
             let remaining = await self.eventBatcher.drain()
-            await MainActor.run {
-                for event in remaining {
-                    self.handleEvent(event)
+            if !remaining.isEmpty {
+                await MainActor.run {
+                    for event in remaining { self.handleEvent(event) }
                 }
-                self.wipeTransientState()
             }
         }
 
@@ -68,6 +67,7 @@ extension SessionViewModel {
             handleRelayConfig(relayUrl: relayUrl, relayApiKey: relayApiKey)
 
         case .transportReconnecting:
+            DiagnosticLog.log("EVENT: transportReconnecting was=\(connectionState)")
             if connectionState == .connected {
                 connectionState = .reconnecting
             }
@@ -78,6 +78,7 @@ extension SessionViewModel {
             connectionQuality.recordHeartbeat(senderTs: senderTs, buffered: buffered)
 
         case .peerDisconnected:
+            DiagnosticLog.log("EVENT: peerDisconnected was=\(connectionState)")
             // Don't tear down the transport — the relay auto-reconnects and
             // startRelayStateObservation re-sends sync when the peer returns.
             if connectionState == .connected || connectionState == .connecting {
@@ -290,24 +291,49 @@ extension SessionViewModel {
 
     @MainActor
     private func handleUnpair() {
-        // Desktop revoked our pairing -- clear everything and return to discovery.
-        // Clear pairedDevices BEFORE disconnect so SwiftUI doesn't briefly show
-        // the disconnected view (which auto-triggers reconnect while devices exist).
-        pairedDevices = []
-        try? KeychainStore.deleteAll()
-        pairingState = .idle
-        disconnect()
+        // Desktop revoked our pairing -- remove only the active device.
+        if let device = activeDevice {
+            pairedDevices.removeAll { $0.id == device.id }
+            LayoutCache.delete(deviceId: device.id)
+        }
+        savePairedDevices()
+        if pairedDevices.isEmpty {
+            try? KeychainStore.deleteAll()
+            activeDeviceId = nil
+            pairingState = .idle
+            disconnect()
+        } else {
+            // Switch to the next available device.
+            let nextId = pairedDevices.first!.id
+            switchToDevice(id: nextId)
+        }
     }
 
     @MainActor
     private func handleRelayConfig(relayUrl: String, relayApiKey: String) {
         // Desktop pushed updated relay config -- persist it for roaming.
+        // Guard: if the active device is a LAN-only pairing (apiKey "lan-direct")
+        // and the incoming config doesn't provide BOTH a relay URL and API key,
+        // keep the LAN-direct sentinel intact. Without this, a desktop with no
+        // relay would overwrite the "lan-direct" marker, breaking reconnects.
+        // A legitimate relay upgrade must provide both values.
+        if let device = activeDevice, device.relayAPIKey == "lan-direct" {
+            guard !relayUrl.isEmpty, !relayApiKey.isEmpty else {
+                DiagnosticLog.log("RELAY-CFG: rejected empty for lan-direct \(device.name)")
+                print("[Ion] handleRelayConfig: ignoring incomplete relay config for LAN-direct device \(device.name)")
+                return
+            }
+            // Legitimate upgrade from LAN-direct to relay — fall through.
+        }
+
         self.relayURL = relayUrl
         self.relayAPIKey = relayApiKey
-        if !pairedDevices.isEmpty {
-            pairedDevices[0].relayURL = relayUrl
-            pairedDevices[0].relayAPIKey = relayApiKey
+        if let device = activeDevice,
+           let idx = pairedDevices.firstIndex(where: { $0.id == device.id }) {
+            pairedDevices[idx].relayURL = relayUrl
+            pairedDevices[idx].relayAPIKey = relayApiKey
             savePairedDevices()
+            DiagnosticLog.log("RELAY-CFG: accepted for \(device.id.prefix(8))")
         }
     }
 

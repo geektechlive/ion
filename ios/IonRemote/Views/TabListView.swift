@@ -4,6 +4,7 @@ struct TabListView: View {
     @Environment(SessionViewModel.self) private var viewModel
     @State private var showSettings = false
     @State private var showNewTab = false
+    @State private var showPairingSheet = false
     @State private var navigationPath = NavigationPath()
     @State private var enginePickerDirectory: String? = nil
     @State private var renamingTabId: String?
@@ -17,6 +18,15 @@ struct TabListView: View {
                         ForEach(group.tabs) { tab in
                             NavigationLink(value: tab.id) {
                                 TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual")
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                Button {
+                                    renameText = tab.displayTitle
+                                    renamingTabId = tab.id
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                .tint(.orange)
                             }
                             .contextMenu {
                                 Button {
@@ -54,6 +64,7 @@ struct TabListView: View {
                                 .foregroundStyle(.secondary)
                             Spacer()
                             if let dir = group.directory {
+
                                 Button {
                                     viewModel.createTab(workingDirectory: dir)
                                 } label: {
@@ -80,10 +91,16 @@ struct TabListView: View {
                                 }
                             }
                         }
+                        .padding(.top, 4)
                     }
                 }
             }
-            .navigationTitle("Ion")
+            .navigationTitle("")
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    DesktopPickerMenu(showPairingSheet: $showPairingSheet)
+                }
+            }
             .alert("Rename Tab", isPresented: .init(
                 get: { renamingTabId != nil },
                 set: { if !$0 { renamingTabId = nil } }
@@ -132,15 +149,24 @@ struct TabListView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    .contextMenu {
+                        if let defaultDir = allDirectories.first {
+                            Button { viewModel.createTab(workingDirectory: defaultDir.fullPath) } label: {
+                                Label("New Tab", systemImage: "plus")
+                            }
+                            Button { viewModel.createTerminalTab(workingDirectory: defaultDir.fullPath) } label: {
+                                Label("New Terminal", systemImage: "terminal")
+                            }
+                            Button { requestEngineTab(directory: defaultDir.fullPath) } label: {
+                                Label("New Engine", systemImage: "bolt.fill")
+                            }
+                        }
+                    }
                 }
             }
             .refreshable {
+                Haptic.light()
                 viewModel.sync()
-            }
-            .onChange(of: viewModel.connectionState) { _, newState in
-                if newState == .disconnected {
-                    navigationPath = NavigationPath()
-                }
             }
             .onChange(of: viewModel.pendingNavigationTabId) { _, tabId in
                 if let tabId {
@@ -150,6 +176,9 @@ struct TabListView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showPairingSheet) {
+                PairingView()
             }
             .sheet(isPresented: $showNewTab) {
                 NavigationStack {
@@ -218,15 +247,25 @@ struct TabListView: View {
             }
             .overlay {
                 if viewModel.tabs.isEmpty {
-                    ContentUnavailableView(
-                        "No Tabs",
-                        systemImage: "terminal",
-                        description: Text("Tap + to create a new tab or pull to refresh.")
-                    )
+                    VStack(spacing: 12) {
+                        Image(systemName: "terminal")
+                            .font(.system(size: 40))
+                            .foregroundStyle(IonTheme.accent)
+                        Text("No Tabs")
+                            .font(.title3.weight(.semibold))
+                        Text("Tap + to create a new tab or pull to refresh.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
                 }
             }
         }
     }
+
+    // MARK: - Reconnecting Indicator
+
 
     /// Handle engine tab creation with profile selection.
     /// - 0 profiles: auto-create without a profileId (engine uses default)
@@ -283,8 +322,9 @@ private struct TabRowView: View {
         HStack(spacing: 12) {
             Circle()
                 .fill(statusInfo.color)
-                .frame(width: 10, height: 10)
+                .frame(width: 8, height: 8)
                 .opacity(statusInfo.pulse ? pulseOpacity : 1.0)
+                .shadow(color: statusInfo.pulse ? statusInfo.color.opacity(0.6) : .clear, radius: 3)
                 .onChange(of: statusInfo.pulse) { _, shouldPulse in
                     if shouldPulse {
                         withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
@@ -325,6 +365,13 @@ private struct TabRowView: View {
                         .lineLimit(1)
                 }
 
+                if tab.status == .running || tab.status == .connecting {
+                    Text("Running…")
+                        .font(.caption2)
+                        .foregroundStyle(IonTheme.statusRunning)
+                        .lineLimit(1)
+                }
+
                 if let message = tab.lastMessage {
                     Text(message)
                         .font(.caption2)
@@ -334,6 +381,12 @@ private struct TabRowView: View {
             }
 
             Spacer()
+
+            if !tab.permissionQueue.isEmpty && tab.status != .running {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 6, height: 6)
+            }
         }
         .padding(.vertical, 4)
     }

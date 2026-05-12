@@ -3,10 +3,12 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showPairingSheet = false
     var body: some View {
         NavigationStack {
             List {
                 connectionSection
+                diagnosticsSection
                 newTabSection
                 tabGroupsSection
                 pairedDevicesSection
@@ -19,6 +21,9 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showPairingSheet) {
+                PairingView()
+            }
         }
     }
 
@@ -30,6 +35,14 @@ struct SettingsView: View {
         case .lanPreferred: return "Connected (LAN)"
         case .relayOnly: return "Connected (Relay)"
         case .disconnected: return "Connected"
+        }
+    }
+
+    private var transportLabel: String {
+        switch viewModel.transportState {
+        case .lanPreferred: return "LAN (Bonjour)"
+        case .relayOnly: return "Relay (WebSocket)"
+        case .disconnected: return "Disconnected"
         }
     }
 
@@ -57,6 +70,37 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+        }
+    }
+
+    private var diagnosticsSection: some View {
+        Section("Diagnostics") {
+            HStack {
+                Label("Transport", systemImage: "antenna.radiowaves.left.and.right")
+                Spacer()
+                Text(transportLabel)
+                    .foregroundStyle(.secondary)
+            }
+            if let latency = viewModel.connectionQuality.latencyLabel {
+                HStack {
+                    Label("Latency", systemImage: "timer")
+                    Spacer()
+                    Text(latency)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                Label("Buffered", systemImage: "tray.full")
+                Spacer()
+                Text("\(viewModel.connectionQuality.lastBuffered)")
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Label("Signal", systemImage: "wifi")
+                Spacer()
+                Text(viewModel.connectionQuality.signalLevel.label)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -109,22 +153,52 @@ struct SettingsView: View {
     }
 
     private var pairedDevicesSection: some View {
-        Section("Paired Device") {
+        Section("Paired Desktops") {
             if viewModel.pairedDevices.isEmpty {
                 Text("No paired devices")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(viewModel.pairedDevices) { device in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(device.name)
-                            .font(.headline)
-                        Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if let lastSeen = device.lastSeen {
-                            Text("Last seen \(lastSeen.formatted(.relative(presentation: .named)))")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                    let isActive = device.id == viewModel.activeDevice?.id
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Text(device.name)
+                                    .font(.headline)
+                                if isActive {
+                                    Text("Active")
+                                        .font(.caption2)
+                                        .foregroundStyle(.green)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            Capsule().stroke(Color.green, lineWidth: 1)
+                                        )
+                                }
+                            }
+                            Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let lastSeen = device.lastSeen {
+                                Text("Last seen \(lastSeen.formatted(.relative(presentation: .named)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Spacer()
+                        Circle()
+                            .fill(isActive && viewModel.connectionState == .connected ? Color.green : Color(.tertiaryLabel))
+                            .frame(width: 8, height: 8)
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if !isActive {
+                            Button {
+                                viewModel.switchToDevice(id: device.id)
+                                Haptic.success()
+                            } label: {
+                                Label("Switch to", systemImage: "arrow.right.arrow.left")
+                            }
+                            .tint(IonTheme.accent)
                         }
                     }
                 }
@@ -135,24 +209,51 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            Button {
+                showPairingSheet = true
+            } label: {
+                Label("Pair New Desktop…", systemImage: "plus")
+            }
         }
     }
 
     private var aboutSection: some View {
         Section("About") {
             HStack {
-                Text("Version")
                 Spacer()
-                Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 8) {
+                    Image(systemName: "bolt.shield.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(IonTheme.accent)
+                    Text("Ion Remote")
+                        .font(.headline)
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .listRowBackground(Color.clear)
+
+            NavigationLink("Diagnostic Log") {
+                DiagnosticLogView()
             }
 
             Button(role: .destructive) {
                 dismiss()
                 viewModel.resetAll()
             } label: {
-                Text("Unpair Device")
+                HStack {
+                    Spacer()
+                    Text("Unpair All Devices")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                }
             }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .listRowBackground(Color.clear)
         }
     }
 }

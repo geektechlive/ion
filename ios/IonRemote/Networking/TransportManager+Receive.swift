@@ -54,6 +54,7 @@ extension TransportManager {
         lanListenTask?.cancel()
         lanListenTask = Task { [weak self] in
             guard let lan = self?.lan else { return }
+            DiagnosticLog.log("LAN-LISTEN: starting for-await, isConnected=\(lan.isConnected)")
             for await data in lan.messages {
                 guard !Task.isCancelled, let self else { break }
                 self.handleIncomingData(data, isRelay: false)
@@ -61,11 +62,18 @@ extension TransportManager {
             // LAN stream ended naturally -- emit peerDisconnected if no relay fallback.
             // Skip if cancelled (transport.stop() was called): yielding peerDisconnected
             // here would call disconnect() and clobber a new connection being set up.
+            DiagnosticLog.log("LAN-LISTEN: stream ended cancelled=\(Task.isCancelled)")
             guard !Task.isCancelled else { return }
-            if let self, self.relay == nil || !(self.relay?.isConnected ?? false) {
+            guard let self else { return }
+            // If the LAN client already reconnected (Bonjour observation called
+            // startLANWithAuth which creates a new stream), don't emit
+            // peerDisconnected — the new connection is alive and a new listener
+            // task was started by that reconnection.
+            if self.lan.isConnected { return }
+            if self.relay == nil || !(self.relay?.isConnected ?? false) {
                 self.eventContinuation.yield(.peerDisconnected)
             }
-            self?.updateState()
+            self.updateState()
         }
     }
 
@@ -77,6 +85,7 @@ extension TransportManager {
                 guard let self else { break }
                 let connected = self.lan.isConnected
                 if connected != wasConnected {
+                    DiagnosticLog.log("LAN-STATE-OBS: \(wasConnected) -> \(connected)")
                     wasConnected = connected
                     if !connected {
                         self.updateState()
@@ -96,11 +105,13 @@ extension TransportManager {
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let type = json["type"] as? String, type.hasPrefix("relay:") {
             if type == "relay:peer-disconnected" {
+                DiagnosticLog.log("RELAY-CTRL: peer-disconnected")
                 // The relay told us the desktop disconnected. Start grace
                 // period with force=true because the relay WebSocket itself
                 // is still connected — the *peer* is gone.
                 startDisconnectGracePeriod(force: true)
             } else if type == "relay:peer-reconnected" {
+                DiagnosticLog.log("RELAY-CTRL: peer-reconnected")
                 cancelDisconnectGracePeriod()
                 // Peer is back — reset dedup so fresh seq=1 messages aren't dropped.
                 lastReceivedSeq = 0

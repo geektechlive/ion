@@ -21,6 +21,12 @@ final class LANClient {
     private var session: URLSession?
     private var intentionallyClosed = false
 
+    /// Monotonically increasing connection generation. Each `connect()` call
+    /// bumps this so that stale `receiveLoop` callbacks from a previous
+    /// URLSessionWebSocketTask can detect they belong to a superseded
+    /// connection and avoid finishing the current continuation.
+    private var connectionGen: UInt64 = 0
+
     /// Continuation for the current connection's message stream.
     /// Replaced on each `connect()` so old iterators terminate cleanly.
     private var messageContinuation: AsyncStream<Data>.Continuation?
@@ -59,6 +65,12 @@ final class LANClient {
         session?.invalidateAndCancel()
         session = nil
 
+        // Bump generation BEFORE creating the new stream so any in-flight
+        // callback from the old task sees a stale gen and bails out.
+        connectionGen &+= 1
+        let gen = connectionGen
+        DiagnosticLog.log("LAN-WS: connect gen=\(gen) \(host):\(port)")
+
         // Create a fresh stream for this connection.
         var continuation: AsyncStream<Data>.Continuation!
         self.messages = AsyncStream { continuation = $0 }
@@ -72,10 +84,11 @@ final class LANClient {
         self.task = wsTask
 
         wsTask.resume()
-        receiveLoop(wsTask)
+        receiveLoop(wsTask, gen: gen)
     }
 
     func disconnect() {
+        DiagnosticLog.log("LAN-WS: disconnect gen=\(connectionGen)")
         intentionallyClosed = true
         messageContinuation?.finish()
         task?.cancel(with: .normalClosure, reason: nil)
@@ -94,13 +107,26 @@ final class LANClient {
 
     // MARK: - Receive loop
 
-    private func receiveLoop(_ wsTask: URLSessionWebSocketTask) {
+    private func receiveLoop(_ wsTask: URLSessionWebSocketTask, gen: UInt64) {
         wsTask.receive { [weak self] result in
             guard let self else { return }
 
+            // If connect() was called again, this callback belongs to a
+            // superseded connection — drop it silently. Without this guard
+            // the old task's cancellation-failure fires handleDisconnect()
+            // which finishes the NEW connection's continuation, killing the
+            // listener stream ~100ms after auth.
+            guard gen == self.connectionGen else {
+                DiagnosticLog.log("LAN-WS: stale recv gen=\(gen) cur=\(self.connectionGen)")
+                return
+            }
+
             switch result {
             case .success(let message):
-                if !self.isConnected { self.isConnected = true }
+                if !self.isConnected {
+                    self.isConnected = true
+                    DiagnosticLog.log("LAN-WS: first msg, isConnected=true gen=\(gen)")
+                }
                 switch message {
                 case .data(let data):
                     self.messageContinuation?.yield(data)
@@ -111,15 +137,24 @@ final class LANClient {
                 @unknown default:
                     break
                 }
-                self.receiveLoop(wsTask)
+                self.receiveLoop(wsTask, gen: gen)
 
-            case .failure:
-                self.handleDisconnect()
+            case .failure(let error):
+                DiagnosticLog.log("LAN-WS: recv failure gen=\(gen) err=\(error.localizedDescription)")
+                self.handleDisconnect(gen: gen)
             }
         }
     }
 
-    private func handleDisconnect() {
+    private func handleDisconnect(gen: UInt64) {
+        // Only act if this disconnect belongs to the current connection.
+        // A stale receiveLoop from a previous connect() must not touch
+        // the new connection's state or continuation.
+        guard gen == connectionGen else {
+            DiagnosticLog.log("LAN-WS: stale disconnect gen=\(gen) cur=\(connectionGen)")
+            return
+        }
+        DiagnosticLog.log("LAN-WS: handleDisconnect gen=\(gen)")
         isConnected = false
         task = nil
         session?.invalidateAndCancel()
