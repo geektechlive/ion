@@ -54,6 +54,7 @@ extension TransportManager {
         lanListenTask?.cancel()
         lanListenTask = Task { [weak self] in
             guard let lan = self?.lan else { return }
+            DiagnosticLog.log("LAN-LISTEN: starting for-await, isConnected=\(lan.isConnected)")
             for await data in lan.messages {
                 guard !Task.isCancelled, let self else { break }
                 self.handleIncomingData(data, isRelay: false)
@@ -84,6 +85,7 @@ extension TransportManager {
                 guard let self else { break }
                 let connected = self.lan.isConnected
                 if connected != wasConnected {
+                    DiagnosticLog.log("LAN-STATE-OBS: \(wasConnected) -> \(connected)")
                     wasConnected = connected
                     if !connected {
                         self.updateState()

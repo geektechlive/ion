@@ -35,6 +35,7 @@ extension TransportManager {
             group.addTask { [weak self] in
                 try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled else { return false }
+                DiagnosticLog.log("AUTH: timeout fired, disconnecting LAN")
                 self?.lan.disconnect()
                 return false
             }
@@ -45,17 +46,31 @@ extension TransportManager {
     }
 
     private func performLANAuthCore() async -> Bool {
-        // Wait for the first message (should be AuthChallenge).
+        // IMPORTANT: AsyncStream is single-consumer. We must use exactly ONE
+        // `for await` loop here so that `startLANListener` can later create
+        // the next (and only) iterator on the same stream. Nested `for await`
+        // loops on the same stream create multiple iterators which corrupts
+        // the stream state and causes the listener's iterator to terminate
+        // immediately.
+        var awaitingResult = false
+        DiagnosticLog.log("AUTH-CORE: entering for-await on lan.messages")
+
         for await data in lan.messages {
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = json["type"] as? String else { continue }
 
-            if type == "auth_challenge", let nonceB64 = json["nonce"] as? String {
+            if !awaitingResult {
+                // Phase 1: waiting for auth_challenge
+                guard type == "auth_challenge",
+                      let nonceB64 = json["nonce"] as? String else {
+                    DiagnosticLog.log("AUTH-CORE: unexpected type=\(type) in phase1, returning false")
+                    return false
+                }
+
                 DiagnosticLog.log("AUTH: challenge received")
                 guard let nonceData = Data(base64Encoded: nonceB64) else { return false }
                 let proof = E2ECrypto.createAuthProof(nonce: nonceData, sharedSecret: sharedKey)
 
-                // Send auth_response as a WireMessage with payload.
                 let authResponse: [String: Any] = [
                     "type": "auth_response",
                     "deviceId": deviceId ?? "",
@@ -68,30 +83,27 @@ extension TransportManager {
                         try? await lan.send(data: wireData)
                     }
                 }
-
-                // Wait for AuthResult.
-                for await resultData in lan.messages {
-                    guard let resultJson = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any],
-                          let rType = resultJson["type"] as? String else { continue }
-
-                    if rType == "auth_result" {
-                        let ok = resultJson["success"] as? Bool == true
-                        DiagnosticLog.log("AUTH: result success=\(ok)")
-                        return ok
-                    }
-                    // Also check for WireMessage wrapping an auth_result
-                    if let payload = resultJson["payload"] as? String,
-                       let inner = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-                       inner["type"] as? String == "auth_result" {
-                        let ok = inner["success"] as? Bool == true
-                        DiagnosticLog.log("AUTH: result(wire) success=\(ok)")
-                        return ok
-                    }
+                awaitingResult = true
+                DiagnosticLog.log("AUTH-CORE: sent response, awaiting result")
+            } else {
+                // Phase 2: waiting for auth_result
+                if type == "auth_result" {
+                    let ok = json["success"] as? Bool == true
+                    DiagnosticLog.log("AUTH: result success=\(ok)")
+                    return ok
                 }
-                return false
+                // Also check for WireMessage wrapping an auth_result
+                if let payload = json["payload"] as? String,
+                   let inner = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+                   inner["type"] as? String == "auth_result" {
+                    let ok = inner["success"] as? Bool == true
+                    DiagnosticLog.log("AUTH: result(wire) success=\(ok)")
+                    return ok
+                }
+                DiagnosticLog.log("AUTH-CORE: unexpected type=\(type) in phase2")
             }
-            return false
         }
+        DiagnosticLog.log("AUTH-CORE: for-await ended (stream finished)")
         return false
     }
 

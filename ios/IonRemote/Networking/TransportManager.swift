@@ -173,6 +173,7 @@ final class TransportManager {
 
     /// Disconnect all transports and stop discovery.
     func stop() {
+        DiagnosticLog.log("TM: stop() called")
         isStopped = true
 
         relayListenTask?.cancel()

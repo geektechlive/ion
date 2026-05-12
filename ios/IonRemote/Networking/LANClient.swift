@@ -69,6 +69,7 @@ final class LANClient {
         // callback from the old task sees a stale gen and bails out.
         connectionGen &+= 1
         let gen = connectionGen
+        DiagnosticLog.log("LAN-WS: connect gen=\(gen) \(host):\(port)")
 
         // Create a fresh stream for this connection.
         var continuation: AsyncStream<Data>.Continuation!
@@ -87,6 +88,7 @@ final class LANClient {
     }
 
     func disconnect() {
+        DiagnosticLog.log("LAN-WS: disconnect gen=\(connectionGen)")
         intentionallyClosed = true
         messageContinuation?.finish()
         task?.cancel(with: .normalClosure, reason: nil)
@@ -114,11 +116,17 @@ final class LANClient {
             // the old task's cancellation-failure fires handleDisconnect()
             // which finishes the NEW connection's continuation, killing the
             // listener stream ~100ms after auth.
-            guard gen == self.connectionGen else { return }
+            guard gen == self.connectionGen else {
+                DiagnosticLog.log("LAN-WS: stale recv gen=\(gen) cur=\(self.connectionGen)")
+                return
+            }
 
             switch result {
             case .success(let message):
-                if !self.isConnected { self.isConnected = true }
+                if !self.isConnected {
+                    self.isConnected = true
+                    DiagnosticLog.log("LAN-WS: first msg, isConnected=true gen=\(gen)")
+                }
                 switch message {
                 case .data(let data):
                     self.messageContinuation?.yield(data)
@@ -131,7 +139,8 @@ final class LANClient {
                 }
                 self.receiveLoop(wsTask, gen: gen)
 
-            case .failure:
+            case .failure(let error):
+                DiagnosticLog.log("LAN-WS: recv failure gen=\(gen) err=\(error.localizedDescription)")
                 self.handleDisconnect(gen: gen)
             }
         }
@@ -141,7 +150,11 @@ final class LANClient {
         // Only act if this disconnect belongs to the current connection.
         // A stale receiveLoop from a previous connect() must not touch
         // the new connection's state or continuation.
-        guard gen == connectionGen else { return }
+        guard gen == connectionGen else {
+            DiagnosticLog.log("LAN-WS: stale disconnect gen=\(gen) cur=\(connectionGen)")
+            return
+        }
+        DiagnosticLog.log("LAN-WS: handleDisconnect gen=\(gen)")
         isConnected = false
         task = nil
         session?.invalidateAndCancel()
