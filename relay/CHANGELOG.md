@@ -10,6 +10,12 @@ clients to Ion Engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.3.0](https://github.com/dsswift/ion/compare/relay-v1.2.1...relay-v1.3.0) (2026-05-12)
+
+### Features
+
+* **relay:** add channel status endpoint for peer polling ([6fd65bf](https://github.com/dsswift/ion/commit/6fd65bf09a33c8cb88aa4332c201dc3204343776))
+
 ## [1.2.1](https://github.com/dsswift/ion/compare/relay-v1.2.0...relay-v1.2.1) (2026-05-11)
 
 ### Bug Fixes

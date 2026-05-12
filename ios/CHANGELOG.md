@@ -10,6 +10,19 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.15.0](https://github.com/dsswift/ion/compare/ios-v1.14.2...ios-v1.15.0) (2026-05-12)
+
+### Features
+
+* **ios:** multi-desktop pairing, layout cache, graceful reconnect ([d725bc6](https://github.com/dsswift/ion/commit/d725bc6c251964fb5fe4fd306cb1d433e8bb709e))
+* **ios:** add on-device diagnostic log for wireless debugging ([7412a4a](https://github.com/dsswift/ion/commit/7412a4aa41aff10171134b2ca44e20eb79c530cb))
+* **ios:** add design system and app-wide visual polish ([e049d37](https://github.com/dsswift/ion/commit/e049d37c37df03e49fbd4e7e34327cbc8b158f8e))
+
+### Bug Fixes
+
+* **ios:** prevent relay_config from corrupting lan-direct devices ([28b82c8](https://github.com/dsswift/ion/commit/28b82c8f52f800eb9245809e825310d10359dfc5))
+* **ios:** flatten auth to single iterator, add LAN diagnostic logging ([0548d3f](https://github.com/dsswift/ion/commit/0548d3fa161b43e2f3aeffba13a4694b76154624))
+
 ## [1.14.2](https://github.com/dsswift/ion/compare/ios-v1.14.1...ios-v1.14.2) (2026-05-11)
 
 ### Bug Fixes
