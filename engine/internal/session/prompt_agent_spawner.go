@@ -23,15 +23,18 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		// If the LLM named a specialist, resolve it. Fires capability_match
 		// when not registered so a harness extension can promote a draft
 		// (via ctx.RegisterAgentSpec) and we resolve on the same call.
+		// Falls back to an unnamed agent when the name is not registered,
+		// so the model's intent (delegate work) still succeeds.
 		var spec types.AgentSpec
 		var specMatched bool
 		if requestedName != "" {
 			if matched, ok := m.resolveAgentSpec(s, key, requestedName); ok {
 				spec = matched
 				specMatched = true
-			} else {
-				return "", fmt.Errorf("agent %q is not registered (capability_match returned no match)", requestedName)
 			}
+			// When resolution fails, continue with an unnamed agent rather
+			// than hard-failing. The model's intent was to parallelize work;
+			// the name was aspirational, not required.
 		}
 
 		s.agentCounter++
