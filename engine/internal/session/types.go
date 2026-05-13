@@ -62,6 +62,10 @@ type engineSession struct {
 	lastModel         string
 	lastTotalCost     float64
 
+	// Agent spawner counter – monotonically increasing across runs so
+	// agent names are globally unique within the session.
+	agentCounter int
+
 	// CLI backend turn tracking (populated by handleNormalizedEvent)
 	cliTurnNumber  int  // current turn number for CLI runs
 	cliTurnActive  bool // true between turn_start and turn_end

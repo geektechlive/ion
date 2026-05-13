@@ -75,6 +75,7 @@ var validCommands = map[string]bool{
 	"generate_title":        true,
 	"elicitation_response":  true,
 	"health":                true,
+	"reconcile_state":       true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -233,6 +234,8 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasString(raw, "text")
 	case "elicitation_response":
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "elicitRequestId")
+	case "reconcile_state":
+		return hasNonEmptyString(raw, "key")
 	}
 	return false
 }
