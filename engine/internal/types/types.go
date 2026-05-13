@@ -341,7 +341,12 @@ type EngineEvent struct {
 	PlanModeFilePath string `json:"planFilePath,omitempty"`
 
 	// engine_compacting
-	CompactingActive bool `json:"active,omitempty"`
+	CompactingActive         bool   `json:"active,omitempty"`
+	CompactingSummary        string `json:"summary,omitempty"`
+	CompactingMessagesBefore int    `json:"messagesBefore,omitempty"`
+	CompactingMessagesAfter  int    `json:"messagesAfter,omitempty"`
+	CompactingClearedBlocks  int    `json:"clearedBlocks,omitempty"`
+	CompactingStrategy       string `json:"strategy,omitempty"`
 
 	// engine_extension_died, engine_extension_respawned, engine_extension_dead_permanent
 	ExtensionName string `json:"extensionName,omitempty"`

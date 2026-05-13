@@ -499,7 +499,15 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 		return types.EngineEvent{Type: "engine_stream_reset"}
 
 	case *types.CompactingEvent:
-		return types.EngineEvent{Type: "engine_compacting", CompactingActive: e.Active}
+		return types.EngineEvent{
+			Type:                     "engine_compacting",
+			CompactingActive:         e.Active,
+			CompactingSummary:        e.Summary,
+			CompactingMessagesBefore: e.MessagesBefore,
+			CompactingMessagesAfter:  e.MessagesAfter,
+			CompactingClearedBlocks:  e.ClearedBlocks,
+			CompactingStrategy:       e.Strategy,
+		}
 
 	case *types.ToolStalledEvent:
 		return types.EngineEvent{Type: "engine_tool_stalled", ToolID: e.ToolID, ToolName: e.ToolName, ToolElapsed: e.Elapsed}
