@@ -8,6 +8,8 @@ struct EngineView: View {
     @State private var agentsPanelExpanded = true
     @State private var agentPanelFullscreen = false
     @State private var isNearBottom = true
+    @State private var showFileExplorer = false
+    @State private var showGitPane = false
 
     private var instances: [EngineInstanceInfo] {
         viewModel.engineInstances[tabId] ?? []
@@ -79,6 +81,120 @@ struct EngineView: View {
         return result
     }
 
+    // MARK: - Extracted sub-views
+
+    /// The scrollable conversation area with smart-scroll tracking.
+    private var conversationScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(groupedMessages) { item in
+                        switch item {
+                        case .single(let msg):
+                            EngineMessageRow(message: msg)
+                                .id(msg.id)
+                        case .toolGroup(let tools):
+                            EngineToolGroupRow(tools: tools)
+                                .id("tg-\(tools.first?.id ?? "")")
+                        }
+                    }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom-anchor")
+                        .onAppear { isNearBottom = true }
+                        .onDisappear { isNearBottom = false }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .onChange(of: engineMsgs.count) {
+                if isNearBottom, let last = engineMsgs.last {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if !isNearBottom {
+                    Button {
+                        withAnimation {
+                            proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.orange)
+                            .background(Circle().fill(.ultraThinMaterial))
+                    }
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
+                }
+            }
+        }
+    }
+
+    /// The agent panel: header + scrollable rows. In normal mode the rows are
+    /// capped at 132pt; in fullscreen mode they grow to fill remaining space.
+    private var agentSection: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Button {
+                    withAnimation(IonTheme.snappySpring) {
+                        agentsPanelExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: agentsPanelExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                        Text("Agents")
+                            .font(.caption.weight(.semibold))
+                        Text("(\(visibleAgents.count))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button {
+                    withAnimation(IonTheme.snappySpring) {
+                        agentPanelFullscreen.toggle()
+                    }
+                } label: {
+                    Image(systemName: agentPanelFullscreen
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+
+            if agentsPanelExpanded {
+                let agentList = ScrollView {
+                    VStack(spacing: 4) {
+                        ForEach(visibleAgents) { agent in
+                            AgentBarRow(agent: agent)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                }
+
+                if agentPanelFullscreen {
+                    agentList
+                } else {
+                    agentList.frame(maxHeight: 132)
+                }
+            }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Context usage bar
@@ -137,59 +253,14 @@ struct EngineView: View {
                 .background(Color(.secondarySystemFill).opacity(0.7))
             }
 
-            // Conversation messages area
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(groupedMessages) { item in
-                            switch item {
-                            case .single(let msg):
-                                EngineMessageRow(message: msg)
-                                    .id(msg.id)
-                            case .toolGroup(let tools):
-                                EngineToolGroupRow(tools: tools)
-                                    .id("tg-\(tools.first?.id ?? "")")
-                            }
-                        }
-
-                        // Feature 2: bottom anchor for scroll tracking
-                        Color.clear
-                            .frame(height: 1)
-                            .id("bottom-anchor")
-                            .onAppear { isNearBottom = true }
-                            .onDisappear { isNearBottom = false }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-                .onChange(of: engineMsgs.count) {
-                    if isNearBottom, let last = engineMsgs.last {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                    }
-                }
-                // Feature 2: scroll-to-bottom button
-                .overlay(alignment: .bottom) {
-                    if !isNearBottom {
-                        Button {
-                            withAnimation {
-                                proxy.scrollTo("bottom-anchor", anchor: .bottom)
-                            }
-                        } label: {
-                            Image(systemName: "chevron.down.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(.orange)
-                                .background(Circle().fill(.ultraThinMaterial))
-                        }
-                        .padding(.bottom, 8)
-                        .transition(.opacity)
-                    }
-                }
+            // Conversation messages area — gets flex space in normal mode,
+            // shrinks to a small strip in agent-fullscreen mode.
+            if !agentPanelFullscreen {
+                conversationScroll
+            } else {
+                conversationScroll
+                    .frame(height: 100)
             }
-            // Feature 3: layout priority for messages vs agents
-            .frame(maxHeight: agentPanelFullscreen ? 100 : .infinity)
-            .layoutPriority(agentPanelFullscreen ? 0 : 1)
 
             // Active tool cards (above agent bars)
             if !activeToolsList.isEmpty {
@@ -204,60 +275,7 @@ struct EngineView: View {
 
             // Agent bars with collapsible header
             if !visibleAgents.isEmpty {
-                VStack(spacing: 0) {
-                    // Collapsible header with fullscreen toggle
-                    HStack(spacing: 4) {
-                        Button {
-                            withAnimation(IonTheme.snappySpring) {
-                                agentsPanelExpanded.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: agentsPanelExpanded ? "chevron.down" : "chevron.right")
-                                    .font(.caption2)
-                                Text("Agents")
-                                    .font(.caption.weight(.semibold))
-                                Text("(\(visibleAgents.count))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-
-                        Spacer()
-
-                        // Feature 3: fullscreen toggle
-                        Button {
-                            withAnimation(IonTheme.snappySpring) {
-                                agentPanelFullscreen.toggle()
-                            }
-                        } label: {
-                            Image(systemName: agentPanelFullscreen
-                                  ? "arrow.down.right.and.arrow.up.left"
-                                  : "arrow.up.left.and.arrow.down.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-
-                    if agentsPanelExpanded {
-                        ScrollView {
-                            VStack(spacing: 4) {
-                                ForEach(visibleAgents) { agent in
-                                    AgentBarRow(agent: agent)
-                                }
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                        }
-                        .frame(maxHeight: agentPanelFullscreen ? .infinity : 132)
-                    }
-                }
-                .layoutPriority(agentPanelFullscreen ? 1 : 0)
+                agentSection
             }
 
             Divider()
@@ -302,10 +320,18 @@ struct EngineView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    viewModel.addEngineInstance(tabId: tabId)
-                } label: {
-                    Image(systemName: "plus.rectangle")
+                HStack(spacing: 12) {
+                    Button { showFileExplorer = true } label: {
+                        Image(systemName: "folder")
+                            .font(.subheadline)
+                    }
+                    Button { showGitPane = true } label: {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.subheadline)
+                    }
+                    Button { viewModel.addEngineInstance(tabId: tabId) } label: {
+                        Image(systemName: "plus.rectangle")
+                    }
                 }
             }
         }
@@ -326,6 +352,14 @@ struct EngineView: View {
             set: { _ in }
         )) { dialog in
             EngineDialogSheet(tabId: tabId, dialog: dialog)
+        }
+        .fullScreenCover(isPresented: $showGitPane) {
+            GitPaneView(tabId: tabId)
+                .environment(viewModel)
+        }
+        .fullScreenCover(isPresented: $showFileExplorer) {
+            FileExplorerView(tabId: tabId)
+                .environment(viewModel)
         }
     }
 

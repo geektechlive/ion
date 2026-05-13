@@ -94,6 +94,8 @@
 		A1B2C3D4E5F60001001006AA /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */; };
 		A1B2C3D4E5F60001001008AA /* DiagnosticLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */; };
 		A1B2C3D4E5F60001002000AA /* IonTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001002001AA /* IonTheme.swift */; };
+		A1B2C3D4E5F60001003000AA /* EngineToolGroupRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */; };
+		A1B2C3D4E5F60001003002AA /* EngineDialogSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -197,6 +199,8 @@
 		A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLog.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLogView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001002001AA /* IonTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IonTheme.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineToolGroupRow.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineDialogSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -339,6 +343,8 @@
 				A1B2C3D4E5F60001001005AA /* DesktopPickerMenu.swift */,
 					A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */,
 					A1B2C3D4E5F60001002001AA /* IonTheme.swift */,
+					A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */,
+					A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -576,6 +582,8 @@
 				A1B2C3D4E5F60001001006AA /* DiagnosticLog.swift in Sources */,
 				A1B2C3D4E5F60001001008AA /* DiagnosticLogView.swift in Sources */,
 				A1B2C3D4E5F60001002000AA /* IonTheme.swift in Sources */,
+				A1B2C3D4E5F60001003000AA /* EngineToolGroupRow.swift in Sources */,
+				A1B2C3D4E5F60001003002AA /* EngineDialogSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
