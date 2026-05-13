@@ -71,7 +71,7 @@ export type RemoteCommand =
   | { type: 'create_tab'; workingDirectory?: string }
   | { type: 'create_terminal_tab'; workingDirectory?: string }
   | { type: 'close_tab'; tabId: string }
-  | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote' }
+  | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }
   | { type: 'cancel'; tabId: string }
   | { type: 'respond_permission'; tabId: string; questionId: string; optionId: string }
   | { type: 'set_permission_mode'; tabId: string; mode: 'auto' | 'plan' }
@@ -87,7 +87,7 @@ export type RemoteCommand =
   | { type: 'rewind'; tabId: string; messageId: string }
   | { type: 'fork_from_message'; tabId: string; messageId: string }
   | { type: 'create_engine_tab'; workingDirectory?: string; profileId?: string }
-  | { type: 'engine_prompt'; tabId: string; instanceId?: string; text: string }
+  | { type: 'engine_prompt'; tabId: string; instanceId?: string; text: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }
   | { type: 'engine_abort'; tabId: string; instanceId?: string }
   | { type: 'engine_dialog_response'; tabId: string; instanceId?: string; dialogId: string; value: any }
   | { type: 'engine_add_instance'; tabId: string }
@@ -108,6 +108,7 @@ export type RemoteCommand =
   | { type: 'fs_read_file'; filePath: string }
   | { type: 'fs_write_file'; filePath: string; content: string }
   | { type: 'discover_commands'; directory: string }
+  | { type: 'upload_attachment'; dataUrl: string; name: string }
 
 // ─── Ion → iOS events ───
 
@@ -161,6 +162,7 @@ export type RemoteEvent =
   | { type: 'fs_dir_listing'; directory: string; entries: Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedMs: number }>; error?: string }
   | { type: 'fs_file_content'; filePath: string; content: string | null; error?: string }
   | { type: 'fs_write_result'; filePath: string; ok: boolean; error?: string }
+  | { type: 'upload_attachment_result'; id: string; name: string; path: string; error?: string }
   | { type: 'discover_commands_response'; directory: string; commands: Array<{ name: string; description: string; scope: 'user' | 'project'; source: 'command' | 'skill' }> }
 
 // ─── Relay control frames (injected by relay, not by Ion) ───

@@ -75,6 +75,8 @@ enum RemoteEvent: Codable, Sendable {
     case fsWriteResult(filePath: String, response: FsWriteResultResponse)
     // Command discovery events
     case discoverCommandsResponse(directory: String, commands: [DiscoveredSlashCommand])
+    // Upload attachment result
+    case uploadAttachmentResult(id: String, name: String, path: String, error: String?)
 
     // MARK: - Codable keys
 
@@ -131,6 +133,7 @@ enum RemoteEvent: Codable, Sendable {
         case fsFileContent = "fs_file_content"
         case fsWriteResult = "fs_write_result"
         case discoverCommandsResponse = "discover_commands_response"
+        case uploadAttachmentResult = "upload_attachment_result"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -151,6 +154,7 @@ enum RemoteEvent: Codable, Sendable {
         case entries, filePath, ok, error
         case commands
         case ts, buffered
+        case id, name, path
     }
 
     // MARK: - Decoder

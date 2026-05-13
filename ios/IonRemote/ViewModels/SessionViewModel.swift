@@ -177,6 +177,9 @@ final class SessionViewModel {
     // Discovered slash commands (per working directory)
     var discoveredCommands: [String: [DiscoveredSlashCommand]] = [:]
 
+    // Upload attachment results (consumed by InputBar / EngineView)
+    var pendingUploadResults: [UploadAttachmentResult] = []
+
     /// Tab group mode synced from the desktop: "off", "auto", or "manual".
     var tabGroupMode: String = "auto"
     /// Manual tab group definitions from the desktop (only meaningful when tabGroupMode == "manual").

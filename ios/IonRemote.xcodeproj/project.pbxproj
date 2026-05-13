@@ -96,6 +96,10 @@
 		A1B2C3D4E5F60001002000AA /* IonTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001002001AA /* IonTheme.swift */; };
 		A1B2C3D4E5F60001003000AA /* EngineToolGroupRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */; };
 		A1B2C3D4E5F60001003002AA /* EngineDialogSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */; };
+		A1B2C3D4E5F60001004000AA /* ActiveToolRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004001AA /* ActiveToolRow.swift */; };
+		A1B2C3D4E5F60001004002AA /* AttachmentChipsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */; };
+		A1B2C3D4E5F60001004004AA /* FilePickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */; };
+		A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -201,6 +205,10 @@
 		A1B2C3D4E5F60001002001AA /* IonTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IonTheme.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineToolGroupRow.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineDialogSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004001AA /* ActiveToolRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveToolRow.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChipsView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePickerSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineMessageRow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -345,6 +353,10 @@
 					A1B2C3D4E5F60001002001AA /* IonTheme.swift */,
 					A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */,
 					A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */,
+					A1B2C3D4E5F60001004001AA /* ActiveToolRow.swift */,
+					A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */,
+					A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */,
+					A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -584,6 +596,10 @@
 				A1B2C3D4E5F60001002000AA /* IonTheme.swift in Sources */,
 				A1B2C3D4E5F60001003000AA /* EngineToolGroupRow.swift in Sources */,
 				A1B2C3D4E5F60001003002AA /* EngineDialogSheet.swift in Sources */,
+				A1B2C3D4E5F60001004000AA /* ActiveToolRow.swift in Sources */,
+				A1B2C3D4E5F60001004002AA /* AttachmentChipsView.swift in Sources */,
+				A1B2C3D4E5F60001004004AA /* FilePickerSheet.swift in Sources */,
+				A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

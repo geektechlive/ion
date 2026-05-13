@@ -1,4 +1,5 @@
 import { join } from 'path'
+import { tmpdir } from 'os'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { log as _log } from '../../logger'
 import { state } from '../../state'
@@ -75,5 +76,28 @@ export async function handleFsWriteFile(cmd: Extract<RemoteCommand, { type: 'fs_
   } catch (err) {
     log(`fs_write_file error: ${(err as Error).message}`)
     state.remoteTransport?.send({ type: 'fs_write_result', filePath, ok: false, error: (err as Error).message })
+  }
+}
+
+export async function handleUploadAttachment(cmd: Extract<RemoteCommand, { type: 'upload_attachment' }>): Promise<void> {
+  try {
+    const match = cmd.dataUrl.match(/^data:([^;]+);base64,(.+)$/)
+    if (!match) {
+      state.remoteTransport?.send({ type: 'upload_attachment_result', id: '', name: cmd.name, path: '', error: 'Invalid data URL format' })
+      return
+    }
+    const [, , base64Data] = match
+    const buf = Buffer.from(base64Data, 'base64')
+    const timestamp = Date.now()
+    // Derive extension from the original filename
+    const nameExt = cmd.name.includes('.') ? cmd.name.substring(cmd.name.lastIndexOf('.')) : '.bin'
+    const filePath = join(tmpdir(), `ion-remote-${timestamp}${nameExt}`)
+    writeFileSync(filePath, buf)
+    const id = crypto.randomUUID()
+    log(`upload_attachment: saved ${buf.length} bytes to ${filePath}`)
+    state.remoteTransport?.send({ type: 'upload_attachment_result', id, name: cmd.name, path: filePath })
+  } catch (err) {
+    log(`upload_attachment error: ${(err as Error).message}`)
+    state.remoteTransport?.send({ type: 'upload_attachment_result', id: '', name: cmd.name, path: '', error: (err as Error).message })
   }
 }

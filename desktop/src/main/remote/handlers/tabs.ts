@@ -145,8 +145,8 @@ export function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' }>): v
   const promptText = cmd.text.trim()
     .replace(/—/g, '--')
     .replace(/–/g, '-')
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
+    .replace(/['']/g, "'")
+    .replace(/[""]/g, '"')
 
   if (promptText.startsWith('!') && promptText.length > 1) {
     const bashCmd = promptText.substring(1).trim()
@@ -161,13 +161,31 @@ export function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' }>): v
     return
   }
 
+  // Prepend attachment context lines (same format as desktop send-slice)
+  let fullPrompt = promptText
+  const attachments = cmd.attachments || []
+  if (attachments.length > 0) {
+    const ctx = attachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
+    fullPrompt = `${ctx}\n\n${fullPrompt}`
+  }
+
+  const remoteAttachments = attachments.map((a) => ({
+    id: crypto.randomUUID(),
+    type: a.type,
+    name: a.name,
+    path: a.path,
+  }))
+
   const now = Date.now()
   state.remoteTransport?.send({
     type: 'message_added',
     tabId: cmd.tabId,
-    message: { id: reqId, role: 'user', content: promptText, timestamp: now, source: 'remote' },
+    message: {
+      id: reqId, role: 'user', content: promptText, timestamp: now, source: 'remote',
+      attachments: remoteAttachments.length > 0 ? remoteAttachments : undefined,
+    },
   })
-  broadcast(IPC.REMOTE_USER_MESSAGE, { tabId: cmd.tabId, requestId: reqId, prompt: promptText, timestamp: now })
+  broadcast(IPC.REMOTE_USER_MESSAGE, { tabId: cmd.tabId, requestId: reqId, prompt: fullPrompt, timestamp: now })
 }
 
 export function handleCancel(cmd: Extract<RemoteCommand, { type: 'cancel' }>): void {

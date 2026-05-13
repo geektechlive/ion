@@ -51,6 +51,27 @@ struct MessageBubble: View {
                     }
                     .foregroundStyle(.secondary)
                 }
+
+                // Attachment chips (if any)
+                if let attachments = message.attachments, !attachments.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(attachments) { att in
+                            HStack(spacing: 3) {
+                                Image(systemName: att.type == .image ? "photo" : "doc")
+                                    .font(.caption2)
+                                Text(att.name)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(.secondarySystemFill))
+                            .clipShape(Capsule())
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+
                 HStack(spacing: 0) {
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(IonTheme.accent)

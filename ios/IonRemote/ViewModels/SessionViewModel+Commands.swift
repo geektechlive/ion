@@ -15,8 +15,8 @@ extension SessionViewModel {
         send(.sync)
     }
 
-    func sendPrompt(tabId: String, text: String) {
-        send(.prompt(tabId: tabId, text: text))
+    func sendPrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
+        send(.prompt(tabId: tabId, text: text, attachments: attachments))
     }
 
     func cancel(tabId: String) {
@@ -165,7 +165,7 @@ extension SessionViewModel {
         send(.createEngineTab(workingDirectory: dir, profileId: profileId))
     }
 
-    func submitEnginePrompt(tabId: String, text: String) {
+    func submitEnginePrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
         let key = engineCompoundKey(tabId: tabId)
         enginePinnedPrompt[key] = text
         // Add user message to conversation
@@ -177,7 +177,7 @@ extension SessionViewModel {
             tabs[idx].status = .running
         }
         let instanceId = activeEngineInstance[tabId] ?? engineInstances[tabId]?.first?.id
-        send(.enginePrompt(tabId: tabId, text: text, instanceId: instanceId))
+        send(.enginePrompt(tabId: tabId, text: text, instanceId: instanceId, attachments: attachments))
     }
 
     func setEngineModel(tabId: String, model: String) {
@@ -302,6 +302,11 @@ extension SessionViewModel {
     }
 
     // MARK: - File Explorer Commands
+
+    /// Upload an image from the iOS device to the desktop as a temp file.
+    func uploadAttachment(dataUrl: String, name: String) {
+        send(.uploadAttachment(dataUrl: dataUrl, name: name))
+    }
 
     func requestFsListDir(directory: String, includeHidden: Bool = false) {
         fileListingLoading.insert(directory)

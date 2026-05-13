@@ -51,6 +51,7 @@ import {
   handleFsListDir,
   handleFsReadFile,
   handleFsWriteFile,
+  handleUploadAttachment,
 } from './handlers/files'
 import type { RemoteCommand } from './protocol'
 
@@ -103,6 +104,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'fs_read_file': await handleFsReadFile(cmd); break
     case 'fs_write_file': await handleFsWriteFile(cmd); break
     case 'discover_commands': await handleDiscoverCommands(cmd); break
+    case 'upload_attachment': await handleUploadAttachment(cmd); break
     case 'unpair': handleUnpair(deviceId); break
   }
 }

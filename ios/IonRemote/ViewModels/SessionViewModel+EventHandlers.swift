@@ -281,6 +281,9 @@ extension SessionViewModel {
         case .fsWriteResult(_, let response):
             fileWriteResult = response
 
+        case .uploadAttachmentResult(let id, let name, let path, let error):
+            handleUploadAttachmentResult(id: id, name: name, path: path, error: error)
+
         // Command discovery events
         case .discoverCommandsResponse(let directory, let commands):
             discoveredCommands[directory] = commands
@@ -522,6 +525,17 @@ extension SessionViewModel {
             messageCountByTab.removeValue(forKey: tabId)
             conversationLoadFailed.remove(tabId)
             loadConversation(tabId: tabId)
+        }
+    }
+
+    // MARK: - Upload attachment result
+
+    @MainActor
+    private func handleUploadAttachmentResult(id: String, name: String, path: String, error: String?) {
+        if let error, !error.isEmpty {
+            pendingUploadResults.append(UploadAttachmentResult(id: "", name: name, path: "", error: error))
+        } else {
+            pendingUploadResults.append(UploadAttachmentResult(id: id, name: name, path: path, error: nil))
         }
     }
 

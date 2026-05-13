@@ -7,7 +7,7 @@ enum RemoteCommand: Codable, Sendable {
     case createTab(workingDirectory: String?)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
-    case prompt(tabId: String, text: String, origin: String? = "remote")
+    case prompt(tabId: String, text: String, origin: String? = "remote", attachments: [CommandAttachment]? = nil)
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)
     case setPermissionMode(tabId: String, mode: PermissionMode)
@@ -24,7 +24,7 @@ enum RemoteCommand: Codable, Sendable {
     case forkFromMessage(tabId: String, messageId: String)
     case unpair
     case createEngineTab(workingDirectory: String?, profileId: String?)
-    case enginePrompt(tabId: String, text: String, instanceId: String? = nil)
+    case enginePrompt(tabId: String, text: String, instanceId: String? = nil, attachments: [CommandAttachment]? = nil)
     case engineAbort(tabId: String, instanceId: String? = nil)
     case engineDialogResponse(tabId: String, dialogId: String, value: String, instanceId: String? = nil)
     case engineAddInstance(tabId: String)
@@ -45,6 +45,7 @@ enum RemoteCommand: Codable, Sendable {
     case fsReadFile(filePath: String)
     case fsWriteFile(filePath: String, content: String)
     case discoverCommands(directory: String)
+    case uploadAttachment(dataUrl: String, name: String)
 
     // MARK: - Codable
 
@@ -91,6 +92,7 @@ enum RemoteCommand: Codable, Sendable {
         case fsReadFile = "fs_read_file"
         case fsWriteFile = "fs_write_file"
         case discoverCommands = "discover_commands"
+        case uploadAttachment = "upload_attachment"
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -99,6 +101,7 @@ enum RemoteCommand: Codable, Sendable {
         case instanceId, data, cols, rows, customTitle, label, messageId
         case dialogId, value, profileId, model, groupId
         case directory, path, staged, paths, skip, limit, message, filePath, content, includeHidden
+        case attachments, dataUrl, name
     }
 
     init(from decoder: Decoder) throws {
@@ -121,7 +124,8 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let text = try container.decode(String.self, forKey: .text)
             let origin = try container.decodeIfPresent(String.self, forKey: .origin)
-            self = .prompt(tabId: tabId, text: text, origin: origin)
+            let attachments = try container.decodeIfPresent([CommandAttachment].self, forKey: .attachments)
+            self = .prompt(tabId: tabId, text: text, origin: origin, attachments: attachments)
 
         case .cancel:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -211,7 +215,8 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let text = try container.decode(String.self, forKey: .text)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
-            self = .enginePrompt(tabId: tabId, text: text, instanceId: instanceId)
+            let attachments = try container.decodeIfPresent([CommandAttachment].self, forKey: .attachments)
+            self = .enginePrompt(tabId: tabId, text: text, instanceId: instanceId, attachments: attachments)
 
         case .engineAbort:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -313,6 +318,11 @@ enum RemoteCommand: Codable, Sendable {
         case .discoverCommands:
             let directory = try container.decode(String.self, forKey: .directory)
             self = .discoverCommands(directory: directory)
+
+        case .uploadAttachment:
+            let dataUrl = try container.decode(String.self, forKey: .dataUrl)
+            let name = try container.decode(String.self, forKey: .name)
+            self = .uploadAttachment(dataUrl: dataUrl, name: name)
         }
     }
 
@@ -331,11 +341,12 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
-        case .prompt(let tabId, let text, let origin):
+        case .prompt(let tabId, let text, let origin, let attachments):
             try container.encode(TypeKey.prompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(origin, forKey: .origin)
+            try container.encodeIfPresent(attachments, forKey: .attachments)
 
         case .cancel(let tabId):
             try container.encode(TypeKey.cancel, forKey: .type)
@@ -421,11 +432,12 @@ enum RemoteCommand: Codable, Sendable {
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
             try container.encodeIfPresent(profileId, forKey: .profileId)
 
-        case .enginePrompt(let tabId, let text, let instanceId):
+        case .enginePrompt(let tabId, let text, let instanceId, let attachments):
             try container.encode(TypeKey.enginePrompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encodeIfPresent(attachments, forKey: .attachments)
 
         case .engineAbort(let tabId, let instanceId):
             try container.encode(TypeKey.engineAbort, forKey: .type)
@@ -529,6 +541,18 @@ enum RemoteCommand: Codable, Sendable {
         case .discoverCommands(let directory):
             try container.encode(TypeKey.discoverCommands, forKey: .type)
             try container.encode(directory, forKey: .directory)
+
+        case .uploadAttachment(let dataUrl, let name):
+            try container.encode(TypeKey.uploadAttachment, forKey: .type)
+            try container.encode(dataUrl, forKey: .dataUrl)
+            try container.encode(name, forKey: .name)
         }
     }
+}
+
+/// Attachment metadata sent with prompt and engine_prompt commands.
+struct CommandAttachment: Codable, Sendable {
+    let type: String   // "image" or "file"
+    let name: String
+    let path: String
 }
