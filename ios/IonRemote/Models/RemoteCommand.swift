@@ -29,6 +29,7 @@ enum RemoteCommand: Codable, Sendable {
     case engineDialogResponse(tabId: String, dialogId: String, value: String, instanceId: String? = nil)
     case engineAddInstance(tabId: String)
     case engineRemoveInstance(tabId: String, instanceId: String)
+    case engineRenameInstance(tabId: String, instanceId: String, label: String)
     case engineSelectInstance(tabId: String, instanceId: String)
     case loadEngineConversation(tabId: String, instanceId: String?)
     case setTabGroupMode(mode: String)
@@ -74,6 +75,7 @@ enum RemoteCommand: Codable, Sendable {
         case engineDialogResponse = "engine_dialog_response"
         case engineAddInstance = "engine_add_instance"
         case engineRemoveInstance = "engine_remove_instance"
+        case engineRenameInstance = "engine_rename_instance"
         case engineSelectInstance = "engine_select_instance"
         case loadEngineConversation = "load_engine_conversation"
         case setTabGroupMode = "set_tab_group_mode"
@@ -231,6 +233,12 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decode(String.self, forKey: .instanceId)
             self = .engineRemoveInstance(tabId: tabId, instanceId: instanceId)
+
+        case .engineRenameInstance:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decode(String.self, forKey: .instanceId)
+            let label = try container.decode(String.self, forKey: .label)
+            self = .engineRenameInstance(tabId: tabId, instanceId: instanceId, label: label)
 
         case .engineSelectInstance:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -439,6 +447,12 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(TypeKey.engineRemoveInstance, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(instanceId, forKey: .instanceId)
+
+        case .engineRenameInstance(let tabId, let instanceId, let label):
+            try container.encode(TypeKey.engineRenameInstance, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(instanceId, forKey: .instanceId)
+            try container.encode(label, forKey: .label)
 
         case .engineSelectInstance(let tabId, let instanceId):
             try container.encode(TypeKey.engineSelectInstance, forKey: .type)

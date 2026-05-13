@@ -216,6 +216,17 @@ extension SessionViewModel {
         loadEngineConversation(tabId: tabId)
     }
 
+    func renameEngineInstance(tabId: String, instanceId: String, label: String) {
+        // Update local state immediately
+        if var instances = engineInstances[tabId] {
+            if let idx = instances.firstIndex(where: { $0.id == instanceId }) {
+                instances[idx].label = label
+                engineInstances[tabId] = instances
+            }
+        }
+        send(.engineRenameInstance(tabId: tabId, instanceId: instanceId, label: label))
+    }
+
     func loadEngineConversation(tabId: String) {
         let instanceId = activeEngineInstance[tabId]
         ionLog.info("loadEngineConversation: tabId=\(tabId), instanceId=\(instanceId ?? "nil"), instances=\(self.engineInstances[tabId]?.map(\.id) ?? [])")

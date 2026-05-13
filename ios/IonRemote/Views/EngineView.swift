@@ -6,6 +6,8 @@ struct EngineView: View {
     @State private var promptText = ""
     @FocusState private var isInputFocused: Bool
     @State private var agentsPanelExpanded = true
+    @State private var agentPanelFullscreen = false
+    @State private var isNearBottom = true
 
     private var instances: [EngineInstanceInfo] {
         viewModel.engineInstances[tabId] ?? []
@@ -19,8 +21,21 @@ struct EngineView: View {
         viewModel.engineCompoundKey(tabId: tabId)
     }
 
+    // Feature 2b: sorted agents
     private var visibleAgents: [AgentStateUpdate] {
-        (viewModel.engineAgentStates[compoundKey] ?? []).filter(\.isVisible)
+        (viewModel.engineAgentStates[compoundKey] ?? [])
+            .filter(\.isVisible)
+            .sorted { a, b in
+                let statusOrder: [String: Int] = ["running": 0, "done": 1, "error": 1, "cancelled": 1, "idle": 2]
+                let visOrder: [String: Int] = ["always": 0, "sticky": 1, "ephemeral": 2]
+                let sa = statusOrder[a.status] ?? 2
+                let sb = statusOrder[b.status] ?? 2
+                if sa != sb { return sa < sb }
+                let va = visOrder[a.visibility] ?? 9
+                let vb = visOrder[b.visibility] ?? 9
+                if va != vb { return va < vb }
+                return a.displayName.localizedCompare(b.displayName) == .orderedAscending
+            }
     }
 
     private var activeToolsList: [ActiveToolInfo] {
@@ -29,6 +44,39 @@ struct EngineView: View {
 
     private var engineMsgs: [EngineMessage] {
         viewModel.engineMessages[compoundKey] ?? []
+    }
+
+    // Feature 1: tool grouping
+    private enum GroupedItem: Identifiable {
+        case single(EngineMessage)
+        case toolGroup([EngineMessage])
+
+        var id: String {
+            switch self {
+            case .single(let msg): return msg.id
+            case .toolGroup(let msgs): return "tg-\(msgs.first?.id ?? "")"
+            }
+        }
+    }
+
+    private var groupedMessages: [GroupedItem] {
+        var result: [GroupedItem] = []
+        var toolBuf: [EngineMessage] = []
+        for msg in engineMsgs {
+            if msg.role == "tool" {
+                toolBuf.append(msg)
+            } else {
+                if !toolBuf.isEmpty {
+                    result.append(.toolGroup(toolBuf))
+                    toolBuf = []
+                }
+                result.append(.single(msg))
+            }
+        }
+        if !toolBuf.isEmpty {
+            result.append(.toolGroup(toolBuf))
+        }
+        return result
     }
 
     var body: some View {
@@ -93,22 +141,55 @@ struct EngineView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        ForEach(engineMsgs) { msg in
-                            EngineMessageRow(message: msg)
-                                .id(msg.id)
+                        ForEach(groupedMessages) { item in
+                            switch item {
+                            case .single(let msg):
+                                EngineMessageRow(message: msg)
+                                    .id(msg.id)
+                            case .toolGroup(let tools):
+                                EngineToolGroupRow(tools: tools)
+                                    .id("tg-\(tools.first?.id ?? "")")
+                            }
                         }
+
+                        // Feature 2: bottom anchor for scroll tracking
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom-anchor")
+                            .onAppear { isNearBottom = true }
+                            .onDisappear { isNearBottom = false }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
                 .onChange(of: engineMsgs.count) {
-                    if let last = engineMsgs.last {
+                    if isNearBottom, let last = engineMsgs.last {
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
                     }
                 }
+                // Feature 2: scroll-to-bottom button
+                .overlay(alignment: .bottom) {
+                    if !isNearBottom {
+                        Button {
+                            withAnimation {
+                                proxy.scrollTo("bottom-anchor", anchor: .bottom)
+                            }
+                        } label: {
+                            Image(systemName: "chevron.down.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(.orange)
+                                .background(Circle().fill(.ultraThinMaterial))
+                        }
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
+                    }
+                }
             }
+            // Feature 3: layout priority for messages vs agents
+            .frame(maxHeight: agentPanelFullscreen ? 100 : .infinity)
+            .layoutPriority(agentPanelFullscreen ? 0 : 1)
 
             // Active tool cards (above agent bars)
             if !activeToolsList.isEmpty {
@@ -124,27 +205,44 @@ struct EngineView: View {
             // Agent bars with collapsible header
             if !visibleAgents.isEmpty {
                 VStack(spacing: 0) {
-                    // Collapsible header
-                    Button {
-                        withAnimation(IonTheme.snappySpring) {
-                            agentsPanelExpanded.toggle()
+                    // Collapsible header with fullscreen toggle
+                    HStack(spacing: 4) {
+                        Button {
+                            withAnimation(IonTheme.snappySpring) {
+                                agentsPanelExpanded.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: agentsPanelExpanded ? "chevron.down" : "chevron.right")
+                                    .font(.caption2)
+                                Text("Agents")
+                                    .font(.caption.weight(.semibold))
+                                Text("(\(visibleAgents.count))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .foregroundStyle(.secondary)
                         }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: agentsPanelExpanded ? "chevron.down" : "chevron.right")
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        // Feature 3: fullscreen toggle
+                        Button {
+                            withAnimation(IonTheme.snappySpring) {
+                                agentPanelFullscreen.toggle()
+                            }
+                        } label: {
+                            Image(systemName: agentPanelFullscreen
+                                  ? "arrow.down.right.and.arrow.up.left"
+                                  : "arrow.up.left.and.arrow.down.right")
                                 .font(.caption2)
-                            Text("Agents")
-                                .font(.caption.weight(.semibold))
-                            Text("(\(visibleAgents.count))")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                            Spacer()
+                                .foregroundStyle(.secondary)
                         }
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
 
                     if agentsPanelExpanded {
                         ScrollView {
@@ -156,9 +254,10 @@ struct EngineView: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
                         }
-                        .frame(maxHeight: 132)
+                        .frame(maxHeight: agentPanelFullscreen ? .infinity : 132)
                     }
                 }
+                .layoutPriority(agentPanelFullscreen ? 1 : 0)
             }
 
             Divider()
@@ -266,25 +365,39 @@ struct EngineMessageRow: View {
         }
     }
 
+    // Feature 1: markdown user message with bubble styling
     private var userMessage: some View {
         HStack {
             Spacer()
-            Text(message.content)
-                .font(.callout)
+            HStack(spacing: 0) {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(IonTheme.accent)
+                    .frame(width: 2.5)
+                MarkdownContentView(
+                    blocks: MarkdownBlockCache.shared.blocks(for: message.content)
+                )
+                .textSelection(.enabled)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .background(Color.orange.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .foregroundStyle(.primary)
+            }
+            .background(
+                ZStack {
+                    Color(.tertiarySystemBackground)
+                    IonTheme.userBubbleTint
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.large))
         }
     }
 
+    // Feature 1: markdown assistant message
     private var assistantMessage: some View {
         HStack {
-            Text(message.content)
-                .font(.callout)
-                .textSelection(.enabled)
-            Spacer()
+            MarkdownContentView(
+                blocks: MarkdownBlockCache.shared.blocks(for: message.content)
+            )
+            .textSelection(.enabled)
+            Spacer(minLength: 0)
         }
     }
 
@@ -450,62 +563,4 @@ struct ActiveToolRow: View {
     }
 }
 
-// MARK: - EngineDialogSheet
 
-struct EngineDialogSheet: View {
-    let tabId: String
-    let dialog: EngineDialogInfo
-    @Environment(SessionViewModel.self) private var viewModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var inputText = ""
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Text(dialog.title)
-                    .font(.headline)
-
-                if dialog.method == "select", let options = dialog.options {
-                    ForEach(options, id: \.self) { option in
-                        Button(option) {
-                            viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: option)
-                            dismiss()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                } else if dialog.method == "confirm" {
-                    HStack(spacing: 16) {
-                        Button("No") {
-                            viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: "false")
-                            dismiss()
-                        }
-                        .buttonStyle(.bordered)
-                        Button("Yes") {
-                            viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: "true")
-                            dismiss()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
-                    }
-                } else if dialog.method == "input" {
-                    TextField(dialog.defaultValue ?? "Enter value", text: $inputText)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Submit") {
-                        viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: inputText)
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
-                }
-
-                Spacer()
-            }
-            .padding()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-        }
-    }
-}
