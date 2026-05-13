@@ -466,6 +466,7 @@ struct EngineView: View {
             text: promptText,
             attachments: attachments.isEmpty ? nil : attachments
         )
+        isInputFocused = false
         promptText = ""
         pendingAttachments = []
     }
