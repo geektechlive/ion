@@ -35,6 +35,13 @@ func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversa
 	cleared := conversation.MicroCompact(conv, 10)
 	utils.Log("ApiBackend", fmt.Sprintf("proactive compact step 1: was %d%%, micro-compact cleared %d", usage.Percent, cleared))
 
+	// Surface compaction to the model so it knows data was lost.
+	if cleared > 0 {
+		conversation.AddTransientUserMessage(conv,
+			fmt.Sprintf("[SYSTEM] Context compaction cleared %d older tool results. "+
+				"Use the SearchHistory tool to find specific details from the compacted conversation, or re-read relevant files.", cleared))
+	}
+
 	// Step 2: if still above threshold, extract facts and hard-truncate
 	usageAfterMicro := conversation.GetContextUsage(conv, contextWindow)
 	if usageAfterMicro.Percent > threshold {
@@ -88,6 +95,13 @@ func (b *ApiBackend) compactReactive(run *activeRun, conv *conversation.Conversa
 	// Step 1: micro-compact (tool results, then assistant text)
 	cleared := conversation.MicroCompact(conv, 10)
 	utils.Log("ApiBackend", fmt.Sprintf("prompt_too_long micro-compact cleared %d blocks", cleared))
+
+	// Surface compaction to the model so it knows data was lost.
+	if cleared > 0 {
+		conversation.AddTransientUserMessage(conv,
+			fmt.Sprintf("[SYSTEM] Context compaction cleared %d older tool results. "+
+				"Use the SearchHistory tool to find specific details from the compacted conversation, or re-read relevant files.", cleared))
+	}
 
 	// Step 2: fact extraction
 	facts := compaction.ExtractFacts(conv.Messages)

@@ -224,6 +224,19 @@ func (b *ApiBackend) GetContextUsage(requestID string) *conversation.ContextUsag
 	return &usage
 }
 
+// SearchHistory searches the active run's conversation history for the given
+// query, returning up to maxResults matches. Returns nil when no matching run
+// is active or the conversation has not been initialized yet.
+func (b *ApiBackend) SearchHistory(requestID string, query string, maxResults int) []conversation.HistoryMatch {
+	b.mu.Lock()
+	run, ok := b.activeRuns[requestID]
+	b.mu.Unlock()
+	if !ok || run.conv == nil {
+		return nil
+	}
+	return conversation.SearchMessages(run.conv, query, maxResults)
+}
+
 // Steer sends a steering message to an active run's conversation.
 func (b *ApiBackend) Steer(requestID, message string) bool {
 	b.mu.Lock()
