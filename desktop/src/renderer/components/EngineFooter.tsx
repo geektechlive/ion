@@ -44,7 +44,7 @@ export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engine
   const [modelPos, setModelPos] = useState({ bottom: 0, left: 0 })
 
   const preferredModel = usePreferencesStore((s) => s.preferredModel)
-  const selectedModel = engineModelOverride || engineDefaultModel || preferredModel || AVAILABLE_MODELS[1].id
+  const selectedModel = engineModelOverride || engineDefaultModel || preferredModel || AVAILABLE_MODELS[0].id
   const selectedLabel = getModelDisplayLabel(selectedModel)
 
   const isBusy = status?.state === 'running'

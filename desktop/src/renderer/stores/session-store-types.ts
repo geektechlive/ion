@@ -152,6 +152,7 @@ export interface State {
   renameEngineInstance: (tabId: string, instanceId: string, label: string) => void
   reorderEngineInstances: (tabId: string, reordered: EngineInstance[]) => void
   setEngineModel: (tabId: string, modelId: string) => void
+  addEngineSystemMessage: (key: string, content: string) => void
 }
 
 export type StoreSet = (partial: State | Partial<State> | ((state: State) => State | Partial<State>), replace?: false) => void

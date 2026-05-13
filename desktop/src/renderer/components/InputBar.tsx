@@ -42,6 +42,7 @@ export function InputBar() {
   const submitEnginePrompt = useSessionStore((s) => s.submitEnginePrompt)
   const clearTab = useSessionStore((s) => s.clearTab)
   const addSystemMessage = useSessionStore((s) => s.addSystemMessage)
+  const addEngineSystemMessage = useSessionStore((s) => s.addEngineSystemMessage)
   const startBashCommand = useSessionStore((s) => s.startBashCommand)
   const completeBashCommand = useSessionStore((s) => s.completeBashCommand)
   const addAttachments = useSessionStore((s) => s.addAttachments)
@@ -301,6 +302,9 @@ export function InputBar() {
         if (instanceId) {
           const key = `${currentTab.id}:${instanceId}`
           window.ion.engineCommand(key, slashMatch[1], slashMatch[2])
+          if (slashMatch[1] === 'clear') {
+            addEngineSystemMessage(key, 'Conversation cleared.')
+          }
         }
       } else {
         submitEnginePrompt(currentTab.id, text)
@@ -311,7 +315,7 @@ export function InputBar() {
     sendMessage(prompt || 'See attached files')
     // Refocus after React re-renders from the state update
     requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [input, isBusy, sendMessage, submitEnginePrompt, attachments.length, showSlashMenu, slashFilter, slashIndex, handleSlashSelect, bashMode, bashExecuting, tab?.workingDirectory, startBashCommand, completeBashCommand, extraCommands, isConnecting, activeTabId, setDraftInput, setBashMode, addSystemMessage, setPreferredModel])
+  }, [input, isBusy, sendMessage, submitEnginePrompt, attachments.length, showSlashMenu, slashFilter, slashIndex, handleSlashSelect, bashMode, bashExecuting, tab?.workingDirectory, startBashCommand, completeBashCommand, extraCommands, isConnecting, activeTabId, setDraftInput, setBashMode, addSystemMessage, addEngineSystemMessage, setPreferredModel])
 
   // ─── Keyboard ───
   const handleKeyDown = (e: React.KeyboardEvent) => {
