@@ -9,9 +9,10 @@ struct AgentBarRow: View {
     // Live elapsed seconds from startTime (running) or final elapsed (done).
     private var elapsedSeconds: Int? {
         if agent.status == "running", let st = agent.startTime {
-            return max(0, Int(now.timeIntervalSince1970 - st))
+            let secs = Int(now.timeIntervalSince1970 - st)
+            return max(0, secs)
         }
-        if let e = agent.elapsed { return Int(e) }
+        if let e = agent.elapsed { return max(0, Int(e)) }
         return nil
     }
 
@@ -185,7 +186,10 @@ struct AgentBarRow: View {
 
     private func formatDuration(_ secs: Int) -> String {
         if secs < 60 { return "\(secs)s" }
-        return "\(secs / 60)m \(secs % 60)s"
+        if secs < 3600 { return "\(secs / 60)m \(secs % 60)s" }
+        let h = secs / 3600
+        let m = (secs % 3600) / 60
+        return "\(h)h \(m)m"
     }
 }
 
