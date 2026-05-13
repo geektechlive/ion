@@ -9,6 +9,7 @@ struct ConversationView: View {
     @State private var scrollTask: Task<Void, Never>?
     @State private var scrollProxy: ScrollViewProxy?
     @State private var isNearBottom: Bool = true
+    @State private var needsInitialScroll: Bool = true
     @State private var showGitPane = false
     @State private var showFileExplorer = false
 
@@ -238,10 +239,29 @@ struct ConversationView: View {
         }
         .onDisappear {
             scrollTask?.cancel()
+            needsInitialScroll = true
             viewModel.clearConversation(tabId: tabId)
         }
         .onChange(of: viewModel.messageCountByTab[tabId]) {
             cachedRestoredCard = computeRestoredSpecialCard()
+
+            // Initial load: unconditionally scroll to bottom so the user
+            // sees the most recent messages when opening the conversation.
+            if needsInitialScroll, !conversationMessages.isEmpty {
+                scrollTask?.cancel()
+                scrollTask = Task { @MainActor in
+                    // Longer delay to let LazyVStack lay out the bottom anchor
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard !Task.isCancelled else { return }
+                    if let proxy = scrollProxy {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    isNearBottom = true
+                    needsInitialScroll = false
+                }
+                return
+            }
+
             guard !viewModel.suppressScrollToBottom else {
                 viewModel.suppressScrollToBottom = false
                 return
@@ -426,72 +446,6 @@ struct ConversationView: View {
         case .compaction(let message):
             CompactionRowView(message: message)
                 .id(message.id)
-        }
-    }
-}
-
-// MARK: - UIKit Scroll Offset Reader
-
-/// Finds the parent UIScrollView and observes contentOffset via KVO
-/// to reliably determine whether the user is near the bottom.
-private struct ScrollOffsetReader: UIViewRepresentable {
-    @Binding var isNearBottom: Bool
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.isHidden = true
-        view.isUserInteractionEnabled = false
-        // Defer scroll view lookup to next layout pass
-        DispatchQueue.main.async {
-            guard let scrollView = findScrollView(in: view) else { return }
-            context.coordinator.observe(scrollView: scrollView)
-        }
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(isNearBottom: $isNearBottom)
-    }
-
-    private func findScrollView(in view: UIView) -> UIScrollView? {
-        var current: UIView? = view
-        while let parent = current?.superview {
-            if let scrollView = parent as? UIScrollView {
-                return scrollView
-            }
-            current = parent
-        }
-        return nil
-    }
-
-    final class Coordinator: NSObject {
-        private var isNearBottom: Binding<Bool>
-        private var observation: NSKeyValueObservation?
-
-        init(isNearBottom: Binding<Bool>) {
-            self.isNearBottom = isNearBottom
-        }
-
-        func observe(scrollView: UIScrollView) {
-            observation = scrollView.observe(
-                \.contentOffset, options: [.new]
-            ) { [weak self] sv, _ in
-                let distanceFromBottom =
-                    sv.contentSize.height - sv.contentOffset.y - sv.bounds.height
-                    + sv.adjustedContentInset.bottom
-                let nearBottom = distanceFromBottom < 100
-                if self?.isNearBottom.wrappedValue != nearBottom {
-                    DispatchQueue.main.async {
-                        self?.isNearBottom.wrappedValue = nearBottom
-                    }
-                }
-            }
-        }
-
-        deinit {
-            observation = nil
         }
     }
 }

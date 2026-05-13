@@ -1,0 +1,95 @@
+import SwiftUI
+import PhotosUI
+
+// MARK: - Attachments
+
+extension EngineView {
+
+    func addFileAttachment(path: String, name: String) {
+        let imageExts: Set = ["png", "jpg", "jpeg", "gif", "webp", "svg"]
+        let ext = (name as NSString).pathExtension.lowercased()
+        let type = imageExts.contains(ext) ? "image" : "file"
+        pendingAttachments.append(PendingAttachment(
+            id: UUID().uuidString, type: type, name: name, path: path, isUploading: false
+        ))
+    }
+
+    func handlePhotoSelection(_ item: PhotosPickerItem) {
+        let placeholderId = UUID().uuidString
+        let name = "photo-\(Int(Date().timeIntervalSince1970)).jpeg"
+        pendingAttachments.append(PendingAttachment(
+            id: placeholderId, type: "image", name: name, path: "", isUploading: true
+        ))
+
+        Task {
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                await MainActor.run { pendingAttachments.removeAll { $0.id == placeholderId } }
+                return
+            }
+            let compressed = compressImage(data: data, maxBytes: 1_000_000)
+            let base64 = compressed.base64EncodedString()
+            let dataUrl = "data:image/jpeg;base64,\(base64)"
+            await MainActor.run {
+                viewModel.uploadAttachment(dataUrl: dataUrl, name: name)
+            }
+        }
+    }
+
+    func handleDocumentPickerResult(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        for url in urls {
+            guard url.startAccessingSecurityScopedResource() else { continue }
+            defer { url.stopAccessingSecurityScopedResource() }
+            let name = url.lastPathComponent
+            guard let data = try? Data(contentsOf: url) else { continue }
+
+            let placeholderId = UUID().uuidString
+            let imageExts: Set = ["png", "jpg", "jpeg", "gif", "webp", "svg"]
+            let ext = url.pathExtension.lowercased()
+            let type = imageExts.contains(ext) ? "image" : "file"
+
+            pendingAttachments.append(PendingAttachment(
+                id: placeholderId, type: type, name: name, path: "", isUploading: true
+            ))
+            if type == "image" {
+                let compressed = compressImage(data: data, maxBytes: 1_000_000)
+                let base64 = compressed.base64EncodedString()
+                let mimeExt = (ext == "jpg" || ext == "jpeg") ? "jpeg" : ext
+                let dataUrl = "data:image/\(mimeExt);base64,\(base64)"
+                viewModel.uploadAttachment(dataUrl: dataUrl, name: name)
+            } else {
+                let base64 = data.base64EncodedString()
+                let dataUrl = "data:application/octet-stream;base64,\(base64)"
+                viewModel.uploadAttachment(dataUrl: dataUrl, name: name)
+            }
+        }
+    }
+
+    func compressImage(data: Data, maxBytes: Int) -> Data {
+        guard let uiImage = UIImage(data: data) else { return data }
+        var quality: CGFloat = 0.8
+        while quality > 0.1 {
+            if let jpeg = uiImage.jpegData(compressionQuality: quality), jpeg.count <= maxBytes {
+                return jpeg
+            }
+            quality -= 0.1
+        }
+        return uiImage.jpegData(compressionQuality: 0.1) ?? data
+    }
+
+    func consumeUploadResults(_ results: [UploadAttachmentResult]) {
+        guard !results.isEmpty else { return }
+        for result in results {
+            if let idx = pendingAttachments.firstIndex(where: { $0.isUploading && $0.name == result.name }) {
+                if let error = result.error, !error.isEmpty {
+                    pendingAttachments.remove(at: idx)
+                } else {
+                    pendingAttachments[idx] = PendingAttachment(
+                        id: result.id, type: pendingAttachments[idx].type, name: result.name, path: result.path, isUploading: false
+                    )
+                }
+            }
+        }
+        viewModel.pendingUploadResults = []
+    }
+}
