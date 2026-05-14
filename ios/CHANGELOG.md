@@ -10,6 +10,16 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.17.0](https://github.com/dsswift/ion/compare/ios-v1.16.0...ios-v1.17.0) (2026-05-14)
+
+### Features
+
+* **ios:** add KeychainHelper for secure API key storage ([d9be704](https://github.com/dsswift/ion/commit/d9be704520f873db22d5bf4a0d2a0dc8b73833ec))
+* **ios:** add VoiceService for ElevenLabs text-to-speech ([a3a5c7f](https://github.com/dsswift/ion/commit/a3a5c7f3dce59b8d4b09d4ade4595c06484b94f3))
+* **ios:** add voice section to Settings for ElevenLabs TTS ([ac1f563](https://github.com/dsswift/ion/commit/ac1f5632b93b1372b4a1a7119e51f3d0045f598b))
+* **ios:** add VoiceService and engineTurnHasText to SessionViewModel ([8c661f9](https://github.com/dsswift/ion/commit/8c661f94c243967aeb4388d53c828d8e31b43df5))
+* **ios:** speak assistant responses via VoiceService in handleEngineMessageEnd ([6b97953](https://github.com/dsswift/ion/commit/6b979531da4fa4d92886cb753d88572b380cb6e8))
+
 ## [1.16.0](https://github.com/dsswift/ion/compare/ios-v1.15.1...ios-v1.16.0) (2026-05-14)
 
 ### Features
