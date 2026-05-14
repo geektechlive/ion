@@ -35,13 +35,21 @@ func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversa
 	cleared := conversation.MicroCompact(conv, 10)
 	utils.Log("ApiBackend", fmt.Sprintf("proactive compact step 1: was %d%%, micro-compact cleared %d", usage.Percent, cleared))
 
+	// Surface compaction to the model so it knows data was lost.
+	if cleared > 0 {
+		conversation.AddTransientUserMessage(conv,
+			fmt.Sprintf("[SYSTEM] Context compaction cleared %d older tool results. "+
+				"Use the SearchHistory tool to find specific details from the compacted conversation, or re-read relevant files.", cleared))
+	}
+
 	// Step 2: if still above threshold, extract facts and hard-truncate
+	var summary string
 	usageAfterMicro := conversation.GetContextUsage(conv, contextWindow)
 	if usageAfterMicro.Percent > threshold {
 		facts := compaction.ExtractFacts(conv.Messages)
 		conversation.Compact(conv, 10)
 		if len(facts) > 0 {
-			summary := compaction.FormatFactsSummary(facts)
+			summary = compaction.FormatFactsSummary(facts)
 			restoreMsg := compaction.PostCompactRestore(conv, compaction.ExtractRecentFiles(conv.Messages), nil)
 			if summary != "" {
 				factMsg := types.LlmMessage{
@@ -57,13 +65,31 @@ func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversa
 		utils.Log("ApiBackend", fmt.Sprintf("proactive compact step 2: hard-truncated to %d messages", len(conv.Messages)))
 	}
 
-	b.emit(run, types.NormalizedEvent{Data: &types.CompactingEvent{Active: false}})
+	// Emit enriched completion event so clients can render a compaction marker.
+	msgAfter := len(conv.Messages)
+	b.emit(run, types.NormalizedEvent{Data: &types.CompactingEvent{
+		Active:         false,
+		Summary:        summary,
+		MessagesBefore: msgBefore,
+		MessagesAfter:  msgAfter,
+		ClearedBlocks:  cleared,
+		Strategy:       "auto",
+	}})
+
+	// Record compaction in the conversation tree (if entries are tracked).
+	if conv.Entries != nil {
+		conversation.AppendEntry(conv, conversation.EntryCompaction, conversation.CompactionData{
+			Summary:          summary,
+			FirstKeptEntryID: firstEntryID(conv),
+			TokensBefore:     usage.Tokens,
+		})
+	}
 
 	if hooks.OnSessionCompact != nil {
 		hooks.OnSessionCompact(run.requestID, map[string]interface{}{
 			"strategy":       "auto",
 			"messagesBefore": msgBefore,
-			"messagesAfter":  len(conv.Messages),
+			"messagesAfter":  msgAfter,
 		})
 	}
 }
@@ -89,10 +115,18 @@ func (b *ApiBackend) compactReactive(run *activeRun, conv *conversation.Conversa
 	cleared := conversation.MicroCompact(conv, 10)
 	utils.Log("ApiBackend", fmt.Sprintf("prompt_too_long micro-compact cleared %d blocks", cleared))
 
+	// Surface compaction to the model so it knows data was lost.
+	if cleared > 0 {
+		conversation.AddTransientUserMessage(conv,
+			fmt.Sprintf("[SYSTEM] Context compaction cleared %d older tool results. "+
+				"Use the SearchHistory tool to find specific details from the compacted conversation, or re-read relevant files.", cleared))
+	}
+
 	// Step 2: fact extraction
+	var summary string
 	facts := compaction.ExtractFacts(conv.Messages)
 	if len(facts) > 0 {
-		summary := compaction.FormatFactsSummary(facts)
+		summary = compaction.FormatFactsSummary(facts)
 		restoreMsg := compaction.PostCompactRestore(conv, compaction.ExtractRecentFiles(conv.Messages), nil)
 		if summary != "" {
 			factMsg := types.LlmMessage{
@@ -111,15 +145,41 @@ func (b *ApiBackend) compactReactive(run *activeRun, conv *conversation.Conversa
 	conversation.Compact(conv, keepTurns)
 	utils.Log("ApiBackend", fmt.Sprintf("prompt_too_long hard-truncated to keepTurns=%d, %d messages remain", keepTurns, len(conv.Messages)))
 
-	b.emit(run, types.NormalizedEvent{Data: &types.CompactingEvent{Active: false}})
+	// Emit enriched completion event so clients can render a compaction marker.
+	msgAfter := len(conv.Messages)
+	b.emit(run, types.NormalizedEvent{Data: &types.CompactingEvent{
+		Active:         false,
+		Summary:        summary,
+		MessagesBefore: msgBefore,
+		MessagesAfter:  msgAfter,
+		ClearedBlocks:  cleared,
+		Strategy:       "reactive",
+	}})
+
+	// Record compaction in the conversation tree (if entries are tracked).
+	if conv.Entries != nil {
+		conversation.AppendEntry(conv, conversation.EntryCompaction, conversation.CompactionData{
+			Summary:          summary,
+			FirstKeptEntryID: firstEntryID(conv),
+			TokensBefore:     0, // not available for reactive compaction
+		})
+	}
 
 	// Fire session_compact hook (observe)
 	if hooks.OnSessionCompact != nil {
 		hooks.OnSessionCompact(run.requestID, map[string]interface{}{
 			"strategy":       "reactive",
 			"messagesBefore": msgBefore,
-			"messagesAfter":  len(conv.Messages),
+			"messagesAfter":  msgAfter,
 		})
 	}
 	return true
+}
+
+// firstEntryID returns the ID of the first conversation tree entry, or empty string.
+func firstEntryID(conv *conversation.Conversation) string {
+	if len(conv.Entries) > 0 {
+		return conv.Entries[0].ID
+	}
+	return ""
 }

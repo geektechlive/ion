@@ -11,7 +11,7 @@ struct RemoteTabGroup: Codable, Identifiable, Sendable {
 }
 
 enum RemoteEvent: Codable, Sendable {
-    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?)
+    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?)
     case tabCreated(tab: RemoteTabState)
     case tabClosed(tabId: String)
     case tabStatus(tabId: String, status: TabStatus)
@@ -75,6 +75,8 @@ enum RemoteEvent: Codable, Sendable {
     case fsWriteResult(filePath: String, response: FsWriteResultResponse)
     // Command discovery events
     case discoverCommandsResponse(directory: String, commands: [DiscoveredSlashCommand])
+    // Upload attachment result
+    case uploadAttachmentResult(id: String, name: String, path: String, error: String?)
 
     // MARK: - Codable keys
 
@@ -131,6 +133,7 @@ enum RemoteEvent: Codable, Sendable {
         case fsFileContent = "fs_file_content"
         case fsWriteResult = "fs_write_result"
         case discoverCommandsResponse = "discover_commands_response"
+        case uploadAttachmentResult = "upload_attachment_result"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -145,12 +148,13 @@ enum RemoteEvent: Codable, Sendable {
         case level, dialogId, method, title, defaultValue
         case agents, fields, inputTokens, outputTokens, contextPercent
         case signal, stderrTail, label, profiles, elapsed, usage, model
-        case tabGroupMode, tabGroups
+        case tabGroupMode, tabGroups, preferredModel, engineDefaultModel
         case directory, files, branch, isGitRepo, ahead, behind
         case commits, totalCount, diff, fileName
         case entries, filePath, ok, error
         case commands
         case ts, buffered
+        case id, name, path
     }
 
     // MARK: - Decoder

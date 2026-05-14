@@ -13,6 +13,9 @@ import {
   handleSetTabGroupMode,
   handleMoveTabToGroup,
   handleDiscoverCommands,
+  handleSetTabModel,
+  handleSetPreferredModel,
+  handleSetEngineDefaultModel,
 } from './handlers/tabs'
 import {
   handleEnginePrompt,
@@ -51,6 +54,7 @@ import {
   handleFsListDir,
   handleFsReadFile,
   handleFsWriteFile,
+  handleUploadAttachment,
 } from './handlers/files'
 import type { RemoteCommand } from './protocol'
 
@@ -103,6 +107,10 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'fs_read_file': await handleFsReadFile(cmd); break
     case 'fs_write_file': await handleFsWriteFile(cmd); break
     case 'discover_commands': await handleDiscoverCommands(cmd); break
+    case 'upload_attachment': await handleUploadAttachment(cmd); break
+    case 'set_tab_model': await handleSetTabModel(cmd); break
+    case 'set_preferred_model': await handleSetPreferredModel(cmd); break
+    case 'set_engine_default_model': await handleSetEngineDefaultModel(cmd); break
     case 'unpair': handleUnpair(deviceId); break
   }
 }

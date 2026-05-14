@@ -246,5 +246,15 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       })
       window.ion.engineDialogResponse(key, dialogId, value)
     },
+
+    addEngineSystemMessage: (key, content) => {
+      set((state) => {
+        const messages = new Map(state.engineMessages)
+        const msgs = [...(messages.get(key) || [])]
+        msgs.push({ id: nextMsgId(), role: 'system' as const, content, timestamp: Date.now() })
+        messages.set(key, msgs)
+        return { engineMessages: messages }
+      })
+    },
   }
 }

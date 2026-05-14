@@ -19,7 +19,10 @@
 		A1B2C3D4E5F60001000013AA /* E2ECrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000014AA /* E2ECrypto.swift */; };
 		A1B2C3D4E5F60001000015AA /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000016AA /* KeychainStore.swift */; };
 		A1B2C3D4E5F60001000017AA /* TabListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000018AA /* TabListView.swift */; };
+		A1B2C3D4E5F600010000FCAA /* TabRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000FDAA /* TabRowView.swift */; };
 		A1B2C3D4E5F60001000019AA /* ConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100001AAA /* ConversationView.swift */; };
+		A1B2C3D4E5F60001005001AA /* ChatCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005002AA /* ChatCollectionView.swift */; };
+		A1B2C3D4E5F6000100400DAA /* EngineView+Attachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100400CAA /* EngineView+Attachments.swift */; };
 		A1B2C3D4E5F6000100001BAA /* PermissionCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100001CAA /* PermissionCardView.swift */; };
 		A1B2C3D4E5F6000100001DAA /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100001EAA /* PairingView.swift */; };
 		A1B2C3D4E5F6000100001FAA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000020AA /* SettingsView.swift */; };
@@ -44,6 +47,7 @@
 		A1B2C3D4E5F600010000D2AA /* AnsiParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000D3AA /* AnsiParser.swift */; };
 		A1B2C3D4E5F600010000E0AA /* AgentBarRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */; };
 		A1B2C3D4E5F600010000E2AA /* EngineFooterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000E3AA /* EngineFooterView.swift */; };
+		A1B2C3D4E5F6000100400FAA /* ConversationStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100400EAA /* ConversationStatusBar.swift */; };
 		A1B2C3D4E5F600010000F0AA /* EngineProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000F1AA /* EngineProfile.swift */; };
 		A1B2C3D4E5F600010000F2AA /* KeyboardUtilityBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000F3AA /* KeyboardUtilityBar.swift */; };
 		A1B2C3D4E5F600010000F4AA /* EngineInstanceBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000F5AA /* EngineInstanceBar.swift */; };
@@ -87,6 +91,7 @@
 		A1B2C3D4E5F60001000702AA /* ToolGroupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000703AA /* ToolGroupView.swift */; };
 		A1B2C3D4E5F60001000704AA /* ToolGrouping.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000705AA /* ToolGrouping.swift */; };
 		A1B2C3D4E5F60001000800AA /* ActivityIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000801AA /* ActivityIndicatorView.swift */; };
+		A1B2C3D4E5F60001004009AA /* CompactionRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */; };
 		A1B2C3D4E5F60001000900AA /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000901AA /* AppDelegate.swift */; };
 		A1B2C3D4E5F60001001000AA /* LayoutCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001001AA /* LayoutCache.swift */; };
 		A1B2C3D4E5F60001001002AA /* PeerStatusPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001003AA /* PeerStatusPoller.swift */; };
@@ -94,6 +99,12 @@
 		A1B2C3D4E5F60001001006AA /* DiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */; };
 		A1B2C3D4E5F60001001008AA /* DiagnosticLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */; };
 		A1B2C3D4E5F60001002000AA /* IonTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001002001AA /* IonTheme.swift */; };
+		A1B2C3D4E5F60001003000AA /* EngineToolGroupRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */; };
+		A1B2C3D4E5F60001003002AA /* EngineDialogSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */; };
+		A1B2C3D4E5F60001004000AA /* ActiveToolRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004001AA /* ActiveToolRow.swift */; };
+		A1B2C3D4E5F60001004002AA /* AttachmentChipsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */; };
+		A1B2C3D4E5F60001004004AA /* FilePickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */; };
+		A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -120,7 +131,10 @@
 		A1B2C3D4E5F60001000014AA /* E2ECrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = E2ECrypto.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000016AA /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000018AA /* TabListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabListView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F600010000FDAA /* TabRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabRowView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100001AAA /* ConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001005002AA /* ChatCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCollectionView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000100400CAA /* EngineView+Attachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineView+Attachments.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100001CAA /* PermissionCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCardView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100001EAA /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000020AA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -148,6 +162,7 @@
 		A1B2C3D4E5F600010000D3AA /* AnsiParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnsiParser.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBarRow.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000E3AA /* EngineFooterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineFooterView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000100400EAA /* ConversationStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatusBar.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000F1AA /* EngineProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineProfile.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000F3AA /* KeyboardUtilityBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardUtilityBar.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000F5AA /* EngineInstanceBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineInstanceBar.swift; sourceTree = "<group>"; };
@@ -191,12 +206,19 @@
 		A1B2C3D4E5F60001000703AA /* ToolGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolGroupView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000705AA /* ToolGrouping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolGrouping.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000801AA /* ActivityIndicatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityIndicatorView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactionRowView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001001AA /* LayoutCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutCache.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001003AA /* PeerStatusPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerStatusPoller.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001005AA /* DesktopPickerMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopPickerMenu.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLog.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticLogView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001002001AA /* IonTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IonTheme.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineToolGroupRow.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineDialogSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004001AA /* ActiveToolRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveToolRow.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChipsView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePickerSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineMessageRow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -307,7 +329,10 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F60001000018AA /* TabListView.swift */,
+				A1B2C3D4E5F600010000FDAA /* TabRowView.swift */,
 				A1B2C3D4E5F6000100001AAA /* ConversationView.swift */,
+				A1B2C3D4E5F60001005002AA /* ChatCollectionView.swift */,
+				A1B2C3D4E5F6000100400CAA /* EngineView+Attachments.swift */,
 				A1B2C3D4E5F6000100001CAA /* PermissionCardView.swift */,
 				A1B2C3D4E5F60001000097AA /* AskUserQuestionCardView.swift */,
 				A1B2C3D4E5F60001000099AA /* PlanApprovalCardView.swift */,
@@ -324,6 +349,7 @@
 				A1B2C3D4E5F600010000F5AA /* EngineInstanceBar.swift */,
 				A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */,
 				A1B2C3D4E5F600010000E3AA /* EngineFooterView.swift */,
+				A1B2C3D4E5F6000100400EAA /* ConversationStatusBar.swift */,
 				A1B2C3D4E5F60001000304AA /* GitPaneView.swift */,
 				A1B2C3D4E5F60001000306AA /* GitChangesListView.swift */,
 				A1B2C3D4E5F60001000308AA /* GitGraphListView.swift */,
@@ -339,6 +365,13 @@
 				A1B2C3D4E5F60001001005AA /* DesktopPickerMenu.swift */,
 					A1B2C3D4E5F60001001009AA /* DiagnosticLogView.swift */,
 					A1B2C3D4E5F60001002001AA /* IonTheme.swift */,
+					A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */,
+					A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */,
+					A1B2C3D4E5F60001004001AA /* ActiveToolRow.swift */,
+					A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */,
+					A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */,
+					A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */,
+					A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -515,7 +548,10 @@
 				A1B2C3D4E5F60001000013AA /* E2ECrypto.swift in Sources */,
 				A1B2C3D4E5F60001000015AA /* KeychainStore.swift in Sources */,
 				A1B2C3D4E5F60001000017AA /* TabListView.swift in Sources */,
+				A1B2C3D4E5F600010000FCAA /* TabRowView.swift in Sources */,
 				A1B2C3D4E5F60001000019AA /* ConversationView.swift in Sources */,
+				A1B2C3D4E5F60001005001AA /* ChatCollectionView.swift in Sources */,
+				A1B2C3D4E5F6000100400DAA /* EngineView+Attachments.swift in Sources */,
 				A1B2C3D4E5F6000100001BAA /* PermissionCardView.swift in Sources */,
 				A1B2C3D4E5F60001000096AA /* AskUserQuestionCardView.swift in Sources */,
 				A1B2C3D4E5F60001000098AA /* PlanApprovalCardView.swift in Sources */,
@@ -556,6 +592,7 @@
 				A1B2C3D4E5F600010000D2AA /* AnsiParser.swift in Sources */,
 				A1B2C3D4E5F600010000E0AA /* AgentBarRow.swift in Sources */,
 				A1B2C3D4E5F600010000E2AA /* EngineFooterView.swift in Sources */,
+				A1B2C3D4E5F6000100400FAA /* ConversationStatusBar.swift in Sources */,
 				A1B2C3D4E5F600010000F0AA /* EngineProfile.swift in Sources */,
 				A1B2C3D4E5F600010000F2AA /* KeyboardUtilityBar.swift in Sources */,
 				A1B2C3D4E5F600010000F6AA /* MarkdownFormatter.swift in Sources */,
@@ -569,6 +606,7 @@
 				A1B2C3D4E5F60001000702AA /* ToolGroupView.swift in Sources */,
 				A1B2C3D4E5F60001000704AA /* ToolGrouping.swift in Sources */,
 				A1B2C3D4E5F60001000800AA /* ActivityIndicatorView.swift in Sources */,
+				A1B2C3D4E5F60001004009AA /* CompactionRowView.swift in Sources */,
 				A1B2C3D4E5F60001000900AA /* AppDelegate.swift in Sources */,
 				A1B2C3D4E5F60001001000AA /* LayoutCache.swift in Sources */,
 				A1B2C3D4E5F60001001002AA /* PeerStatusPoller.swift in Sources */,
@@ -576,6 +614,12 @@
 				A1B2C3D4E5F60001001006AA /* DiagnosticLog.swift in Sources */,
 				A1B2C3D4E5F60001001008AA /* DiagnosticLogView.swift in Sources */,
 				A1B2C3D4E5F60001002000AA /* IonTheme.swift in Sources */,
+				A1B2C3D4E5F60001003000AA /* EngineToolGroupRow.swift in Sources */,
+				A1B2C3D4E5F60001003002AA /* EngineDialogSheet.swift in Sources */,
+				A1B2C3D4E5F60001004000AA /* ActiveToolRow.swift in Sources */,
+				A1B2C3D4E5F60001004002AA /* AttachmentChipsView.swift in Sources */,
+				A1B2C3D4E5F60001004004AA /* FilePickerSheet.swift in Sources */,
+				A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -750,7 +794,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -776,7 +820,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -796,7 +840,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/IonRemote.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/IonRemote";
 			};
 			name = Debug;
@@ -817,7 +861,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/IonRemote.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/IonRemote";
 			};
 			name = Release;

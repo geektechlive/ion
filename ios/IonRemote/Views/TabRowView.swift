@@ -1,0 +1,118 @@
+import SwiftUI
+
+// MARK: - TabRowView
+
+struct TabRowView: View {
+    let tab: RemoteTabState
+    var showDirectory: Bool = false
+
+    @State private var pulseOpacity: Double = 1.0
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(statusInfo.color)
+                .frame(width: 8, height: 8)
+                .opacity(statusInfo.pulse ? pulseOpacity : 1.0)
+                .shadow(color: statusInfo.pulse ? statusInfo.color.opacity(0.6) : .clear, radius: 3)
+                .onChange(of: statusInfo.pulse) { _, shouldPulse in
+                    if shouldPulse {
+                        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                            pulseOpacity = 0.3
+                        }
+                    } else {
+                        withAnimation(.default) {
+                            pulseOpacity = 1.0
+                        }
+                    }
+                }
+                .onAppear {
+                    if statusInfo.pulse {
+                        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                            pulseOpacity = 0.3
+                        }
+                    }
+                }
+
+            if tab.isEngine == true {
+                Image(systemName: "bolt.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if tab.isTerminalOnly == true {
+                Image(systemName: "terminal")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tab.displayTitle)
+                    .font(.headline)
+
+                if showDirectory {
+                    Text(directoryLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                if tab.status == .running || tab.status == .connecting {
+                    Text("Running…")
+                        .font(.caption2)
+                        .foregroundStyle(IonTheme.statusRunning)
+                        .lineLimit(1)
+                }
+
+                if let message = tab.lastMessage {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var directoryLabel: String {
+        let path = tab.workingDirectory
+        let base = (path as NSString).lastPathComponent
+        if base.isEmpty || path == "/" || path == "~" { return "Home" }
+        return base
+    }
+
+    /// Status color and pulse state matching desktop TabStrip priority order.
+    var statusInfo: (color: Color, pulse: Bool) {
+        // 1. Dead/Failed -> Red (no pulse)
+        if tab.status == .dead || tab.status == .failed {
+            return (Color(hex: 0xC47060), false)
+        }
+
+        // 2. Check permission queue for special tool states
+        let hasGenericPermission = tab.permissionQueue.contains {
+            $0.toolName != "ExitPlanMode" && $0.toolName != "AskUserQuestion"
+        }
+        let hasPlanReady = tab.permissionQueue.contains { $0.toolName == "ExitPlanMode" }
+        let hasQuestion = tab.permissionQueue.contains { $0.toolName == "AskUserQuestion" }
+
+        // 3. Generic permission -> Orange (steady)
+        if hasGenericPermission {
+            return (Color(hex: 0xE8854A), false)
+        }
+        // 4. Running/Connecting -> Orange + pulse (before plan/question so active streaming always wins)
+        if tab.status == .running || tab.status == .connecting {
+            return (Color(hex: 0xE8854A), true)
+        }
+        // 5. Plan ready -> Green (idle or completed -- run finishes after auto-allow)
+        if hasPlanReady && (tab.status == .idle || tab.status == .completed) {
+            return (.green, false)
+        }
+        // 6. Question pending -> Blue (idle or completed)
+        if hasQuestion && (tab.status == .idle || tab.status == .completed) {
+            return (Color(hex: 0x4A9EF5), false)
+        }
+        // 7. Default -> Gray
+        return (Color(hex: 0x8A8A80), false)
+    }
+}

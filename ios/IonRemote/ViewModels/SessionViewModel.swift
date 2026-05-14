@@ -156,6 +156,10 @@ final class SessionViewModel {
     var activeEngineInstance: [String: String] = [:]              // tabId -> active instanceId
     /// Engine profiles synced from the desktop settings.
     var engineProfiles: [EngineProfile] = []
+    /// Preferred model default for new tabs (synced from desktop settings).
+    var preferredModel: String = "claude-sonnet-4-6"
+    /// Engine default model (synced from desktop settings).
+    var engineDefaultModel: String = ""
     /// Active tool calls per tab, keyed by toolId.
     var activeTools: [String: [String: ActiveToolInfo]] = [:]
     /// Tab IDs that iOS has requested to close but hasn't received tab_closed confirmation for.
@@ -176,6 +180,9 @@ final class SessionViewModel {
 
     // Discovered slash commands (per working directory)
     var discoveredCommands: [String: [DiscoveredSlashCommand]] = [:]
+
+    // Upload attachment results (consumed by InputBar / EngineView)
+    var pendingUploadResults: [UploadAttachmentResult] = []
 
     /// Tab group mode synced from the desktop: "off", "auto", or "manual".
     var tabGroupMode: String = "auto"

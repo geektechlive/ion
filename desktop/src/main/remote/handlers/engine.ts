@@ -77,7 +77,15 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
 
     // Route through the renderer's submitEnginePrompt so it adds the user
     // message, sets tab status, and calls the engine bridge properly.
-    broadcast(IPC.REMOTE_ENGINE_PROMPT, { tabId: cmd.tabId, text: cmd.text })
+    // Prepend attachment context lines (same format as desktop send-slice)
+    let fullText = cmd.text
+    const attachments = cmd.attachments || []
+    if (attachments.length > 0) {
+      const ctx = attachments.map((a: { type: string; name: string; path: string }) => `[Attached ${a.type}: ${a.path}]`).join('\n')
+      fullText = `${ctx}\n\n${fullText}`
+    }
+
+    broadcast(IPC.REMOTE_ENGINE_PROMPT, { tabId: cmd.tabId, text: fullText })
   } catch (err) {
     log(`engine_prompt error: ${(err as Error).message}`)
   }

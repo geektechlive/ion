@@ -87,8 +87,8 @@ extension SessionViewModel {
             }
             connectionQuality.transportState = transport?.state ?? .disconnected
 
-        case .snapshot(let snapshotTabs, let recentDirs, let snapshotGroupMode, let snapshotGroups):
-            handleSnapshot(snapshotTabs: snapshotTabs, recentDirs: recentDirs, groupMode: snapshotGroupMode, groups: snapshotGroups)
+        case .snapshot(let snapshotTabs, let recentDirs, let snapshotGroupMode, let snapshotGroups, let snapshotPreferredModel, let snapshotEngineDefaultModel):
+            handleSnapshot(snapshotTabs: snapshotTabs, recentDirs: recentDirs, groupMode: snapshotGroupMode, groups: snapshotGroups, preferredModel: snapshotPreferredModel, engineDefaultModel: snapshotEngineDefaultModel)
 
         case .tabCreated(let tab):
             if !tabs.contains(where: { $0.id == tab.id }) {
@@ -107,14 +107,14 @@ extension SessionViewModel {
             handleTabStatus(tabId: tabId, status: status)
 
         case .textChunk(let tabId, let text):
-            liveText[tabId, default: ""] += text
             // Update tab preview for the tab list (shows most recent text)
             if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-                let preview = liveText[tabId, default: ""]
+                let preview = (liveText[tabId] ?? "") + text
                 tabs[idx].lastMessage = String(preview.suffix(64))
                     .replacingOccurrences(of: "\n", with: " ")
             }
             guard !conversationLoaded.contains(tabId) else { break }
+            liveText[tabId, default: ""] += text
 
         case .toolCall(let tabId, let toolName, _):
             guard !conversationLoaded.contains(tabId) else { break }
@@ -280,6 +280,9 @@ extension SessionViewModel {
 
         case .fsWriteResult(_, let response):
             fileWriteResult = response
+
+        case .uploadAttachmentResult(let id, let name, let path, let error):
+            handleUploadAttachmentResult(id: id, name: name, path: path, error: error)
 
         // Command discovery events
         case .discoverCommandsResponse(let directory, let commands):
@@ -458,6 +461,7 @@ extension SessionViewModel {
         conversationLoadFailed.remove(tabId)
         loadingConversation.remove(tabId)
         conversationLoaded.insert(tabId)
+        liveText.removeValue(forKey: tabId)
         conversationHasMore[tabId] = hasMore
         conversationCursor[tabId] = cursor
         if cursor != nil {
@@ -481,7 +485,18 @@ extension SessionViewModel {
         guard conversationLoaded.contains(tabId) else { return }
         if messages[tabId] != nil {
             if messages[tabId]!.contains(where: { $0.id == message.id }) { return }
-            messages[tabId]!.append(message)
+            // Replace optimistic local insert: if the last message is a user message
+            // we inserted locally (source == .remote) with the same content, replace
+            // it with the canonical message from the desktop.
+            if message.role == .user,
+               let lastIdx = messages[tabId]!.indices.last,
+               messages[tabId]![lastIdx].role == .user,
+               messages[tabId]![lastIdx].source == .remote,
+               messages[tabId]![lastIdx].content == message.content {
+                messages[tabId]![lastIdx] = message
+            } else {
+                messages[tabId]!.append(message)
+            }
         } else {
             messages[tabId] = [message]
         }
@@ -522,6 +537,17 @@ extension SessionViewModel {
             messageCountByTab.removeValue(forKey: tabId)
             conversationLoadFailed.remove(tabId)
             loadConversation(tabId: tabId)
+        }
+    }
+
+    // MARK: - Upload attachment result
+
+    @MainActor
+    private func handleUploadAttachmentResult(id: String, name: String, path: String, error: String?) {
+        if let error, !error.isEmpty {
+            pendingUploadResults.append(UploadAttachmentResult(id: "", name: name, path: "", error: error))
+        } else {
+            pendingUploadResults.append(UploadAttachmentResult(id: id, name: name, path: path, error: nil))
         }
     }
 

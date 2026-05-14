@@ -13,18 +13,27 @@ struct MessageBubble: View {
     @State private var showRewindConfirm = false
     @State private var showCopyButton = false
     @State private var showCopiedCheck = false
+    @State private var containerWidth: CGFloat = UIScreen.main.bounds.width
 
     var body: some View {
-        switch message.role {
-        case .user:
-            userBubble
-        case .assistant:
-            assistantBubble
-        case .tool:
-            toolBubble
-        case .system:
-            systemBubble
+        Group {
+            switch message.role {
+            case .user:
+                userBubble
+            case .assistant:
+                assistantBubble
+            case .tool:
+                toolBubble
+            case .system:
+                systemBubble
+            }
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: ContainerWidthKey.self, value: geo.size.width)
+            }
+        )
+        .onPreferenceChange(ContainerWidthKey.self) { containerWidth = $0 }
     }
 
     // MARK: - Timestamp helper
@@ -51,6 +60,27 @@ struct MessageBubble: View {
                     }
                     .foregroundStyle(.secondary)
                 }
+
+                // Attachment chips (if any)
+                if let attachments = message.attachments, !attachments.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(attachments) { att in
+                            HStack(spacing: 3) {
+                                Image(systemName: att.type == .image ? "photo" : "doc")
+                                    .font(.caption2)
+                                Text(att.name)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(.secondarySystemFill))
+                            .clipShape(Capsule())
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+
                 HStack(spacing: 0) {
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(IonTheme.accent)
@@ -164,7 +194,7 @@ struct MessageBubble: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .frame(maxWidth: UIScreen.main.bounds.width * 0.92, alignment: .leading)
+            .frame(maxWidth: containerWidth * 0.92, alignment: .leading)
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.large))
             .contentShape(Rectangle())
@@ -373,5 +403,14 @@ final class MarkdownBlockCache {
         let result = MarkdownFormatter.parse(content)
         cache.setObject(CacheEntry(result), forKey: key)
         return result
+    }
+}
+
+// MARK: - Container Width Preference
+
+private struct ContainerWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = UIScreen.main.bounds.width
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

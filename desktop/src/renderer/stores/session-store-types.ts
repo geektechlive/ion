@@ -70,6 +70,7 @@ export interface State {
   closeTab: (tabId: string) => void
   reorderTabs: (reorderedTabs: TabState[]) => void
   renameTab: (tabId: string, customTitle: string | null) => void
+  setTabModel: (tabId: string, model: string) => void
   setTabPillColor: (tabId: string, color: string | null) => void
   setTabPillIcon: (tabId: string, icon: string | null) => void
   clearTab: () => void
@@ -152,6 +153,7 @@ export interface State {
   renameEngineInstance: (tabId: string, instanceId: string, label: string) => void
   reorderEngineInstances: (tabId: string, reordered: EngineInstance[]) => void
   setEngineModel: (tabId: string, modelId: string) => void
+  addEngineSystemMessage: (key: string, content: string) => void
 }
 
 export type StoreSet = (partial: State | Partial<State> | ((state: State) => State | Partial<State>), replace?: false) => void

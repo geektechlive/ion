@@ -34,35 +34,10 @@ func DefaultSocketPath() string {
 	return filepath.Join(home, ".ion", "engine.sock")
 }
 
-// broadcastQueueSize bounds per-client and per-listener event queues. A slow
-// consumer may lag this many events before the server starts dropping for it.
-const broadcastQueueSize = 256
-
 // broadcastWriteDeadline is how long a single per-client write may take before
 // the drainer treats the connection as dead and evicts it. Configurable via
 // TimeoutsConfig.BroadcastWrite().
 var broadcastWriteDeadline = 5 * time.Second
-
-// clientWriter owns a connected client's outbound queue. A drain goroutine
-// reads from queue and writes to conn under a per-write deadline. Slow or
-// stalled consumers drop events at the enqueue site (non-blocking send) and,
-// once the write deadline trips, are evicted entirely.
-type clientWriter struct {
-	conn    net.Conn
-	queue   chan []byte
-	done    chan struct{}
-	dropped int64
-}
-
-// listenerHandle wraps a registered broadcast listener with its own queue and
-// drain goroutine so a slow listener (e.g. a backed-up relay) cannot stall
-// delivery to socket clients or to other listeners.
-type listenerHandle struct {
-	fn      func(line string)
-	queue   chan string
-	done    chan struct{}
-	dropped int64
-}
 
 // Server listens on a Unix domain socket (or TCP on Windows), accepts NDJSON
 // commands from clients, and broadcasts session events back to all connected clients.
@@ -115,7 +90,7 @@ func NewServer(socketPath string, b backend.RunBackend) *Server {
 			return
 		}
 		line := protocol.SerializeServerEvent(key, json.RawMessage(raw))
-		s.broadcast(line)
+		s.broadcast(line, event.Type)
 	})
 
 	return s
@@ -251,9 +226,10 @@ func (s *Server) acceptLoop() {
 		}
 
 		cw := &clientWriter{
-			conn:  conn,
-			queue: make(chan []byte, broadcastQueueSize),
-			done:  make(chan struct{}),
+			conn:        conn,
+			stateQueue:  make(chan []byte, stateQueueSize),
+			streamQueue: make(chan []byte, streamQueueSize),
+			done:        make(chan struct{}),
 		}
 		s.mu.Lock()
 		s.clients[conn] = cw
@@ -261,29 +237,6 @@ func (s *Server) acceptLoop() {
 
 		go s.drainClient(cw)
 		go s.handleClient(conn)
-	}
-}
-
-// drainClient reads from cw.queue and writes to the underlying conn under a
-// per-write deadline. A failed write evicts the client.
-func (s *Server) drainClient(cw *clientWriter) {
-	for {
-		select {
-		case line, ok := <-cw.queue:
-			if !ok {
-				return
-			}
-			if err := cw.conn.SetWriteDeadline(time.Now().Add(broadcastWriteDeadline)); err != nil {
-				utils.Log("Server", "set write deadline failed: "+err.Error())
-			}
-			if _, err := cw.conn.Write(line); err != nil {
-				utils.Log("Server", fmt.Sprintf("broadcast write error (evicting client, %d events dropped): %s", atomic.LoadInt64(&cw.dropped), err.Error()))
-				s.evictClient(cw.conn)
-				return
-			}
-		case <-cw.done:
-			return
-		}
 	}
 }
 
@@ -303,21 +256,6 @@ func (s *Server) evictClient(conn net.Conn) {
 			close(cw.done)
 		}
 		conn.Close()
-	}
-}
-
-// drainListener calls the listener fn for each queued line until done is closed.
-func (s *Server) drainListener(lh *listenerHandle) {
-	for {
-		select {
-		case line, ok := <-lh.queue:
-			if !ok {
-				return
-			}
-			lh.fn(line)
-		case <-lh.done:
-			return
-		}
 	}
 }
 
@@ -534,6 +472,10 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 			s.sendResult(c, command, nil, map[string]string{"title": title})
 		}(conn, cmd)
 
+	case "reconcile_state":
+		s.manager.ReconcileState(cmd.Key)
+		s.sendResult(conn, cmd, nil, nil)
+
 	case "shutdown":
 		_ = s.Stop()
 
@@ -614,84 +556,10 @@ func (s *Server) healthSnapshot() map[string]interface{} {
 	}
 }
 
-// OnBroadcast registers a listener that receives every broadcast line.
-// Used by relay transport to forward engine events to mobile peers. Each
-// listener gets its own bounded queue + drain goroutine so a slow listener
-// cannot stall delivery to socket clients or other listeners.
-func (s *Server) OnBroadcast(fn func(line string)) {
-	lh := &listenerHandle{
-		fn:    fn,
-		queue: make(chan string, broadcastQueueSize),
-		done:  make(chan struct{}),
-	}
-	s.mu.Lock()
-	s.broadcastListeners = append(s.broadcastListeners, lh)
-	s.mu.Unlock()
-	go s.drainListener(lh)
-}
-
-// broadcast delivers line to every connected client and registered listener.
-// Per-client and per-listener delivery is non-blocking: each side has its own
-// bounded queue, drained by a dedicated goroutine. The Server lock is held
-// only for the snapshot read; no I/O happens under lock.
-func (s *Server) broadcast(line string) {
-	payload := []byte(line)
-	s.mu.RLock()
-	clients := make([]*clientWriter, 0, len(s.clients))
-	for _, cw := range s.clients {
-		clients = append(clients, cw)
-	}
-	listeners := make([]*listenerHandle, len(s.broadcastListeners))
-	copy(listeners, s.broadcastListeners)
-	s.mu.RUnlock()
-
-	for _, cw := range clients {
-		select {
-		case cw.queue <- payload:
-			// If events were previously dropped, notify the client now that the queue has room.
-			if n := atomic.LoadInt64(&cw.dropped); n > 0 {
-				select {
-				case cw.queue <- eventsDroppedLine(n):
-					atomic.StoreInt64(&cw.dropped, 0)
-				default:
-					// Queue full again — notification will be retried on the next successful send.
-				}
-			}
-		default:
-			n := atomic.AddInt64(&cw.dropped, 1)
-			if n == 1 || n%256 == 0 {
-				utils.Log("Server", fmt.Sprintf("broadcast queue full; dropped %d events for slow client", n))
-			}
-		}
-	}
-
-	for _, lh := range listeners {
-		select {
-		case lh.queue <- line:
-			if n := atomic.LoadInt64(&lh.dropped); n > 0 {
-				select {
-				case lh.queue <- string(eventsDroppedLine(n)):
-					atomic.StoreInt64(&lh.dropped, 0)
-				default:
-				}
-			}
-		default:
-			n := atomic.AddInt64(&lh.dropped, 1)
-			if n == 1 || n%256 == 0 {
-				utils.Log("Server", fmt.Sprintf("broadcast listener queue full; dropped %d events", n))
-			}
-		}
-	}
-}
-
-// eventsDroppedLine returns a JSON line notifying the client that events were dropped.
-func eventsDroppedLine(count int64) []byte {
-	return []byte(fmt.Sprintf("{\"type\":\"engine_events_dropped\",\"count\":%d}\n", count))
-}
-
-// writeToClient routes a single line to the given conn through its queue, so
-// it is serialized with broadcast traffic on the same connection. A nil conn
-// is a relay-dispatched command with no socket reply (results go via
+// writeToClient routes a single line to the given conn through its state
+// queue, so it is serialized with broadcast traffic on the same connection.
+// Results are critical control messages and always use the state queue. A nil
+// conn is a relay-dispatched command with no socket reply (results go via
 // broadcast listeners).
 func (s *Server) writeToClient(conn net.Conn, line string) {
 	if conn == nil {
@@ -711,11 +579,11 @@ func (s *Server) writeToClient(conn net.Conn, line string) {
 	}
 	payload := []byte(line)
 	select {
-	case cw.queue <- payload:
+	case cw.stateQueue <- payload: // Results always go to state queue
 	default:
-		n := atomic.AddInt64(&cw.dropped, 1)
+		n := atomic.AddInt64(&cw.stateDropped, 1)
 		if n == 1 || n%256 == 0 {
-			utils.Log("Server", fmt.Sprintf("client queue full; dropped %d events", n))
+			utils.Log("Server", fmt.Sprintf("client state queue full; dropped %d events", n))
 		}
 	}
 }
