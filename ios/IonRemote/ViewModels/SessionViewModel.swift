@@ -151,6 +151,7 @@ final class SessionViewModel {
     // Engine conversation messages (per compound key)
     var engineMessages: [String: [EngineMessage]] = [:]         // compoundKey -> messages
     var engineConversationLoaded: Set<String> = []               // compoundKeys that have loaded history
+    var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
     // Engine instance state (per engine tab)
     var engineInstances: [String: [EngineInstanceInfo]] = [:]   // tabId -> instances
     var activeEngineInstance: [String: String] = [:]              // tabId -> active instanceId
@@ -292,7 +293,6 @@ final class SessionViewModel {
     /// Tabs grouped by working directory basename, preserving original order within each group.
     /// Duplicate basenames are disambiguated with the parent directory name.
     var tabsByDirectory: [(directory: String, fullPath: String, tabs: [RemoteTabState])] {
-        // Build ordered groups preserving tab order
         var order: [String] = []
         var groups: [String: [RemoteTabState]] = [:]
         for tab in tabs {
@@ -303,7 +303,6 @@ final class SessionViewModel {
             groups[key, default: []].append(tab)
         }
 
-        // Count how many distinct full paths share each basename
         var basenameCounts: [String: Int] = [:]
         for path in order {
             let base = (path as NSString).lastPathComponent
@@ -357,6 +356,10 @@ final class SessionViewModel {
             return (label: g.label, id: g.id, icon: "tray.2.fill", directory: dir, tabs: gTabs)
         }
     }
+
+    // MARK: - Voice
+
+    let voiceService = VoiceService()
 
     // MARK: - Init
 
