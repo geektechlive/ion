@@ -10,6 +10,12 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.18.1](https://github.com/dsswift/ion/compare/ios-v1.18.0...ios-v1.18.1) (2026-05-14)
+
+### Bug Fixes
+
+* **ios:** improve voice TTS trigger and simplify settings UI ([8d4813c](https://github.com/dsswift/ion/commit/8d4813c8ac719991f1e33593068e3d0dd2637cb2))
+
 ## [1.18.0](https://github.com/dsswift/ion/compare/ios-v1.17.0...ios-v1.18.0) (2026-05-14)
 
 ### Features
