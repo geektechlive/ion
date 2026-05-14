@@ -83,7 +83,7 @@ export async function handleUploadAttachment(cmd: Extract<RemoteCommand, { type:
   try {
     const match = cmd.dataUrl.match(/^data:([^;]+);base64,(.+)$/)
     if (!match) {
-      state.remoteTransport?.send({ type: 'upload_attachment_result', id: '', name: cmd.name, path: '', error: 'Invalid data URL format' })
+      state.remoteTransport?.send({ type: 'upload_attachment_result', id: '', name: cmd.name, path: '', correlationId: cmd.correlationId, error: 'Invalid data URL format' })
       return
     }
     const [, , base64Data] = match
@@ -95,9 +95,9 @@ export async function handleUploadAttachment(cmd: Extract<RemoteCommand, { type:
     writeFileSync(filePath, buf)
     const id = crypto.randomUUID()
     log(`upload_attachment: saved ${buf.length} bytes to ${filePath}`)
-    state.remoteTransport?.send({ type: 'upload_attachment_result', id, name: cmd.name, path: filePath })
+    state.remoteTransport?.send({ type: 'upload_attachment_result', id, name: cmd.name, path: filePath, correlationId: cmd.correlationId })
   } catch (err) {
     log(`upload_attachment error: ${(err as Error).message}`)
-    state.remoteTransport?.send({ type: 'upload_attachment_result', id: '', name: cmd.name, path: '', error: (err as Error).message })
+    state.remoteTransport?.send({ type: 'upload_attachment_result', id: '', name: cmd.name, path: '', correlationId: cmd.correlationId, error: (err as Error).message })
   }
 }
