@@ -43,6 +43,7 @@ export default function App() {
   useKeyboardShortcuts(setCloseConfirmTab)
 
   const settingsOpen = useSessionStore((s) => s.settingsOpen)
+  const settingsInitialTab = useSessionStore((s) => s.settingsInitialTab)
   const activeTabStatus = useSessionStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.status)
   const addAttachments = useSessionStore((s) => s.addAttachments)
   const colors = useColors()
@@ -134,7 +135,7 @@ export default function App() {
 
           <AnimatePresence initial={false}>
             {settingsOpen && (
-              <SettingsDialog onClose={() => useSessionStore.getState().closeSettings()} />
+              <SettingsDialog initialTab={settingsInitialTab} onClose={() => useSessionStore.getState().closeSettings()} />
             )}
           </AnimatePresence>
 

@@ -62,6 +62,7 @@ export interface State {
   tallViewTabId: string | null
   scrollToBottomCounter: number
   settingsOpen: boolean
+  settingsInitialTab: string | null
 
   initStaticInfo: () => Promise<void>
   setPermissionMode: (mode: 'auto' | 'plan', source?: string) => void
@@ -77,7 +78,7 @@ export interface State {
   clearTab: () => void
   toggleExpanded: () => void
   toggleTallView: (tabId: string) => void
-  openSettings: () => void
+  openSettings: (initialTab?: string) => void
   closeSettings: () => void
   toggleGitPanel: () => void
   closeGitPanel: () => void

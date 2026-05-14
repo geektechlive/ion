@@ -62,6 +62,7 @@ const initialState = {
   tallViewTabId: null,
   scrollToBottomCounter: 0,
   settingsOpen: false,
+  settingsInitialTab: null,
 }
 
 export const useSessionStore = create<State>((set, get) => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { X, GearSix, GitBranch, Columns, PaintBrush, TerminalWindow, SlidersHorizontal, WifiHigh, Plugs } from '@phosphor-icons/react'
+import { X, GearSix, GitBranch, Columns, PaintBrush, TerminalWindow, SlidersHorizontal, WifiHigh, Plugs, Lightning } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { GeneralCategory } from './settings/GeneralCategory'
@@ -12,6 +12,7 @@ import { EditorTerminalCategory } from './settings/EditorTerminalCategory'
 import { PresetsCategory } from './settings/PresetsCategory'
 import { RemoteCategory } from './settings/RemoteCategory'
 import { EngineCategory } from './settings/EngineCategory'
+import { QuickToolsCategory } from './settings/QuickToolsCategory'
 import type { Icon } from '@phosphor-icons/react'
 
 interface Category {
@@ -28,6 +29,7 @@ const CATEGORIES: Category[] = [
   { id: 'tabs', label: 'Tabs & Panels', icon: Columns, component: TabsPanelsCategory },
   { id: 'appearance', label: 'Appearance', icon: PaintBrush, component: AppearanceCategory },
   { id: 'editor', label: 'Editor & Terminal', icon: TerminalWindow, component: EditorTerminalCategory },
+  { id: 'quicktools', label: 'Quick Tools', icon: Lightning, component: QuickToolsCategory },
   { id: 'remote', label: 'Remote', icon: WifiHigh, component: RemoteCategory },
   { id: 'engine', label: 'Engine', icon: Plugs, component: EngineCategory },
 ]
@@ -36,15 +38,18 @@ const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
 
 interface SettingsDialogProps {
   onClose: () => void
+  initialTab?: string | null
 }
 
 const DIALOG_WIDTH = 700
 const DIALOG_HEIGHT = 600
 
-export function SettingsDialog({ onClose }: SettingsDialogProps) {
+export function SettingsDialog({ onClose, initialTab }: SettingsDialogProps) {
   const colors = useColors()
   const popoverLayer = usePopoverLayer()
-  const [activeCategory, setActiveCategory] = useState('general')
+  const [activeCategory, setActiveCategory] = useState(
+    initialTab && CATEGORIES.some((c) => c.id === initialTab) ? initialTab : 'general'
+  )
 
   // Position: always start centered
   const [pos, setPos] = useState(() => ({
