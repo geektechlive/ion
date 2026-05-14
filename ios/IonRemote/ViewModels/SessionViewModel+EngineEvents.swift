@@ -89,15 +89,7 @@ extension SessionViewModel {
             tabs[idx].contextTokens = inputTokens
             tabs[idx].contextPercent = contextPercent
         }
-        // Only speak if this LLM sub-turn produced text — prevents re-speaking the
-        // previous turn's response when the current sub-turn only used tools.
-        if engineTurnHasText.contains(key),
-           let lastAssistant = engineMessages[key]?.last(where: { $0.role == "assistant" }),
-           !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           lastAssistant.content.count > 20
-        {
-            voiceService.speak(text: lastAssistant.content)
-        }
+
         engineTurnHasText.remove(key)
     }
 

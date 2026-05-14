@@ -428,15 +428,13 @@ extension SessionViewModel {
             activeTools.removeValue(forKey: key)
         }
 
-        // Voice: speak the final assistant message if this engine turn produced text
-        let compoundKey = engineCompoundKey(tabId: tabId)
-        if engineTurnHasText.contains(compoundKey),
-           let msgs = engineMessages[compoundKey],
-           let lastAssistant = msgs.last(where: { $0.role == "assistant" }),
-           !lastAssistant.content.isEmpty {
+        // Speak the final assistant response via TTS (if voice is enabled)
+        let key = engineCompoundKey(tabId: tabId)
+        if let lastAssistant = engineMessages[key]?.last(where: { $0.role == "assistant" }),
+           !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           lastAssistant.content.count > 20 {
             voiceService.speak(text: lastAssistant.content)
         }
-        engineTurnHasText.remove(compoundKey)
     }
 
     // MARK: - Permission/message events
