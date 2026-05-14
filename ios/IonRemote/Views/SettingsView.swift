@@ -5,14 +5,15 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showPairingSheet = false
     @State private var elevenLabsKey: String = ""
+    @State private var showApiKey = false
     var body: some View {
         NavigationStack {
             List {
                 connectionSection
-                voiceSection
                 diagnosticsSection
                 newTabSection
                 modelsSection
+                voiceSection
                 tabGroupsSection
                 pairedDevicesSection
                 aboutSection
@@ -26,6 +27,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showPairingSheet) {
                 PairingView()
+            }
+            .onAppear {
+                elevenLabsKey = KeychainHelper.get("com.ion.remote.elevenlabs") ?? ""
             }
         }
     }
@@ -50,36 +54,6 @@ struct SettingsView: View {
     }
 
     // MARK: - Sections
-
-    private var voiceSection: some View {
-        Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.voiceService.isEnabled },
-                set: { viewModel.voiceService.isEnabled = $0 }
-            )) {
-                Label("Voice Responses", systemImage: "waveform")
-            }
-            SecureField("ElevenLabs API Key", text: $elevenLabsKey)
-                .textContentType(.password)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            Button("Save Key") {
-                if elevenLabsKey.trimmingCharacters(in: .whitespaces).isEmpty {
-                    KeychainHelper.delete("com.ion.remote.elevenlabs")
-                } else {
-                    KeychainHelper.set(elevenLabsKey, service: "com.ion.remote.elevenlabs")
-                }
-            }
-            .foregroundStyle(IonTheme.accent)
-        } header: {
-            Text("Voice")
-        } footer: {
-            Text(viewModel.voiceService.isEnabled ? "Ion will speak assistant responses aloud." : "Voice is off.")
-        }
-        .onAppear {
-            elevenLabsKey = KeychainHelper.get("com.ion.remote.elevenlabs") ?? ""
-        }
-    }
 
     @ViewBuilder
     private var connectionSection: some View {
@@ -176,6 +150,56 @@ struct SettingsView: View {
                     Text(model.label).tag(model.id)
                 }
             }
+        }
+    }
+
+    private var voiceSection: some View {
+        Section {
+            Toggle("Voice Readback", isOn: Binding<Bool>(
+                get: { viewModel.voiceService.isEnabled },
+                set: { viewModel.voiceService.isEnabled = $0 }
+            ))
+            if viewModel.voiceService.isEnabled {
+                HStack {
+                    Label("API Key", systemImage: "key")
+                    Spacer()
+                    if showApiKey {
+                        TextField("xi-...", text: $elevenLabsKey)
+                            .textContentType(.password)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .multilineTextAlignment(.trailing)
+                            .font(.system(.caption, design: .monospaced))
+                    } else {
+                        Text(elevenLabsKey.isEmpty ? "Not set" : "••••••\(elevenLabsKey.suffix(4))")
+                            .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        showApiKey.toggle()
+                    } label: {
+                        Image(systemName: showApiKey ? "eye.slash" : "eye")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if showApiKey {
+                    Button("Save API Key") {
+                        let trimmed = elevenLabsKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.isEmpty {
+                            KeychainHelper.delete("com.ion.remote.elevenlabs")
+                        } else {
+                            KeychainHelper.set(trimmed, service: "com.ion.remote.elevenlabs")
+                        }
+                        elevenLabsKey = trimmed
+                        showApiKey = false
+                    }
+                    .disabled(elevenLabsKey.trimmingCharacters(in: .whitespacesAndNewlines) == (KeychainHelper.get("com.ion.remote.elevenlabs") ?? ""))
+                }
+            }
+        } header: {
+            Text("Voice")
+        } footer: {
+            Text("Speaks the final assistant response when a task completes. Requires an ElevenLabs API key.")
         }
     }
 

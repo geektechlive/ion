@@ -19,15 +19,16 @@ final class VoiceService {
     private var pendingText: String?
 
     private static let keychainService = "com.ion.remote.elevenlabs"
-    private static let voiceID = "21m00Tcm4TlvDq8ikWAM"  // Rachel (default)
+    private static let voiceID = "21m00Tcm4TlvDq8ikWAM" // Rachel (default)
     private static let modelID = "eleven_turbo_v2_5"
+    private static let maxSpokenLength = 500
 
     private var apiKey: String? {
         KeychainHelper.get(VoiceService.keychainService)
     }
 
     func speak(text: String) {
-        let cleaned = stripMarkdown(text)
+        let cleaned = prepareForSpeech(text)
         guard isEnabled, !cleaned.isEmpty else { return }
         if isSpeaking {
             // Replace any earlier queued text; current audio finishes naturally.
@@ -118,13 +119,30 @@ final class VoiceService {
         }
     }
 
-    private func stripMarkdown(_ text: String) -> String {
+    // MARK: - Text Preparation
+
+    /// Prepare raw assistant output for speech: strip code, markdown, and cap length.
+    private func prepareForSpeech(_ text: String) -> String {
         var s = text
-        s = s.replacingOccurrences(of: #"```[\s\S]*?```"#, with: " ", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"`[^`\n]+`"#, with: " ", options: .regularExpression)
+        // Remove fenced code blocks entirely (content and all)
+        s = s.replacingOccurrences(of: #"```[\s\S]*?```"#, with: "", options: .regularExpression)
+        // Remove inline code
+        s = s.replacingOccurrences(of: #"`[^`\n]+`"#, with: "", options: .regularExpression)
+        // Strip markdown emphasis
         s = s.replacingOccurrences(of: #"\*{1,3}([^*\n]+)\*{1,3}"#, with: "$1", options: .regularExpression)
+        // Strip markdown headings
         s = s.replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
+        // Strip markdown links, keep label
         s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]+\)"#, with: "$1", options: .regularExpression)
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Collapse multiple newlines/spaces
+        s = s.replacingOccurrences(of: #"\n{2,}"#, with: ". ", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Cap length
+        if s.count > Self.maxSpokenLength {
+            let idx = s.index(s.startIndex, offsetBy: Self.maxSpokenLength)
+            s = String(s[..<idx]) + "..."
+        }
+        return s
     }
 }
