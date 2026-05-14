@@ -115,6 +115,7 @@ export type RemoteCommand =
   | { type: 'fs_write_file'; filePath: string; content: string }
   | { type: 'discover_commands'; directory: string }
   | { type: 'upload_attachment'; dataUrl: string; name: string; correlationId?: string }
+  | { type: 'voice_config'; enabled: boolean; mode: 'client' | 'desktop'; systemPrompt?: string }
 
 // ─── Ion → iOS events ───
 

@@ -6,6 +6,7 @@ struct TabRowView: View {
     let tab: RemoteTabState
     var showDirectory: Bool = false
     var idleSince: Date?
+    var isSpeaking: Bool = false
 
     @State private var pulseOpacity: Double = 1.0
 
@@ -43,6 +44,13 @@ struct TabRowView: View {
                 Image(systemName: "terminal")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            if isSpeaking {
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.caption)
+                    .foregroundStyle(IonTheme.accent)
+                    .symbolEffect(.variableColor.iterative)
             }
 
             VStack(alignment: .leading, spacing: 2) {

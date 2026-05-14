@@ -417,6 +417,12 @@ extension SessionViewModel {
 
     @MainActor
     private func handleTaskComplete(tabId: String) {
+        // Capture liveText before it's cleared — the relay sends assistant
+        // output as text_chunk (which populates liveText) rather than
+        // engine_text_delta (which populates engineMessages), so liveText
+        // is the only reliable source for voice readback.
+        let capturedLiveText = liveText[tabId]
+
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].status = .completed
             // Preserve ExitPlanMode/AskUserQuestion entries for plan card UI
@@ -424,7 +430,7 @@ extension SessionViewModel {
                 $0.toolName != "ExitPlanMode" && $0.toolName != "AskUserQuestion"
             }
             // Capture final preview from accumulated live text before it's cleared
-            if let text = liveText[tabId], !text.isEmpty {
+            if let text = capturedLiveText, !text.isEmpty {
                 tabs[idx].lastMessage = String(text.suffix(64))
                     .replacingOccurrences(of: "\n", with: " ")
             }
@@ -436,12 +442,35 @@ extension SessionViewModel {
         }
         tabIdleSince[tabId] = Date()
 
-        // Speak the final assistant response via TTS (if voice is enabled)
+        // TTS: try engineMessages → conversation messages → liveText
         let key = engineCompoundKey(tabId: tabId)
-        if let lastAssistant = engineMessages[key]?.last(where: { $0.role == "assistant" }),
-           !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           lastAssistant.content.count > 20 {
-            voiceService.speak(text: lastAssistant.content)
+        let convLoaded = conversationLoaded.contains(tabId)
+        DiagnosticLog.log("VOICE-TTS: taskComplete tabId=\(tabId.prefix(8)) convLoaded=\(convLoaded) liveText=\(capturedLiveText?.count ?? -1) msgs=\(messages[tabId]?.count ?? -1) engineMsgs=\(engineMessages[key]?.count ?? -1)")
+        let spokenInfo: (text: String, messageId: String?)? = {
+            // 1. engineMessages (engine_text_delta path) — no stable message ID
+            if let last = engineMessages[key]?.last(where: { $0.role == "assistant" }),
+               !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (last.content, nil)
+            }
+            // 2. conversation messages (message_added path) — has stable ID
+            if let last = messages[tabId]?.last(where: { $0.role == .assistant }),
+               !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (last.content, last.id)
+            }
+            // 3. liveText (text_chunk path — captured before clear) — no ID
+            if let text = capturedLiveText,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (text, nil)
+            }
+            return nil
+        }()
+
+        if let info = spokenInfo,
+           info.text.trimmingCharacters(in: .whitespacesAndNewlines).count > 20 {
+            DiagnosticLog.log("VOICE-TTS: speaking \(info.text.count) chars")
+            voiceService.speak(text: info.text, messageId: info.messageId, tabId: tabId)
+        } else {
+            DiagnosticLog.log("VOICE-TTS: not speaking — text=\(spokenInfo == nil ? "nil" : "\(spokenInfo!.text.count) chars")")
         }
     }
 

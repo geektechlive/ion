@@ -142,5 +142,8 @@ extension SessionViewModel {
                 recentDirectories: recentDirectories
             )
         }
+
+        // Send voice configuration so the desktop knows current voice settings.
+        sendVoiceConfig()
     }
 }

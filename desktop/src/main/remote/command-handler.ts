@@ -26,6 +26,7 @@ import {
   handleEngineSelectInstance,
   handleLoadEngineConversation,
   handleEngineSetModel,
+  handleVoiceConfig,
 } from './handlers/engine'
 import {
   handleTerminalInput,
@@ -77,7 +78,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
       break
     case 'set_permission_mode': handleSetPermissionMode(cmd); break
     case 'load_conversation': await handleLoadConversation(cmd); break
-    case 'engine_prompt': await handleEnginePrompt(cmd); break
+    case 'engine_prompt': await handleEnginePrompt(cmd, deviceId); break
     case 'engine_abort': handleEngineAbort(cmd); break
     case 'engine_dialog_response': handleEngineDialogResponse(cmd); break
     case 'engine_add_instance': await handleEngineAddInstance(cmd); break
@@ -111,6 +112,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'set_tab_model': await handleSetTabModel(cmd); break
     case 'set_preferred_model': await handleSetPreferredModel(cmd); break
     case 'set_engine_default_model': await handleSetEngineDefaultModel(cmd); break
+    case 'voice_config': handleVoiceConfig(cmd, deviceId); break
     case 'unpair': handleUnpair(deviceId); break
   }
 }

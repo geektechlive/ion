@@ -8,7 +8,24 @@ function log(msg: string): void {
   _log('main', msg)
 }
 
-export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'engine_prompt' }>): Promise<void> {
+/** Per-device voice configuration (sent by iOS). */
+const deviceVoiceConfig = new Map<string, { enabled: boolean; mode: 'client' | 'desktop'; systemPrompt?: string }>()
+
+export function handleVoiceConfig(
+  cmd: Extract<RemoteCommand, { type: 'voice_config' }>,
+  deviceId: string,
+): void {
+  log(`voice_config: device=${deviceId} enabled=${cmd.enabled} mode=${cmd.mode} hasPrompt=${!!cmd.systemPrompt}`)
+  deviceVoiceConfig.set(deviceId, { enabled: cmd.enabled, mode: cmd.mode, systemPrompt: cmd.systemPrompt })
+}
+
+export function getVoiceSystemPrompt(deviceId: string): string | undefined {
+  const cfg = deviceVoiceConfig.get(deviceId)
+  if (!cfg || !cfg.enabled || cfg.mode !== 'desktop') return undefined
+  return cfg.systemPrompt
+}
+
+export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'engine_prompt' }>, deviceId: string): Promise<void> {
   try {
     if (!state.mainWindow) {
       log('engine_prompt: no mainWindow, ignoring')
@@ -85,7 +102,8 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
       fullText = `${ctx}\n\n${fullText}`
     }
 
-    broadcast(IPC.REMOTE_ENGINE_PROMPT, { tabId: cmd.tabId, text: fullText })
+    const voicePrompt = getVoiceSystemPrompt(deviceId)
+    broadcast(IPC.REMOTE_ENGINE_PROMPT, { tabId: cmd.tabId, text: fullText, appendSystemPrompt: voicePrompt })
   } catch (err) {
     log(`engine_prompt error: ${(err as Error).message}`)
   }

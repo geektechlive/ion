@@ -13,9 +13,9 @@ export function registerEngineIpc(): void {
     return engineBridge.startSession(key, config)
   })
 
-  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model }: { key: string; text: string; model?: string }) => {
-    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'}`)
-    return engineBridge.sendPrompt(key, text, model)
+  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt }: { key: string; text: string; model?: string; appendSystemPrompt?: string }) => {
+    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt}`)
+    return engineBridge.sendPrompt(key, text, model, appendSystemPrompt)
   })
 
   ipcMain.handle(IPC.ENGINE_ABORT, (_event, { key }: { key: string }) => {

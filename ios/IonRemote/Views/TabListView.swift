@@ -148,6 +148,17 @@ struct TabListView: View {
             .overlay {
                 emptyStateOverlay
             }
+            .overlay(alignment: .top) {
+                if viewModel.voiceService.isSpeaking {
+                    VoicePlaybackBar(
+                        onSkip: { viewModel.voiceService.skip() },
+                        onStopAll: { viewModel.voiceService.stop() },
+                        hasPending: viewModel.voiceService.hasPending
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(IonTheme.snappySpring, value: viewModel.voiceService.isSpeaking)
+                }
+            }
         }
     }
 
@@ -174,6 +185,17 @@ struct TabListView: View {
             .overlay {
                 emptyStateOverlay
             }
+            .overlay(alignment: .top) {
+                if viewModel.voiceService.isSpeaking {
+                    VoicePlaybackBar(
+                        onSkip: { viewModel.voiceService.skip() },
+                        onStopAll: { viewModel.voiceService.stop() },
+                        hasPending: viewModel.voiceService.hasPending
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(IonTheme.snappySpring, value: viewModel.voiceService.isSpeaking)
+                }
+            }
         }
     }
 
@@ -188,10 +210,10 @@ struct TabListView: View {
                         switch selectionStyle {
                         case .navigation:
                             NavigationLink(value: tab.id) {
-                                TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual", idleSince: viewModel.tabIdleSince[tab.id])
+                                TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual", idleSince: viewModel.tabIdleSince[tab.id], isSpeaking: viewModel.voiceService.speakingTabId == tab.id && viewModel.voiceService.isSpeaking)
                             }
                         case .selection:
-                            TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual", idleSince: viewModel.tabIdleSince[tab.id])
+                            TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual", idleSince: viewModel.tabIdleSince[tab.id], isSpeaking: viewModel.voiceService.speakingTabId == tab.id && viewModel.voiceService.isSpeaking)
                                 .tag(tab.id)
                         }
                     }
