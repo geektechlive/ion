@@ -11,6 +11,7 @@ struct EngineView: View {
     @State private var agentPanelFullscreen = false
     @State private var isNearBottom = true
     @State private var scrollTask: Task<Void, Never>?
+    @State private var scrollProxy: ScrollViewProxy?
     @State private var scrollHandle = ScrollHandle()
     @State private var needsInitialScroll = true
     @State private var showFileExplorer = false
@@ -101,32 +102,34 @@ struct EngineView: View {
 
     private var conversationScroll: some View {
         ZStack(alignment: .bottom) {
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(groupedMessages) { item in
-                        switch item {
-                        case .single(let msg):
-                            EngineMessageRow(message: msg)
-                                .id(msg.id)
-                        case .toolGroup(let tools):
-                            EngineToolGroupRow(tools: tools)
-                                .id("tg-\(tools.first?.id ?? "")")
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(groupedMessages) { item in
+                            switch item {
+                            case .single(let msg):
+                                EngineMessageRow(message: msg)
+                                    .id(msg.id)
+                            case .toolGroup(let tools):
+                                EngineToolGroupRow(tools: tools)
+                                    .id("tg-\(tools.first?.id ?? "")")
+                            }
                         }
+                        Color.clear.frame(height: 1).id("bottom-anchor")
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(ScrollOffsetReader(
+                        isNearBottom: $isNearBottom,
+                        scrollHandle: scrollHandle
+                    ))
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .onAppear { scrollProxy = proxy }
             }
-            .background(ScrollOffsetReader(
-                isNearBottom: $isNearBottom,
-                scrollHandle: scrollHandle
-            ))
             .onChange(of: engineMsgs.count) { scrollToBottomIfNeeded() }
             .onChange(of: engineMsgs.last?.content.count) { scrollToBottomIfNeeded() }
             .onChange(of: isNearBottom) { _, newValue in
-                if newValue, isRunning {
-                    debouncedScrollToBottom()
-                }
+                if newValue, isRunning { debouncedScrollToBottom() }
             }
             .onDisappear {
                 scrollTask?.cancel()
@@ -136,7 +139,13 @@ struct EngineView: View {
             if !isNearBottom {
                 Button {
                     isNearBottom = true
-                    scrollHandle.scrollToBottom(animated: true)
+                    // Scroll to the last rendered item via SwiftUI.
+                    // Do NOT use UIKit setContentOffset — LazyVStack
+                    // inflates contentSize with estimated heights, so
+                    // the computed offset overshoots into blank void.
+                    // The last message/group is always rendered (it was
+                    // just visible), so scrollTo lands accurately.
+                    scrollToLastItem()
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 14, weight: .semibold))
@@ -458,16 +467,33 @@ struct EngineView: View {
 
     // MARK: - Scroll helpers
 
+    /// The ID of the last rendered item in the LazyVStack.
+    /// This is always rendered or near-rendered, so SwiftUI's scrollTo
+    /// will land accurately — unlike "bottom-anchor" which may not be
+    /// materialized yet.
+    private var lastItemId: String? {
+        groupedMessages.last?.id
+    }
+
+    private func scrollToLastItem() {
+        guard let id = lastItemId else { return }
+        scrollProxy?.scrollTo(id, anchor: .bottom)
+    }
+
     private func scrollToBottomIfNeeded() {
         if needsInitialScroll, !engineMsgs.isEmpty {
             needsInitialScroll = false
             scrollTask?.cancel()
             scrollTask = Task { @MainActor in
-                // Short delay for LazyVStack to begin layout, then pin:
-                // contentSize KVO will keep re-scrolling as estimates correct.
+                // Short delay for LazyVStack to begin layout.
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled else { return }
-                scrollHandle.pinToBottom(for: .seconds(1))
+                scrollProxy?.scrollTo("bottom-anchor", anchor: .bottom)
+                // After layout settles, scroll again in case estimates
+                // shifted things.
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                scrollProxy?.scrollTo("bottom-anchor", anchor: .bottom)
                 isNearBottom = true
             }
             return
@@ -481,7 +507,7 @@ struct EngineView: View {
         scrollTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(50))
             guard !Task.isCancelled else { return }
-            scrollHandle.scrollToBottom()
+            scrollToLastItem()
         }
     }
 

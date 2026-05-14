@@ -107,14 +107,14 @@ extension SessionViewModel {
             handleTabStatus(tabId: tabId, status: status)
 
         case .textChunk(let tabId, let text):
-            liveText[tabId, default: ""] += text
             // Update tab preview for the tab list (shows most recent text)
             if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-                let preview = liveText[tabId, default: ""]
+                let preview = (liveText[tabId] ?? "") + text
                 tabs[idx].lastMessage = String(preview.suffix(64))
                     .replacingOccurrences(of: "\n", with: " ")
             }
             guard !conversationLoaded.contains(tabId) else { break }
+            liveText[tabId, default: ""] += text
 
         case .toolCall(let tabId, let toolName, _):
             guard !conversationLoaded.contains(tabId) else { break }
@@ -461,6 +461,7 @@ extension SessionViewModel {
         conversationLoadFailed.remove(tabId)
         loadingConversation.remove(tabId)
         conversationLoaded.insert(tabId)
+        liveText.removeValue(forKey: tabId)
         conversationHasMore[tabId] = hasMore
         conversationCursor[tabId] = cursor
         if cursor != nil {
@@ -484,7 +485,18 @@ extension SessionViewModel {
         guard conversationLoaded.contains(tabId) else { return }
         if messages[tabId] != nil {
             if messages[tabId]!.contains(where: { $0.id == message.id }) { return }
-            messages[tabId]!.append(message)
+            // Replace optimistic local insert: if the last message is a user message
+            // we inserted locally (source == .remote) with the same content, replace
+            // it with the canonical message from the desktop.
+            if message.role == .user,
+               let lastIdx = messages[tabId]!.indices.last,
+               messages[tabId]![lastIdx].role == .user,
+               messages[tabId]![lastIdx].source == .remote,
+               messages[tabId]![lastIdx].content == message.content {
+                messages[tabId]![lastIdx] = message
+            } else {
+                messages[tabId]!.append(message)
+            }
         } else {
             messages[tabId] = [message]
         }

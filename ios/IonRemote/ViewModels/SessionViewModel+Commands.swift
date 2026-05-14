@@ -17,6 +17,24 @@ extension SessionViewModel {
 
     func sendPrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
         send(.prompt(tabId: tabId, text: text, attachments: attachments))
+        // Optimistic local insert so the user's message appears immediately
+        // (dismisses empty state, enables scroll-to-bottom) rather than waiting
+        // for the desktop to echo it back via messageAdded.
+        if conversationLoaded.contains(tabId) {
+            let optimistic = Message(
+                id: UUID().uuidString,
+                role: .user,
+                content: text,
+                timestamp: Date().timeIntervalSince1970,
+                source: .remote
+            )
+            if messages[tabId] != nil {
+                messages[tabId]!.append(optimistic)
+            } else {
+                messages[tabId] = [optimistic]
+            }
+            messageCountByTab[tabId] = messages[tabId]?.count ?? 0
+        }
     }
 
     func cancel(tabId: String) {
@@ -53,6 +71,7 @@ extension SessionViewModel {
         guard !loadingConversation.contains(tabId) else { return }
         messages.removeValue(forKey: tabId)
         messageCountByTab.removeValue(forKey: tabId)
+        liveText.removeValue(forKey: tabId)
         conversationLoaded.remove(tabId)
         conversationHasMore.removeValue(forKey: tabId)
         conversationCursor.removeValue(forKey: tabId)
@@ -186,10 +205,6 @@ extension SessionViewModel {
     func submitEnginePrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
         let key = engineCompoundKey(tabId: tabId)
         enginePinnedPrompt[key] = text
-        // Add user message to conversation
-        var msgs = engineMessages[key] ?? []
-        msgs.append(EngineMessage(id: UUID().uuidString, role: "user", content: text, timestamp: Date().timeIntervalSince1970 * 1000))
-        engineMessages[key] = msgs
         // Set tab running
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].status = .running

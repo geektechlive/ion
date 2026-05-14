@@ -251,7 +251,6 @@ struct ConversationView: View {
         .onDisappear {
             scrollTask?.cancel()
             needsInitialScroll = true
-            viewModel.clearConversation(tabId: tabId)
         }
         .onChange(of: viewModel.messageCountByTab[tabId]) {
             cachedRestoredCard = computeRestoredSpecialCard()
