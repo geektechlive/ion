@@ -56,9 +56,7 @@ extension SessionViewModel {
 
     @MainActor
     func handleEvent(_ event: RemoteEvent) {
-        if case .heartbeat = event { /* skip noisy log */ } else {
-            print("[Ion] handleEvent: \(event)")
-        }
+        DiagnosticLog.logEvent(event)
         switch event {
         case .unpair:
             handleUnpair()
@@ -67,7 +65,6 @@ extension SessionViewModel {
             handleRelayConfig(relayUrl: relayUrl, relayApiKey: relayApiKey)
 
         case .transportReconnecting:
-            DiagnosticLog.log("EVENT: transportReconnecting was=\(connectionState)")
             if connectionState == .connected {
                 connectionState = .reconnecting
             }
@@ -78,7 +75,6 @@ extension SessionViewModel {
             connectionQuality.recordHeartbeat(senderTs: senderTs, buffered: buffered)
 
         case .peerDisconnected:
-            DiagnosticLog.log("EVENT: peerDisconnected was=\(connectionState)")
             // Don't tear down the transport — the relay auto-reconnects and
             // startRelayStateObservation re-sends sync when the peer returns.
             if connectionState == .connected || connectionState == .connecting {
@@ -399,19 +395,13 @@ extension SessionViewModel {
         }
         guard conversationLoaded.contains(tabId) else { return }
         if messages[tabId] != nil {
-            if messages[tabId]!.contains(where: { $0.id == message.id }) { return }
-            // Replace optimistic local insert: if the last message is a user message
-            // we inserted locally (source == .remote) with the same content, replace
-            // it with the canonical message from the desktop.
-            if message.role == .user,
-               let lastIdx = messages[tabId]!.indices.last,
-               messages[tabId]![lastIdx].role == .user,
-               messages[tabId]![lastIdx].source == .remote,
-               messages[tabId]![lastIdx].content == message.content {
-                messages[tabId]![lastIdx] = message
-            } else {
-                messages[tabId]!.append(message)
+            // ID-based reconciliation: if a message with this ID already exists
+            // (optimistic insert), replace it with the canonical version from desktop.
+            if let existingIdx = messages[tabId]!.firstIndex(where: { $0.id == message.id }) {
+                messages[tabId]![existingIdx] = message
+                return
             }
+            messages[tabId]!.append(message)
         } else {
             messages[tabId] = [message]
         }

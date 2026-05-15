@@ -17,11 +17,12 @@ extension RemoteCommand {
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
-        case .prompt(let tabId, let text, let origin, let attachments):
+        case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments):
             try container.encode(TypeKey.prompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(origin, forKey: .origin)
+            try container.encodeIfPresent(clientMsgId, forKey: .clientMsgId)
             try container.encodeIfPresent(attachments, forKey: .attachments)
         case .cancel(let tabId):
             try container.encode(TypeKey.cancel, forKey: .type)

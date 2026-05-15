@@ -9,7 +9,9 @@ extension SessionViewModel {
 
     @MainActor
     func handleSnapshot(snapshotTabs: [RemoteTabState], recentDirs: [String], groupMode: String?, groups: [RemoteTabGroup]?, preferredModel: String? = nil, engineDefaultModel: String? = nil) {
+        DiagnosticLog.log("SNAP: received tabs=\(snapshotTabs.count) dirs=\(recentDirs.count) groupMode=\(groupMode ?? "nil")")
         if connectionState != .connected {
+            DiagnosticLog.log("SNAP: connected (was \(connectionState))")
             connectionState = .connected
             cancelReconnectSafetyTimer()
         }

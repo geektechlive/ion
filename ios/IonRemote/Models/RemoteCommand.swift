@@ -6,7 +6,7 @@ enum RemoteCommand: Codable, Sendable {
     case createTab(workingDirectory: String?)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
-    case prompt(tabId: String, text: String, origin: String? = "remote", attachments: [CommandAttachment]? = nil)
+    case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil)
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)
     case setPermissionMode(tabId: String, mode: PermissionMode)
@@ -107,7 +107,7 @@ enum RemoteCommand: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case type
         case workingDirectory, tabId, text, questionId, optionId, mode, before, origin
-        case instanceId, data, cols, rows, customTitle, label, messageId
+        case instanceId, data, cols, rows, customTitle, label, messageId, clientMsgId
         case dialogId, value, profileId, model, groupId
         case directory, path, staged, paths, skip, limit, message, filePath, content, includeHidden
         case attachments, dataUrl, name, correlationId
@@ -134,8 +134,9 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let text = try container.decode(String.self, forKey: .text)
             let origin = try container.decodeIfPresent(String.self, forKey: .origin)
+            let clientMsgId = try container.decodeIfPresent(String.self, forKey: .clientMsgId)
             let attachments = try container.decodeIfPresent([CommandAttachment].self, forKey: .attachments)
-            self = .prompt(tabId: tabId, text: text, origin: origin, attachments: attachments)
+            self = .prompt(tabId: tabId, text: text, origin: origin, clientMsgId: clientMsgId, attachments: attachments)
 
         case .cancel:
             let tabId = try container.decode(String.self, forKey: .tabId)
