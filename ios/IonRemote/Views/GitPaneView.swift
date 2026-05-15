@@ -123,7 +123,7 @@ struct GitPaneView: View {
     ) -> some View {
         VStack(spacing: 0) {
             Button {
-                withAnimation(IonTheme.snappySpring) {
+                withAnimation(.easeInOut(duration: 0.2)) {
                     isExpanded.wrappedValue.toggle()
                 }
             } label: {

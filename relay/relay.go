@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -121,9 +123,12 @@ func sendControl(conn *websocket.Conn, msgType string, timeout time.Duration) {
 
 // relayMessage wraps a forwarded payload to check for push flags.
 type relayMessage struct {
-	Push      bool   `json:"push,omitempty"`
-	PushTitle string `json:"pushTitle,omitempty"`
-	PushBody  string `json:"pushBody,omitempty"`
+	Push         bool   `json:"push,omitempty"`
+	PushTitle    string `json:"pushTitle,omitempty"`
+	PushBody     string `json:"pushBody,omitempty"`
+	Sound        string `json:"sound,omitempty"`
+	BriefingID   string `json:"briefingId,omitempty"`
+	BriefingText string `json:"briefingText,omitempty"`
 }
 
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID, role string, pusher *APNsPusher) {
@@ -179,6 +184,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 	if role == "mobile" {
 		if token := r.URL.Query().Get("apns_token"); token != "" {
 			ch.apnsToken = token
+			writePushChannel(channelID)
 		}
 	}
 
@@ -228,7 +234,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 				if body == "" {
 					body = "Approval required"
 				}
-				pusher.Send(apnsToken, title, body)
+				pusher.Send(apnsToken, title, body, msg.Sound, msg.BriefingID, msg.BriefingText)
 			}
 		}
 	}
@@ -284,5 +290,19 @@ func ping(conn *websocket.Conn, done <-chan struct{}, interval, pingTimeout time
 				return
 			}
 		}
+	}
+}
+
+// writePushChannel persists the channel ID of the most-recently paired mobile
+// peer to ~/.ion/push-channel so harness-ts can read it without needing
+// Ion Desktop's settings.
+func writePushChannel(channelID string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(home, ".ion", "push-channel")
+	if err := os.WriteFile(path, []byte(channelID), 0600); err != nil {
+		log.Printf("writePushChannel: %v", err)
 	}
 }

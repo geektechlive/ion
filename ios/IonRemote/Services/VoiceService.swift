@@ -18,20 +18,20 @@ final class VoiceService {
     private var speakTask: Task<Void, Never>?
     private var pendingText: String?
 
-    private static let keychainService = "com.ion.remote.elevenlabs"
-    private static let voiceID = "21m00Tcm4TlvDq8ikWAM" // Rachel (default)
-    private static let modelID = "eleven_turbo_v2_5"
-    private static let maxSpokenLength = 500
+    // ElevenLabs — Paul Bettany voice
+    private static let keychainService = "com.geektechlive.ionremote.elevenlabs"
+    private static let voiceID = "UolWdrj5vmGn5b1zzgvS"
 
     private var apiKey: String? {
         KeychainHelper.get(VoiceService.keychainService)
     }
+    private static let modelID = "eleven_turbo_v2_5"
 
     func speak(text: String) {
-        let cleaned = prepareForSpeech(text)
+        let cleaned = stripMarkdown(text)
         guard isEnabled, !cleaned.isEmpty else { return }
         if isSpeaking {
-            // Replace any earlier queued text; current audio finishes naturally.
+            // Queue for after current audio finishes; replace any earlier queued text.
             pendingText = cleaned
         } else {
             pendingText = nil
@@ -54,6 +54,7 @@ final class VoiceService {
         isSpeaking = true
         defer {
             isSpeaking = false
+            // Auto-play queued text unless stop() was called (which clears pendingText).
             if !Task.isCancelled, let pending = pendingText {
                 pendingText = nil
                 speakTask = Task { await self.performSpeak(pending) }
@@ -119,30 +120,17 @@ final class VoiceService {
         }
     }
 
-    // MARK: - Text Preparation
-
-    /// Prepare raw assistant output for speech: strip code, markdown, and cap length.
-    private func prepareForSpeech(_ text: String) -> String {
+    private func stripMarkdown(_ text: String) -> String {
         var s = text
-        // Remove fenced code blocks entirely (content and all)
-        s = s.replacingOccurrences(of: #"```[\s\S]*?```"#, with: "", options: .regularExpression)
-        // Remove inline code
-        s = s.replacingOccurrences(of: #"`[^`\n]+`"#, with: "", options: .regularExpression)
-        // Strip markdown emphasis
+        // Code blocks before inline code
+        s = s.replacingOccurrences(of: #"```[\s\S]*?```"#, with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"`[^`\n]+`"#, with: " ", options: .regularExpression)
+        // Bold/italic
         s = s.replacingOccurrences(of: #"\*{1,3}([^*\n]+)\*{1,3}"#, with: "$1", options: .regularExpression)
-        // Strip markdown headings
+        // Headings
         s = s.replacingOccurrences(of: #"(?m)^#{1,6}\s+"#, with: "", options: .regularExpression)
-        // Strip markdown links, keep label
+        // Links
         s = s.replacingOccurrences(of: #"\[([^\]]+)\]\([^\)]+\)"#, with: "$1", options: .regularExpression)
-        // Collapse multiple newlines/spaces
-        s = s.replacingOccurrences(of: #"\n{2,}"#, with: ". ", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
-        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Cap length
-        if s.count > Self.maxSpokenLength {
-            let idx = s.index(s.startIndex, offsetBy: Self.maxSpokenLength)
-            s = String(s[..<idx]) + "..."
-        }
-        return s
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

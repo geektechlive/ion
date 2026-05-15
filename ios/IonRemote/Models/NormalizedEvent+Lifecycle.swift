@@ -15,9 +15,7 @@ extension RemoteEvent {
             let recentDirs = try container.decodeIfPresent([String].self, forKey: .recentDirectories) ?? []
             let tabGroupMode = try container.decodeIfPresent(String.self, forKey: .tabGroupMode)
             let tabGroups = try container.decodeIfPresent([RemoteTabGroup].self, forKey: .tabGroups)
-            let preferredModel = try container.decodeIfPresent(String.self, forKey: .preferredModel)
-            let engineDefaultModel = try container.decodeIfPresent(String.self, forKey: .engineDefaultModel)
-            return .snapshot(tabs: tabs, recentDirectories: recentDirs, tabGroupMode: tabGroupMode, tabGroups: tabGroups, preferredModel: preferredModel, engineDefaultModel: engineDefaultModel)
+            return .snapshot(tabs: tabs, recentDirectories: recentDirs, tabGroupMode: tabGroupMode, tabGroups: tabGroups)
 
         case .tabCreated:
             let tab = try container.decode(RemoteTabState.self, forKey: .tab)
@@ -64,7 +62,7 @@ extension RemoteEvent {
     /// Encode lifecycle events. Returns `true` if the receiver was a lifecycle event.
     func encodeLifecycle(into container: inout KeyedEncodingContainer<CodingKeys>) throws -> Bool {
         switch self {
-        case .snapshot(let tabs, let recentDirectories, let tabGroupMode, let tabGroups, let preferredModel, let engineDefaultModel):
+        case .snapshot(let tabs, let recentDirectories, let tabGroupMode, let tabGroups):
             try container.encode(TypeKey.snapshot, forKey: .type)
             try container.encode(tabs, forKey: .tabs)
             if !recentDirectories.isEmpty {
@@ -72,8 +70,6 @@ extension RemoteEvent {
             }
             try container.encodeIfPresent(tabGroupMode, forKey: .tabGroupMode)
             try container.encodeIfPresent(tabGroups, forKey: .tabGroups)
-            try container.encodeIfPresent(preferredModel, forKey: .preferredModel)
-            try container.encodeIfPresent(engineDefaultModel, forKey: .engineDefaultModel)
             return true
 
         case .tabCreated(let tab):

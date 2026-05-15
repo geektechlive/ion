@@ -7,7 +7,7 @@ enum RemoteCommand: Codable, Sendable {
     case createTab(workingDirectory: String?)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
-    case prompt(tabId: String, text: String, origin: String? = "remote", attachments: [CommandAttachment]? = nil)
+    case prompt(tabId: String, text: String, origin: String? = "remote")
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)
     case setPermissionMode(tabId: String, mode: PermissionMode)
@@ -24,20 +24,16 @@ enum RemoteCommand: Codable, Sendable {
     case forkFromMessage(tabId: String, messageId: String)
     case unpair
     case createEngineTab(workingDirectory: String?, profileId: String?)
-    case enginePrompt(tabId: String, text: String, instanceId: String? = nil, attachments: [CommandAttachment]? = nil)
+    case enginePrompt(tabId: String, text: String, instanceId: String? = nil)
     case engineAbort(tabId: String, instanceId: String? = nil)
     case engineDialogResponse(tabId: String, dialogId: String, value: String, instanceId: String? = nil)
     case engineAddInstance(tabId: String)
     case engineRemoveInstance(tabId: String, instanceId: String)
-    case engineRenameInstance(tabId: String, instanceId: String, label: String)
     case engineSelectInstance(tabId: String, instanceId: String)
     case loadEngineConversation(tabId: String, instanceId: String?)
     case setTabGroupMode(mode: String)
     case moveTabToGroup(tabId: String, groupId: String)
     case engineSetModel(tabId: String, model: String, instanceId: String? = nil)
-    case setTabModel(tabId: String, model: String)
-    case setPreferredModel(model: String)
-    case setEngineDefaultModel(model: String)
     case gitChanges(directory: String)
     case gitGraph(directory: String, skip: Int? = nil, limit: Int? = nil)
     case gitDiff(directory: String, path: String, staged: Bool)
@@ -47,8 +43,6 @@ enum RemoteCommand: Codable, Sendable {
     case fsListDir(directory: String, includeHidden: Bool = false)
     case fsReadFile(filePath: String)
     case fsWriteFile(filePath: String, content: String)
-    case discoverCommands(directory: String)
-    case uploadAttachment(dataUrl: String, name: String)
 
     // MARK: - Codable
 
@@ -79,15 +73,11 @@ enum RemoteCommand: Codable, Sendable {
         case engineDialogResponse = "engine_dialog_response"
         case engineAddInstance = "engine_add_instance"
         case engineRemoveInstance = "engine_remove_instance"
-        case engineRenameInstance = "engine_rename_instance"
         case engineSelectInstance = "engine_select_instance"
         case loadEngineConversation = "load_engine_conversation"
         case setTabGroupMode = "set_tab_group_mode"
         case moveTabToGroup = "move_tab_to_group"
         case engineSetModel = "engine_set_model"
-        case setTabModel = "set_tab_model"
-        case setPreferredModel = "set_preferred_model"
-        case setEngineDefaultModel = "set_engine_default_model"
         case gitChanges = "git_changes"
         case gitGraph = "git_graph"
         case gitDiff = "git_diff"
@@ -97,8 +87,6 @@ enum RemoteCommand: Codable, Sendable {
         case fsListDir = "fs_list_dir"
         case fsReadFile = "fs_read_file"
         case fsWriteFile = "fs_write_file"
-        case discoverCommands = "discover_commands"
-        case uploadAttachment = "upload_attachment"
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -107,7 +95,6 @@ enum RemoteCommand: Codable, Sendable {
         case instanceId, data, cols, rows, customTitle, label, messageId
         case dialogId, value, profileId, model, groupId
         case directory, path, staged, paths, skip, limit, message, filePath, content, includeHidden
-        case attachments, dataUrl, name
     }
 
     init(from decoder: Decoder) throws {
@@ -130,8 +117,7 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let text = try container.decode(String.self, forKey: .text)
             let origin = try container.decodeIfPresent(String.self, forKey: .origin)
-            let attachments = try container.decodeIfPresent([CommandAttachment].self, forKey: .attachments)
-            self = .prompt(tabId: tabId, text: text, origin: origin, attachments: attachments)
+            self = .prompt(tabId: tabId, text: text, origin: origin)
 
         case .cancel:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -221,8 +207,7 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let text = try container.decode(String.self, forKey: .text)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
-            let attachments = try container.decodeIfPresent([CommandAttachment].self, forKey: .attachments)
-            self = .enginePrompt(tabId: tabId, text: text, instanceId: instanceId, attachments: attachments)
+            self = .enginePrompt(tabId: tabId, text: text, instanceId: instanceId)
 
         case .engineAbort:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -244,12 +229,6 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decode(String.self, forKey: .instanceId)
             self = .engineRemoveInstance(tabId: tabId, instanceId: instanceId)
-
-        case .engineRenameInstance:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let instanceId = try container.decode(String.self, forKey: .instanceId)
-            let label = try container.decode(String.self, forKey: .label)
-            self = .engineRenameInstance(tabId: tabId, instanceId: instanceId, label: label)
 
         case .engineSelectInstance:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -275,19 +254,6 @@ enum RemoteCommand: Codable, Sendable {
             let model = try container.decode(String.self, forKey: .model)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             self = .engineSetModel(tabId: tabId, model: model, instanceId: instanceId)
-
-        case .setTabModel:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let model = try container.decode(String.self, forKey: .model)
-            self = .setTabModel(tabId: tabId, model: model)
-
-        case .setPreferredModel:
-            let model = try container.decode(String.self, forKey: .model)
-            self = .setPreferredModel(model: model)
-
-        case .setEngineDefaultModel:
-            let model = try container.decode(String.self, forKey: .model)
-            self = .setEngineDefaultModel(model: model)
 
         case .gitChanges:
             let directory = try container.decode(String.self, forKey: .directory)
@@ -333,15 +299,6 @@ enum RemoteCommand: Codable, Sendable {
             let filePath = try container.decode(String.self, forKey: .filePath)
             let content = try container.decode(String.self, forKey: .content)
             self = .fsWriteFile(filePath: filePath, content: content)
-
-        case .discoverCommands:
-            let directory = try container.decode(String.self, forKey: .directory)
-            self = .discoverCommands(directory: directory)
-
-        case .uploadAttachment:
-            let dataUrl = try container.decode(String.self, forKey: .dataUrl)
-            let name = try container.decode(String.self, forKey: .name)
-            self = .uploadAttachment(dataUrl: dataUrl, name: name)
         }
     }
 
@@ -360,12 +317,11 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
-        case .prompt(let tabId, let text, let origin, let attachments):
+        case .prompt(let tabId, let text, let origin):
             try container.encode(TypeKey.prompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(origin, forKey: .origin)
-            try container.encodeIfPresent(attachments, forKey: .attachments)
 
         case .cancel(let tabId):
             try container.encode(TypeKey.cancel, forKey: .type)
@@ -451,12 +407,11 @@ enum RemoteCommand: Codable, Sendable {
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
             try container.encodeIfPresent(profileId, forKey: .profileId)
 
-        case .enginePrompt(let tabId, let text, let instanceId, let attachments):
+        case .enginePrompt(let tabId, let text, let instanceId):
             try container.encode(TypeKey.enginePrompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
-            try container.encodeIfPresent(attachments, forKey: .attachments)
 
         case .engineAbort(let tabId, let instanceId):
             try container.encode(TypeKey.engineAbort, forKey: .type)
@@ -478,12 +433,6 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(TypeKey.engineRemoveInstance, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(instanceId, forKey: .instanceId)
-
-        case .engineRenameInstance(let tabId, let instanceId, let label):
-            try container.encode(TypeKey.engineRenameInstance, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encode(instanceId, forKey: .instanceId)
-            try container.encode(label, forKey: .label)
 
         case .engineSelectInstance(let tabId, let instanceId):
             try container.encode(TypeKey.engineSelectInstance, forKey: .type)
@@ -509,19 +458,6 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(tabId, forKey: .tabId)
             try container.encode(model, forKey: .model)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
-
-        case .setTabModel(let tabId, let model):
-            try container.encode(TypeKey.setTabModel, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encode(model, forKey: .model)
-
-        case .setPreferredModel(let model):
-            try container.encode(TypeKey.setPreferredModel, forKey: .type)
-            try container.encode(model, forKey: .model)
-
-        case .setEngineDefaultModel(let model):
-            try container.encode(TypeKey.setEngineDefaultModel, forKey: .type)
-            try container.encode(model, forKey: .model)
 
         case .gitChanges(let directory):
             try container.encode(TypeKey.gitChanges, forKey: .type)
@@ -569,22 +505,6 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(TypeKey.fsWriteFile, forKey: .type)
             try container.encode(filePath, forKey: .filePath)
             try container.encode(content, forKey: .content)
-
-        case .discoverCommands(let directory):
-            try container.encode(TypeKey.discoverCommands, forKey: .type)
-            try container.encode(directory, forKey: .directory)
-
-        case .uploadAttachment(let dataUrl, let name):
-            try container.encode(TypeKey.uploadAttachment, forKey: .type)
-            try container.encode(dataUrl, forKey: .dataUrl)
-            try container.encode(name, forKey: .name)
         }
     }
-}
-
-/// Attachment metadata sent with prompt and engine_prompt commands.
-struct CommandAttachment: Codable, Sendable {
-    let type: String   // "image" or "file"
-    let name: String
-    let path: String
 }

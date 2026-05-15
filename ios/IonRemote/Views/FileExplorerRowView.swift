@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// A single row in the file explorer: directory or file entry with indentation.
 struct FileExplorerRowView: View {
@@ -7,17 +6,7 @@ struct FileExplorerRowView: View {
     let entry: FsEntry
     let depth: Int
     let isExpanded: Bool
-    let rootDirectory: String
     let onTap: () -> Void
-
-    /// Path relative to the root working directory.
-    private var relativePath: String {
-        let prefix = rootDirectory.hasSuffix("/") ? rootDirectory : rootDirectory + "/"
-        if entry.path.hasPrefix(prefix) {
-            return String(entry.path.dropFirst(prefix.count))
-        }
-        return entry.path
-    }
 
     var body: some View {
         if entry.isDirectory {
@@ -56,7 +45,6 @@ struct FileExplorerRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .contextMenu { copyMenuItems }
     }
 
     // MARK: - File Row
@@ -94,18 +82,5 @@ struct FileExplorerRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .contextMenu { copyMenuItems }
-    }
-
-    // MARK: - Context Menu
-
-    @ViewBuilder
-    private var copyMenuItems: some View {
-        Button { UIPasteboard.general.string = entry.path } label: {
-            Label("Copy Path", systemImage: "doc.on.doc")
-        }
-        Button { UIPasteboard.general.string = relativePath } label: {
-            Label("Copy Relative Path", systemImage: "doc.on.doc")
-        }
     }
 }

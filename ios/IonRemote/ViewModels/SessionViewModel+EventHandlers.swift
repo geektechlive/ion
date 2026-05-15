@@ -1,3 +1,4 @@
+// @file-size-exception: cohesive engine-event handler; splitting would fragment related switch cases
 import Foundation
 import os
 
@@ -20,15 +21,16 @@ extension SessionViewModel {
                 await self.eventBatcher.enqueue(event)
             }
 
-            // Stream ended naturally -- flush remaining events.
-            // Don't wipe state here: softReconnect keeps state alive.
-            // Only wipe if cancelled explicitly via disconnect().
+            // Stream ended naturally -- flush remaining events and wipe state.
+            // Skip if cancelled (disconnect/reconnect): connect() may have already
+            // advanced connectionState to .connecting and we must not clobber it.
             guard !Task.isCancelled else { return }
             let remaining = await self.eventBatcher.drain()
-            if !remaining.isEmpty {
-                await MainActor.run {
-                    for event in remaining { self.handleEvent(event) }
+            await MainActor.run {
+                for event in remaining {
+                    self.handleEvent(event)
                 }
+                self.wipeTransientState()
             }
         }
 
@@ -37,17 +39,13 @@ extension SessionViewModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(16))
                 guard !Task.isCancelled, let self else { break }
+
                 let batch = await self.eventBatcher.drain()
-                // Sync connectionQuality.transportState so signal bars update promptly.
-                let latestTransport = self.transport?.state ?? .disconnected
-                let needsStateSync = self.connectionQuality.transportState != latestTransport
-                guard !batch.isEmpty || needsStateSync else { continue }
-                await MainActor.run {
-                    for event in batch {
-                        self.handleEvent(event)
-                    }
-                    if needsStateSync {
-                        self.connectionQuality.transportState = latestTransport
+                if !batch.isEmpty {
+                    await MainActor.run {
+                        for event in batch {
+                            self.handleEvent(event)
+                        }
                     }
                 }
             }
@@ -67,28 +65,22 @@ extension SessionViewModel {
             handleRelayConfig(relayUrl: relayUrl, relayApiKey: relayApiKey)
 
         case .transportReconnecting:
-            DiagnosticLog.log("EVENT: transportReconnecting was=\(connectionState)")
             if connectionState == .connected {
                 connectionState = .reconnecting
             }
-            connectionQuality.transportState = transport?.state ?? .disconnected
 
         case .heartbeat(let senderTs, let buffered):
             connectionQuality.transportState = transport?.state ?? .disconnected
             connectionQuality.recordHeartbeat(senderTs: senderTs, buffered: buffered)
 
         case .peerDisconnected:
-            DiagnosticLog.log("EVENT: peerDisconnected was=\(connectionState)")
-            // Don't tear down the transport — the relay auto-reconnects and
-            // startRelayStateObservation re-sends sync when the peer returns.
-            if connectionState == .connected || connectionState == .connecting {
-                connectionState = .reconnecting
-                startReconnectSafetyTimer()
-            }
-            connectionQuality.transportState = transport?.state ?? .disconnected
+            // Tear down and let the auto-retry in IonRemoteApp reconnect.
+            // connect() creates a relay-capable transport and starts Bonjour,
+            // so LAN auto-upgrade still works when the desktop comes back.
+            disconnect()
 
-        case .snapshot(let snapshotTabs, let recentDirs, let snapshotGroupMode, let snapshotGroups, let snapshotPreferredModel, let snapshotEngineDefaultModel):
-            handleSnapshot(snapshotTabs: snapshotTabs, recentDirs: recentDirs, groupMode: snapshotGroupMode, groups: snapshotGroups, preferredModel: snapshotPreferredModel, engineDefaultModel: snapshotEngineDefaultModel)
+        case .snapshot(let snapshotTabs, let recentDirs, let snapshotGroupMode, let snapshotGroups):
+            handleSnapshot(snapshotTabs: snapshotTabs, recentDirs: recentDirs, groupMode: snapshotGroupMode, groups: snapshotGroups)
 
         case .tabCreated(let tab):
             if !tabs.contains(where: { $0.id == tab.id }) {
@@ -107,14 +99,14 @@ extension SessionViewModel {
             handleTabStatus(tabId: tabId, status: status)
 
         case .textChunk(let tabId, let text):
+            liveText[tabId, default: ""] += text
             // Update tab preview for the tab list (shows most recent text)
             if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-                let preview = (liveText[tabId] ?? "") + text
+                let preview = liveText[tabId, default: ""]
                 tabs[idx].lastMessage = String(preview.suffix(64))
                     .replacingOccurrences(of: "\n", with: " ")
             }
             guard !conversationLoaded.contains(tabId) else { break }
-            liveText[tabId, default: ""] += text
 
         case .toolCall(let tabId, let toolName, _):
             guard !conversationLoaded.contains(tabId) else { break }
@@ -189,6 +181,23 @@ extension SessionViewModel {
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
             engineAgentStates[key] = agents
 
+            // Retroactively stamp running tool chips with the agent name.
+            // Runs on every update because the extension emits a placeholder
+            // "Staff member" first, then a second event with the real name —
+            // so we must re-stamp when displayName changes too.
+            if let newNonChief = agents.first(where: { $0.status == "running" && $0.type != "chief" }),
+               var msgs = engineMessages[key] {
+                var updated = false
+                for i in msgs.indices.reversed() {
+                    guard msgs[i].role == "tool" else { break }
+                    if msgs[i].toolStatus == "running" && msgs[i].agentName != newNonChief.displayName {
+                        msgs[i].agentName = newNonChief.displayName
+                        updated = true
+                    }
+                }
+                if updated { engineMessages[key] = msgs }
+            }
+
         case .engineStatus(let tabId, let instanceId, let fields):
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
             engineStatusFields[key] = fields
@@ -235,9 +244,21 @@ extension SessionViewModel {
 
         case .engineConversationHistory(let tabId, let instanceId, let messages):
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-            let filtered = messages.filter { $0.isInternal != true }
-            ionLog.info("engineConversationHistory: key=\(key), messageCount=\(messages.count), filtered=\(filtered.count)")
-            engineMessages[key] = filtered
+            ionLog.info("engineConversationHistory: key=\(key), messageCount=\(messages.count)")
+            // agentName is client-side state not stored on the server; re-apply
+            // any existing stamps to the incoming array before replacing.
+            let agentNames: [String: String] = (engineMessages[key] ?? []).reduce(into: [:]) { d, m in
+                if let tid = m.toolId, let name = m.agentName { d[tid] = name }
+            }
+            var incoming = messages
+            if !agentNames.isEmpty {
+                for i in incoming.indices {
+                    if let tid = incoming[i].toolId, let name = agentNames[tid] {
+                        incoming[i].agentName = name
+                    }
+                }
+            }
+            engineMessages[key] = incoming
             engineConversationLoaded.insert(key)
 
         case .engineDead(let tabId, let instanceId, let exitCode, let signal, let stderrTail):
@@ -257,6 +278,9 @@ extension SessionViewModel {
 
         case .engineProfiles(let profiles):
             engineProfiles = profiles
+
+        case .engineEventsDropped(let droppedCount):
+            print("[Jarvis] engine_events_dropped: \(droppedCount) events lost due to backpressure")
 
         // Git events
         case .gitChangesResponse(let directory, let response):
@@ -280,13 +304,6 @@ extension SessionViewModel {
 
         case .fsWriteResult(_, let response):
             fileWriteResult = response
-
-        case .uploadAttachmentResult(let id, let name, let path, let error):
-            handleUploadAttachmentResult(id: id, name: name, path: path, error: error)
-
-        // Command discovery events
-        case .discoverCommandsResponse(let directory, let commands):
-            discoveredCommands[directory] = commands
         }
     }
 
@@ -294,49 +311,117 @@ extension SessionViewModel {
 
     @MainActor
     private func handleUnpair() {
-        // Desktop revoked our pairing -- remove only the active device.
-        if let device = activeDevice {
-            pairedDevices.removeAll { $0.id == device.id }
-            LayoutCache.delete(deviceId: device.id)
-        }
-        savePairedDevices()
-        if pairedDevices.isEmpty {
-            try? KeychainStore.deleteAll()
-            activeDeviceId = nil
-            pairingState = .idle
-            disconnect()
-        } else {
-            // Switch to the next available device.
-            let nextId = pairedDevices.first!.id
-            switchToDevice(id: nextId)
-        }
+        // Desktop revoked our pairing -- clear everything and return to discovery.
+        // Clear pairedDevices BEFORE disconnect so SwiftUI doesn't briefly show
+        // the disconnected view (which auto-triggers reconnect while devices exist).
+        pairedDevices = []
+        try? KeychainStore.deleteAll()
+        pairingState = .idle
+        disconnect()
     }
 
     @MainActor
     private func handleRelayConfig(relayUrl: String, relayApiKey: String) {
         // Desktop pushed updated relay config -- persist it for roaming.
-        // Guard: if the active device is a LAN-only pairing (apiKey "lan-direct")
-        // and the incoming config doesn't provide BOTH a relay URL and API key,
-        // keep the LAN-direct sentinel intact. Without this, a desktop with no
-        // relay would overwrite the "lan-direct" marker, breaking reconnects.
-        // A legitimate relay upgrade must provide both values.
-        if let device = activeDevice, device.relayAPIKey == "lan-direct" {
-            guard !relayUrl.isEmpty, !relayApiKey.isEmpty else {
-                DiagnosticLog.log("RELAY-CFG: rejected empty for lan-direct \(device.name)")
-                print("[Ion] handleRelayConfig: ignoring incomplete relay config for LAN-direct device \(device.name)")
-                return
-            }
-            // Legitimate upgrade from LAN-direct to relay — fall through.
-        }
-
         self.relayURL = relayUrl
         self.relayAPIKey = relayApiKey
-        if let device = activeDevice,
-           let idx = pairedDevices.firstIndex(where: { $0.id == device.id }) {
-            pairedDevices[idx].relayURL = relayUrl
-            pairedDevices[idx].relayAPIKey = relayApiKey
+        if !pairedDevices.isEmpty {
+            pairedDevices[0].relayURL = relayUrl
+            pairedDevices[0].relayAPIKey = relayApiKey
             savePairedDevices()
-            DiagnosticLog.log("RELAY-CFG: accepted for \(device.id.prefix(8))")
+        }
+    }
+
+    @MainActor
+    private func handleSnapshot(snapshotTabs: [RemoteTabState], recentDirs: [String], groupMode: String?, groups: [RemoteTabGroup]?) {
+        if connectionState != .connected {
+            connectionState = .connected
+        }
+        connectionQuality.transportState = transport?.state ?? .disconnected
+        if !recentDirs.isEmpty {
+            recentDirectories = recentDirs
+        }
+        // Update tab group mode and groups from desktop
+        if let mode = groupMode {
+            tabGroupMode = mode
+        }
+        if let grps = groups {
+            tabGroups = grps
+        }
+        // Filter out tabs that iOS requested to close but hasn't received
+        // tab_closed confirmation for yet. Without this, the snapshot
+        // resurrects tabs that the user just swiped away.
+        let filteredTabs = snapshotTabs.filter { !pendingCloseTabIds.contains($0.id) }
+        // Preserve locally-injected permission queue entries that arrived
+        // via permission_request events. Snapshots pull the queue from the
+        // desktop renderer, which may have already auto-allowed tools like
+        // AskUserQuestion/ExitPlanMode (empty queue), while iOS still needs
+        // to show the card until the user taps an answer.
+        var merged = filteredTabs
+        for i in merged.indices {
+            let tabId = merged[i].id
+
+            // Strip ExitPlanMode/AskUserQuestion entries from the snapshot
+            // queue if the user already dismissed the card on this tab.
+            // The 5-second snapshot polling can re-inject stale entries
+            // from the desktop's permissionDenied before it's cleared.
+            if dismissedLiveSpecialTabs.contains(tabId) {
+                merged[i].permissionQueue.removeAll {
+                    $0.toolName == "ExitPlanMode" || $0.toolName == "AskUserQuestion"
+                }
+            }
+
+            if let existing = tabs.first(where: { $0.id == tabId }),
+               !existing.permissionQueue.isEmpty {
+                // Keep existing local queue entries that aren't in the snapshot
+                let snapshotIds = Set(merged[i].permissionQueue.map(\.questionId))
+                let isRunning = merged[i].status == .running
+                let localOnly = existing.permissionQueue.filter { entry in
+                    if snapshotIds.contains(entry.questionId) { return false }
+                    // Don't re-inject stale plan/question cards once a new task is running
+                    if isRunning && (entry.toolName == "ExitPlanMode" || entry.toolName == "AskUserQuestion") {
+                        return false
+                    }
+                    return true
+                }
+                merged[i].permissionQueue.append(contentsOf: localOnly)
+                // Prefer local entry when it has richer data (e.g. planContent from live event)
+                for local in existing.permissionQueue where snapshotIds.contains(local.questionId) {
+                    if local.toolInput?["planContent"]?.value as? String != nil,
+                       let idx = merged[i].permissionQueue.firstIndex(where: { $0.questionId == local.questionId }),
+                       merged[i].permissionQueue[idx].toolInput?["planContent"]?.value as? String == nil {
+                        merged[i].permissionQueue[idx] = local
+                    }
+                }
+            }
+        }
+        // Always prefer locally-tracked lastMessage over snapshot values.
+        // Real-time textChunk/messageAdded events update lastMessage on iOS
+        // faster than the 5-second snapshot poll, so the local value is
+        // always equal or fresher. The snapshot value is only used for
+        // initial population (when no local value exists yet).
+        for i in merged.indices {
+            if let existing = tabs.first(where: { $0.id == merged[i].id }),
+               existing.lastMessage != nil {
+                merged[i].lastMessage = existing.lastMessage
+            }
+        }
+        tabs = merged
+        tabIds = Set(merged.map(\.id))
+        // Populate terminal state from snapshot tab data
+        for tab in merged {
+            if tab.isTerminalOnly == true, let instances = tab.terminalInstances {
+                terminalInstances[tab.id] = instances
+                activeTerminalInstance[tab.id] = tab.activeTerminalInstanceId ?? instances.first?.id
+            }
+            // Populate engine instance state from snapshot tab data
+            if tab.isEngine == true, let instances = tab.engineInstances {
+                engineInstances[tab.id] = instances.map { EngineInstanceInfo(id: $0.id, label: $0.label) }
+                activeEngineInstance[tab.id] = tab.activeEngineInstanceId ?? instances.first?.id
+                ionLog.info("snapshot: engine tab \(tab.id.prefix(8)), instances=\(instances.map(\.id)), active=\(tab.activeEngineInstanceId ?? "nil")")
+                // Pre-load engine conversation history for all engine tabs
+                loadEngineConversation(tabId: tab.id)
+            }
         }
     }
 
@@ -427,14 +512,6 @@ extension SessionViewModel {
         for key in activeTools.keys where key.hasPrefix("\(tabId):") {
             activeTools.removeValue(forKey: key)
         }
-
-        // Speak the final assistant response via TTS (if voice is enabled)
-        let key = engineCompoundKey(tabId: tabId)
-        if let lastAssistant = engineMessages[key]?.last(where: { $0.role == "assistant" }),
-           !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           lastAssistant.content.count > 20 {
-            voiceService.speak(text: lastAssistant.content)
-        }
     }
 
     // MARK: - Permission/message events
@@ -469,7 +546,6 @@ extension SessionViewModel {
         conversationLoadFailed.remove(tabId)
         loadingConversation.remove(tabId)
         conversationLoaded.insert(tabId)
-        liveText.removeValue(forKey: tabId)
         conversationHasMore[tabId] = hasMore
         conversationCursor[tabId] = cursor
         if cursor != nil {
@@ -493,18 +569,7 @@ extension SessionViewModel {
         guard conversationLoaded.contains(tabId) else { return }
         if messages[tabId] != nil {
             if messages[tabId]!.contains(where: { $0.id == message.id }) { return }
-            // Replace optimistic local insert: if the last message is a user message
-            // we inserted locally (source == .remote) with the same content, replace
-            // it with the canonical message from the desktop.
-            if message.role == .user,
-               let lastIdx = messages[tabId]!.indices.last,
-               messages[tabId]![lastIdx].role == .user,
-               messages[tabId]![lastIdx].source == .remote,
-               messages[tabId]![lastIdx].content == message.content {
-                messages[tabId]![lastIdx] = message
-            } else {
-                messages[tabId]!.append(message)
-            }
+            messages[tabId]!.append(message)
         } else {
             messages[tabId] = [message]
         }
@@ -545,17 +610,6 @@ extension SessionViewModel {
             messageCountByTab.removeValue(forKey: tabId)
             conversationLoadFailed.remove(tabId)
             loadConversation(tabId: tabId)
-        }
-    }
-
-    // MARK: - Upload attachment result
-
-    @MainActor
-    private func handleUploadAttachmentResult(id: String, name: String, path: String, error: String?) {
-        if let error, !error.isEmpty {
-            pendingUploadResults.append(UploadAttachmentResult(id: "", name: name, path: "", error: error))
-        } else {
-            pendingUploadResults.append(UploadAttachmentResult(id: id, name: name, path: path, error: nil))
         }
     }
 

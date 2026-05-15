@@ -106,8 +106,7 @@ struct FileExplorerView: View {
                     FileExplorerRowView(
                         entry: item.entry,
                         depth: item.depth,
-                        isExpanded: expandedPaths.contains(item.entry.path),
-                        rootDirectory: directory
+                        isExpanded: expandedPaths.contains(item.entry.path)
                     ) {
                         handleTap(item.entry)
                     }
@@ -135,7 +134,7 @@ struct FileExplorerView: View {
 
     private func handleTap(_ entry: FsEntry) {
         guard entry.isDirectory else { return }
-        withAnimation(IonTheme.snappySpring) {
+        withAnimation(.easeInOut(duration: 0.2)) {
             if expandedPaths.contains(entry.path) {
                 expandedPaths.remove(entry.path)
             } else {

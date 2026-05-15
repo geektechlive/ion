@@ -23,7 +23,6 @@ final class RelayClient {
     private let relayURL: URL
     private let apiKey: String
     private let channelId: String
-    private let apnsToken: String?
 
     // MARK: - Internals
 
@@ -44,15 +43,23 @@ final class RelayClient {
 
     // MARK: - Init
 
-    init(relayURL: URL, apiKey: String, channelId: String, apnsToken: String? = nil) {
+    init(relayURL: URL, apiKey: String, channelId: String) {
         self.relayURL = relayURL
         self.apiKey = apiKey
         self.channelId = channelId
-        self.apnsToken = apnsToken
 
         var continuation: AsyncStream<Data>.Continuation!
         self.messages = AsyncStream { continuation = $0 }
         self.messageContinuation = continuation
+
+        NotificationCenter.default.addObserver(
+            forName: .apnsTokenRefreshed,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, !self.intentionallyClosed else { return }
+            Task { await self.doConnect() }
+        }
     }
 
     deinit {
@@ -123,12 +130,12 @@ final class RelayClient {
             ? "/v1/channel/\(channelId)"
             : "/\(basePath)/v1/channel/\(channelId)"
         components.path = fullPath
-        components.queryItems = [
-            URLQueryItem(name: "role", value: "mobile"),
-        ]
-        if let token = apnsToken, !token.isEmpty {
-            components.queryItems?.append(URLQueryItem(name: "apns_token", value: token))
+        var queryItems = [URLQueryItem(name: "role", value: "mobile")]
+        if let apnsToken = UserDefaults.standard.string(forKey: "apnsDeviceToken"),
+           !apnsToken.isEmpty {
+            queryItems.append(URLQueryItem(name: "apns_token", value: apnsToken))
         }
+        components.queryItems = queryItems
 
         guard let url = components.url else {
             print("[Ion] RelayClient: failed to build URL from components")
@@ -144,8 +151,6 @@ final class RelayClient {
         let urlSession = URLSession(configuration: .default)
         self.session = urlSession
         let wsTask = urlSession.webSocketTask(with: request)
-        // Default maximumMessageSize is 1 MiB. Encrypted snapshots can
-        // exceed that, causing EMSGSIZE ("Message too long").
         wsTask.maximumMessageSize = 16 * 1024 * 1024
         self.task = wsTask
 

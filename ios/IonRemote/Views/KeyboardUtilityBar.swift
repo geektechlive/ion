@@ -27,14 +27,6 @@ struct KeyboardUtilityBar: View {
                 utilityButton("selection.pin.in.out", label: "Select All") {
                     UIApplication.shared.sendAction(#selector(UIResponder.selectAll(_:)), to: nil, from: nil, for: nil)
                 }
-
-                utilityButton("arrow.right.to.line", label: "Tab") {
-                    promptText.append("\t")
-                }
-
-                utilityButton("return", label: "New Line") {
-                    promptText.append("\n")
-                }
             }
 
             Spacer()
@@ -46,14 +38,12 @@ struct KeyboardUtilityBar: View {
                 Image(systemName: "keyboard.chevron.compact.down")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Circle())
-                    .background(Circle().fill(Color(.tertiarySystemFill)))
+                    .frame(width: 36, height: 36)
             }
         }
         .padding(.horizontal, 8)
-        .frame(height: 40)
-        .background(.regularMaterial)
+        .frame(height: 36)
+        .background(.ultraThinMaterial)
     }
 
     private func utilityButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
@@ -61,9 +51,7 @@ struct KeyboardUtilityBar: View {
             Image(systemName: icon)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-                .frame(width: 40, height: 40)
-                .contentShape(Circle())
-                .background(Circle().fill(Color(.tertiarySystemFill)))
+                .frame(width: 44, height: 36)
         }
         .accessibilityLabel(label)
     }

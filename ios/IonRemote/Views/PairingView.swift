@@ -2,7 +2,6 @@ import SwiftUI
 
 struct PairingView: View {
     @Environment(SessionViewModel.self) private var viewModel
-    @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var browser = BonjourBrowser()
 
@@ -14,15 +13,6 @@ struct PairingView: View {
     // Whether a codeless recovery attempt is in progress or has been tried
     @State private var attemptingRecovery = false
     @State private var recoveryAttempted = false
-
-    // Discovery pulse animation
-    @State private var pulseScale: CGFloat = 1.0
-
-    // Code field focus
-    @FocusState private var codeFieldFocused: Bool
-
-    // Clipboard paste detection
-    @State private var clipboardHasCode = false
 
     var body: some View {
         NavigationStack {
@@ -56,25 +46,8 @@ struct PairingView: View {
         Group {
             if browser.discoveredHosts.isEmpty {
                 VStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .stroke(IonTheme.accent.opacity(0.3), lineWidth: 2)
-                            .frame(width: 80, height: 80)
-                            .scaleEffect(pulseScale)
-                            .opacity(2 - pulseScale)
-                        Circle()
-                            .stroke(IonTheme.accent.opacity(0.15), lineWidth: 2)
-                            .frame(width: 80, height: 80)
-                            .scaleEffect(pulseScale * 0.7 + 0.3)
-                            .opacity(2 - pulseScale)
-                        ProgressView()
-                            .scaleEffect(1.2)
-                    }
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false)) {
-                            pulseScale = 1.8
-                        }
-                    }
+                    ProgressView()
+                        .scaleEffect(1.2)
                     Text("Searching your network...")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -119,10 +92,8 @@ struct PairingView: View {
         } label: {
             HStack {
                 Image(systemName: icon)
-                    .font(.caption)
-                    .foregroundStyle(IonTheme.accent)
-                    .frame(width: 28, height: 28)
-                    .background(IonTheme.accent.opacity(0.12), in: Circle())
+                    .foregroundStyle(Color(hex: 0x4ECDC4))
+                    .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(service.name)
                         .font(.headline)
@@ -131,14 +102,6 @@ struct PairingView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if viewModel.pairedDevices.contains(where: { $0.name == service.name }) {
-                    Text("Paired")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.15), in: Capsule())
-                }
                 Image(systemName: "chevron.right")
                     .foregroundStyle(.tertiary)
             }
@@ -153,7 +116,7 @@ struct PairingView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "server.rack")
                         .font(.system(size: 40))
-                        .foregroundStyle(IonTheme.accent)
+                        .foregroundStyle(Color(hex: 0x4ECDC4))
                     Text(service.name)
                         .font(.title2.bold())
                     Text("\(service.host):\(service.port)")
@@ -183,7 +146,7 @@ struct PairingView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.medium])
     }
 
     // MARK: - Ion Direct Pairing Sheet
@@ -194,7 +157,7 @@ struct PairingView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "desktopcomputer")
                         .font(.system(size: 40))
-                        .foregroundStyle(IonTheme.accent)
+                        .foregroundStyle(Color(hex: 0x4ECDC4))
                     Text(service.name)
                         .font(.title2.bold())
                     Text("\(service.host):\(service.port)")
@@ -219,59 +182,13 @@ struct PairingView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
-                        let isRegular = sizeClass == .regular
-                        let boxWidth: CGFloat = isRegular ? 52 : 40
-                        let boxHeight: CGFloat = isRegular ? 64 : 52
-                        let boxFont: Font = isRegular
-                            ? .system(.largeTitle, design: .monospaced)
-                            : .system(.title, design: .monospaced)
-
-                        ZStack {
-                            HStack(spacing: 8) {
-                                ForEach(0..<6, id: \.self) { index in
-                                    let char = index < pairingCodeInput.count
-                                        ? String(pairingCodeInput[pairingCodeInput.index(pairingCodeInput.startIndex, offsetBy: index)])
-                                        : ""
-                                    Text(char)
-                                        .font(boxFont)
-                                        .frame(width: boxWidth, height: boxHeight)
-                                        .background(Color(.tertiarySystemFill))
-                                        .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.small))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: IonTheme.Radius.small)
-                                                .stroke(index == pairingCodeInput.count ? IonTheme.accent : Color(.separator), lineWidth: index == pairingCodeInput.count ? 2 : 1)
-                                        )
-                                }
-                            }
-                            .allowsHitTesting(false)
-
-                            // Full-sized transparent TextField for reliable keyboard activation on iPad
-                            TextField("", text: $pairingCodeInput)
-                                .keyboardType(.numberPad)
-                                .focused($codeFieldFocused)
-                                .foregroundColor(.clear)
-                                .tint(.clear)
-                                .frame(width: boxWidth * 6 + 8 * 5, height: boxHeight)
-                                .onChange(of: pairingCodeInput) { _, newValue in
-                                    // Limit to 6 digits
-                                    let filtered = String(newValue.prefix(6).filter(\.isNumber))
-                                    if filtered != newValue { pairingCodeInput = filtered }
-                                }
-                        }
-
-                        if clipboardHasCode, let clip = UIPasteboard.general.string {
-                            Button {
-                                pairingCodeInput = String(clip.prefix(6))
-                                clipboardHasCode = false
-                            } label: {
-                                Label("Paste \(clip.prefix(6))", systemImage: "doc.on.clipboard")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(IonTheme.accent)
-                        }
+                        TextField("000000", text: $pairingCodeInput)
+                            .keyboardType(.numberPad)
+                            .font(.system(.largeTitle, design: .monospaced))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 200)
+                            .textFieldStyle(.roundedBorder)
                     }
-                    .onTapGesture { codeFieldFocused = true }
                     .padding(.horizontal)
 
                     Button {
@@ -285,10 +202,10 @@ struct PairingView: View {
                         Text("Pair")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                            .padding(.vertical, 12)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(IonTheme.accent)
+                    .tint(Color(hex: 0x4ECDC4))
                     .disabled(pairingCodeInput.count != 6 || viewModel.pairingState.isConnecting)
                     .padding(.horizontal, 40)
 
@@ -308,11 +225,8 @@ struct PairingView: View {
                     }
                 }
             }
-            .onChange(of: viewModel.pairedDevices.count) { oldCount, newCount in
-                if newCount > oldCount {
-                    Haptic.success()
-                    selectedService = nil
-                }
+            .onChange(of: viewModel.pairedDevices.count) { _, count in
+                if count > 0 { selectedService = nil }
             }
             .task {
                 // Auto-attempt codeless recovery before showing code entry.
@@ -334,16 +248,7 @@ struct PairingView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
-        .onAppear {
-            if let clip = UIPasteboard.general.string,
-               clip.count == 6, clip.allSatisfy(\.isNumber) {
-                clipboardHasCode = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if !attemptingRecovery { codeFieldFocused = true }
-            }
-        }
+        .presentationDetents([.medium])
     }
 
     // MARK: - Status Indicator

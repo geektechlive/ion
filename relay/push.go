@@ -21,15 +21,18 @@ import (
 const (
 	apnsProductionURL = "https://api.push.apple.com"
 	apnsSandboxURL    = "https://api.sandbox.push.apple.com"
-	apnsTopic         = "com.sprague.ion.mobile"
+	apnsTopic         = "com.geektechlive.ion.mobile"
 	tokenTTL          = 50 * time.Minute // Apple requires refresh within 60 min
 )
 
 // pushRequest holds the parameters for a single push notification.
 type pushRequest struct {
-	deviceToken string
-	title       string
-	body        string
+	deviceToken  string
+	title        string
+	body         string
+	sound        string
+	briefingID   string
+	briefingText string
 }
 
 // APNsPusher sends push notifications via Apple's HTTP/2 APNs API.
@@ -112,9 +115,12 @@ func (p *APNsPusher) getToken() (string, error) {
 	return signed, nil
 }
 
-type apnsPayload struct {
-	Aps apsPayload `json:"aps"`
-}
+// apnsBriefingTextLimit is the max byte length for briefingText embedded in
+// the APNs payload. APNs caps alert payloads at 4 KB; this leaves margin for
+// aps + title + body + briefingId. If briefingText exceeds this limit it is
+// truncated and the iOS app falls back to the drain-on-reconnect path for the
+// full version.
+const apnsBriefingTextLimit = 2800
 
 type apsPayload struct {
 	Alert            apsAlert `json:"alert"`
@@ -128,9 +134,26 @@ type apsAlert struct {
 	Body  string `json:"body"`
 }
 
-func (p *APNsPusher) Send(deviceToken, title, body string) {
+// truncateBriefingText cuts briefingText to fit under the APNs payload cap
+// and appends a marker so the iOS app can hint the user that more is available.
+func truncateBriefingText(s string) string {
+	if len(s) <= apnsBriefingTextLimit {
+		return s
+	}
+	const marker = "\n…[truncated — open Briefings for full text]"
+	return s[:apnsBriefingTextLimit-len(marker)] + marker
+}
+
+func (p *APNsPusher) Send(deviceToken, title, body, sound, briefingID, briefingText string) {
 	select {
-	case p.queue <- pushRequest{deviceToken: deviceToken, title: title, body: body}:
+	case p.queue <- pushRequest{
+		deviceToken:  deviceToken,
+		title:        title,
+		body:         body,
+		sound:        sound,
+		briefingID:   briefingID,
+		briefingText: briefingText,
+	}:
 	default:
 		log.Printf("APNs push queue full, dropping notification")
 	}
@@ -140,28 +163,41 @@ func (p *APNsPusher) Send(deviceToken, title, body string) {
 func (p *APNsPusher) Start() {
 	go func() {
 		for req := range p.queue {
-			p.sendAsync(req.deviceToken, req.title, req.body)
+			p.sendAsync(req)
 		}
 	}()
 }
 
-func (p *APNsPusher) sendAsync(deviceToken, title, body string) {
+func (p *APNsPusher) sendAsync(req pushRequest) {
 	token, err := p.getToken()
 	if err != nil {
 		log.Printf("APNs token error: %v", err)
 		return
 	}
 
-	payload := apnsPayload{
-		Aps: apsPayload{
+	sound := req.sound
+	if sound == "" {
+		sound = "jarvis-message.caf"
+	}
+
+	// Top-level keys: aps + arbitrary custom data (briefingId, briefingText)
+	// per APNs spec. Marshal as a map so we can omit empties cleanly.
+	payload := map[string]any{
+		"aps": apsPayload{
 			Alert: apsAlert{
-				Title: title,
-				Body:  body,
+				Title: req.title,
+				Body:  req.body,
 			},
-			Sound:            "default",
+			Sound:            sound,
 			Category:         "PERMISSION_REQUEST",
 			ContentAvailable: 1,
 		},
+	}
+	if req.briefingID != "" {
+		payload["briefingId"] = req.briefingID
+	}
+	if req.briefingText != "" {
+		payload["briefingText"] = truncateBriefingText(req.briefingText)
 	}
 
 	data, err := json.Marshal(payload)
@@ -170,19 +206,19 @@ func (p *APNsPusher) sendAsync(deviceToken, title, body string) {
 		return
 	}
 
-	url := fmt.Sprintf("%s/3/device/%s", p.baseURL, deviceToken)
-	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
+	url := fmt.Sprintf("%s/3/device/%s", p.baseURL, req.deviceToken)
+	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(data))
 	if err != nil {
 		log.Printf("APNs request error: %v", err)
 		return
 	}
 
-	req.Header.Set("Authorization", "bearer "+token)
-	req.Header.Set("apns-topic", apnsTopic)
-	req.Header.Set("apns-push-type", "alert")
-	req.Header.Set("apns-priority", "10")
+	httpReq.Header.Set("Authorization", "bearer "+token)
+	httpReq.Header.Set("apns-topic", apnsTopic)
+	httpReq.Header.Set("apns-push-type", "alert")
+	httpReq.Header.Set("apns-priority", "10")
 
-	resp, err := p.client.Do(req)
+	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		log.Printf("APNs send error: %v", err)
 		return

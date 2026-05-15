@@ -117,7 +117,7 @@ struct FileEditorView: View {
             } label: {
                 Text("Save")
                     .fontWeight(.semibold)
-                    .foregroundStyle(isDirty ? IonTheme.accent : .secondary)
+                    .foregroundStyle(isDirty ? Color(hex: 0x2EB8A6) : .secondary)
             }
             .disabled(!isDirty)
         }
@@ -134,28 +134,12 @@ struct FileEditorView: View {
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                HStack(alignment: .top, spacing: 0) {
-                    // Line number gutter
-                    VStack(alignment: .trailing, spacing: 0) {
-                        ForEach(1...max(editedContent.components(separatedBy: "\n").count, 1), id: \.self) { lineNum in
-                            Text("\(lineNum)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                                .frame(height: 20)
-                        }
-                    }
-                    .padding(.top, 8)
-                    .padding(.horizontal, 4)
-                    .frame(width: 40)
-                    .background(Color(.secondarySystemBackground))
-
-                    Text(editedContent)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                }
+                Text(editedContent)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
             }
         }
     }
@@ -164,33 +148,12 @@ struct FileEditorView: View {
 
     private var editorView: some View {
         ZStack(alignment: .topTrailing) {
-            HStack(alignment: .top, spacing: 0) {
-                // Line number gutter
-                ScrollView {
-                    VStack(alignment: .trailing, spacing: 0) {
-                        ForEach(1...max(editedContent.components(separatedBy: "\n").count, 1), id: \.self) { lineNum in
-                            Text("\(lineNum)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                                .frame(height: 20)
-                        }
-                    }
-                    .padding(.top, 8)
-                    .padding(.horizontal, 4)
-                }
-                .frame(width: 40)
-                .background(Color(.secondarySystemBackground))
-                .scrollDisabled(true)
-
-                Divider()
-
-                TextEditor(text: $editedContent)
-                    .font(.system(.body, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .scrollContentBackground(.hidden)
-                    .background(Color(.systemBackground))
-            }
+            TextEditor(text: $editedContent)
+                .font(.system(.body, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .scrollContentBackground(.hidden)
+                .background(Color(.systemBackground))
 
             if let msg = saveMessage {
                 saveMessageBadge(msg)

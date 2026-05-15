@@ -22,7 +22,6 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     var engineInstances: [EngineInstanceInfo]?
     var activeEngineInstanceId: String?
     var groupId: String?
-    var modelOverride: String?
 
     var displayTitle: String {
         customTitle ?? title

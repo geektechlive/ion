@@ -6,8 +6,8 @@ struct ConversationView: View {
     let tabId: String
 
     @State private var cachedRestoredCard: PermissionRequest?
-    @State private var isNearBottom: Bool = true
-    @State private var forceScrollCounter: Int = 0
+    @State private var scrollTask: Task<Void, Never>?
+    @State private var scrollProxy: ScrollViewProxy?
     @State private var showGitPane = false
     @State private var showFileExplorer = false
 
@@ -16,15 +16,11 @@ struct ConversationView: View {
     }
 
     private var isRunning: Bool {
-        tab?.status == .running || tab?.status == .connecting
+        tab?.status == .running
     }
 
     private var conversationMessages: [Message] {
         viewModel.messages[tabId] ?? []
-    }
-
-    private var groupedItems: [ConversationItem] {
-        groupConversationItems(conversationMessages)
     }
 
     private var isLoading: Bool {
@@ -33,30 +29,6 @@ struct ConversationView: View {
 
     private var loadFailed: Bool {
         viewModel.conversationLoadFailed.contains(tabId)
-    }
-
-    /// Derives a human-readable activity string from current state,
-    /// mirroring the desktop's `tab.currentActivity` ("Thinking…", etc.).
-    private var currentActivity: String {
-        // 1. Active tools → "Running {toolName}…"
-        if let tools = viewModel.activeTools[tabId], !tools.isEmpty {
-            if let first = tools.values.first {
-                return "Running \(first.toolName)…"
-            }
-        }
-        // 2. Last message is assistant and streaming → "Writing…"
-        if let last = conversationMessages.last, last.role == .assistant {
-            return "Writing…"
-        }
-        // 3. Default
-        return "Thinking…"
-    }
-
-    /// True when the engine is actively compacting context.
-    /// Detected from the last system message being a compacting marker,
-    /// or from a snapshot that included compacting status.
-    private var isCompacting: Bool {
-        currentActivity.hasPrefix("Compacting")
     }
 
     private var pendingPermission: PermissionRequest? {
@@ -77,10 +49,9 @@ struct ConversationView: View {
             }
         }
         // Synthesize a card from conversation history when the permission queue
-        // is empty (e.g. reopening a previous conversation). Also allow completed
-        // status so the card survives the task_complete → permission_request gap.
-        if let status = tab?.status, (status == .idle || status == .completed),
-           !viewModel.dismissedLiveSpecialTabs.contains(tabId),
+        // is empty (e.g. reopening a previous conversation). Only when idle --
+        // completed/failed/dead conversations should not resurface old cards.
+        if tab?.status == .idle, !viewModel.dismissedLiveSpecialTabs.contains(tabId),
            let restored = cachedRestoredCard,
            !viewModel.dismissedRestoredCards.contains(restored.questionId) {
             return restored
@@ -118,107 +89,13 @@ struct ConversationView: View {
         )
     }
 
-    // MARK: - Row items for the collection view
-
-    /// Unified row enum that wraps both state indicators and conversation items.
-    /// Hashable by a stable string id for the diffable data source.
-    private enum RowItem: Hashable {
-        case loadMore
-        case loading
-        case loadFailed
-        case empty
-        case conversation(ConversationItem)
-        case liveText(String)
-
-        var stableId: String {
-            switch self {
-            case .loadMore: return "__loadMore"
-            case .loading: return "__loading"
-            case .loadFailed: return "__loadFailed"
-            case .empty: return "__empty"
-            case .conversation(let item): return item.id
-            case .liveText: return "__liveText"
-            }
-        }
-
-        static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.stableId == rhs.stableId
-        }
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(stableId)
-        }
-    }
-
-    private var rowItems: [ChatItem<RowItem>] {
-        var result: [ChatItem<RowItem>] = []
-
-        if viewModel.conversationHasMore[tabId] == true {
-            result.append(ChatItem(id: "__loadMore", payload: .loadMore))
-        }
-        if isLoading && conversationMessages.isEmpty {
-            result.append(ChatItem(id: "__loading", payload: .loading))
-        } else if loadFailed && conversationMessages.isEmpty {
-            result.append(ChatItem(id: "__loadFailed", payload: .loadFailed))
-        }
-        if conversationMessages.isEmpty && !isLoading && !loadFailed {
-            result.append(ChatItem(id: "__empty", payload: .empty))
-        }
-        for item in groupedItems {
-            result.append(ChatItem(id: item.id, payload: .conversation(item)))
-        }
-        if conversationMessages.isEmpty,
-           let text = viewModel.liveText[tabId], !text.isEmpty {
-            result.append(ChatItem(id: "__liveText", payload: .liveText(text)))
-        }
-        return result
-    }
-
     var body: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
-                messageList
-                if !isNearBottom {
-                    Button {
-                        isNearBottom = true
-                        forceScrollCounter += 1
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 40, height: 40)
-                            .background(.regularMaterial)
-                            .clipShape(Circle())
-                            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
-                    }
-                    .padding(.bottom, 12)
-                    .transition(.opacity.combined(with: .scale))
-                }
-            }
-            .animation(IonTheme.snappySpring, value: isNearBottom)
-
-            // Activity indicator — pinned above status bar, always visible
-            if isRunning {
-                ActivityIndicatorView(
-                    text: currentActivity,
-                    dotColorOverride: isCompacting ? .blue : nil
-                )
-            }
-
-            ConversationStatusBar(
-                modelOverride: tab?.modelOverride,
-                preferredModel: viewModel.preferredModel,
-                contextPercent: tab?.contextPercent,
-                contextTokens: tab?.contextTokens,
-                isRunning: isRunning,
-                onSelectModel: { model in
-                    viewModel.setTabModel(tabId: tabId, model: model)
-                }
-            )
+            messageList
 
             if let request = pendingPermission {
                 PermissionCardView(tabId: tabId, request: request)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
+                    .padding()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
@@ -231,32 +108,21 @@ struct ConversationView: View {
                         .font(.caption)
                 }
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .background(Capsule().fill(Color(.tertiarySystemFill)))
             }
 
             InputBar(tabId: tabId)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(JarvisTheme.background.opacity(0.95), for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text(tab?.displayTitle ?? "Tab")
-                        .font(.headline)
-                    if let dir = tab?.workingDirectory {
-                        Text((dir as NSString).lastPathComponent)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    if let status = tab?.status {
-                        Text(status.rawValue.capitalized)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Text(tab?.displayTitle ?? "Tab")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(JarvisTheme.accent)
+                    .shadow(color: JarvisTheme.accent.opacity(0.8), radius: 4)
+                    .shadow(color: JarvisTheme.accent.opacity(0.4), radius: 10)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 12) {
@@ -285,31 +151,35 @@ struct ConversationView: View {
                             Text(tab?.permissionMode == .plan ? "Plan" : "Auto")
                                 .font(.caption.weight(.medium))
                         }
-                        .foregroundStyle(tab?.permissionMode == .plan ? IonTheme.accent : .secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color(.tertiarySystemFill)))
+                        .foregroundStyle(tab?.permissionMode == .plan ? Color(hex: 0x2EB8A6) : .secondary)
                     }
                 }
             }
         }
-        .task {
+        .onAppear {
             viewModel.loadConversation(tabId: tabId)
             cachedRestoredCard = computeRestoredSpecialCard()
         }
+        .onDisappear {
+            scrollTask?.cancel()
+            viewModel.clearConversation(tabId: tabId)
+        }
         .onChange(of: viewModel.messageCountByTab[tabId]) {
             cachedRestoredCard = computeRestoredSpecialCard()
-
             guard !viewModel.suppressScrollToBottom else {
                 viewModel.suppressScrollToBottom = false
                 return
             }
-            // Always scroll to bottom when the user sends a message,
-            // even if they were scrolled up — matches desktop behavior.
-            let userSent = conversationMessages.last?.role == .user
-            if userSent {
-                isNearBottom = true
-                forceScrollCounter += 1
+            // Defer scroll to let LazyVStack finish layout
+            scrollTask?.cancel()
+            scrollTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled else { return }
+                if let proxy = scrollProxy {
+                    withAnimation {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
             }
         }
         .onChange(of: viewModel.connectionState) { _, newState in
@@ -337,117 +207,356 @@ struct ConversationView: View {
     // MARK: - Message List
 
     private var messageList: some View {
-        ChatCollectionView(
-            items: rowItems,
-            isNearBottom: $isNearBottom,
-            forceScrollCounter: forceScrollCounter,
-            spacing: 6,
-            horizontalInset: 0
-        ) { [self] rowItem in
-            rowView(rowItem)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    // "Load more" button at the top
+                    if viewModel.conversationHasMore[tabId] == true {
+                        Button {
+                            viewModel.loadMoreMessages(tabId: tabId)
+                        } label: {
+                            if isLoading {
+                                ProgressView()
+                            } else {
+                                Text("Load earlier messages")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+
+                    // Loading indicator for initial load
+                    if isLoading && conversationMessages.isEmpty {
+                        ProgressView("Loading conversation...")
+                            .padding(.top, 40)
+                    } else if loadFailed && conversationMessages.isEmpty {
+                        Button {
+                            viewModel.loadConversation(tabId: tabId)
+                        } label: {
+                            VStack(spacing: 8) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.title2)
+                                Text("Couldn't load conversation.\nTap to retry.")
+                                    .font(.subheadline)
+                                    .multilineTextAlignment(.center)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 40)
+                    }
+
+                    // Messages
+                    ForEach(conversationMessages) { message in
+                        MessageBubble(
+                            message: message,
+                            isRunning: isRunning && message.id == conversationMessages.last?.id,
+                            onRewind: message.role == .user ? { messageId in
+                                viewModel.rewindConversation(tabId: tabId, messageId: messageId)
+                            } : nil,
+                            onFork: message.role == .user ? { messageId in
+                                viewModel.forkFromMessage(tabId: tabId, messageId: messageId)
+                            } : nil
+                        )
+                        .id(message.id)
+                    }
+
+                    // Fallback: legacy liveText when no structured messages
+                    if conversationMessages.isEmpty, let text = viewModel.liveText[tabId], !text.isEmpty {
+                        Text(text)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(.horizontal)
+                    }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom")
+                }
+                .padding(.vertical)
+            }
+            .onAppear { scrollProxy = proxy }
+        }
+    }
+}
+
+// MARK: - MessageBubble
+
+struct MessageBubble: View {
+    let message: Message
+    var isRunning: Bool = false
+    var onRewind: ((String) -> Void)?
+    var onFork: ((String) -> Void)?
+
+    @State private var isToolExpanded = false
+    @State private var showRewindConfirm = false
+
+    var body: some View {
+        switch message.role {
+        case .user:
+            userBubble
+        case .assistant:
+            assistantBubble
+        case .tool:
+            toolBubble
+        case .system:
+            systemBubble
         }
     }
 
-    // MARK: - Row dispatch
+    // MARK: - User
 
-    @ViewBuilder
-    private func rowView(_ rowItem: RowItem) -> some View {
-        switch rowItem {
-        case .loadMore:
-            Button {
-                viewModel.loadMoreMessages(tabId: tabId)
-            } label: {
-                if isLoading {
-                    ProgressView()
-                } else {
-                    Text("Load earlier messages")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+    private var userBubble: some View {
+        HStack {
+            Spacer(minLength: 24)
+            VStack(alignment: .trailing, spacing: 4) {
+                if let source = message.source, source == .remote {
+                    HStack(spacing: 4) {
+                        Image(systemName: "iphone")
+                            .font(.caption2)
+                        Text("from iOS")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                Text(message.content)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(JarvisTheme.accentSubtle)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .padding(.trailing, 12)
+            .padding(.vertical, 2)
+        }
+        .contextMenu {
+            Button { UIPasteboard.general.string = message.content } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            ShareLink(item: message.content) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            if onRewind != nil || onFork != nil {
+                Divider()
+            }
+            if onRewind != nil {
+                Button { showRewindConfirm = true } label: {
+                    Label("Rewind to Here", systemImage: "arrow.counterclockwise")
                 }
             }
-            .padding(.vertical, 8)
-
-        case .loading:
-            ProgressView("Loading conversation...")
-                .padding(.top, 40)
-
-        case .loadFailed:
-            Button {
-                viewModel.loadConversation(tabId: tabId)
-            } label: {
-                VStack(spacing: 8) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.title2)
-                    Text("Couldn't load conversation.\nTap to retry.")
-                        .font(.subheadline)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
+            if let onFork {
+                Button { onFork(message.id) } label: {
+                    Label("Fork from Here", systemImage: "arrow.triangle.branch")
                 }
+            }
+        }
+        .confirmationDialog(
+            "Rewind Conversation",
+            isPresented: $showRewindConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Rewind", role: .destructive) {
+                onRewind?(message.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will reset the conversation to before this message. This cannot be undone.")
+        }
+    }
+
+    // MARK: - Assistant
+
+    private var assistantBubble: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !message.content.isEmpty {
+                if let attributed = MarkdownCache.shared.attributedString(for: message.content) {
+                    Text(attributed)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(message.content)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            // Blinking cursor for streaming
+            if isRunning && message.isAssistant {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.primary)
+                    .frame(width: 8, height: 16)
+                    .opacity(0.6)
+                    .modifier(BlinkingModifier())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemFill))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Tool
+
+    private var toolBubble: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isToolExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    toolStatusIcon
+
+                    Text(message.toolName ?? "Tool")
+                        .font(.subheadline.monospaced())
+                        .foregroundStyle(.primary)
+
+                    Spacer()
+
+                    Image(systemName: isToolExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
             }
             .buttonStyle(.plain)
-            .padding(.top, 40)
 
-        case .empty:
-            VStack(spacing: 12) {
-                Image("IonIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 48, height: 48)
-                    .foregroundStyle(.tertiary)
-                Text("Send a message to get started")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            if isToolExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let input = message.toolInput, !input.isEmpty {
+                        Text("Input:")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        Text(input)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(10)
+                    }
+                    if !message.content.isEmpty {
+                        Text(message.toolStatus == .error ? "Error:" : "Result:")
+                            .font(.caption.bold())
+                            .foregroundStyle(message.toolStatus == .error ? .red : .secondary)
+                        Text(message.content)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(20)
+                            .foregroundStyle(message.toolStatus == .error ? .red : .primary)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 80)
+        }
+        .background(Color(.tertiarySystemFill))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 1)
+    }
 
-        case .conversation(let item):
-            conversationItemView(item)
-
-        case .liveText(let text):
-            Text(text)
-                .font(.system(.body, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(.horizontal)
+    private var toolStatusIcon: some View {
+        Group {
+            switch message.toolStatus {
+            case .running:
+                ProgressView()
+                    .controlSize(.mini)
+            case .completed:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.subheadline)
+            case .error:
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+                    .font(.subheadline)
+            case nil:
+                Image(systemName: "gearshape")
+                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+            }
         }
     }
 
-    // MARK: - Conversation item dispatch
+    // MARK: - System
 
-    @ViewBuilder
-    private func conversationItemView(_ item: ConversationItem) -> some View {
-        switch item {
-        case .user(let message):
-            MessageBubble(
-                message: message,
-                isRunning: false,
-                onRewind: { messageId in
-                    viewModel.rewindConversation(tabId: tabId, messageId: messageId)
-                },
-                onFork: { messageId in
-                    viewModel.forkFromMessage(tabId: tabId, messageId: messageId)
-                }
-            )
-
-        case .assistant(let message):
-            let isLast = message.id == conversationMessages.last?.id
-            let combined = consecutiveAssistantContent(
-                for: message.id, in: conversationMessages
-            )
-            MessageBubble(
-                message: message,
-                isRunning: isRunning && isLast,
-                copyableContent: combined
-            )
-
-        case .system(let message):
-            MessageBubble(message: message)
-
-        case .toolGroup(let tools):
-            ToolGroupView(tools: tools, isTabRunning: isRunning)
-
-        case .compaction(let message):
-            CompactionRowView(message: message)
+    private var systemBubble: some View {
+        HStack {
+            Spacer()
+            Text(message.content)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Spacer()
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - BlinkingModifier
+
+struct BlinkingModifier: ViewModifier {
+    @State private var isVisible = true
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true)) {
+                    isVisible = false
+                }
+            }
+    }
+}
+
+// MARK: - Color hex init
+
+extension Color {
+    init(hex: UInt, opacity: Double = 1.0) {
+        self.init(
+            .sRGB,
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255,
+            opacity: opacity
+        )
+    }
+}
+
+// MARK: - MarkdownCache
+
+/// Caches parsed AttributedStrings so markdown is only parsed once per unique
+/// content string, not on every SwiftUI re-render.
+@MainActor
+final class MarkdownCache {
+    static let shared = MarkdownCache()
+
+    private let cache = NSCache<NSString, CacheEntry>()
+
+    private class CacheEntry {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    init() {
+        cache.countLimit = 200
+    }
+
+    func attributedString(for content: String) -> AttributedString? {
+        let key = content as NSString
+        if let entry = cache.object(forKey: key) {
+            return entry.value
+        }
+        guard let result = try? AttributedString(
+            markdown: content,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) else { return nil }
+        cache.setObject(CacheEntry(result), forKey: key)
+        return result
     }
 }

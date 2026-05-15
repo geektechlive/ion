@@ -151,16 +151,12 @@ final class SessionViewModel {
     // Engine conversation messages (per compound key)
     var engineMessages: [String: [EngineMessage]] = [:]         // compoundKey -> messages
     var engineConversationLoaded: Set<String> = []               // compoundKeys that have loaded history
-    var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
+    var engineTurnHasText: Set<String> = []                     // compoundKeys where current LLM sub-turn produced text
     // Engine instance state (per engine tab)
     var engineInstances: [String: [EngineInstanceInfo]] = [:]   // tabId -> instances
     var activeEngineInstance: [String: String] = [:]              // tabId -> active instanceId
     /// Engine profiles synced from the desktop settings.
     var engineProfiles: [EngineProfile] = []
-    /// Preferred model default for new tabs (synced from desktop settings).
-    var preferredModel: String = "claude-sonnet-4-6"
-    /// Engine default model (synced from desktop settings).
-    var engineDefaultModel: String = ""
     /// Active tool calls per tab, keyed by toolId.
     var activeTools: [String: [String: ActiveToolInfo]] = [:]
     /// Tab IDs that iOS has requested to close but hasn't received tab_closed confirmation for.
@@ -179,12 +175,6 @@ final class SessionViewModel {
     var fileListingLoading: Set<String> = []
     var fileContentLoading: Set<String> = []
 
-    // Discovered slash commands (per working directory)
-    var discoveredCommands: [String: [DiscoveredSlashCommand]] = [:]
-
-    // Upload attachment results (consumed by InputBar / EngineView)
-    var pendingUploadResults: [UploadAttachmentResult] = []
-
     /// Tab group mode synced from the desktop: "off", "auto", or "manual".
     var tabGroupMode: String = "auto"
     /// Manual tab group definitions from the desktop (only meaningful when tabGroupMode == "manual").
@@ -193,30 +183,7 @@ final class SessionViewModel {
     var pairedDevices: [PairedDevice] = []
     var connectionState: ConnectionState = .disconnected
     var pairingState: PairingState = .idle
-
-    /// Which desktop is currently selected (persisted in UserDefaults).
-    var activeDeviceId: String? {
-        get { UserDefaults.standard.string(forKey: "activeDeviceId") }
-        set { UserDefaults.standard.set(newValue, forKey: "activeDeviceId") }
-    }
-
-    /// The currently active paired device, falling back to the first device.
-    var activeDevice: PairedDevice? {
-        if let id = activeDeviceId {
-            return pairedDevices.first { $0.id == id } ?? pairedDevices.first
-        }
-        return pairedDevices.first
-    }
-
-    /// True once we've received at least one snapshot (enables cached layout restoration).
-    var hasConnectedBefore: Bool = false
-
-    /// Online status of non-active paired devices (from relay polling).
-    /// Key: device ID. Value: true=online, false=offline, nil=unknown/error.
-    var deviceOnlineStatus: [String: Bool?] = [:]
-    /// Background task for periodic device status polling.
-    var deviceStatusTask: Task<Void, Never>?
-
+    var scenePhase: ScenePhase = .active
     /// Recent base directories from the desktop, updated via snapshot events.
     var recentDirectories: [String] = []
     /// Tab ID to auto-navigate to after remote creation.
@@ -231,9 +198,6 @@ final class SessionViewModel {
         get { UserDefaults.standard.string(forKey: "defaultBaseDirectory") }
         set { UserDefaults.standard.set(newValue, forKey: "defaultBaseDirectory") }
     }
-
-    /// APNs device token (set by AppDelegate on registration success).
-    var apnsToken: String?
 
     // MARK: - Settings (persisted via paired device)
 
@@ -251,8 +215,6 @@ final class SessionViewModel {
     var transport: TransportManager?
     var eventTask: Task<Void, Never>?
     var flushTask: Task<Void, Never>?
-    /// Safety timer: if `.reconnecting` lingers too long, force a full reconnect.
-    var reconnectSafetyTask: Task<Void, Never>?
     let eventBatcher = EventBatcher()
     /// Standalone browser for pairing discovery (before a transport exists).
     private(set) var pairingBrowser = BonjourBrowser()
@@ -261,33 +223,6 @@ final class SessionViewModel {
 
     func tab(for id: String) -> RemoteTabState? {
         tabs.first { $0.id == id }
-    }
-
-    /// Navigate to a specific tab (e.g. from a push notification tap).
-    func navigateToTab(_ tabId: String) {
-        pendingNavigationTabId = tabId
-    }
-
-    /// Poll relay channel status for all non-active paired devices.
-    func pollDeviceStatus() {
-        let activeId = activeDevice?.id
-        let devices = pairedDevices.filter { $0.id != activeId }
-        guard !devices.isEmpty else { return }
-        Task {
-            for device in devices {
-                let relayUrl = device.relayURL ?? relayURL
-                let apiKey = device.relayAPIKey ?? relayAPIKey
-                let channelId = E2ECrypto.deriveChannelId(
-                    sharedSecret: SymmetricKey(data: device.sharedSecret)
-                )
-                let online = await PeerStatusPoller.checkDesktopOnline(
-                    relayURL: relayUrl, apiKey: apiKey, channelId: channelId
-                )
-                await MainActor.run {
-                    self.deviceOnlineStatus[device.id] = online
-                }
-            }
-        }
     }
 
     /// Compute the compound key for the active engine instance.
@@ -300,6 +235,7 @@ final class SessionViewModel {
     /// Tabs grouped by working directory basename, preserving original order within each group.
     /// Duplicate basenames are disambiguated with the parent directory name.
     var tabsByDirectory: [(directory: String, fullPath: String, tabs: [RemoteTabState])] {
+        // Build ordered groups preserving tab order
         var order: [String] = []
         var groups: [String: [RemoteTabState]] = [:]
         for tab in tabs {
@@ -310,6 +246,7 @@ final class SessionViewModel {
             groups[key, default: []].append(tab)
         }
 
+        // Count how many distinct full paths share each basename
         var basenameCounts: [String: Int] = [:]
         for path in order {
             let base = (path as NSString).lastPathComponent
@@ -364,6 +301,10 @@ final class SessionViewModel {
         }
     }
 
+    // MARK: - Briefings
+
+    var briefingsStore = BriefingsStore()
+
     // MARK: - Voice
 
     let voiceService = VoiceService()
@@ -372,7 +313,5 @@ final class SessionViewModel {
 
     init() {
         loadPairedDevices()
-        // Restore hasConnectedBefore from UserDefaults
-        hasConnectedBefore = UserDefaults.standard.bool(forKey: "hasConnectedBefore")
     }
 }

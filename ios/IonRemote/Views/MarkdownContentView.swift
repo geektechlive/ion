@@ -3,14 +3,23 @@ import SwiftUI
 /// Renders an array of `MarkdownBlock` values with GitHub-inspired styling.
 /// Each block becomes its own SwiftUI view, enabling backgrounds on code blocks,
 /// dividers under headers, accent bars on blockquotes, and proper list indentation.
+private struct ImageItem: Identifiable, Sendable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
 struct MarkdownContentView: View {
     let blocks: [MarkdownBlock]
+    @State private var fullscreenImage: ImageItem?
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 16) {
+        LazyVStack(alignment: .leading, spacing: 14) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
+        }
+        .sheet(item: $fullscreenImage) { item in
+            FullscreenImageView(url: item.url)
         }
     }
 
@@ -29,13 +38,10 @@ struct MarkdownContentView: View {
             blockQuoteView(text: text)
         case .listItem(let ordinal, let ordered, let text):
             listItemView(ordinal: ordinal, ordered: ordered, text: text)
-        case .thematicBreak:
+        case .thematicBreak(_):
             thematicBreakView
-        case .table(let headers, let rows, let alignments):
-            tableView(
-                headers: headers, rows: rows,
-                alignments: alignments
-            )
+        case .image(let url):
+            imageView(url: url)
         }
     }
 
@@ -51,15 +57,7 @@ struct MarkdownContentView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if level <= 2 {
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(.separator), Color(.separator).opacity(0)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(height: 0.5)
+                Divider()
             }
         }
     }
@@ -87,30 +85,26 @@ struct MarkdownContentView: View {
         code: String
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                if let lang = language, !lang.isEmpty {
-                    Text(lang)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
-                }
-                Spacer()
-                CodeBlockCopyButton(code: code)
+            if let lang = language, !lang.isEmpty {
+                Text(lang)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, language != nil ? 6 : 10)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemFill).opacity(0.7))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(Color(.tertiarySystemFill))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: - Block quote
@@ -118,8 +112,8 @@ struct MarkdownContentView: View {
     private func blockQuoteView(text: AttributedString) -> some View {
         HStack(alignment: .top, spacing: 0) {
             RoundedRectangle(cornerRadius: 1.5)
-                .fill(IonTheme.accent.opacity(0.6))
-                .frame(width: 3.5)
+                .fill(Color(hex: 0x4ECDC4).opacity(0.6))
+                .frame(width: 3)
 
             Text(text)
                 .foregroundStyle(.secondary)
@@ -148,136 +142,93 @@ struct MarkdownContentView: View {
         }
     }
 
-    // MARK: - Table
-
-    private func tableView(
-        headers: [AttributedString],
-        rows: [[AttributedString]],
-        alignments: [TableColumnAlignment]
-    ) -> some View {
-        let colCount = max(
-            headers.count, rows.first?.count ?? 0
-        )
-        return ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, verticalSpacing: 0) {
-                if !headers.isEmpty {
-                    GridRow {
-                        ForEach(0..<colCount, id: \.self) { col in
-                            tableCellContent(
-                                text: col < headers.count
-                                    ? headers[col] : AttributedString(),
-                                alignment: tableAlignment(
-                                    col, alignments
-                                ),
-                                isHeader: true
-                            )
-                        }
-                    }
-                }
-
-                ForEach(
-                    Array(rows.enumerated()), id: \.offset
-                ) { rowIndex, row in
-                    GridRow {
-                        ForEach(0..<colCount, id: \.self) { col in
-                            tableCellContent(
-                                text: col < row.count
-                                    ? row[col] : AttributedString(),
-                                alignment: tableAlignment(
-                                    col, alignments
-                                ),
-                                isHeader: false
-                            )
-                        }
-                    }
-                    .background(
-                        rowIndex.isMultiple(of: 2)
-                            ? Color(.tertiarySystemFill).opacity(0.5)
-                            : Color.clear
-                    )
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color(.separator), lineWidth: 0.5)
-            )
-        }
-    }
-
-    private func tableCellContent(
-        text: AttributedString,
-        alignment: HorizontalAlignment,
-        isHeader: Bool
-    ) -> some View {
-        let textAlign: TextAlignment = switch alignment {
-        case .trailing: .trailing
-        case .center: .center
-        default: .leading
-        }
-        return Text(text)
-            .font(isHeader ? .subheadline.bold() : .subheadline)
-            .multilineTextAlignment(textAlign)
-            .frame(
-                maxWidth: .infinity,
-                alignment: Alignment(
-                    horizontal: alignment, vertical: .center
-                )
-            )
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(
-                isHeader
-                    ? Color(.tertiarySystemFill)
-                    : Color.clear
-            )
-            .overlay(
-                Rectangle()
-                    .stroke(Color(.separator), lineWidth: 0.5)
-            )
-    }
-
-    private func tableAlignment(
-        _ col: Int,
-        _ alignments: [TableColumnAlignment]
-    ) -> HorizontalAlignment {
-        guard col < alignments.count else { return .leading }
-        return switch alignments[col] {
-        case .left: .leading
-        case .center: .center
-        case .right: .trailing
-        }
-    }
-
     // MARK: - Thematic break
 
     private var thematicBreakView: some View {
         Divider()
             .padding(.vertical, 4)
     }
+
+    // MARK: - Image
+
+    private func imageView(url: URL) -> some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .empty:
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.tertiarySystemFill))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 120)
+                    ProgressView()
+                }
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .frame(maxHeight: 300)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .onTapGesture { fullscreenImage = ImageItem(url: url) }
+            case .failure:
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.tertiarySystemFill))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 80)
+                    Label("Image unavailable", systemImage: "photo.slash")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+            @unknown default:
+                EmptyView()
+            }
+        }
+    }
 }
 
-// MARK: - Code block copy button
-
-private struct CodeBlockCopyButton: View {
-    let code: String
-    @State private var copied = false
+private struct FullscreenImageView: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1.0
+    @GestureState private var magnifyBy: CGFloat = 1.0
 
     var body: some View {
-        Button {
-            UIPasteboard.general.string = code
-            copied = true
-            Haptic.light()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                copied = false
+        NavigationStack {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(scale * magnifyBy)
+                        .gesture(
+                            MagnificationGesture()
+                                .updating($magnifyBy) { value, state, _ in state = value }
+                                .onEnded { value in
+                                    scale = max(1.0, min(scale * value, 5.0))
+                                }
+                        )
+                        .onTapGesture(count: 2) { scale = 1.0 }
+                case .empty:
+                    ProgressView()
+                case .failure:
+                    Label("Image unavailable", systemImage: "photo.slash")
+                        .foregroundStyle(.secondary)
+                @unknown default:
+                    EmptyView()
+                }
             }
-        } label: {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                .font(.caption2)
-                .foregroundStyle(copied ? Color.green : Color(.tertiaryLabel))
-                .frame(width: 24, height: 24)
-                .contentTransition(.symbolEffect(.replace))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(.white)
+                }
+            }
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
         }
-        .buttonStyle(.plain)
     }
 }

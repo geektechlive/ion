@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 // MARK: - Engine Event Handlers
 
@@ -9,9 +10,9 @@ extension SessionViewModel {
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
         let info = ActiveToolInfo(id: toolId, toolName: toolName, startTime: Date())
         activeTools[key, default: [:]][toolId] = info
-        // Add tool message to conversation
+        let runningAgent = engineAgentStates[key]?.first { $0.status == "running" && $0.type != "chief" }
         var msgs = engineMessages[key] ?? []
-        msgs.append(EngineMessage(id: toolId, role: "tool", content: "", toolName: toolName, toolId: toolId, toolStatus: "running", timestamp: Date().timeIntervalSince1970 * 1000))
+        msgs.append(EngineMessage(id: toolId, role: "tool", content: "", toolName: toolName, toolId: toolId, toolStatus: "running", timestamp: Date().timeIntervalSince1970 * 1000, agentName: runningAgent?.displayName))
         engineMessages[key] = msgs
     }
 
@@ -80,16 +81,26 @@ extension SessionViewModel {
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
         // Clear pinned prompt after message completes
         enginePinnedPrompt[key] = nil
-        // Update context stats only — do NOT set status to .idle here.
-        // The agent may continue with tool calls after a message ends.
-        // Tab status transitions to idle only via authoritative events:
-        // tabStatus, taskComplete, engineDead, or snapshot reconciliation.
+        // Set tab idle and update context stats if this is the active instance
         let isActive = activeEngineInstance[tabId] == instanceId || (instanceId == nil)
         if isActive, let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            tabs[idx].status = .idle
             tabs[idx].contextTokens = inputTokens
             tabs[idx].contextPercent = contextPercent
         }
-
+        // Only speak if this LLM sub-turn produced text — prevents re-speaking the
+        // previous turn's response when the current sub-turn only used tools.
+        if engineTurnHasText.contains(key),
+           let lastAssistant = engineMessages[key]?.last(where: { $0.role == "assistant" }),
+           !lastAssistant.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           lastAssistant.content.count > 20
+        {
+            if scenePhase == .active {
+                voiceService.speak(text: lastAssistant.content)
+            } else {
+                postBriefingNotification(text: lastAssistant.content)
+            }
+        }
         engineTurnHasText.remove(key)
     }
 
@@ -113,6 +124,21 @@ extension SessionViewModel {
         if !stderrTail.isEmpty { deathMsg += "\n" + stderrTail.suffix(5).joined(separator: "\n") }
         msgs.append(EngineMessage(id: UUID().uuidString, role: "system", content: deathMsg, timestamp: Date().timeIntervalSince1970 * 1000))
         engineMessages[key] = msgs
+    }
+
+    @MainActor
+    private func postBriefingNotification(text: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Jarvis"
+        let preview = String(text.prefix(120))
+        content.body = preview
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { _ in }
     }
 
     @MainActor

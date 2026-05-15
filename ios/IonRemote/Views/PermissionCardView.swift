@@ -23,8 +23,6 @@ struct PermissionCardGenericView: View {
     let tabId: String
     let request: PermissionRequest
 
-    @State private var dragOffset: CGFloat = 0
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(request.toolName)
@@ -43,7 +41,7 @@ struct PermissionCardGenericView: View {
             HStack(spacing: 12) {
                 ForEach(request.options) { option in
                     Button {
-                        Haptic.medium()
+                        triggerHaptic()
                         viewModel.respondPermission(
                             tabId: tabId,
                             questionId: request.questionId,
@@ -53,7 +51,7 @@ struct PermissionCardGenericView: View {
                         Text(option.label)
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 10)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(buttonTint(for: option))
@@ -61,22 +59,10 @@ struct PermissionCardGenericView: View {
             }
         }
         .padding()
-        .cardStyle()
-        .offset(y: dragOffset)
-        .gesture(
-            DragGesture(minimumDistance: 20)
-                .onChanged { value in
-                    if value.translation.height > 0 {
-                        dragOffset = value.translation.height
-                    }
-                }
-                .onEnded { value in
-                    if value.translation.height > 80 {
-                        Haptic.medium()
-                        dismissAsDeny()
-                    }
-                    withAnimation(IonTheme.snappySpring) { dragOffset = 0 }
-                }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThickMaterial)
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
         )
     }
 
@@ -87,28 +73,12 @@ struct PermissionCardGenericView: View {
         if label.contains("deny") || label.contains("reject") || label.contains("no") {
             return .red
         }
-        return IonTheme.accent
+        return Color(hex: 0x4ECDC4)
     }
 
-    /// Finds the deny/reject/no option and responds with it, or dismisses the card.
-    private func dismissAsDeny() {
-        let denyOption = request.options.first { option in
-            let label = option.label.lowercased()
-            return label.contains("deny") || label.contains("reject") || label.contains("no")
-        }
-        if let denyOption {
-            viewModel.respondPermission(
-                tabId: tabId,
-                questionId: request.questionId,
-                optionId: denyOption.id
-            )
-        } else if let firstOption = request.options.first {
-            viewModel.respondPermission(
-                tabId: tabId,
-                questionId: request.questionId,
-                optionId: firstOption.id
-            )
-        }
+    private func triggerHaptic() {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
     }
 
     private func formatJSON(_ dict: [String: AnyCodable]) -> String {

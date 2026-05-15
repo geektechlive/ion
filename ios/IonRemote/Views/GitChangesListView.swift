@@ -7,9 +7,6 @@ struct GitChangesListView: View {
     let directory: String
     @State private var commitMessage = ""
     @State private var showDiff = false
-    @State private var selectMode = false
-    @State private var selectedPaths: Set<String> = []
-    @State private var recentCommitMessages: [String] = []
 
     private var changesResponse: GitChangesResponse? {
         viewModel.gitChanges[directory]
@@ -76,33 +73,6 @@ struct GitChangesListView: View {
                 // Commit bar
                 if !stagedFiles.isEmpty {
                     commitBar
-                }
-
-                // Batch actions
-                if selectMode && !selectedPaths.isEmpty {
-                    HStack(spacing: 12) {
-                        Button {
-                            viewModel.gitStage(directory: directory, paths: Array(selectedPaths))
-                            selectedPaths.removeAll()
-                        } label: {
-                            Label("Stage \(selectedPaths.count)", systemImage: "plus.circle")
-                                .font(.caption.weight(.medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.green)
-
-                        Button {
-                            viewModel.gitUnstage(directory: directory, paths: Array(selectedPaths))
-                            selectedPaths.removeAll()
-                        } label: {
-                            Label("Unstage \(selectedPaths.count)", systemImage: "minus.circle")
-                                .font(.caption.weight(.medium))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
                 }
             }
             .fullScreenCover(isPresented: $showDiff) {
@@ -175,13 +145,6 @@ struct GitChangesListView: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
             Spacer()
-            if count >= 3 {
-                Button(selectMode ? "Done" : "Select") {
-                    selectMode.toggle()
-                    if !selectMode { selectedPaths.removeAll() }
-                }
-                .font(.caption)
-            }
             Button(actionLabel, action: action)
                 .font(.caption)
         }
@@ -208,21 +171,9 @@ struct GitChangesListView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()
-                if selectMode {
-                    Image(systemName: selectedPaths.contains(file.path) ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selectedPaths.contains(file.path) ? IonTheme.accent : Color(.tertiaryLabel))
-                        .onTapGesture {
-                            if selectedPaths.contains(file.path) {
-                                selectedPaths.remove(file.path)
-                            } else {
-                                selectedPaths.insert(file.path)
-                            }
-                        }
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
-                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.quaternary)
             }
             .padding(.leading, indented ? 28 : 12)
             .padding(.trailing, 12)
@@ -272,26 +223,12 @@ struct GitChangesListView: View {
 
     private var commitBar: some View {
         HStack(spacing: 8) {
-            if commitMessage.isEmpty && !recentCommitMessages.isEmpty {
-                Menu {
-                    ForEach(recentCommitMessages, id: \.self) { msg in
-                        Button(msg) { commitMessage = msg }
-                    }
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
             TextField("Commit message", text: $commitMessage)
                 .textFieldStyle(.roundedBorder)
                 .font(.subheadline)
 
             Button {
                 guard !commitMessage.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                recentCommitMessages.insert(commitMessage, at: 0)
-                if recentCommitMessages.count > 5 { recentCommitMessages.removeLast() }
                 viewModel.gitCommit(directory: directory, message: commitMessage)
                 commitMessage = ""
             } label: {
@@ -300,7 +237,7 @@ struct GitChangesListView: View {
                     .foregroundStyle(
                         commitMessage.trimmingCharacters(in: .whitespaces).isEmpty
                             ? .secondary
-                            : IonTheme.accent
+                            : Color(hex: 0x2EB8A6)
                     )
             }
             .disabled(commitMessage.trimmingCharacters(in: .whitespaces).isEmpty)

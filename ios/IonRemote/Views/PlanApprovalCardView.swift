@@ -5,7 +5,6 @@ struct PlanApprovalCardView: View {
     let tabId: String
     let request: PermissionRequest
     @State private var showFullPlan = false
-    @State private var implementOnDismiss = false
 
     private var planContent: String? {
         request.toolInput?["planContent"]?.value as? String
@@ -15,12 +14,10 @@ struct PlanApprovalCardView: View {
         VStack(alignment: .leading, spacing: 12) {
             // Header
             HStack(spacing: 6) {
-                Text("Plan Ready")
-                    .font(.caption.weight(.semibold))
+                Image(systemName: "checkmark.seal.fill")
                     .foregroundStyle(.green)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Color.green.opacity(0.15), in: Capsule())
+                Text("Plan Ready")
+                    .font(.headline)
                 Spacer()
                 if planContent != nil {
                     Button { showFullPlan = true } label: {
@@ -40,56 +37,44 @@ struct PlanApprovalCardView: View {
                 .frame(maxHeight: 300)
                 .background(Color(.tertiarySystemFill))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                .mask(
-                    VStack(spacing: 0) {
-                        LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 8)
-                        Color.black
-                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 8)
-                    }
-                )
             }
 
             // Action buttons
             Button {
-                Haptic.medium()
+                triggerHaptic()
                 implement()
             } label: {
                 Text("Implement")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .padding(.vertical, 10)
             }
             .buttonStyle(.borderedProminent)
             .tint(.green)
         }
         .padding()
-        .cardStyle()
-        .fullScreenCover(isPresented: $showFullPlan, onDismiss: {
-            if implementOnDismiss {
-                implementOnDismiss = false
-                implement()
-            }
-        }) {
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThickMaterial)
+                .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+        )
+        .fullScreenCover(isPresented: $showFullPlan) {
             if let content = planContent {
-                PlanFullScreenView(content: content) {
-                    implementOnDismiss = true
-                    showFullPlan = false
-                }
+                PlanFullScreenView(content: content)
             }
         }
     }
 
     private func implement() {
+        viewModel.dismissSpecialPermission(tabId: tabId, questionId: request.questionId)
+        viewModel.setPermissionMode(tabId: tabId, mode: .auto)
         let prompt: String
         if let content = planContent, !content.isEmpty {
             prompt = "Implement the following plan:\n\n\(content)"
         } else {
             prompt = "Implement the plan."
         }
-        viewModel.dismissSpecialPermission(tabId: tabId, questionId: request.questionId)
-        viewModel.implementPlan(tabId: tabId, prompt: prompt)
+        viewModel.sendPrompt(tabId: tabId, text: prompt)
     }
 
     @ViewBuilder
@@ -98,5 +83,10 @@ struct PlanApprovalCardView: View {
             .font(.caption)
             .textSelection(.enabled)
             .padding(8)
+    }
+
+    private func triggerHaptic() {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
     }
 }

@@ -11,28 +11,13 @@ extension SessionViewModel {
         pairingBrowser.startBrowsing()
     }
 
-    func pairWithHost(_ host: DiscoveredHost) {
-        pairingState = .connecting(hostName: host.name)
-
-        Task {
-            _ = E2ECrypto.generateKeyPair()
-            await MainActor.run {
-                self.pairingState = .exchangingKeys
-            }
-            await MainActor.run {
-                self.pairingState = .configuringRelay
-            }
-        }
-    }
-
     func completePairing(relayURL: String, relayAPIKey: String) {
         self.relayURL = relayURL
         self.relayAPIKey = relayAPIKey
 
-        if let device = activeDevice,
-           let idx = pairedDevices.firstIndex(where: { $0.id == device.id }) {
-            pairedDevices[idx].relayURL = relayURL
-            pairedDevices[idx].relayAPIKey = relayAPIKey
+        if !pairedDevices.isEmpty {
+            pairedDevices[0].relayURL = relayURL
+            pairedDevices[0].relayAPIKey = relayAPIKey
             savePairedDevices()
         }
 
@@ -115,11 +100,10 @@ extension SessionViewModel {
                 session.invalidateAndCancel()
 
                 await MainActor.run {
-                    self.addOrUpdateDevice(device)
+                    self.pairedDevices = [device]
                     self.relayURL = relayUrl
                     self.relayAPIKey = relayApiKey
                     self.savePairedDevices()
-                    self.activeDeviceId = device.id
                     self.pairingState = .paired
                     self.connectLAN(host: host, port: port)
                 }
@@ -176,6 +160,7 @@ extension SessionViewModel {
             guard let json = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
                   let peerPublicKeyB64 = json["publicKey"] as? String,
                   let peerPublicKeyData = Data(base64Encoded: peerPublicKeyB64) else {
+                // Desktop rejected recovery (pair_error response) -- not a known device.
                 ws.cancel(with: .normalClosure, reason: nil)
                 session.invalidateAndCancel()
                 return false
@@ -206,11 +191,10 @@ extension SessionViewModel {
             session.invalidateAndCancel()
 
             await MainActor.run {
-                self.addOrUpdateDevice(device)
+                self.pairedDevices = [device]
                 self.relayURL = relayUrl
                 self.relayAPIKey = relayApiKey
                 self.savePairedDevices()
-                self.activeDeviceId = device.id
                 self.pairingState = .paired
                 self.connectLAN(host: host, port: port)
             }
@@ -223,16 +207,5 @@ extension SessionViewModel {
     func cancelPairing() {
         pairingBrowser.stopBrowsing()
         pairingState = .idle
-    }
-
-    // MARK: - Helpers
-
-    /// Add a new device or update an existing one (dedup by id).
-    private func addOrUpdateDevice(_ device: PairedDevice) {
-        if let idx = pairedDevices.firstIndex(where: { $0.id == device.id }) {
-            pairedDevices[idx] = device
-        } else {
-            pairedDevices.append(device)
-        }
     }
 }

@@ -134,6 +134,10 @@ extension RemoteEvent {
             let profiles = try container.decode([EngineProfile].self, forKey: .profiles)
             return .engineProfiles(profiles: profiles)
 
+        case .engineEventsDropped:
+            let droppedCount = try container.decodeIfPresent(Int.self, forKey: .droppedCount) ?? 0
+            return .engineEventsDropped(droppedCount: droppedCount)
+
         default:
             return nil
         }
@@ -284,6 +288,11 @@ extension RemoteEvent {
             try container.encode(profiles, forKey: .profiles)
             return true
 
+        case .engineEventsDropped(let droppedCount):
+            try container.encode(TypeKey.engineEventsDropped, forKey: .type)
+            try container.encode(droppedCount, forKey: .droppedCount)
+            return true
+
         default:
             return false
         }
@@ -309,8 +318,6 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
     let elapsed: Double?
     let cost: Double?
     let color: String?
-    let model: String?
-    let startTime: Double?   // Unix timestamp in seconds
 
     /// Whether this agent should be shown in the UI based on visibility rules.
     var isVisible: Bool {
@@ -339,14 +346,6 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
         lastWork = meta["lastWork"]?.value as? String
         fullOutput = meta["fullOutput"]?.value as? String
         color = meta["color"]?.value as? String
-        model = meta["model"]?.value as? String
-        if let st = meta["startTime"]?.value as? Double {
-            startTime = st
-        } else if let st = meta["startTime"]?.value as? Int {
-            startTime = Double(st)
-        } else {
-            startTime = nil
-        }
 
         // Bool and numeric values may arrive as various types
         if let inv = meta["invited"]?.value as? Bool {
@@ -388,8 +387,6 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
         if let elapsed { meta["elapsed"] = AnyCodable(elapsed) }
         if let cost { meta["cost"] = AnyCodable(cost) }
         if let color { meta["color"] = AnyCodable(color) }
-        if let model { meta["model"] = AnyCodable(model) }
-        if let startTime { meta["startTime"] = AnyCodable(startTime) }
         try container.encode(meta, forKey: .metadata)
     }
 }
@@ -401,13 +398,11 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
 struct StatusFields: Codable, Sendable {
     var label: String
     let state: String
-    let sessionId: String?       // omitempty in Go — may be absent
     let team: String?            // omitempty in Go — may be absent
     let model: String
     let contextPercent: Double
     let contextWindow: Int
     let totalCostUsd: Double?
-    let permissionDenials: [PermissionDenialEntry]?
     /// Friendly display name broadcast by the extension (e.g. "Chief of Staff").
     let extensionName: String?
 
@@ -417,13 +412,6 @@ struct StatusFields: Codable, Sendable {
         copy.label = newLabel
         return copy
     }
-}
-
-/// A permission denial record within StatusFields.
-struct PermissionDenialEntry: Codable, Sendable {
-    let toolName: String
-    let toolUseId: String
-    let toolInput: [String: AnyCodable]?
 }
 
 // MARK: - EngineInstancePayload
@@ -446,13 +434,12 @@ struct EngineMessage: Identifiable, Sendable {
     var toolId: String?
     var toolStatus: String?
     var timestamp: Double?
-    var isInternal: Bool?
+    var agentName: String?
 }
 
 extension EngineMessage: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, role, content, toolName, toolId, toolStatus, timestamp
-        case isInternal = "internal"
+        case id, role, content, toolName, toolId, toolStatus, timestamp, agentName
     }
 
     init(from decoder: Decoder) throws {
@@ -471,7 +458,7 @@ extension EngineMessage: Codable {
         toolId = try container.decodeIfPresent(String.self, forKey: .toolId)
         toolStatus = try container.decodeIfPresent(String.self, forKey: .toolStatus)
         timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
-        isInternal = try container.decodeIfPresent(Bool.self, forKey: .isInternal)
+        agentName = try container.decodeIfPresent(String.self, forKey: .agentName)
     }
 }
 
