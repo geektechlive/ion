@@ -6,8 +6,9 @@ struct TabListView: View {
     @State private var showSettings = false
     @State private var showBriefings = false
     @State private var navigationPath = NavigationPath()
-    @State private var enginePickerDirectory: String? = nil
     @State private var flickerOpacity: Double = 1.0
+
+    private let agentHarnessDir = "/Users/cfavero/AgentHarness"
 
     var body: some View {
         ZStack {
@@ -114,8 +115,32 @@ struct TabListView: View {
                             .opacity(flickerOpacity)
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            requestEngineTab(directory: allDirectories.first?.fullPath ?? "")
+                        Menu {
+                            let profiles = viewModel.engineProfiles
+                            if profiles.isEmpty {
+                                Button {
+                                    viewModel.createEngineTab(workingDirectory: agentHarnessDir)
+                                } label: {
+                                    Label("Jarvis", systemImage: "bolt.fill")
+                                }
+                            } else {
+                                ForEach(profiles) { profile in
+                                    Button {
+                                        viewModel.createEngineTab(
+                                            workingDirectory: agentHarnessDir,
+                                            profileId: profile.id
+                                        )
+                                    } label: {
+                                        Label(profile.name, systemImage: "bolt.fill")
+                                    }
+                                }
+                            }
+                            Divider()
+                            Button {
+                                viewModel.createTerminalTab()
+                            } label: {
+                                Label("Terminal", systemImage: "terminal")
+                            }
                         } label: {
                             Image(systemName: "bolt.fill")
                         }
@@ -155,25 +180,6 @@ struct TabListView: View {
                 }
                 .sheet(isPresented: $showBriefings) {
                     BriefingsView()
-                }
-                .confirmationDialog(
-                    "Select Engine Profile",
-                    isPresented: Binding(
-                        get: { enginePickerDirectory != nil },
-                        set: { if !$0 { enginePickerDirectory = nil } }
-                    ),
-                    titleVisibility: .visible
-                ) {
-                    ForEach(viewModel.engineProfiles) { profile in
-                        Button(profile.name) {
-                            let dir = enginePickerDirectory
-                            enginePickerDirectory = nil
-                            viewModel.createEngineTab(workingDirectory: dir, profileId: profile.id)
-                        }
-                    }
-                    Button("Cancel", role: .cancel) {
-                        enginePickerDirectory = nil
-                    }
                 }
                 .toolbarBackground(JarvisTheme.background.opacity(0.95), for: .navigationBar)
                 .toolbarColorScheme(.dark, for: .navigationBar)
@@ -216,47 +222,6 @@ struct TabListView: View {
         }
     }
 
-    /// Handle engine tab creation with profile selection.
-    /// - 0 profiles: auto-create without a profileId (engine uses default)
-    /// - 1 profile: auto-select the only profile
-    /// - 2+ profiles: show a confirmation dialog picker
-    private func requestEngineTab(directory: String) {
-        let profiles = viewModel.engineProfiles
-        switch profiles.count {
-        case 0:
-            viewModel.createEngineTab(workingDirectory: directory)
-        case 1:
-            viewModel.createEngineTab(workingDirectory: directory, profileId: profiles[0].id)
-        default:
-            enginePickerDirectory = directory
-        }
-    }
-
-    /// Ordered list of directories: default base directory first, then recent directories (deduplicated).
-    private var allDirectories: [(label: String, fullPath: String)] {
-        var seen = Set<String>()
-        var result: [(label: String, fullPath: String)] = []
-
-        if let base = viewModel.defaultBaseDirectory, !base.isEmpty {
-            seen.insert(base)
-            result.append((label: directoryLabel(base), fullPath: base))
-        }
-
-        for dir in viewModel.recentDirectories where !seen.contains(dir) {
-            seen.insert(dir)
-            result.append((label: directoryLabel(dir), fullPath: dir))
-        }
-
-        return result
-    }
-
-    private func directoryLabel(_ path: String) -> String {
-        let base = (path as NSString).lastPathComponent
-        if base.isEmpty || path == "/" || path == "~" {
-            return "Home"
-        }
-        return base
-    }
 }
 
 // MARK: - TabRowView
