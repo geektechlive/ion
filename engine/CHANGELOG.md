@@ -13,6 +13,13 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.18.0](https://github.com/dsswift/ion/compare/engine-v1.17.0...engine-v1.18.0) (2026-05-15)
+
+### Features
+
+* **engine:** add http2 ping timeouts for stream stability ([ac15ba1](https://github.com/dsswift/ion/commit/ac15ba1a88769bf06298a17557512d30f0c78a6b))
+* **engine:** add provider resilience with fallback chains ([1a4a68a](https://github.com/dsswift/ion/commit/1a4a68add7b83a69a284297006d3e3fff5613e96))
+
 ## [1.17.0](https://github.com/dsswift/ion/compare/engine-v1.16.2...engine-v1.17.0) (2026-05-14)
 
 ### Features
