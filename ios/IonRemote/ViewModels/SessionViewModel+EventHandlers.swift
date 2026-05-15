@@ -56,9 +56,7 @@ extension SessionViewModel {
 
     @MainActor
     func handleEvent(_ event: RemoteEvent) {
-        if case .heartbeat = event { /* skip noisy log */ } else {
-            print("[Ion] handleEvent: \(event)")
-        }
+        DiagnosticLog.logEvent(event)
         switch event {
         case .unpair:
             handleUnpair()
@@ -67,7 +65,6 @@ extension SessionViewModel {
             handleRelayConfig(relayUrl: relayUrl, relayApiKey: relayApiKey)
 
         case .transportReconnecting:
-            DiagnosticLog.log("EVENT: transportReconnecting was=\(connectionState)")
             if connectionState == .connected {
                 connectionState = .reconnecting
             }
@@ -78,7 +75,6 @@ extension SessionViewModel {
             connectionQuality.recordHeartbeat(senderTs: senderTs, buffered: buffered)
 
         case .peerDisconnected:
-            DiagnosticLog.log("EVENT: peerDisconnected was=\(connectionState)")
             // Don't tear down the transport — the relay auto-reconnects and
             // startRelayStateObservation re-sends sync when the peer returns.
             if connectionState == .connected || connectionState == .connecting {

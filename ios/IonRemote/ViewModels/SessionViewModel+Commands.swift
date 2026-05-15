@@ -409,7 +409,9 @@ extension SessionViewModel {
     // MARK: - Send
 
     func send(_ command: RemoteCommand) {
+        DiagnosticLog.logCommand(command)
         guard let transport else {
+            DiagnosticLog.log("CMD: dropped (no transport)")
             Task { @MainActor [weak self] in
                 self?.showToast(ToastMessage(style: .error, title: "Not connected", detail: "Command could not be sent"))
             }
