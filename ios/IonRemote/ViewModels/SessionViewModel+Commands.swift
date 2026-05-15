@@ -16,13 +16,14 @@ extension SessionViewModel {
     }
 
     func sendPrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
-        send(.prompt(tabId: tabId, text: text, attachments: attachments))
+        let clientMsgId = UUID().uuidString
+        send(.prompt(tabId: tabId, text: text, clientMsgId: clientMsgId, attachments: attachments))
         // Optimistic local insert so the user's message appears immediately
         // (dismisses empty state, enables scroll-to-bottom) rather than waiting
         // for the desktop to echo it back via messageAdded.
         if conversationLoaded.contains(tabId) {
             let optimistic = Message(
-                id: UUID().uuidString,
+                id: clientMsgId,
                 role: .user,
                 content: text,
                 timestamp: Date().timeIntervalSince1970,

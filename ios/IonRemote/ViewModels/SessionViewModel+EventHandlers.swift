@@ -399,19 +399,13 @@ extension SessionViewModel {
         }
         guard conversationLoaded.contains(tabId) else { return }
         if messages[tabId] != nil {
-            if messages[tabId]!.contains(where: { $0.id == message.id }) { return }
-            // Replace optimistic local insert: if the last message is a user message
-            // we inserted locally (source == .remote) with the same content, replace
-            // it with the canonical message from the desktop.
-            if message.role == .user,
-               let lastIdx = messages[tabId]!.indices.last,
-               messages[tabId]![lastIdx].role == .user,
-               messages[tabId]![lastIdx].source == .remote,
-               messages[tabId]![lastIdx].content == message.content {
-                messages[tabId]![lastIdx] = message
-            } else {
-                messages[tabId]!.append(message)
+            // ID-based reconciliation: if a message with this ID already exists
+            // (optimistic insert), replace it with the canonical version from desktop.
+            if let existingIdx = messages[tabId]!.firstIndex(where: { $0.id == message.id }) {
+                messages[tabId]![existingIdx] = message
+                return
             }
+            messages[tabId]!.append(message)
         } else {
             messages[tabId] = [message]
         }
