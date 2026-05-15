@@ -179,10 +179,31 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		}
 
 		// Call provider with retry (with telemetry span)
+		runIDCopy, turnCopy := run.requestID, turn
 		retryConfig := &providers.RetryConfig{
 			MaxRetries:    opts.MaxRetries,
-			FallbackModel: opts.FallbackModel,
+			FallbackChain: opts.FallbackChain,
 			Persistent:    opts.Persistent,
+			OnRetryWait: func(attempt, delayMs int, pe *providers.ProviderError) {
+				cause := ""
+				if pe != nil && pe.Cause != nil {
+					cause = fmt.Sprintf(" cause=%v", pe.Cause)
+				}
+				code := ""
+				if pe != nil {
+					code = pe.Code
+				}
+				utils.Warn("ApiBackend", fmt.Sprintf(
+					"provider retry: runID=%s turn=%d attempt=%d delay=%dms code=%s err=%q%s",
+					runIDCopy, turnCopy, attempt, delayMs, code, fmt.Sprint(pe), cause,
+				))
+			},
+			OnFallback: func(fromModel, toModel string, hop int) {
+				utils.Warn("ApiBackend", fmt.Sprintf(
+					"model fallback: runID=%s turn=%d hop=%d %s -> %s",
+					runIDCopy, turnCopy, hop, fromModel, toModel,
+				))
+			},
 		}
 
 		var telem TelemetryCollector
@@ -235,7 +256,11 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				b.compactReactive(run, conv, hooks, promptTooLongRetries)
 				continue // retry the turn after compaction
 			}
-			utils.Error("ApiBackend", fmt.Sprintf("stream error: runID=%s turn=%d err=%s", run.requestID, turn, streamErr.Error()))
+			cause := ""
+			if pe, ok := streamErr.(*providers.ProviderError); ok && pe.Cause != nil {
+				cause = fmt.Sprintf(" cause=%v", pe.Cause)
+			}
+			utils.Error("ApiBackend", fmt.Sprintf("stream error: runID=%s turn=%d err=%s%s", run.requestID, turn, streamErr.Error(), cause))
 			b.emitError(run, streamErr)
 			b.emitExit(run.requestID, intPtr(1), nil, conv.ID)
 			return

@@ -57,10 +57,12 @@ export interface State {
   enginePanes: Map<string, EnginePaneState>
   engineMessages: Map<string, Message[]>
   engineModelOverrides: Map<string, string>
+  engineDraftInputs: Map<string, string>
 
   tallViewTabId: string | null
   scrollToBottomCounter: number
   settingsOpen: boolean
+  settingsInitialTab: string | null
 
   initStaticInfo: () => Promise<void>
   setPermissionMode: (mode: 'auto' | 'plan', source?: string) => void
@@ -76,7 +78,7 @@ export interface State {
   clearTab: () => void
   toggleExpanded: () => void
   toggleTallView: (tabId: string) => void
-  openSettings: () => void
+  openSettings: (initialTab?: string) => void
   closeSettings: () => void
   toggleGitPanel: () => void
   closeGitPanel: () => void
@@ -145,7 +147,7 @@ export interface State {
   setWorktreeUncommitted: (tabId: string, hasChanges: boolean) => void
   createEngineTab: (dir?: string, profileId?: string) => string
   handleEngineEvent: (key: string, event: any) => void
-  submitEnginePrompt: (tabId: string, text: string) => void
+  submitEnginePrompt: (tabId: string, text: string, appendSystemPrompt?: string) => void
   respondEngineDialog: (tabId: string, dialogId: string, value: any) => void
   addEngineInstance: (tabId: string) => string
   removeEngineInstance: (tabId: string, instanceId: string) => void
@@ -154,6 +156,7 @@ export interface State {
   reorderEngineInstances: (tabId: string, reordered: EngineInstance[]) => void
   setEngineModel: (tabId: string, modelId: string) => void
   addEngineSystemMessage: (key: string, content: string) => void
+  setEngineDraftInput: (key: string, text: string) => void
 }
 
 export type StoreSet = (partial: State | Partial<State> | ((state: State) => State | Partial<State>), replace?: false) => void

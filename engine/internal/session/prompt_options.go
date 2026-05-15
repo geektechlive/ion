@@ -78,12 +78,20 @@ func (m *Manager) applyConfigDefaults(opts *types.RunOptions) {
 	}
 }
 
-// resolveModelTier resolves model tier aliases (e.g. "fast" -> configured fast model).
+// resolveModelTier resolves model tier aliases (e.g. "fast" -> configured fast model)
+// and populates the configured fallback chain. If the tier value in models.json
+// is an object {"model": "...", "fallbacks": [...]}, the fallbacks land on
+// RunOptions.FallbackChain and the retry loop walks them on overload.
 func resolveModelTier(opts *types.RunOptions) {
-	if opts.Model != "" {
-		if resolved := modelconfig.ResolveTier(opts.Model); resolved != opts.Model {
-			opts.Model = resolved
-		}
+	if opts.Model == "" {
+		return
+	}
+	resolved, fallbacks := modelconfig.ResolveTierChain(opts.Model)
+	if resolved != opts.Model {
+		opts.Model = resolved
+	}
+	if len(fallbacks) > 0 && len(opts.FallbackChain) == 0 {
+		opts.FallbackChain = fallbacks
 	}
 }
 

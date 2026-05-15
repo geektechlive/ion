@@ -204,6 +204,23 @@ struct ConversationView: View {
                 )
             }
 
+            // Voice playback bar — always visible when speaking
+            if viewModel.voiceService.isSpeaking {
+                VoicePlaybackBar(
+                    onSkip: { viewModel.voiceService.skip() },
+                    onStopAll: { viewModel.voiceService.stop() },
+                    hasPending: viewModel.voiceService.hasPending
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if let request = pendingPermission {
+                PermissionCardView(tabId: tabId, request: request)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             ConversationStatusBar(
                 modelOverride: tab?.modelOverride,
                 preferredModel: viewModel.preferredModel,
@@ -214,13 +231,6 @@ struct ConversationView: View {
                     viewModel.setTabModel(tabId: tabId, model: model)
                 }
             )
-
-            if let request = pendingPermission {
-                PermissionCardView(tabId: tabId, request: request)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
 
             // Queued prompts indicator
             if let queued = tab?.queuedPrompts, !queued.isEmpty {
@@ -434,10 +444,15 @@ struct ConversationView: View {
             let combined = consecutiveAssistantContent(
                 for: message.id, in: conversationMessages
             )
+            let voiceSvc = viewModel.voiceService
             MessageBubble(
                 message: message,
                 isRunning: isRunning && isLast,
-                copyableContent: combined
+                copyableContent: combined,
+                isSpeaking: voiceSvc.speakingMessageId == message.id && voiceSvc.isSpeaking,
+                hasPendingSpeech: voiceSvc.hasPending,
+                onSkipSpeaking: { voiceSvc.skip() },
+                onStopAllSpeaking: { voiceSvc.stop() }
             )
 
         case .system(let message):

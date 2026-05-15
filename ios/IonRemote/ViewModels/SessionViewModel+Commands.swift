@@ -354,8 +354,8 @@ extension SessionViewModel {
     // MARK: - File Explorer Commands
 
     /// Upload an image from the iOS device to the desktop as a temp file.
-    func uploadAttachment(dataUrl: String, name: String) {
-        send(.uploadAttachment(dataUrl: dataUrl, name: name))
+    func uploadAttachment(dataUrl: String, name: String, correlationId: String) {
+        send(.uploadAttachment(dataUrl: dataUrl, name: name, correlationId: correlationId))
     }
 
     func requestFsListDir(directory: String, includeHidden: Bool = false) {
@@ -377,6 +377,20 @@ extension SessionViewModel {
     func discoverCommands(directory: String) {
         guard !directory.isEmpty else { return }
         send(.discoverCommands(directory: directory))
+    }
+
+    // MARK: - Voice Config
+
+    /// Send the current voice configuration to the desktop.
+    /// Called on initial connection (snapshot) and when voice settings change.
+    @MainActor
+    func sendVoiceConfig() {
+        let prompt = voiceService.voiceMode == .desktopAssisted ? voiceService.voiceSystemPrompt : nil
+        send(.voiceConfig(
+            enabled: voiceService.isEnabled,
+            mode: voiceService.voiceMode.rawValue,
+            systemPrompt: prompt
+        ))
     }
 
     // MARK: - Send
