@@ -10,6 +10,18 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.22.0](https://github.com/dsswift/ion/compare/desktop-v1.21.0...desktop-v1.22.0) (2026-05-15)
+
+### Features
+
+* **desktop:** add per-instance draft input for engine tabs ([177b495](https://github.com/dsswift/ion/commit/177b495084b2c5be18cc9e79df64b9b5c188b41c))
+* **desktop:** add correlation id to file upload protocol ([58e380a](https://github.com/dsswift/ion/commit/58e380a243b70c292972d2e6ebe4c72790f09416))
+* **desktop:** add lastActivityAt field to tab protocol ([0aab4f5](https://github.com/dsswift/ion/commit/0aab4f5e83c3b7436158539b5adaf37bb35d4a3f))
+* **desktop:** add quick tools settings category ([24ba95a](https://github.com/dsswift/ion/commit/24ba95a38a15650209c869f197e78c039a209f97))
+* **desktop:** replace update banner with dialog UI ([6d7cda8](https://github.com/dsswift/ion/commit/6d7cda8a3235343853eb4cf8b43ef6cbea173def))
+* **ios:** add voice mode with TTS playback and controls ([6f05ca2](https://github.com/dsswift/ion/commit/6f05ca289bed3daf037bc817b77a2970f64bb791))
+* **desktop:** add developer settings category ([a0174e9](https://github.com/dsswift/ion/commit/a0174e91c194dd864251004ab51a7eb8fa5b2413))
+
 ## [1.21.0](https://github.com/dsswift/ion/compare/desktop-v1.20.0...desktop-v1.21.0) (2026-05-14)
 
 ### Features

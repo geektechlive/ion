@@ -394,7 +394,7 @@ type RunOptions struct {
 	MaxTokens          int             `json:"maxTokens,omitempty"`
 	Thinking           *ThinkingConfig `json:"thinking,omitempty"`
 	MaxRetries         int             `json:"maxRetries,omitempty"`
-	FallbackModel      string          `json:"fallbackModel,omitempty"`
+	FallbackChain      []string        `json:"fallbackChain,omitempty"`
 	Persistent         bool            `json:"persistent,omitempty"`
 	PlanMode           bool            `json:"planMode,omitempty"`
 	PlanModeTools      []string        `json:"planModeTools,omitempty"`

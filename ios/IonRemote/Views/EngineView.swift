@@ -2,13 +2,12 @@ import SwiftUI
 
 struct EngineView: View {
     let tabId: String
-    @Environment(SessionViewModel.self) private var viewModel
+    @Environment(SessionViewModel.self) var viewModel
     @State private var promptText = ""
     @FocusState private var isInputFocused: Bool
     @State private var showStatusDrawer = false
     @State private var showTranscript = false
-    @State private var expandedToolIds: Set<String> = []
-
+    @State var pendingAttachments: [PendingAttachment] = []
     private var instances: [EngineInstanceInfo] {
         viewModel.engineInstances[tabId] ?? []
     }
@@ -71,11 +70,8 @@ struct EngineView: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(engineMsgs) { msg in
-                            EngineMessageRow(
-                                message: msg,
-                                isExpanded: expansionBinding(for: msg.id)
-                            )
-                            .id(msg.id)
+                            EngineMessageRow(message: msg)
+                                .id(msg.id)
                         }
                     }
                     .padding(.horizontal, 12)
@@ -197,19 +193,6 @@ struct EngineView: View {
         promptText = ""
     }
 
-    private func expansionBinding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { expandedToolIds.contains(id) },
-            set: { isExpanded in
-                if isExpanded {
-                    expandedToolIds.insert(id)
-                } else {
-                    expandedToolIds.remove(id)
-                }
-            }
-        )
-    }
-
     private func shortModelName(_ id: String) -> String {
         if id.contains("opus") { return "Opus" }
         if id.contains("sonnet") { return "Sonnet" }
@@ -262,228 +245,6 @@ struct ThinkingScanLine: View {
         offset = -0.4
         withAnimation(.linear(duration: 1.8).repeatForever(autoreverses: false)) {
             offset = 1.0
-        }
-    }
-}
-
-// MARK: - EngineMessageRow
-
-struct EngineMessageRow: View {
-    let message: EngineMessage
-    var isExpanded: Binding<Bool> = .constant(false)
-
-    var body: some View {
-        switch message.role {
-        case "user":
-            userMessage
-        case "assistant":
-            assistantMessage
-        case "harness":
-            harnessMessage
-        case "tool":
-            CompactToolRow(message: message, isExpanded: isExpanded)
-        default:
-            systemMessage
-        }
-    }
-
-    private var userMessage: some View {
-        let bubble = RoundedRectangle(cornerRadius: 12)
-        return HStack {
-            Spacer()
-            Text(message.content)
-                .font(.callout)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(JarvisTheme.userBubbleBg)
-                .clipShape(bubble)
-                .overlay(bubble.stroke(JarvisTheme.accent.opacity(0.3), lineWidth: 1))
-                .foregroundStyle(JarvisTheme.textPrimary)
-        }
-    }
-
-    private var assistantMessage: some View {
-        HStack(alignment: .top) {
-            MarkdownContentView(blocks: MarkdownFormatter.parse(message.content))
-                .textSelection(.enabled)
-            Spacer()
-        }
-    }
-
-    private var harnessMessage: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "gearshape.fill")
-                .font(.caption2)
-                .foregroundStyle(.orange.opacity(0.7))
-            Text(message.content)
-                .font(.caption)
-                .foregroundStyle(JarvisTheme.textSecondary)
-                .italic()
-            Spacer()
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var systemMessage: some View {
-        HStack {
-            Spacer()
-            Text(message.content)
-                .font(.caption)
-                .foregroundStyle(JarvisTheme.textTertiary)
-            Spacer()
-        }
-    }
-}
-
-// MARK: - ActiveToolRow
-
-struct ActiveToolRow: View {
-    let tabId: String
-    let tool: ActiveToolInfo
-    @Environment(SessionViewModel.self) private var viewModel
-    @State private var now = Date()
-    @State private var showAbortConfirm = false
-
-    private var elapsed: TimeInterval {
-        now.timeIntervalSince(tool.startTime)
-    }
-
-    private var isLikelyStalled: Bool {
-        tool.isStalled || elapsed > 30
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(tool.toolName)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(isLikelyStalled ? Color.red.opacity(0.85) : Color.orange.opacity(0.85))
-                .clipShape(Capsule())
-
-            Text(formatElapsed(elapsed))
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(isLikelyStalled ? .red : .secondary)
-
-            if isLikelyStalled {
-                Text("may be stuck")
-                    .font(.caption2)
-                    .foregroundStyle(.red.opacity(0.8))
-            }
-
-            Spacer()
-
-            if isLikelyStalled {
-                Button {
-                    showAbortConfirm = true
-                } label: {
-                    Text("Abort")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.red)
-                        .clipShape(Capsule())
-                }
-            } else {
-                Circle()
-                    .fill(.orange)
-                    .frame(width: 6, height: 6)
-                    .opacity(pulseOpacity)
-                    .animation(.easeInOut(duration: 1).repeatForever(autoreverses: true), value: now)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(
-            (isLikelyStalled ? Color.red : Color.orange)
-                .opacity(0.08)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { time in
-            now = time
-        }
-        .alert("Abort Run?", isPresented: $showAbortConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Abort", role: .destructive) {
-                viewModel.abortEngine(tabId: tabId)
-            }
-        } message: {
-            Text("\(tool.toolName) has been running for \(Int(elapsed))s. This may be waiting for a macOS permission dialog. Aborting will stop the entire run.")
-        }
-    }
-
-    private var pulseOpacity: Double {
-        let phase = now.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2)
-        return phase < 1 ? 0.3 : 1.0
-    }
-
-    private func formatElapsed(_ interval: TimeInterval) -> String {
-        let seconds = Int(interval)
-        if seconds < 60 { return "\(seconds)s" }
-        let minutes = seconds / 60
-        let secs = seconds % 60
-        return "\(minutes)m \(secs)s"
-    }
-}
-
-// MARK: - EngineDialogSheet
-
-struct EngineDialogSheet: View {
-    let tabId: String
-    let dialog: EngineDialogInfo
-    @Environment(SessionViewModel.self) private var viewModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var inputText = ""
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Text(dialog.title)
-                    .font(.headline)
-
-                if dialog.method == "select", let options = dialog.options {
-                    ForEach(options, id: \.self) { option in
-                        Button(option) {
-                            viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: option)
-                            dismiss()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                } else if dialog.method == "confirm" {
-                    HStack(spacing: 16) {
-                        Button("No") {
-                            viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: "false")
-                            dismiss()
-                        }
-                        .buttonStyle(.bordered)
-                        Button("Yes") {
-                            viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: "true")
-                            dismiss()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
-                    }
-                } else if dialog.method == "input" {
-                    TextField(dialog.defaultValue ?? "Enter value", text: $inputText)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Submit") {
-                        viewModel.respondEngineDialog(tabId: tabId, dialogId: dialog.id, value: inputText)
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.orange)
-                }
-
-                Spacer()
-            }
-            .padding()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
         }
     }
 }

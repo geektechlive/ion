@@ -21,7 +21,7 @@ struct TabListView: View {
                         Section {
                             ForEach(group.tabs) { tab in
                                 NavigationLink(value: tab.id) {
-                                    TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual")
+                                    JarvisTabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual")
                                 }
                                 .listRowBackground(
                                     RoundedRectangle(cornerRadius: 10)
@@ -187,6 +187,17 @@ struct TabListView: View {
                         .background(Color.clear)
                     }
                 }
+                .overlay(alignment: .top) {
+                    if viewModel.voiceService.isSpeaking {
+                        VoicePlaybackBar(
+                            onSkip: { viewModel.voiceService.skip() },
+                            onStopAll: { viewModel.voiceService.stop() },
+                            hasPending: viewModel.voiceService.hasPending
+                        )
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(IonTheme.snappySpring, value: viewModel.voiceService.isSpeaking)
+                    }
+                }
             }
             .task {
                 while !Task.isCancelled {
@@ -250,7 +261,7 @@ struct TabListView: View {
 
 // MARK: - TabRowView
 
-private struct TabRowView: View {
+private struct JarvisTabRowView: View {
     let tab: RemoteTabState
     var showDirectory: Bool = false
 

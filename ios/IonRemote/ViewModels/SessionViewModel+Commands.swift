@@ -127,6 +127,13 @@ extension SessionViewModel {
         conversationCursor.removeValue(forKey: tabId)
     }
 
+    /// Set the model override for a conversation tab (optimistic local update only).
+    func setTabModel(tabId: String, model: String) {
+        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            tabs[idx].modelOverride = model.isEmpty ? nil : model
+        }
+    }
+
     func setPermissionMode(tabId: String, mode: PermissionMode) {
         // Optimistic local update for responsive UI
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
@@ -292,6 +299,13 @@ extension SessionViewModel {
 
     // MARK: - File Explorer Commands
 
+
+    /// Upload an image from the iOS device to the desktop as a temp file.
+    func uploadAttachment(dataUrl: String, name: String, correlationId: String) {
+        send(.uploadAttachment(dataUrl: dataUrl, name: name, correlationId: correlationId))
+    }
+
+
     func requestFsListDir(directory: String, includeHidden: Bool = false) {
         fileListingLoading.insert(directory)
         send(.fsListDir(directory: directory, includeHidden: includeHidden))
@@ -305,6 +319,29 @@ extension SessionViewModel {
     func requestFsWriteFile(filePath: String, content: String) {
         send(.fsWriteFile(filePath: filePath, content: content))
     }
+
+
+    // MARK: - Command Discovery
+
+    func discoverCommands(directory: String) {
+        guard !directory.isEmpty else { return }
+        send(.discoverCommands(directory: directory))
+    }
+
+    // MARK: - Voice Config
+
+    /// Send the current voice configuration to the desktop.
+    /// Called on initial connection (snapshot) and when voice settings change.
+    @MainActor
+    func sendVoiceConfig() {
+        let prompt = voiceService.voiceMode == .desktopAssisted ? voiceService.voiceSystemPrompt : nil
+        send(.voiceConfig(
+            enabled: voiceService.isEnabled,
+            mode: voiceService.voiceMode.rawValue,
+            systemPrompt: prompt
+        ))
+    }
+
 
     // MARK: - Send
 

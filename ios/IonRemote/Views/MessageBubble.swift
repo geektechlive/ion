@@ -8,6 +8,10 @@ struct MessageBubble: View {
     var onRewind: ((String) -> Void)?
     var onFork: ((String) -> Void)?
     var copyableContent: String?
+    var isSpeaking: Bool = false
+    var hasPendingSpeech: Bool = false
+    var onSkipSpeaking: (() -> Void)?
+    var onStopAllSpeaking: (() -> Void)?
 
     @State private var isToolExpanded = false
     @State private var showRewindConfirm = false
@@ -153,25 +157,65 @@ struct MessageBubble: View {
     private var assistantBubble: some View {
         VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .bottomTrailing) {
-                VStack(alignment: .leading, spacing: 4) {
-                    if !message.content.isEmpty {
-                        MarkdownContentView(
-                            blocks: MarkdownBlockCache.shared.blocks(for: message.content)
-                        )
-                        .textSelection(.enabled)
+                ZStack(alignment: .bottomLeading) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !message.content.isEmpty {
+                            MarkdownContentView(
+                                blocks: MarkdownBlockCache.shared.blocks(for: message.content)
+                            )
+                            .textSelection(.enabled)
+                        }
+
+                        // Blinking cursor for streaming
+                        if isRunning && message.isAssistant {
+                            RoundedRectangle(cornerRadius: 0.5)
+                                .fill(Color.primary)
+                                .frame(width: 2, height: 18)
+                                .modifier(BlinkingModifier())
+                        }
                     }
 
-                    // Blinking cursor for streaming
-                    if isRunning && message.isAssistant {
-                        RoundedRectangle(cornerRadius: 0.5)
-                            .fill(Color.primary)
-                            .frame(width: 2, height: 18)
-                            .modifier(BlinkingModifier())
+                    // Voice playback controls
+                    if isSpeaking {
+                        HStack(spacing: 6) {
+                            Button { onSkipSpeaking?() } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "speaker.wave.2.fill")
+                                        .font(.caption2)
+                                        .symbolEffect(.variableColor.iterative)
+                                    Image(systemName: hasPendingSpeech ? "forward.fill" : "stop.fill")
+                                        .font(.caption2)
+                                }
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Capsule())
+                            }
+
+                            if hasPendingSpeech {
+                                Button { onStopAllSpeaking?() } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "stop.fill")
+                                            .font(.caption2)
+                                        Text("Stop All")
+                                            .font(.caption2)
+                                    }
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Capsule())
+                                }
+                            }
+                        }
+                        .transition(.opacity.combined(with: .scale))
+                        .padding(4)
                     }
                 }
 
                 // Copy button overlay
-                if showCopyButton {
+                if showCopyButton && !isSpeaking {
                     Button {
                         UIPasteboard.general.string = copyableContent ?? message.content
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -359,20 +403,6 @@ struct BlinkingModifier: ViewModifier {
                     pulse = true
                 }
             }
-    }
-}
-
-// MARK: - Color hex init
-
-extension Color {
-    init(hex: UInt, opacity: Double = 1.0) {
-        self.init(
-            .sRGB,
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255,
-            opacity: opacity
-        )
     }
 }
 

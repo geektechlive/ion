@@ -189,6 +189,8 @@ extension SessionViewModel {
                 self.relayURL = ""
                 self.relayAPIKey = ""
                 self.pairingState = .idle
+                self.hasConnectedBefore = false
+                UserDefaults.standard.set(false, forKey: "hasConnectedBefore")
                 try? KeychainStore.deleteAll()
             }
         }
@@ -200,6 +202,35 @@ extension SessionViewModel {
         pairedDevices[0].relayAPIKey = relayAPIKey
         savePairedDevices()
     }
+
+    // MARK: - Active Device
+
+    /// Cancel any pending reconnect safety timer (no-op; timer lives in RelayClient).
+    func cancelReconnectSafetyTimer() {}
+
+    /// The currently active paired device (first in list when connected).
+    var activeDevice: PairedDevice? {
+        pairedDevices.first
+    }
+
+    /// The ID of the currently active device, if any.
+    var activeDeviceId: String? {
+        activeDevice?.id
+    }
+
+    /// Switch the active connection to the given device.
+    func switchToDevice(id: String) {
+        guard let idx = pairedDevices.firstIndex(where: { $0.id == id }) else { return }
+        if idx != 0 {
+            let device = pairedDevices.remove(at: idx)
+            pairedDevices.insert(device, at: 0)
+            savePairedDevices()
+        }
+        reconnect()
+    }
+
+    /// Refresh device status (no-op stub; status is driven by connection events).
+    func pollDeviceStatus() {}
 
     // MARK: - Persistence
 

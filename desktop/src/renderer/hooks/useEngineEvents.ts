@@ -162,8 +162,8 @@ export function useEngineEvents() {
 
     // Remote engine prompt (sent from iOS) — submit through the renderer's engine flow
     // so the store adds the user message, sets status, and calls the engine bridge.
-    const remoteEnginePromptHandler = (_e: any, data: { tabId: string; text: string }) => {
-      useSessionStore.getState().submitEnginePrompt(data.tabId, data.text)
+    const remoteEnginePromptHandler = (_e: any, data: { tabId: string; text: string; appendSystemPrompt?: string }) => {
+      useSessionStore.getState().submitEnginePrompt(data.tabId, data.text, data.appendSystemPrompt)
     }
     window.ion.on(IPC.REMOTE_ENGINE_PROMPT, remoteEnginePromptHandler)
 

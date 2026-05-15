@@ -16,7 +16,7 @@ import { FileEditor } from './components/FileEditor'
 import { QuickToolsTray } from './components/QuickToolsTray'
 import { PopoverLayerProvider } from './components/PopoverLayer'
 import { CloseTabConfirmDialog } from './components/CloseTabConfirmDialog'
-import { UpdateBanner } from './components/UpdateBanner'
+import { UpdateDialog } from './components/UpdateDialog'
 import { useEngineEvents } from './hooks/useEngineEvents'
 import { useHealthReconciliation } from './hooks/useHealthReconciliation'
 import { useThemeSync } from './hooks/useThemeSync'
@@ -28,6 +28,7 @@ import { useWindowHeight, useInputRowHeight } from './hooks/useWindowGeometry'
 import { useSessionStore, editorDirForTab } from './stores/sessionStore'
 import { useColors, spacing } from './theme'
 import { usePreferencesStore } from './preferences'
+import { useUpdateStore } from './stores/update-store'
 
 const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
 
@@ -39,10 +40,18 @@ export default function App() {
   useTabRestoration()
   useClickThrough()
 
+  // Listen for auto-update download notifications from the main process
+  useEffect(() => {
+    return window.ion.onUpdateDownloaded((info) => {
+      useUpdateStore.getState().setAvailable(info.version)
+    })
+  }, [])
+
   const [closeConfirmTab, setCloseConfirmTab] = useState<{ id: string; title: string; directory: string } | null>(null)
   useKeyboardShortcuts(setCloseConfirmTab)
 
   const settingsOpen = useSessionStore((s) => s.settingsOpen)
+  const settingsInitialTab = useSessionStore((s) => s.settingsInitialTab)
   const activeTabStatus = useSessionStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.status)
   const addAttachments = useSessionStore((s) => s.addAttachments)
   const colors = useColors()
@@ -134,7 +143,7 @@ export default function App() {
 
           <AnimatePresence initial={false}>
             {settingsOpen && (
-              <SettingsDialog onClose={() => useSessionStore.getState().closeSettings()} />
+              <SettingsDialog initialTab={settingsInitialTab} onClose={() => useSessionStore.getState().closeSettings()} />
             )}
           </AnimatePresence>
 
@@ -372,8 +381,8 @@ export default function App() {
           <TerminalBigScreen tabId={activeTabId} />
         )}
 
-        {/* Auto-update notification */}
-        <UpdateBanner />
+        {/* Auto-update install dialog */}
+        <UpdateDialog />
       </div>
     </PopoverLayerProvider>
   )

@@ -1,7 +1,6 @@
 import Foundation
 
-/// Commands sent from iOS to Ion.
-/// Mirrors `RemoteCommand` in `src/main/remote/protocol.ts`.
+/// Commands sent from iOS to Ion. Mirrors `RemoteCommand` in `src/main/remote/protocol.ts`.
 enum RemoteCommand: Codable, Sendable {
     case sync
     case createTab(workingDirectory: String?)
@@ -43,6 +42,9 @@ enum RemoteCommand: Codable, Sendable {
     case fsListDir(directory: String, includeHidden: Bool = false)
     case fsReadFile(filePath: String)
     case fsWriteFile(filePath: String, content: String)
+    case discoverCommands(directory: String)
+    case uploadAttachment(dataUrl: String, name: String, correlationId: String)
+    case voiceConfig(enabled: Bool, mode: String, systemPrompt: String?)
 
     // MARK: - Codable
 
@@ -87,6 +89,9 @@ enum RemoteCommand: Codable, Sendable {
         case fsListDir = "fs_list_dir"
         case fsReadFile = "fs_read_file"
         case fsWriteFile = "fs_write_file"
+        case discoverCommands = "discover_commands"
+        case uploadAttachment = "upload_attachment"
+        case voiceConfig = "voice_config"
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -95,6 +100,8 @@ enum RemoteCommand: Codable, Sendable {
         case instanceId, data, cols, rows, customTitle, label, messageId
         case dialogId, value, profileId, model, groupId
         case directory, path, staged, paths, skip, limit, message, filePath, content, includeHidden
+        case attachments, dataUrl, name, correlationId
+        case enabled, systemPrompt
     }
 
     init(from decoder: Decoder) throws {
@@ -299,6 +306,22 @@ enum RemoteCommand: Codable, Sendable {
             let filePath = try container.decode(String.self, forKey: .filePath)
             let content = try container.decode(String.self, forKey: .content)
             self = .fsWriteFile(filePath: filePath, content: content)
+
+        case .discoverCommands:
+            let directory = try container.decode(String.self, forKey: .directory)
+            self = .discoverCommands(directory: directory)
+
+        case .uploadAttachment:
+            let dataUrl = try container.decode(String.self, forKey: .dataUrl)
+            let name = try container.decode(String.self, forKey: .name)
+            let correlationId = try container.decode(String.self, forKey: .correlationId)
+            self = .uploadAttachment(dataUrl: dataUrl, name: name, correlationId: correlationId)
+
+        case .voiceConfig:
+            let enabled = try container.decode(Bool.self, forKey: .enabled)
+            let mode = try container.decode(String.self, forKey: .mode)
+            let systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+            self = .voiceConfig(enabled: enabled, mode: mode, systemPrompt: systemPrompt)
         }
     }
 
@@ -308,11 +331,9 @@ enum RemoteCommand: Codable, Sendable {
         switch self {
         case .sync:
             try container.encode(TypeKey.sync, forKey: .type)
-
         case .createTab(let workingDirectory):
             try container.encode(TypeKey.createTab, forKey: .type)
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
-
         case .closeTab(let tabId):
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -323,6 +344,7 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(origin, forKey: .origin)
 
+
         case .cancel(let tabId):
             try container.encode(TypeKey.cancel, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -332,17 +354,14 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(tabId, forKey: .tabId)
             try container.encode(questionId, forKey: .questionId)
             try container.encode(optionId, forKey: .optionId)
-
         case .setPermissionMode(let tabId, let mode):
             try container.encode(TypeKey.setPermissionMode, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(mode, forKey: .mode)
-
         case .loadConversation(let tabId, let before):
             try container.encode(TypeKey.loadConversation, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(before, forKey: .before)
-
         case .createTerminalTab(let workingDirectory):
             try container.encode(TypeKey.createTerminalTab, forKey: .type)
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
@@ -505,6 +524,22 @@ enum RemoteCommand: Codable, Sendable {
             try container.encode(TypeKey.fsWriteFile, forKey: .type)
             try container.encode(filePath, forKey: .filePath)
             try container.encode(content, forKey: .content)
+
+        case .discoverCommands(let directory):
+            try container.encode(TypeKey.discoverCommands, forKey: .type)
+            try container.encode(directory, forKey: .directory)
+
+        case .uploadAttachment(let dataUrl, let name, let correlationId):
+            try container.encode(TypeKey.uploadAttachment, forKey: .type)
+            try container.encode(dataUrl, forKey: .dataUrl)
+            try container.encode(name, forKey: .name)
+            try container.encode(correlationId, forKey: .correlationId)
+
+        case .voiceConfig(let enabled, let mode, let systemPrompt):
+            try container.encode(TypeKey.voiceConfig, forKey: .type)
+            try container.encode(enabled, forKey: .enabled)
+            try container.encode(mode, forKey: .mode)
+            try container.encodeIfPresent(systemPrompt, forKey: .systemPrompt)
         }
     }
 }

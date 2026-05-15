@@ -10,6 +10,16 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.19.0](https://github.com/dsswift/ion/compare/ios-v1.18.1...ios-v1.19.0) (2026-05-15)
+
+### Features
+
+* **ios:** add correlation id to file upload flow ([6e51d30](https://github.com/dsswift/ion/commit/6e51d30d110f628f96be23198abe0cfbb0a35974))
+* **ios:** add lastActivityAt tracking to tab state ([f58b474](https://github.com/dsswift/ion/commit/f58b474739f37d56676ab94da3158cf9b3d6703e))
+* **ios:** add voice mode with TTS playback and controls ([6f05ca2](https://github.com/dsswift/ion/commit/6f05ca289bed3daf037bc817b77a2970f64bb791))
+* **ios:** reposition permission card above status bar ([99a9a74](https://github.com/dsswift/ion/commit/99a9a74fc217338fe400b1d33984ac4723b217d0))
+* **ios:** add collapsible plan approval card ([808c022](https://github.com/dsswift/ion/commit/808c02226fb6bd6dd6a0ca9f80c05e64a89a347e))
+
 ## [1.18.1](https://github.com/dsswift/ion/compare/ios-v1.18.0...ios-v1.18.1) (2026-05-14)
 
 ### Bug Fixes

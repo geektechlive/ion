@@ -161,6 +161,8 @@ final class SessionViewModel {
     var activeTools: [String: [String: ActiveToolInfo]] = [:]
     /// Tab IDs that iOS has requested to close but hasn't received tab_closed confirmation for.
     var pendingCloseTabIds: Set<String> = []
+    /// Timestamps when tabs transitioned to an idle/completed/failed/dead state (for "idle since" display).
+    var tabIdleSince: [String: Date] = [:]
 
     // Git state (per working directory)
     var gitChanges: [String: GitChangesResponse] = [:]     // directory -> changes
@@ -193,11 +195,22 @@ final class SessionViewModel {
     var awaitingLocalTabCreation = false
     /// Text to prefill into the input bar (set by rewind/fork responses).
     var pendingInputByTab: [String: String] = [:]
+    /// Pending upload results from desktop attachment uploads (consumed by InputBar).
+    var pendingUploadResults: [UploadAttachmentResult] = []
+    /// Discovered slash commands by directory.
+    var discoveredCommands: [String: [DiscoveredSlashCommand]] = [:]
     /// Default directory for new tabs on iOS (independent of desktop setting).
     var defaultBaseDirectory: String? {
         get { UserDefaults.standard.string(forKey: "defaultBaseDirectory") }
         set { UserDefaults.standard.set(newValue, forKey: "defaultBaseDirectory") }
     }
+
+    /// Preferred model for new sessions (synced from desktop snapshot).
+    var preferredModel: String = "claude-sonnet-4-6"
+    /// Default engine model (synced from desktop snapshot).
+    var engineDefaultModel: String = ""
+    /// True after the first successful connection (persisted across restarts).
+    var hasConnectedBefore: Bool = UserDefaults.standard.bool(forKey: "hasConnectedBefore")
 
     // MARK: - Settings (persisted via paired device)
 

@@ -10,8 +10,9 @@ struct DesktopPickerMenu: View {
     var body: some View {
         Menu {
             ForEach(viewModel.pairedDevices) { device in
-                let isActive = device.id == viewModel.activeDeviceId
-                    || (viewModel.activeDeviceId == nil && device.id == viewModel.pairedDevices.first?.id)
+                let activeId = viewModel.activeDeviceId
+                let isActive = device.id == activeId
+                    || (activeId == nil && device.id == viewModel.pairedDevices.first?.id)
                 Button {
                     if !isActive {
                         viewModel.switchToDevice(id: device.id)
@@ -53,7 +54,7 @@ struct DesktopPickerMenu: View {
             } label: {
                 Label("Pair New Desktop…", systemImage: "plus")
             }
-            .tint(IonTheme.accent)
+            .tint(JarvisTheme.accent)
         } label: {
             HStack(spacing: 6) {
                 Text(activeDeviceName)
@@ -73,7 +74,7 @@ struct DesktopPickerMenu: View {
     // MARK: - Helpers
 
     private var activeDeviceName: String {
-        viewModel.activeDevice?.name ?? "Ion"
+        viewModel.pairedDevices.first?.name ?? "Ion"
     }
 
     @ViewBuilder
