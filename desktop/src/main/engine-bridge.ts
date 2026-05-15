@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { log as _log, debug as _debug, warn as _warn, error as _error } from './logger'
-import type { EngineConfig, EngineEvent } from '../shared/types'
+import type { EngineConfig, EngineEvent, ImageAttachmentPayload } from '../shared/types'
 
 const TAG = 'EngineBridge'
 function log(msg: string): void { _log(TAG, msg) }
@@ -356,12 +356,20 @@ export class EngineBridge extends EventEmitter {
     }
   }
 
-  async sendPrompt(key: string, text: string, model?: string, appendSystemPrompt?: string): Promise<{ ok: boolean; error?: string }> {
-    log(`sendPrompt: key=${key} len=${text.length} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt}`)
+  async sendPrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]): Promise<{ ok: boolean; error?: string }> {
+    const attCount = imageAttachments?.length ?? 0
+    log(`sendPrompt: key=${key} len=${text.length} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${attCount}`)
     await this.connect()
     const msg: Record<string, unknown> = { cmd: 'send_prompt', key, text }
     if (model) msg.model = model
     if (appendSystemPrompt) msg.appendSystemPrompt = appendSystemPrompt
+    if (imageAttachments && imageAttachments.length > 0) {
+      msg.attachments = imageAttachments.map((a) => ({
+        media_type: a.mediaType,
+        data: a.data,
+        path: a.path,
+      }))
+    }
     return this._sendWithResult(msg)
   }
 

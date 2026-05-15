@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { log as _log } from '../../logger'
 import { state } from '../../state'
 import { isValidProjectPath } from '../../ipc-validation'
@@ -36,6 +36,41 @@ export async function handleFsListDir(cmd: Extract<RemoteCommand, { type: 'fs_li
   } catch (err) {
     log(`fs_list_dir error: ${(err as Error).message}`)
     state.remoteTransport?.send({ type: 'fs_dir_listing', directory, entries: [], error: (err as Error).message })
+  }
+}
+
+/** Mime sniff by extension. Matches the engine's supported image set. */
+function imageMimeForExt(filePath: string): string | null {
+  const lower = filePath.toLowerCase()
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  return null
+}
+
+export async function handleFsReadImage(cmd: Extract<RemoteCommand, { type: 'fs_read_image' }>): Promise<void> {
+  const { filePath } = cmd
+  try {
+    const mime = imageMimeForExt(filePath)
+    if (!mime) {
+      state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: null, error: 'Unsupported image extension' })
+      return
+    }
+    if (!filePath || !existsSync(filePath)) {
+      state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: null, error: 'File not found' })
+      return
+    }
+    const st = statSync(filePath)
+    if (st.size > 10 * 1024 * 1024) {
+      state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: null, error: 'Image too large (>10MB)' })
+      return
+    }
+    const buf = readFileSync(filePath)
+    state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: `data:${mime};base64,${buf.toString('base64')}` })
+  } catch (err) {
+    log(`fs_read_image error: ${(err as Error).message}`)
+    state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: null, error: (err as Error).message })
   }
 }
 

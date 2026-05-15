@@ -2,6 +2,7 @@ import { IPC } from '../../../shared/types'
 import { log as _log } from '../../logger'
 import { state, engineBridge } from '../../state'
 import { broadcast } from '../../broadcast'
+import { encodeImageAttachments } from '../attachment-encoder'
 import type { RemoteCommand } from '../protocol'
 
 function log(msg: string): void {
@@ -95,15 +96,23 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
     // Route through the renderer's submitEnginePrompt so it adds the user
     // message, sets tab status, and calls the engine bridge properly.
     // Prepend attachment context lines (same format as desktop send-slice)
+    // for client-side display, then encode each image to base64 so the
+    // engine can ship native multimodal content blocks to the LLM.
     let fullText = cmd.text
     const attachments = cmd.attachments || []
     if (attachments.length > 0) {
       const ctx = attachments.map((a: { type: string; name: string; path: string }) => `[Attached ${a.type}: ${a.path}]`).join('\n')
       fullText = `${ctx}\n\n${fullText}`
     }
+    const { encoded, rewrittenText } = encodeImageAttachments(fullText, attachments)
 
     const voicePrompt = getVoiceSystemPrompt(deviceId)
-    broadcast(IPC.REMOTE_ENGINE_PROMPT, { tabId: cmd.tabId, text: fullText, appendSystemPrompt: voicePrompt })
+    broadcast(IPC.REMOTE_ENGINE_PROMPT, {
+      tabId: cmd.tabId,
+      text: rewrittenText,
+      appendSystemPrompt: voicePrompt,
+      imageAttachments: encoded.length > 0 ? encoded : undefined,
+    })
   } catch (err) {
     log(`engine_prompt error: ${(err as Error).message}`)
   }

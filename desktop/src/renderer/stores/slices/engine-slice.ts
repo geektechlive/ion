@@ -196,24 +196,43 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       set({ engineModelOverrides: overrides })
     },
 
-    submitEnginePrompt: (tabId, text, appendSystemPrompt) => {
+    submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments) => {
       const pane = get().enginePanes.get(tabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
+      // Build a FileAttachment list from the encoded image attachments so
+      // the user-message bubble can render images inline. The path is the
+      // only field needed at render time; main-side READ_IMAGE_DATA_URL
+      // turns it into a data URL for <img>.
+      const userAttachments = (imageAttachments || [])
+        .filter((a) => !!a.path)
+        .map((a) => ({
+          id: crypto.randomUUID(),
+          type: 'image' as const,
+          name: (a.path?.split('/').pop() || 'image'),
+          path: a.path!,
+          mimeType: a.mediaType,
+        }))
       set((state) => {
         const pinnedPrompt = new Map(state.enginePinnedPrompt)
         pinnedPrompt.set(key, text)
         const messages = new Map(state.engineMessages)
         const msgs = [...(messages.get(key) || [])]
-        msgs.push({ id: nextMsgId(), role: 'user' as const, content: text, timestamp: Date.now() })
+        msgs.push({
+          id: nextMsgId(),
+          role: 'user' as const,
+          content: text,
+          timestamp: Date.now(),
+          ...(userAttachments.length > 0 ? { attachments: userAttachments } : {}),
+        })
         messages.set(key, msgs)
         const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const } : t)
         return { enginePinnedPrompt: pinnedPrompt, engineMessages: messages, tabs }
       })
       const prefs = usePreferencesStore.getState()
       const modelOverride = get().engineModelOverrides.get(key) || prefs.engineDefaultModel || prefs.preferredModel || undefined
-      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt).then((result) => {
+      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt, imageAttachments).then((result) => {
         if (result && !result.ok) {
           set((state) => {
             const messages = new Map(state.engineMessages)

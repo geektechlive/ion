@@ -13,9 +13,9 @@ export function registerEngineIpc(): void {
     return engineBridge.startSession(key, config)
   })
 
-  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt }: { key: string; text: string; model?: string; appendSystemPrompt?: string }) => {
-    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt}`)
-    return engineBridge.sendPrompt(key, text, model, appendSystemPrompt)
+  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt, imageAttachments }: { key: string; text: string; model?: string; appendSystemPrompt?: string; imageAttachments?: import('../../shared/types').ImageAttachmentPayload[] }) => {
+    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${imageAttachments?.length ?? 0}`)
+    return engineBridge.sendPrompt(key, text, model, appendSystemPrompt, imageAttachments)
   })
 
   ipcMain.handle(IPC.ENGINE_ABORT, (_event, { key }: { key: string }) => {

@@ -112,6 +112,7 @@ export type RemoteCommand =
   | { type: 'git_commit'; directory: string; message: string }
   | { type: 'fs_list_dir'; directory: string; includeHidden?: boolean }
   | { type: 'fs_read_file'; filePath: string }
+  | { type: 'fs_read_image'; filePath: string }
   | { type: 'fs_write_file'; filePath: string; content: string }
   | { type: 'discover_commands'; directory: string }
   | { type: 'upload_attachment'; dataUrl: string; name: string; correlationId?: string }
@@ -168,6 +169,7 @@ export type RemoteEvent =
   | { type: 'git_diff_response'; diff: string; fileName: string }
   | { type: 'fs_dir_listing'; directory: string; entries: Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedMs: number }>; error?: string }
   | { type: 'fs_file_content'; filePath: string; content: string | null; error?: string }
+  | { type: 'fs_image_content'; filePath: string; dataUrl: string | null; error?: string }
   | { type: 'fs_write_result'; filePath: string; ok: boolean; error?: string }
   | { type: 'upload_attachment_result'; id: string; name: string; path: string; correlationId?: string; error?: string }
   | { type: 'discover_commands_response'; directory: string; commands: Array<{ name: string; description: string; scope: 'user' | 'project'; source: 'command' | 'skill' }> }

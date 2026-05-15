@@ -8,6 +8,7 @@ import { terminalManager } from '../../terminal-manager-instance'
 import { readSettings, writeSettings } from '../../settings-store'
 import { getRemoteTabStates } from '../snapshot'
 import { discoverCommands } from '../../cli-compat/command-discovery'
+import { encodeImageAttachments } from '../attachment-encoder'
 import type { RemoteCommand } from '../protocol'
 
 function log(msg: string): void {
@@ -192,12 +193,15 @@ export function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' }>): v
   }
 
   // Prepend attachment context lines (same format as desktop send-slice)
+  // for client-side display, then encode each image so the engine can ship
+  // native multimodal content blocks to the LLM.
   let fullPrompt = promptText
   const attachments = cmd.attachments || []
   if (attachments.length > 0) {
     const ctx = attachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
     fullPrompt = `${ctx}\n\n${fullPrompt}`
   }
+  const { encoded, rewrittenText } = encodeImageAttachments(fullPrompt, attachments)
 
   const remoteAttachments = attachments.map((a) => ({
     id: crypto.randomUUID(),
@@ -215,7 +219,13 @@ export function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' }>): v
       attachments: remoteAttachments.length > 0 ? remoteAttachments : undefined,
     },
   })
-  broadcast(IPC.REMOTE_USER_MESSAGE, { tabId: cmd.tabId, requestId: reqId, prompt: fullPrompt, timestamp: now })
+  broadcast(IPC.REMOTE_USER_MESSAGE, {
+    tabId: cmd.tabId,
+    requestId: reqId,
+    prompt: rewrittenText,
+    timestamp: now,
+    imageAttachments: encoded.length > 0 ? encoded : undefined,
+  })
 }
 
 export function handleCancel(cmd: Extract<RemoteCommand, { type: 'cancel' }>): void {
