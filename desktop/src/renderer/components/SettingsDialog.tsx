@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { X, GearSix, GitBranch, Columns, PaintBrush, TerminalWindow, SlidersHorizontal, WifiHigh, Plugs, Lightning } from '@phosphor-icons/react'
+import { X, GearSix, GitBranch, Columns, PaintBrush, TerminalWindow, SlidersHorizontal, WifiHigh, Plugs, Lightning, Wrench } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { GeneralCategory } from './settings/GeneralCategory'
@@ -13,6 +13,7 @@ import { PresetsCategory } from './settings/PresetsCategory'
 import { RemoteCategory } from './settings/RemoteCategory'
 import { EngineCategory } from './settings/EngineCategory'
 import { QuickToolsCategory } from './settings/QuickToolsCategory'
+import { DeveloperCategory } from './settings/DeveloperCategory'
 import type { Icon } from '@phosphor-icons/react'
 
 interface Category {
@@ -32,6 +33,7 @@ const CATEGORIES: Category[] = [
   { id: 'quicktools', label: 'Quick Tools', icon: Lightning, component: QuickToolsCategory },
   { id: 'remote', label: 'Remote', icon: WifiHigh, component: RemoteCategory },
   { id: 'engine', label: 'Engine', icon: Plugs, component: EngineCategory },
+  { id: 'developer', label: 'Developer', icon: Wrench, component: DeveloperCategory },
 ]
 
 const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
