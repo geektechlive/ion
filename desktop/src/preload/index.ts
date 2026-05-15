@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
-import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, FileAttachment, SessionMeta, SessionLoadMessage, GitGraphData, GitChangesData, GitBranchInfo, GitCommitDetail, PersistedTabState, FsEntry, WorktreeInfo, WorktreeStatus, EngineConfig, EngineEvent, RemoteTransportState, DiscoveredCommand } from '../shared/types'
+import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, FileAttachment, SessionMeta, SessionLoadMessage, GitGraphData, GitChangesData, GitBranchInfo, GitCommitDetail, PersistedTabState, FsEntry, WorktreeInfo, WorktreeStatus, EngineConfig, EngineEvent, RemoteTransportState, DiscoveredCommand, ImageAttachmentPayload } from '../shared/types'
 
 export interface IonAPI {
   // ─── Request-response (renderer → main) ───
@@ -32,6 +32,7 @@ export interface IonAPI {
   listAllSessions(): Promise<SessionMeta[]>
   loadSession(sessionId: string, projectPath?: string, encodedDir?: string): Promise<SessionLoadMessage[]>
   readPlan(filePath: string): Promise<{ content: string | null; fileName: string | null }>
+  readImageDataUrl(filePath: string): Promise<{ dataUrl: string | null }>
   discoverCommands(projectPath: string): Promise<DiscoveredCommand[]>
   listFonts(): Promise<string[]>
   terminalCreate(key: string, cwd: string): Promise<void>
@@ -106,7 +107,7 @@ export interface IonAPI {
 
   // ─── Engine operations ───
   engineStart(key: string, config: EngineConfig): Promise<{ ok: boolean; error?: string }>
-  enginePrompt(key: string, text: string, model?: string, appendSystemPrompt?: string): Promise<{ ok: boolean; error?: string }>
+  enginePrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]): Promise<{ ok: boolean; error?: string }>
   engineAbort(key: string): Promise<void>
   engineAbortAgent(key: string, agentName: string, subtree: boolean): Promise<void>
   engineDialogResponse(key: string, dialogId: string, value: any): Promise<void>
@@ -181,6 +182,7 @@ const api: IonAPI = {
   listAllSessions: () => ipcRenderer.invoke(IPC.LIST_ALL_SESSIONS),
   loadSession: (sessionId: string, projectPath?: string, encodedDir?: string) => ipcRenderer.invoke(IPC.LOAD_SESSION, { sessionId, projectPath, encodedDir }),
   readPlan: (filePath: string) => ipcRenderer.invoke(IPC.READ_PLAN, filePath),
+  readImageDataUrl: (filePath: string) => ipcRenderer.invoke(IPC.READ_IMAGE_DATA_URL, filePath),
   discoverCommands: (projectPath: string) => ipcRenderer.invoke(IPC.DISCOVER_COMMANDS, projectPath),
   listFonts: () => ipcRenderer.invoke(IPC.LIST_FONTS),
   terminalCreate: (key, cwd) => ipcRenderer.invoke(IPC.TERMINAL_CREATE, { key, cwd }),
@@ -272,7 +274,7 @@ const api: IonAPI = {
 
   // ─── Engine operations ───
   engineStart: (key, config) => ipcRenderer.invoke(IPC.ENGINE_START, { key, config }),
-  enginePrompt: (key, text, model, appendSystemPrompt) => ipcRenderer.invoke(IPC.ENGINE_PROMPT, { key, text, model, appendSystemPrompt }),
+  enginePrompt: (key, text, model, appendSystemPrompt, imageAttachments) => ipcRenderer.invoke(IPC.ENGINE_PROMPT, { key, text, model, appendSystemPrompt, imageAttachments }),
   engineAbort: (key) => ipcRenderer.invoke(IPC.ENGINE_ABORT, { key }),
   engineAbortAgent: (key, agentName, subtree) =>
     ipcRenderer.invoke(IPC.ENGINE_ABORT_AGENT, { key, agentName, subtree }),

@@ -31,6 +31,7 @@ export const IPC = {
   LIST_ALL_SESSIONS: 'ion:list-all-sessions',
   LOAD_SESSION: 'ion:load-session',
   READ_PLAN: 'ion:read-plan',
+  READ_IMAGE_DATA_URL: 'ion:read-image-data-url',
 
   // One-way events (main → renderer)
   TEXT_CHUNK: 'ion:text-chunk',

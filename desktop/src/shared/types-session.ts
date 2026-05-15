@@ -171,6 +171,23 @@ export interface RunOptions {
   thinking?: { enabled: boolean; budgetTokens?: number }
   /** Extension entry points for engine tabs (resolved from engine profile) */
   extensions?: string[]
+  /**
+   * Pre-encoded image attachments for the user message. The engine forwards
+   * each as a native multimodal content block. Desktop is responsible for
+   * reading the file, base64-encoding the bytes, and dropping unreadable
+   * entries before they reach the engine.
+   */
+  imageAttachments?: ImageAttachmentPayload[]
+}
+
+/** Pre-encoded image bytes that ride alongside a user prompt. */
+export interface ImageAttachmentPayload {
+  /** MIME type, e.g. "image/jpeg", "image/png", "image/webp", "image/gif". */
+  mediaType: string
+  /** Base64-encoded image bytes (no data URL prefix). */
+  data: string
+  /** Source path on disk; carried for logging only. */
+  path?: string
 }
 
 // ─── Control Plane Types ───

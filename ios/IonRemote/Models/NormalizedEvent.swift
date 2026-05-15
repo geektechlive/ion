@@ -72,6 +72,7 @@ enum RemoteEvent: Codable, Sendable {
     // File explorer events
     case fsDirListing(directory: String, response: FsDirListingResponse)
     case fsFileContent(filePath: String, response: FsFileContentResponse)
+    case fsImageContent(filePath: String, dataUrl: String?, error: String?)
     case fsWriteResult(filePath: String, response: FsWriteResultResponse)
     // Command discovery events
     case discoverCommandsResponse(directory: String, commands: [DiscoveredSlashCommand])
@@ -131,6 +132,7 @@ enum RemoteEvent: Codable, Sendable {
         case gitDiffResponse = "git_diff_response"
         case fsDirListing = "fs_dir_listing"
         case fsFileContent = "fs_file_content"
+        case fsImageContent = "fs_image_content"
         case fsWriteResult = "fs_write_result"
         case discoverCommandsResponse = "discover_commands_response"
         case uploadAttachmentResult = "upload_attachment_result"
@@ -156,6 +158,7 @@ enum RemoteEvent: Codable, Sendable {
         case ts, buffered
         case id, name, path
         case correlationId
+        case dataUrl
     }
 
     // MARK: - Decoder

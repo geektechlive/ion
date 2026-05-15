@@ -15,9 +15,12 @@ struct PendingAttachment: Identifiable {
 }
 
 /// Horizontal scroll of attachment chips with remove buttons.
+/// Tapping an image chip opens a fullscreen preview.
 struct AttachmentChipsView: View {
     let attachments: [PendingAttachment]
     let onRemove: (String) -> Void
+    @State private var previewImage: UIImage?
+    @State private var previewName: String?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -28,6 +31,14 @@ struct AttachmentChipsView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
+        }
+        .sheet(isPresented: Binding(
+            get: { previewImage != nil },
+            set: { if !$0 { previewImage = nil; previewName = nil } }
+        )) {
+            if let img = previewImage {
+                AttachmentImagePreview(image: img, name: previewName ?? "")
+            }
         }
     }
 
@@ -59,5 +70,12 @@ struct AttachmentChipsView: View {
         .padding(.vertical, 4)
         .background(Color(.secondarySystemFill))
         .clipShape(Capsule())
+        .onTapGesture {
+            guard attachment.type == "image", !attachment.isUploading else { return }
+            if let img = AttachmentImageCache.shared.image(forKey: attachment.id) {
+                previewName = attachment.name
+                previewImage = img
+            }
+        }
     }
 }

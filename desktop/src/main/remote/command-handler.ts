@@ -54,6 +54,7 @@ import {
 import {
   handleFsListDir,
   handleFsReadFile,
+  handleFsReadImage,
   handleFsWriteFile,
   handleUploadAttachment,
 } from './handlers/files'
@@ -106,6 +107,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'git_commit': await handleGitCommit(cmd); break
     case 'fs_list_dir': await handleFsListDir(cmd); break
     case 'fs_read_file': await handleFsReadFile(cmd); break
+    case 'fs_read_image': await handleFsReadImage(cmd); break
     case 'fs_write_file': await handleFsWriteFile(cmd); break
     case 'discover_commands': await handleDiscoverCommands(cmd); break
     case 'upload_attachment': await handleUploadAttachment(cmd); break

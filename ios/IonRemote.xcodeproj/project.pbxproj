@@ -11,6 +11,7 @@
 		A1B2C3D4E5F60001000003AA /* NormalizedEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */; };
 		A1B2C3D4E5F60001000005AA /* RemoteTabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */; };
 		A1B2C3D4E5F60001000007AA /* RemoteCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */; };
+		A1B2C3D4E5F60001005306AA /* RemoteCommand+Encode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005307AA /* RemoteCommand+Encode.swift */; };
 		A1B2C3D4E5F60001000009AA /* PairedDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100000AAA /* PairedDevice.swift */; };
 		A1B2C3D4E5F6000100000BAA /* RelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100000CAA /* RelayClient.swift */; };
 		A1B2C3D4E5F6000100000DAA /* LANClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100000EAA /* LANClient.swift */; };
@@ -58,6 +59,7 @@
 		A1B2C3D4E5F60001000202AA /* SessionViewModel+Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000203AA /* SessionViewModel+Pairing.swift */; };
 		A1B2C3D4E5F60001000204AA /* SessionViewModel+Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000205AA /* SessionViewModel+Commands.swift */; };
 		A1B2C3D4E5F60001000206AA /* SessionViewModel+EventHandlers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000207AA /* SessionViewModel+EventHandlers.swift */; };
+		A1B2C3D4E5F60001005308AA /* SessionViewModel+TabEventHandlers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005309AA /* SessionViewModel+TabEventHandlers.swift */; };
 		A1B2C3D4E5F60001000208AA /* SessionViewModel+EngineEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000209AA /* SessionViewModel+EngineEvents.swift */; };
 		A1B2C3D4E5F60001000902AA /* SessionViewModel+Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000903AA /* SessionViewModel+Snapshot.swift */; };
 		A1B2C3D4E5F60001000220AA /* TransportManager+Send.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000221AA /* TransportManager+Send.swift */; };
@@ -108,6 +110,9 @@
 		A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */; };
 		A1B2C3D4E5F60001005100AA /* VoiceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005101AA /* VoiceService.swift */; };
 		A1B2C3D4E5F60001005102AA /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005103AA /* KeychainHelper.swift */; };
+		A1B2C3D4E5F60001005300AA /* AttachmentImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005301AA /* AttachmentImageCache.swift */; };
+		A1B2C3D4E5F60001005302AA /* AttachmentImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005303AA /* AttachmentImagePreview.swift */; };
+		A1B2C3D4E5F60001005304AA /* RemoteImageFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -126,6 +131,7 @@
 		A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEvent.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTabState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteCommand.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001005307AA /* RemoteCommand+Encode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RemoteCommand+Encode.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100000AAA /* PairedDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedDevice.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100000CAA /* RelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayClient.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100000EAA /* LANClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LANClient.swift; sourceTree = "<group>"; };
@@ -176,6 +182,7 @@
 		A1B2C3D4E5F60001000203AA /* SessionViewModel+Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+Pairing.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000205AA /* SessionViewModel+Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+Commands.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000207AA /* SessionViewModel+EventHandlers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+EventHandlers.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001005309AA /* SessionViewModel+TabEventHandlers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+TabEventHandlers.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000209AA /* SessionViewModel+EngineEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+EngineEvents.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000903AA /* SessionViewModel+Snapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+Snapshot.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000221AA /* TransportManager+Send.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TransportManager+Send.swift"; sourceTree = "<group>"; };
@@ -225,6 +232,9 @@
 		A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineMessageRow.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001005101AA /* VoiceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceService.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001005103AA /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001005301AA /* AttachmentImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentImageCache.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001005303AA /* AttachmentImagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentImagePreview.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteImageFetcher.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -296,6 +306,7 @@
 				A1B2C3D4E5F60001000402AA /* NormalizedEvent+Files.swift */,
 				A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */,
 				A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */,
+				A1B2C3D4E5F60001005307AA /* RemoteCommand+Encode.swift */,
 				A1B2C3D4E5F6000100000AAA /* PairedDevice.swift */,
 				A1B2C3D4E5F60001000091AA /* Message.swift */,
 				A1B2C3D4E5F60001000093AA /* MessageAttachment.swift */,
@@ -377,6 +388,7 @@
 					A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */,
 					A1B2C3D4E5F60001004001AA /* ActiveToolRow.swift */,
 					A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */,
+					A1B2C3D4E5F60001005303AA /* AttachmentImagePreview.swift */,
 					A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */,
 					A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */,
 					A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */,
@@ -392,6 +404,7 @@
 				A1B2C3D4E5F60001000203AA /* SessionViewModel+Pairing.swift */,
 				A1B2C3D4E5F60001000205AA /* SessionViewModel+Commands.swift */,
 				A1B2C3D4E5F60001000207AA /* SessionViewModel+EventHandlers.swift */,
+				A1B2C3D4E5F60001005309AA /* SessionViewModel+TabEventHandlers.swift */,
 				A1B2C3D4E5F60001000209AA /* SessionViewModel+EngineEvents.swift */,
 				A1B2C3D4E5F60001000903AA /* SessionViewModel+Snapshot.swift */,
 			);
@@ -440,6 +453,8 @@
 				A1B2C3D4E5F60001001001AA /* LayoutCache.swift */,
 				A1B2C3D4E5F60001001007AA /* DiagnosticLog.swift */,
 				A1B2C3D4E5F60001005103AA /* KeychainHelper.swift */,
+				A1B2C3D4E5F60001005301AA /* AttachmentImageCache.swift */,
+				A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -555,6 +570,7 @@
 				A1B2C3D4E5F60001000003AA /* NormalizedEvent.swift in Sources */,
 				A1B2C3D4E5F60001000005AA /* RemoteTabState.swift in Sources */,
 				A1B2C3D4E5F60001000007AA /* RemoteCommand.swift in Sources */,
+				A1B2C3D4E5F60001005306AA /* RemoteCommand+Encode.swift in Sources */,
 				A1B2C3D4E5F60001000009AA /* PairedDevice.swift in Sources */,
 				A1B2C3D4E5F60001000090AA /* Message.swift in Sources */,
 				A1B2C3D4E5F60001000092AA /* MessageAttachment.swift in Sources */,
@@ -580,6 +596,7 @@
 				A1B2C3D4E5F60001000202AA /* SessionViewModel+Pairing.swift in Sources */,
 				A1B2C3D4E5F60001000204AA /* SessionViewModel+Commands.swift in Sources */,
 				A1B2C3D4E5F60001000206AA /* SessionViewModel+EventHandlers.swift in Sources */,
+				A1B2C3D4E5F60001005308AA /* SessionViewModel+TabEventHandlers.swift in Sources */,
 				A1B2C3D4E5F60001000208AA /* SessionViewModel+EngineEvents.swift in Sources */,
 				A1B2C3D4E5F60001000902AA /* SessionViewModel+Snapshot.swift in Sources */,
 				A1B2C3D4E5F60001000220AA /* TransportManager+Send.swift in Sources */,
@@ -636,6 +653,9 @@
 				A1B2C3D4E5F60001003002AA /* EngineDialogSheet.swift in Sources */,
 				A1B2C3D4E5F60001004000AA /* ActiveToolRow.swift in Sources */,
 				A1B2C3D4E5F60001004002AA /* AttachmentChipsView.swift in Sources */,
+				A1B2C3D4E5F60001005300AA /* AttachmentImageCache.swift in Sources */,
+				A1B2C3D4E5F60001005302AA /* AttachmentImagePreview.swift in Sources */,
+				A1B2C3D4E5F60001005304AA /* RemoteImageFetcher.swift in Sources */,
 				A1B2C3D4E5F60001004004AA /* FilePickerSheet.swift in Sources */,
 				A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */,
 				A1B2C3D4E5F60001005100AA /* VoiceService.swift in Sources */,
