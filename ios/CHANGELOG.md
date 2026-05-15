@@ -10,6 +10,12 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.21.0](https://github.com/dsswift/ion/compare/ios-v1.20.0...ios-v1.21.0) (2026-05-15)
+
+### Features
+
+* **ios:** add toast notification system ([77d22bf](https://github.com/dsswift/ion/commit/77d22bf8417d740f440685ab184359b5a7483200))
+
 ## [1.20.0](https://github.com/dsswift/ion/compare/ios-v1.19.0...ios-v1.20.0) (2026-05-15)
 
 ### Features
