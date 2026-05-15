@@ -137,7 +137,8 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 		totalOutputToks int
 	)
 
-	for sse := range ParseSSEStream(resp.Body) {
+	sseCh, sseErr := ParseSSEStream(resp.Body)
+	for sse := range sseCh {
 		if sse.Data == "" {
 			continue
 		}
@@ -259,6 +260,15 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 				return err
 			}
 		}
+	}
+
+	// Surface mid-stream read failures as real errors instead of silently
+	// closing the turn with a synthetic message_stop on a partial response.
+	if err := sseErr(); err != nil {
+		if pe := ClassifyTransportError(err); pe != nil {
+			return pe
+		}
+		return FromOpenAIError(fmt.Errorf("sse read: %w", err), 0, "")
 	}
 
 	// message_stop
