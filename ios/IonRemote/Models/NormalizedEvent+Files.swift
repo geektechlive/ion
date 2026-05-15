@@ -24,6 +24,12 @@ extension RemoteEvent {
             let response = FsFileContentResponse(filePath: filePath, content: content, error: error)
             return .fsFileContent(filePath: filePath, response: response)
 
+        case .fsImageContent:
+            let filePath = try container.decode(String.self, forKey: .filePath)
+            let dataUrl = try container.decodeIfPresent(String.self, forKey: .dataUrl)
+            let error = try container.decodeIfPresent(String.self, forKey: .error)
+            return .fsImageContent(filePath: filePath, dataUrl: dataUrl, error: error)
+
         case .fsWriteResult:
             let filePath = try container.decode(String.self, forKey: .filePath)
             let ok = try container.decode(Bool.self, forKey: .ok)
@@ -64,6 +70,13 @@ extension RemoteEvent {
             try container.encode(response.filePath, forKey: .filePath)
             try container.encodeIfPresent(response.content, forKey: .content)
             try container.encodeIfPresent(response.error, forKey: .error)
+            return true
+
+        case .fsImageContent(let filePath, let dataUrl, let error):
+            try container.encode(TypeKey.fsImageContent, forKey: .type)
+            try container.encode(filePath, forKey: .filePath)
+            try container.encodeIfPresent(dataUrl, forKey: .dataUrl)
+            try container.encodeIfPresent(error, forKey: .error)
             return true
 
         case .fsWriteResult(_, let response):

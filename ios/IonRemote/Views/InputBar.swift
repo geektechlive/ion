@@ -282,6 +282,7 @@ struct InputBar: View {
             }
             // Compress to JPEG, target ~1MB max
             let compressed = compressImage(data: data, maxBytes: 1_000_000)
+            AttachmentImageCache.shared.store(data: compressed, forKey: placeholderId)
             let base64 = compressed.base64EncodedString()
             let dataUrl = "data:image/jpeg;base64,\(base64)"
             await MainActor.run {
@@ -308,6 +309,7 @@ struct InputBar: View {
                 // Upload image via data URL
                 pendingAttachments.append(PendingAttachment(id: placeholderId, type: "image", name: name, path: "", isUploading: true, correlationId: correlationId))
                 let compressed = compressImage(data: data, maxBytes: 1_000_000)
+                AttachmentImageCache.shared.store(data: compressed, forKey: placeholderId)
                 let base64 = compressed.base64EncodedString()
                 let mimeExt = (ext == "jpg" || ext == "jpeg") ? "jpeg" : ext
                 let dataUrl = "data:image/\(mimeExt);base64,\(base64)"
@@ -344,6 +346,14 @@ struct InputBar: View {
                 if let error = result.error, !error.isEmpty {
                     pendingAttachments.remove(at: idx)
                 } else {
+                    AttachmentImageCache.shared.rekey(from: pendingAttachments[idx].id, to: result.id)
+                    // Also key by the desktop-side path so rehydrated messages
+                    // (which only know the path from the marker text) can find
+                    // the same image bytes for inline rendering.
+                    if pendingAttachments[idx].type == "image", !result.path.isEmpty,
+                       let bytes = AttachmentImageCache.shared.data(forKey: result.id) {
+                        AttachmentImageCache.shared.store(data: bytes, forKey: result.path)
+                    }
                     pendingAttachments[idx] = PendingAttachment(
                         id: result.id, type: pendingAttachments[idx].type, name: result.name, path: result.path, isUploading: false, correlationId: cid
                     )
