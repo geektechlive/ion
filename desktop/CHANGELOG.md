@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.24.0](https://github.com/dsswift/ion/compare/desktop-v1.23.0...desktop-v1.24.0) (2026-05-15)
+
+### Features
+
+* **desktop:** use client message id in prompt handler ([fa4a1a4](https://github.com/dsswift/ion/commit/fa4a1a4e2ff8f39b8b8c19c5719a3186f994dbe8))
+
 ## [1.23.0](https://github.com/dsswift/ion/compare/desktop-v1.22.0...desktop-v1.23.0) (2026-05-15)
 
 ### Features

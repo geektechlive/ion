@@ -10,6 +10,13 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.22.0](https://github.com/dsswift/ion/compare/ios-v1.21.0...ios-v1.22.0) (2026-05-15)
+
+### Features
+
+* **ios:** add client message id to prompt commands ([0a452c9](https://github.com/dsswift/ion/commit/0a452c93f6cf247d42564555c02bceb7b4d03e1d))
+* **ios:** add persistent rolling logs and diagnostic instrumentation ([0516ecb](https://github.com/dsswift/ion/commit/0516ecb3897a669c25892f7a37486b44ee48e164))
+
 ## [1.21.0](https://github.com/dsswift/ion/compare/ios-v1.20.0...ios-v1.21.0) (2026-05-15)
 
 ### Features
