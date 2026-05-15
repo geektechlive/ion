@@ -2,6 +2,7 @@ import type { TabGroup, TabGroupMode, QuickTool, RemotePairedDevice, EngineProfi
 import { DEFAULT_TAB_GROUP_LABELS } from '../shared/types'
 import type { PreferencesState, ThemeMode } from './preferences-types'
 import { SETTINGS_DEFAULTS } from './preferences-types'
+import { applyHud } from './theme-tokens'
 
 export function saveSettings(s: Record<string, unknown>): void {
   window.ion?.saveSettings(s)
@@ -40,8 +41,8 @@ export function loadPersistedSettings(
   window.ion?.loadSettings().then((disk) => {
     if (!disk) return
     const store = getState()
-    const mode = (['light', 'dark'].includes(disk.themeMode) ? disk.themeMode : 'dark') as ThemeMode
-    const resolved = mode === 'system' ? store._systemIsDark : mode === 'dark'
+    const mode = (['light', 'dark', 'hud'].includes(disk.themeMode) ? disk.themeMode : 'dark') as ThemeMode
+    const resolved = mode === 'system' ? store._systemIsDark : mode === 'dark' || mode === 'hud'
     const sound = typeof disk.soundEnabled === 'boolean' ? disk.soundEnabled : true
     const expanded = typeof disk.expandedUI === 'boolean' ? disk.expandedUI : false
     const ultraWide = typeof disk.ultraWide === 'boolean' ? disk.ultraWide : false
@@ -101,7 +102,7 @@ export function loadPersistedSettings(
     const tabRecoveryEnabled = typeof disk.tabRecoveryEnabled === 'boolean' ? disk.tabRecoveryEnabled : true
     const tabRecoveryTimeoutSec = typeof disk.tabRecoveryTimeoutSec === 'number' ? Math.max(30, Math.min(600, Math.round(disk.tabRecoveryTimeoutSec))) : 120
     setState({ themeMode: mode, isDark: resolved, soundEnabled: sound, expandedUI: expanded, ultraWide, defaultBaseDirectory: baseDir, recentBaseDirectories: recentDirs, directoryUsageCounts: dirUsageCounts, preferredOpenWith: openWith, showImplementClearContext: implClearCtx, expandOnTabSwitch: expandTabSwitch, bashCommandEntry: bashCmd, gitPanelSplitRatio: splitRatio, gitPanelChangesOpen: changesOpen, gitPanelGraphOpen: graphOpen, expandToolResults: expandTools, terminalFontFamily: termFont, terminalFontSize: termSize, closeExplorerOnFileOpen: closeExplorer, openMarkdownInPreview: mdPreview, editorWordWrap: wordWrap, gitOpsMode, worktreeCompletionStrategy: wtStrategy, worktreeBranchDefaults: wtDefaults, worktreeSkipPrTitle: wtSkipPr, allowSettingsEdits: allowSettings, enableClaudeCompat: enableCompat, showTodoList: showTodo, aiGeneratedTitles: aiTitles, hideOnExternalLaunch: hideExternal, tabGroupMode: tabGroupMode as TabGroupMode, tabGroups, autoGroupOrder, stashedManualGroups, stashedManualTabAssignments, inProgressGroupId, doneGroupId, planningGroupId, autoGroupMovement, commitCommand, gitChangesTreeView: changesTreeView, keepExplorerOnCollapse: keepExplorer, keepTerminalOnCollapse: keepTerminal, keepGitPanelOnCollapse: keepGitPanel, defaultPermissionMode: permMode, quickTools, uiZoom, remoteEnabled, relayUrl, relayApiKey, lanServerPort, pairedDevices, engineDefaultModel, engineProfiles, preferredModel, defaultTallConversation, defaultTallTerminal, defaultTallEngine, tabRecoveryEnabled, tabRecoveryTimeoutSec })
-    applyTheme(resolved)
+    if (mode === 'hud') applyHud(); else applyTheme(resolved)
     if (uiZoom !== 1) document.documentElement.style.zoom = String(uiZoom)
   })
 }

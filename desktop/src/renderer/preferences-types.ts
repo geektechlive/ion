@@ -1,6 +1,6 @@
 import type { GitOpsMode, WorktreeCompletionStrategy, TabGroupMode, TabGroup, QuickTool, RemotePairedDevice, EngineProfile } from '../shared/types'
 
-export type ThemeMode = 'system' | 'light' | 'dark'
+export type ThemeMode = 'system' | 'light' | 'dark' | 'hud'
 
 export interface PreferencesState {
   isDark: boolean

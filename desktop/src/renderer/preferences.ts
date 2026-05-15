@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { TabGroup } from '../shared/types'
-import { applyTheme, syncTokensToCss, darkColors, lightColors, type ColorPalette } from './theme-tokens'
+import { applyTheme, applyHud, syncTokensToCss, darkColors, lightColors, hudColors, type ColorPalette } from './theme-tokens'
 import type { PreferencesState, ThemeMode } from './preferences-types'
 import { saveSettings, getAllSettings, getEffectiveTabGroups, INITIAL_SAVED, loadPersistedSettings } from './preferences-persist'
 
@@ -10,7 +10,7 @@ export { getEffectiveTabGroups } from './preferences-persist'
 const saved = INITIAL_SAVED
 
 export const usePreferencesStore = create<PreferencesState>((set, get) => ({
-  isDark: saved.themeMode === 'dark' ? true : saved.themeMode === 'light' ? false : true,
+  isDark: saved.themeMode === 'light' ? false : true,
   themeMode: saved.themeMode,
   soundEnabled: saved.soundEnabled,
   expandedUI: saved.expandedUI,
@@ -97,9 +97,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     applyTheme(isDark)
   },
   setThemeMode: (mode) => {
-    const resolved = mode === 'system' ? get()._systemIsDark : mode === 'dark'
+    const resolved = mode === 'system' ? get()._systemIsDark : mode === 'dark' || mode === 'hud'
     set({ themeMode: mode, isDark: resolved })
-    applyTheme(resolved)
+    if (mode === 'hud') applyHud(); else applyTheme(resolved)
     saveSettings(getAllSettings(get))
   },
   setSoundEnabled: (enabled) => {
@@ -416,7 +416,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 }))
 
 // Initialize CSS vars with saved theme
-syncTokensToCss(saved.themeMode === 'light' ? lightColors : darkColors)
+syncTokensToCss(saved.themeMode === 'light' ? lightColors : saved.themeMode === 'hud' ? hudColors : darkColors)
 
 // Load persisted settings from disk (async, fires once on startup)
 loadPersistedSettings(
@@ -427,7 +427,9 @@ loadPersistedSettings(
 
 /** Reactive hook — returns the active color palette */
 export function useColors(): ColorPalette {
+  const themeMode = usePreferencesStore((s) => s.themeMode)
   const isDark = usePreferencesStore((s) => s.isDark)
+  if (themeMode === 'hud') return hudColors
   return isDark ? darkColors : lightColors
 }
 

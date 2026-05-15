@@ -65,8 +65,15 @@ export function AppearanceCategory() {
       <SettingToggle
         label="Dark Theme"
         description="Toggle between light and dark theme."
-        checked={themeMode === 'dark'}
+        checked={themeMode === 'dark' || themeMode === 'hud'}
         onChange={(next) => setThemeMode(next ? 'dark' : 'light')}
+      />
+
+      <SettingToggle
+        label="Jarvis HUD"
+        description="Arc reactor cyan palette. Applies on top of dark theme."
+        checked={themeMode === 'hud'}
+        onChange={(next) => setThemeMode(next ? 'hud' : 'dark')}
       />
 
       <SettingToggle

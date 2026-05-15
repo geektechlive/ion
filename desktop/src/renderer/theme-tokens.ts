@@ -336,6 +336,12 @@ export function applyTheme(isDark: boolean): void {
   syncTokensToCss(isDark ? darkColors : lightColors)
 }
 
+export function applyHud(): void {
+  document.documentElement.classList.add('dark')
+  document.documentElement.classList.remove('light')
+  syncTokensToCss(hudColors)
+}
+
 // Legacy static export — components migrating to useColors() may still read this.
 export const colors = darkColors
 
