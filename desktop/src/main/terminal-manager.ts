@@ -1,6 +1,7 @@
 import { IPC } from '../shared/types'
 import { getCliEnv } from './cli-env'
 import { homedir } from 'os'
+import { existsSync } from 'fs'
 import type { IPty } from 'node-pty'
 
 // node-pty is a native module — require at runtime to avoid Vite bundling issues
@@ -26,7 +27,10 @@ export class TerminalManager {
       throw new Error('node-pty is not available')
     }
 
-    const resolvedCwd = cwd === '~' ? homedir() : cwd
+    const resolvedCwd = (() => {
+      const p = cwd === '~' ? homedir() : cwd
+      return existsSync(p) ? p : homedir()
+    })()
     const shell = process.env.SHELL || '/bin/zsh'
 
     const term = pty.spawn(shell, [], {
