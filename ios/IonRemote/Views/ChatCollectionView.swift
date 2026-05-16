@@ -88,6 +88,7 @@ final class ChatCollectionVC<Payload, RowContent: View>:
     private var nearBottom = true
     var onNearBottomChanged: ((Bool) -> Void)?
 
+    private var pendingSnapshot: (items: [ChatItem<Payload>], isNearBottom: Bool, forceScroll: Bool)?
     private var hasAppliedInitialSnapshot = false
     private var userIsInteracting = false
     private let spacing: CGFloat
@@ -133,6 +134,11 @@ final class ChatCollectionVC<Payload, RowContent: View>:
         ) { cv, indexPath, item in
             cv.dequeueConfiguredReusableCell(using: reg, for: indexPath, item: item)
         }
+
+        if let pending = pendingSnapshot {
+            pendingSnapshot = nil
+            applySnapshot(items: pending.items, isNearBottom: pending.isNearBottom, forceScroll: pending.forceScroll)
+        }
     }
 
     private func makeLayout() -> UICollectionViewCompositionalLayout {
@@ -158,6 +164,11 @@ final class ChatCollectionVC<Payload, RowContent: View>:
         isNearBottom: Bool,
         forceScroll: Bool
     ) {
+        guard dataSource != nil else {
+            pendingSnapshot = (items, isNearBottom, forceScroll)
+            return
+        }
+
         let isInitial = !hasAppliedInitialSnapshot && !items.isEmpty
         if isInitial { hasAppliedInitialSnapshot = true }
 
