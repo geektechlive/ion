@@ -66,7 +66,7 @@ export async function handleTerminalRemoveInstance(cmd: Extract<RemoteCommand, {
   }
 }
 
-export async function handleRequestTerminalSnapshot(cmd: Extract<RemoteCommand, { type: 'request_terminal_snapshot' }>): Promise<void> {
+export async function handleRequestTerminalSnapshot(cmd: Extract<RemoteCommand, { type: 'request_terminal_snapshot' }>, deviceId: string): Promise<void> {
   try {
     const escapedTabId = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
     const tabState = await state.mainWindow?.webContents.executeJavaScript(`
@@ -90,7 +90,7 @@ export async function handleRequestTerminalSnapshot(cmd: Extract<RemoteCommand, 
       })()
     `)
     if (tabState) {
-      state.remoteTransport?.send({
+      state.remoteTransport?.sendToDevice(deviceId, {
         type: 'terminal_snapshot',
         tabId: cmd.tabId,
         instances: tabState.instances,
