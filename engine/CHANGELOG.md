@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.19.2](https://github.com/dsswift/ion/compare/engine-v1.19.1...engine-v1.19.2) (2026-05-16)
+
+### Bug Fixes
+
+* **engine:** add ca certificates to docker image ([2e2e792](https://github.com/dsswift/ion/commit/2e2e7925ec89864bc5fd44f31ab9558fe71cf312))
+
 ## [1.19.1](https://github.com/dsswift/ion/compare/engine-v1.19.0...engine-v1.19.1) (2026-05-16)
 
 ### Bug Fixes
