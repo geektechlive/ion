@@ -374,6 +374,14 @@ struct SettingsView: View {
         }
     }
 
+    private var appVersionString: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let hash = info?["IonBuildHash"] as? String ?? "?"
+        return "v\(version) (\(build).\(hash))"
+    }
+
     private var aboutSection: some View {
         Section("About") {
             HStack {
@@ -384,7 +392,7 @@ struct SettingsView: View {
                         .foregroundStyle(IonTheme.accent)
                     Text("Ion Remote")
                         .font(.headline)
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                    Text(appVersionString)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
