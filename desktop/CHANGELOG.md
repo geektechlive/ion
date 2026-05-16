@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.25.2](https://github.com/dsswift/ion/compare/desktop-v1.25.1...desktop-v1.25.2) (2026-05-16)
+
+### Bug Fixes
+
+* **desktop:** validate terminal CWD exists before pty.spawn, fall back to homedir ([179d4e3](https://github.com/dsswift/ion/commit/179d4e3734af9fa1ff04109c69aa08f438fa1bdf))
+
 ## [1.25.1](https://github.com/dsswift/ion/compare/desktop-v1.25.0...desktop-v1.25.1) (2026-05-16)
 
 ### Bug Fixes
