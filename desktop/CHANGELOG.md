@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.25.1](https://github.com/dsswift/ion/compare/desktop-v1.25.0...desktop-v1.25.1) (2026-05-16)
+
+### Bug Fixes
+
+* **desktop:** add NSLocalNetworkUsageDescription and log connect errors ([d982564](https://github.com/dsswift/ion/commit/d982564450b0d8ed4e943f94317d96c1907d81dd))
+
 ## [1.25.0](https://github.com/dsswift/ion/compare/desktop-v1.24.0...desktop-v1.25.0) (2026-05-16)
 
 ### Features
