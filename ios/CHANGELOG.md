@@ -10,6 +10,18 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.23.0](https://github.com/dsswift/ion/compare/ios-v1.22.0...ios-v1.23.0) (2026-05-16)
+
+### Features
+
+* **ios:** move plan/auto toggle to status bar ([8bc21c5](https://github.com/dsswift/ion/commit/8bc21c5be0d653aef972acb588b45cbeb48c775f))
+
+### Bug Fixes
+
+* **ios:** streamline conversation toolbar layout ([0c2732f](https://github.com/dsswift/ion/commit/0c2732f0aba353f1fabbcbff7bb051101729d14a))
+* **ios:** stamp version from VERSION file at build time ([ab09672](https://github.com/dsswift/ion/commit/ab0967204b7b518ef06f3da1697f917637236abc))
+* **ios:** use copy-on-write for message mutations ([8e7c2f4](https://github.com/dsswift/ion/commit/8e7c2f4740f7f5d9e857d850ea2ba2f182f84bb3))
+
 ## [1.22.0](https://github.com/dsswift/ion/compare/ios-v1.21.0...ios-v1.22.0) (2026-05-15)
 
 ### Features
