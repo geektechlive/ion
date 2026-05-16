@@ -10,6 +10,7 @@ struct ConversationView: View {
     @State private var forceScrollCounter: Int = 0
     @State private var showGitPane = false
     @State private var showFileExplorer = false
+    @State private var showTerminal = false
 
     private var tab: RemoteTabState? {
         viewModel.tab(for: tabId)
@@ -253,34 +254,24 @@ struct ConversationView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 0) {
-                    Text(tab?.displayTitle ?? "Tab")
-                        .font(.headline)
-                    if let dir = tab?.workingDirectory {
-                        Text((dir as NSString).lastPathComponent)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-                    if let status = tab?.status {
-                        Text(status.rawValue.capitalized)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                Text(tab?.displayTitle ?? "Tab")
+                    .font(.headline)
+                    .lineLimit(1)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 12) {
-                    Button {
-                        showFileExplorer = true
+                    Menu {
+                        Button { showFileExplorer = true } label: {
+                            Label("File Explorer", systemImage: "folder")
+                        }
+                        Button { showGitPane = true } label: {
+                            Label("Git", systemImage: "arrow.triangle.branch")
+                        }
+                        Button { showTerminal = true } label: {
+                            Label("Terminal", systemImage: "terminal")
+                        }
                     } label: {
-                        Image(systemName: "folder")
-                            .font(.subheadline)
-                    }
-
-                    Button {
-                        showGitPane = true
-                    } label: {
-                        Image(systemName: "arrow.triangle.branch")
+                        Image(systemName: "square.grid.2x2")
                             .font(.subheadline)
                     }
 
@@ -340,6 +331,10 @@ struct ConversationView: View {
         }
         .fullScreenCover(isPresented: $showFileExplorer) {
             FileExplorerView(tabId: tabId)
+                .environment(viewModel)
+        }
+        .fullScreenCover(isPresented: $showTerminal) {
+            ConversationTerminalView(tabId: tabId)
                 .environment(viewModel)
         }
     }
