@@ -86,7 +86,7 @@ export function MigrationCategory() {
 
   return (
     <>
-      <SettingHeading first>Tab Migration</SettingHeading>
+      <SettingHeading>Tab Migration</SettingHeading>
 
       <div style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
         <ShieldCheck size={16} color={colors.accent} />
