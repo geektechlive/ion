@@ -140,6 +140,7 @@ export class EngineBridge extends EventEmitter {
 
       conn.on('error', (err: NodeJS.ErrnoException) => {
         if (!this.connected) {
+          warn(`connect err: ${err.code} (${REMOTE_SOCKET})`)
           reject(err)
           return
         }
