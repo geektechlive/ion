@@ -1,20 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { X, GearSix, GitBranch, Columns, PaintBrush, TerminalWindow, SlidersHorizontal, WifiHigh, Plugs, Lightning, Wrench, ArrowsLeftRight } from '@phosphor-icons/react'
+import { X, GearSix, GitBranch, Columns, PaintBrush, WifiHigh, Lightning, Brain, Faders, MagnifyingGlass } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { GeneralCategory } from './settings/GeneralCategory'
+import { AIModelsCategory } from './settings/AIModelsCategory'
 import { GitCategory } from './settings/GitCategory'
 import { TabsPanelsCategory } from './settings/TabsPanelsCategory'
 import { AppearanceCategory } from './settings/AppearanceCategory'
-import { EditorTerminalCategory } from './settings/EditorTerminalCategory'
-import { PresetsCategory } from './settings/PresetsCategory'
-import { RemoteCategory } from './settings/RemoteCategory'
-import { EngineCategory } from './settings/EngineCategory'
 import { QuickToolsCategory } from './settings/QuickToolsCategory'
-import { DeveloperCategory } from './settings/DeveloperCategory'
-import { MigrationCategory } from './settings/MigrationCategory'
+import { RemoteCategory } from './settings/RemoteCategory'
+import { AdvancedCategory } from './settings/AdvancedCategory'
+import { searchSettings } from './settings/settings-search-index'
 import type { Icon } from '@phosphor-icons/react'
 
 interface Category {
@@ -25,18 +23,31 @@ interface Category {
 }
 
 const CATEGORIES: Category[] = [
-  { id: 'presets', label: 'Presets', icon: SlidersHorizontal, component: PresetsCategory },
   { id: 'general', label: 'General', icon: GearSix, component: GeneralCategory },
-  { id: 'git', label: 'Git', icon: GitBranch, component: GitCategory },
-  { id: 'tabs', label: 'Tabs & Panels', icon: Columns, component: TabsPanelsCategory },
+  { id: 'ai', label: 'AI & Models', icon: Brain, component: AIModelsCategory },
   { id: 'appearance', label: 'Appearance', icon: PaintBrush, component: AppearanceCategory },
-  { id: 'editor', label: 'Editor & Terminal', icon: TerminalWindow, component: EditorTerminalCategory },
+  { id: 'tabs', label: 'Tabs & Panels', icon: Columns, component: TabsPanelsCategory },
+  { id: 'git', label: 'Git', icon: GitBranch, component: GitCategory },
   { id: 'quicktools', label: 'Quick Tools', icon: Lightning, component: QuickToolsCategory },
   { id: 'remote', label: 'Remote', icon: WifiHigh, component: RemoteCategory },
-  { id: 'engine', label: 'Engine', icon: Plugs, component: EngineCategory },
-  { id: 'migration', label: 'Migration', icon: ArrowsLeftRight, component: MigrationCategory },
-  { id: 'developer', label: 'Developer', icon: Wrench, component: DeveloperCategory },
+  { id: 'advanced', label: 'Advanced', icon: Faders, component: AdvancedCategory },
 ]
+
+const LEGACY_TAB_MAP: Record<string, string> = {
+  presets: 'advanced',
+  migration: 'advanced',
+  developer: 'advanced',
+  editor: 'appearance',
+  engine: 'ai',
+}
+
+function resolveTab(tab: string | null | undefined): string {
+  if (!tab) return 'general'
+  const mapped = LEGACY_TAB_MAP[tab]
+  if (mapped) return mapped
+  if (CATEGORIES.some((c) => c.id === tab)) return tab
+  return 'general'
+}
 
 const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
 
@@ -51,11 +62,23 @@ const DIALOG_HEIGHT = 600
 export function SettingsDialog({ onClose, initialTab }: SettingsDialogProps) {
   const colors = useColors()
   const popoverLayer = usePopoverLayer()
-  const [activeCategory, setActiveCategory] = useState(
-    initialTab && CATEGORIES.some((c) => c.id === initialTab) ? initialTab : 'general'
-  )
+  const [activeCategory, setActiveCategory] = useState(resolveTab(initialTab))
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
 
-  // Position: always start centered
+  const matchedCategories = useMemo(() => searchSettings(searchQuery), [searchQuery])
+  const isSearching = searchQuery.trim().length > 0
+
+  const visibleCategories = isSearching
+    ? CATEGORIES.filter((c) => matchedCategories.has(c.id))
+    : CATEGORIES
+
+  useEffect(() => {
+    if (isSearching && visibleCategories.length > 0 && !matchedCategories.has(activeCategory)) {
+      setActiveCategory(visibleCategories[0].id)
+    }
+  }, [isSearching, visibleCategories, matchedCategories, activeCategory])
+
   const [pos, setPos] = useState(() => ({
     x: (window.innerWidth - DIALOG_WIDTH) / 2,
     y: (window.innerHeight - DIALOG_HEIGHT) / 2,
@@ -88,10 +111,13 @@ export function SettingsDialog({ onClose, initialTab }: SettingsDialogProps) {
     }
   }, [])
 
-  // Escape key dismisses
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        searchRef.current?.focus()
+      }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
@@ -124,7 +150,7 @@ export function SettingsDialog({ onClose, initialTab }: SettingsDialogProps) {
         zIndex: 9999,
       }}
     >
-      {/* Header — drag handle */}
+      {/* Header */}
       <div
         onMouseDown={handleDragStart}
         style={{
@@ -157,7 +183,7 @@ export function SettingsDialog({ onClose, initialTab }: SettingsDialogProps) {
         </button>
       </div>
 
-      {/* Two-column layout: sidebar + content */}
+      {/* Two-column layout */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Sidebar */}
         <div
@@ -171,13 +197,84 @@ export function SettingsDialog({ onClose, initialTab }: SettingsDialogProps) {
             flexShrink: 0,
           }}
         >
-          {CATEGORIES.map((cat) => {
+          {/* Search */}
+          <div
+            style={{
+              position: 'relative',
+              marginBottom: 6,
+            }}
+          >
+            <MagnifyingGlass
+              size={13}
+              style={{
+                position: 'absolute',
+                left: 8,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                color: colors.textTertiary,
+                pointerEvents: 'none',
+              }}
+            />
+            <input
+              ref={searchRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search..."
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                width: '100%',
+                padding: '5px 8px 5px 26px',
+                fontSize: 12,
+                background: colors.surfacePrimary,
+                border: `1px solid ${colors.containerBorder}`,
+                borderRadius: 8,
+                color: colors.textPrimary,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = colors.accent }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = colors.containerBorder }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                  position: 'absolute',
+                  right: 4,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: colors.textTertiary,
+                  padding: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <X size={11} />
+              </button>
+            )}
+          </div>
+
+          {isSearching && visibleCategories.length === 0 && (
+            <div style={{ padding: '8px 10px', fontSize: 11, color: colors.textTertiary }}>
+              No results
+            </div>
+          )}
+
+          {visibleCategories.map((cat) => {
             const isActive = cat.id === activeCategory
             const IconComp = cat.icon
             return (
               <button
                 key={cat.id}
-                onClick={() => setActiveCategory(cat.id)}
+                onClick={() => {
+                  setActiveCategory(cat.id)
+                  setSearchQuery('')
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

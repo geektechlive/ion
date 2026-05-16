@@ -11,7 +11,7 @@ export function DeveloperCategory() {
 
   return (
     <>
-      <SettingHeading first>Auto-Update</SettingHeading>
+      <SettingHeading>Auto-Update</SettingHeading>
 
       <SettingSection
         label="Simulate Update Downloaded"
