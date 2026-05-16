@@ -14,14 +14,17 @@ private let modelContextWindows: [String: Int] = [
     "claude-haiku-4-5-20251001": 200_000,
 ]
 
-/// Single-line status bar for conversation tabs showing model picker and context usage.
+/// Single-line status bar for conversation tabs showing model picker,
+/// permission mode toggle, and context usage.
 struct ConversationStatusBar: View {
     let modelOverride: String?
     let preferredModel: String
     let contextPercent: Double?
     let contextTokens: Int?
     let isRunning: Bool
+    let permissionMode: PermissionMode?
     let onSelectModel: (String) -> Void
+    let onToggleMode: () -> Void
 
     /// The effective model: override > preferred > default fallback.
     private var effectiveModel: String {
@@ -80,6 +83,22 @@ struct ConversationStatusBar: View {
             }
 
             Spacer()
+
+            // Permission mode toggle
+            if let mode = permissionMode {
+                Button(action: onToggleMode) {
+                    HStack(spacing: 3) {
+                        Image(systemName: mode == .plan ? "doc.text" : "bolt.fill")
+                        Text(mode == .plan ? "Plan" : "Auto")
+                            .fontWeight(.medium)
+                    }
+                    .foregroundStyle(mode == .plan ? IonTheme.accent : .secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color(.tertiarySystemFill)))
+                }
+                .buttonStyle(.plain)
+            }
 
             // Context usage (only when data is available)
             if let pct = resolvedContextPercent {

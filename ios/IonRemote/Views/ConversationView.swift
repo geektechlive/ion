@@ -228,8 +228,14 @@ struct ConversationView: View {
                 contextPercent: tab?.contextPercent,
                 contextTokens: tab?.contextTokens,
                 isRunning: isRunning,
+                permissionMode: tab?.permissionMode,
                 onSelectModel: { model in
                     viewModel.setTabModel(tabId: tabId, model: model)
+                },
+                onToggleMode: {
+                    guard let current = tab?.permissionMode else { return }
+                    let newMode: PermissionMode = current == .plan ? .auto : .plan
+                    viewModel.setPermissionMode(tabId: tabId, mode: newMode)
                 }
             )
 
@@ -259,38 +265,19 @@ struct ConversationView: View {
                     .lineLimit(1)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 12) {
-                    Menu {
-                        Button { showFileExplorer = true } label: {
-                            Label("File Explorer", systemImage: "folder")
-                        }
-                        Button { showGitPane = true } label: {
-                            Label("Git", systemImage: "arrow.triangle.branch")
-                        }
-                        Button { showTerminal = true } label: {
-                            Label("Terminal", systemImage: "terminal")
-                        }
-                    } label: {
-                        Image(systemName: "square.grid.2x2")
-                            .font(.subheadline)
+                Menu {
+                    Button { showFileExplorer = true } label: {
+                        Label("File Explorer", systemImage: "folder")
                     }
-
-                    Button {
-                        guard let current = tab?.permissionMode else { return }
-                        let newMode: PermissionMode = current == .plan ? .auto : .plan
-                        viewModel.setPermissionMode(tabId: tabId, mode: newMode)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: tab?.permissionMode == .plan ? "doc.text" : "bolt.fill")
-                                .font(.caption)
-                            Text(tab?.permissionMode == .plan ? "Plan" : "Auto")
-                                .font(.caption.weight(.medium))
-                        }
-                        .foregroundStyle(tab?.permissionMode == .plan ? IonTheme.accent : .secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color(.tertiarySystemFill)))
+                    Button { showGitPane = true } label: {
+                        Label("Git", systemImage: "arrow.triangle.branch")
                     }
+                    Button { showTerminal = true } label: {
+                        Label("Terminal", systemImage: "terminal")
+                    }
+                } label: {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.subheadline)
                 }
             }
         }
