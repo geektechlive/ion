@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.26.0](https://github.com/dsswift/ion/compare/desktop-v1.25.2...desktop-v1.26.0) (2026-05-16)
+
+### Features
+
+* **desktop:** add settings search functionality ([26874d4](https://github.com/dsswift/ion/commit/26874d49afc62abb5dc1dfba3d766ff59daf48a1))
+
 ## [1.25.2](https://github.com/dsswift/ion/compare/desktop-v1.25.1...desktop-v1.25.2) (2026-05-16)
 
 ### Bug Fixes
