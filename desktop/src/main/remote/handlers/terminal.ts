@@ -1,6 +1,6 @@
 import { IPC } from '../../../shared/types'
 import { log as _log } from '../../logger'
-import { state } from '../../state'
+import { state, terminalScrollback } from '../../state'
 import { broadcast } from '../../broadcast'
 import { terminalManager } from '../../terminal-manager-instance'
 import type { RemoteCommand } from '../protocol'
@@ -90,12 +90,22 @@ export async function handleRequestTerminalSnapshot(cmd: Extract<RemoteCommand, 
       })()
     `)
     if (tabState) {
+      // Fall back to main-process scrollback for instances where the renderer
+      // doesn't have an xterm instance (e.g. terminal tabs created from iOS
+      // that the desktop user has never navigated to).
+      const buffers = { ...tabState.buffers }
+      for (const inst of tabState.instances) {
+        if (!buffers[inst.id]) {
+          const scrollback = terminalScrollback.get(`${cmd.tabId}:${inst.id}`)
+          if (scrollback) buffers[inst.id] = scrollback
+        }
+      }
       state.remoteTransport?.sendToDevice(deviceId, {
         type: 'terminal_snapshot',
         tabId: cmd.tabId,
         instances: tabState.instances,
         activeInstanceId: tabState.activeInstanceId,
-        buffers: Object.keys(tabState.buffers).length > 0 ? tabState.buffers : undefined,
+        buffers: Object.keys(buffers).length > 0 ? buffers : undefined,
       })
     }
   } catch (err) {

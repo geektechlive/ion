@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { IPC } from '../../../shared/types'
 import { log as _log } from '../../logger'
-import { state, sessionPlane, engineBridge } from '../../state'
+import { state, sessionPlane, engineBridge, terminalScrollback } from '../../state'
 import { broadcast } from '../../broadcast'
 import { terminalManager } from '../../terminal-manager-instance'
 import { readSettings, writeSettings } from '../../settings-store'
@@ -54,6 +54,13 @@ async function _sendSync(send: (event: any) => void): Promise<void> {
             } catch(e) { return {}; }
           })()
         `) || {}
+        // Fall back to main-process scrollback for instances without renderer xterm
+        for (const inst of tab.terminalInstances!) {
+          if (!buffers[inst.id]) {
+            const scrollback = terminalScrollback.get(`${tab.id}:${inst.id}`)
+            if (scrollback) buffers[inst.id] = scrollback
+          }
+        }
         send({
           type: 'terminal_snapshot',
           tabId: tab.id,
