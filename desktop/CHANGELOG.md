@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.25.0](https://github.com/dsswift/ion/compare/desktop-v1.24.0...desktop-v1.25.0) (2026-05-16)
+
+### Features
+
+* **desktop:** add tab migration between backends ([8d53980](https://github.com/dsswift/ion/commit/8d539802f0debca0d3699155b5826cd11d10ea58))
+
 ## [1.24.0](https://github.com/dsswift/ion/compare/desktop-v1.23.0...desktop-v1.24.0) (2026-05-15)
 
 ### Features
