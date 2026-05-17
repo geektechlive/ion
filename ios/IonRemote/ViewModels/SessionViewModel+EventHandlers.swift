@@ -635,11 +635,19 @@ extension SessionViewModel {
             }
         }
         guard conversationLoaded.contains(tabId) else { return }
+        var messageToAdd = message
+        if message.role == .tool, message.toolStatus == .running, message.agentName == nil {
+            let runningAgent = engineAgentStates
+                .first { $0.key == tabId || $0.key.hasPrefix("\(tabId):") }?
+                .value
+                .first { $0.status == "running" && $0.type != "chief" }
+            messageToAdd.agentName = runningAgent?.displayName
+        }
         if messages[tabId] != nil {
-            if messages[tabId]!.contains(where: { $0.id == message.id }) { return }
-            messages[tabId]!.append(message)
+            if messages[tabId]!.contains(where: { $0.id == messageToAdd.id }) { return }
+            messages[tabId]!.append(messageToAdd)
         } else {
-            messages[tabId] = [message]
+            messages[tabId] = [messageToAdd]
         }
         messageCountByTab[tabId] = messages[tabId]?.count ?? 0
     }
