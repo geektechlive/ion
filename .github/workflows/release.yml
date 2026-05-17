@@ -1,15 +1,6 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'engine/**'
-      - 'desktop/**'
-      - 'relay/**'
-      - 'ios/**'
-      - 'release-please-*.json'
   workflow_dispatch:
     inputs:
       dry_run:
