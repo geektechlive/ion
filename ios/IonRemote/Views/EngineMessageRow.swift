@@ -72,15 +72,21 @@ struct EngineMessageRow: View {
     private var toolMessage: some View {
         HStack(spacing: 6) {
             toolStatusIcon
-            Text(message.toolName ?? "tool")
+            Text(chipLabel)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(IonTheme.accent)
             Spacer()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color(.secondarySystemBackground))
+        .background(IonTheme.accent.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var chipLabel: String {
+        if let name = message.agentName, !name.isEmpty { return name }
+        if message.toolName == "Agent" { return "Dispatching\u{2026}" }
+        return message.toolName ?? "tool"
     }
 
     @ViewBuilder
