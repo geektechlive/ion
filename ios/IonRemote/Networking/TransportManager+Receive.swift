@@ -116,7 +116,9 @@ extension TransportManager {
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let briefingId = json["briefingId"] as? String,
            let briefingText = json["briefingText"] as? String {
-            let title = (json["title"] as? String) ?? "Briefing"
+            let rawTitle = (json["title"] as? String) ?? "Briefing"
+            let jarvisPrefix = "Jarvis \u{2014} "
+            let title = rawTitle.hasPrefix(jarvisPrefix) ? String(rawTitle.dropFirst(jarvisPrefix.count)) : rawTitle
             DispatchQueue.main.async { [weak self] in
                 self?.onBriefing?(briefingId, title, briefingText)
             }

@@ -161,7 +161,7 @@ struct ContentView: View {
         Group {
             if viewModel.pairedDevices.isEmpty || viewModel.connectionState == .authFailed {
                 PairingView()
-            } else if viewModel.connectionState == .disconnected || viewModel.connectionState == .connecting || viewModel.connectionState == .reconnecting {
+            } else if viewModel.connectionState == .disconnected || viewModel.connectionState == .connecting {
                 disconnectedView
             } else {
                 TabListView()

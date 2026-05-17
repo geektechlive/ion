@@ -12,6 +12,7 @@ struct Message: Codable, Identifiable, Sendable {
     var attachments: [MessageAttachment]?
     let timestamp: Double
     var source: MessageSource?
+    var agentName: String? = nil
 
     var isUser: Bool { role == .user }
     var isAssistant: Bool { role == .assistant }

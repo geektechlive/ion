@@ -287,18 +287,27 @@ struct MessageBubble: View {
     }
 
     private func toolDisplayName(_ message: Message) -> String {
-        guard message.toolName == "Agent",
-              let inputStr = message.toolInput,
-              let data = inputStr.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let subagentType = json["subagent_type"] as? String,
-              !subagentType.isEmpty else {
-            return message.toolName ?? "Tool"
+        // 1. Best: agentName stamped by engineAgentState handler
+        if let name = message.agentName, !name.isEmpty {
+            return name
         }
-        return subagentType
-            .split(whereSeparator: { $0 == "-" || $0 == "_" })
-            .map { $0.capitalized }
-            .joined(separator: " ")
+        // 2. Good: subagent_type in tool input JSON (available once input is captured)
+        if message.toolName == "Agent",
+           let inputStr = message.toolInput,
+           let data = inputStr.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let subagentType = json["subagent_type"] as? String,
+           !subagentType.isEmpty {
+            return subagentType
+                .split(whereSeparator: { $0 == "-" || $0 == "_" })
+                .map { $0.capitalized }
+                .joined(separator: " ")
+        }
+        // 3. Never show "Agent" — use placeholder until name resolves
+        if message.toolName == "Agent" {
+            return "Dispatching\u{2026}"
+        }
+        return message.toolName ?? "Tool"
     }
 
     private var toolBubble: some View {

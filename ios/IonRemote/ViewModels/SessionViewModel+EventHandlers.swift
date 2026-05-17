@@ -198,6 +198,22 @@ extension SessionViewModel {
                 if updated { engineMessages[key] = msgs }
             }
 
+            // Also stamp Message objects that MessageBubble reads. These are
+            // indexed by plain tabId (no instanceId), so we check independently
+            // of whether engineMessages has a matching key.
+            if let newNonChief = agents.first(where: { $0.status == "running" && $0.type != "chief" }),
+               var msgArr = messages[tabId] {
+                var msgUpdated = false
+                for i in msgArr.indices.reversed() {
+                    guard msgArr[i].role == .tool else { break }
+                    if msgArr[i].toolStatus == .running && msgArr[i].agentName != newNonChief.displayName {
+                        msgArr[i].agentName = newNonChief.displayName
+                        msgUpdated = true
+                    }
+                }
+                if msgUpdated { messages[tabId] = msgArr }
+            }
+
         case .engineStatus(let tabId, let instanceId, let fields):
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
             engineStatusFields[key] = fields
