@@ -58,7 +58,11 @@ export function wireRemoteSessionPlaneForwarding(): void {
     if (remoteEvent) {
       const needsPush = event.type === 'permission_request'
       if (needsPush) {
-        const pushTitle = 'Ion needs your attention'
+        const pushTitle = event.toolName === 'AskUserQuestion'
+          ? 'Jarvis — Question'
+          : event.toolName === 'ExitPlanMode'
+            ? 'Jarvis — Plan Ready'
+            : 'Jarvis — Approval'
         const pushBody = event.toolName === 'AskUserQuestion'
           ? 'Question waiting for your answer'
           : event.toolName === 'ExitPlanMode'

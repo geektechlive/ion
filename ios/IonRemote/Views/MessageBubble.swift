@@ -286,6 +286,21 @@ struct MessageBubble: View {
         }
     }
 
+    private func toolDisplayName(_ message: Message) -> String {
+        guard message.toolName == "Agent",
+              let inputStr = message.toolInput,
+              let data = inputStr.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let subagentType = json["subagent_type"] as? String,
+              !subagentType.isEmpty else {
+            return message.toolName ?? "Tool"
+        }
+        return subagentType
+            .split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.capitalized }
+            .joined(separator: " ")
+    }
+
     private var toolBubble: some View {
         HStack(spacing: 0) {
             RoundedRectangle(cornerRadius: 1)
@@ -301,7 +316,7 @@ struct MessageBubble: View {
                     HStack(spacing: 8) {
                         toolStatusIcon
 
-                        Text(message.toolName ?? "Tool")
+                        Text(toolDisplayName(message))
                             .font(.subheadline.monospaced())
                             .foregroundStyle(.primary)
 
