@@ -1,7 +1,7 @@
 import React from 'react'
 import {
   CaretDown, CaretRight, Plus, Minus, ArrowCounterClockwise,
-  Folder, FolderOpen,
+  Folder, FolderOpen, Warning, ArrowRight,
 } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { useCmdHeld, useNavigableText } from '../hooks/useNavigableLinks'
@@ -33,6 +33,8 @@ export function FileRow({
   const cmdHeld = useCmdHeld()
   const { onOpenFile } = useNavigableText()
   const fileName = file.path.split('/').pop() || file.path
+  const oldName = file.oldPath?.split('/').pop()
+  const isConflict = file.status === 'conflict'
 
   return (
     <div
@@ -51,24 +53,37 @@ export function FileRow({
         }
         onClick(file)
       }}
+      title={isConflict ? `Conflict: ${file.conflictKind ?? ''}` : file.path}
     >
+      {isConflict ? (
+        <Warning size={11} weight="fill" color={STATUS_COLORS.conflict} style={{ width: 14, flexShrink: 0 }} />
+      ) : (
+        <span
+          className="text-[10px] font-mono flex-shrink-0"
+          style={{ color: STATUS_COLORS[file.status] || colors.textTertiary, width: 14, display: 'inline-block', textAlign: 'center' }}
+        >
+          {STATUS_LETTERS[file.status] || '?'}
+        </span>
+      )}
       <span
-        className="text-[10px] font-mono flex-shrink-0"
-        style={{ color: STATUS_COLORS[file.status] || colors.textTertiary, width: 14, display: 'inline-block', textAlign: 'center' }}
-      >
-        {STATUS_LETTERS[file.status] || '?'}
-      </span>
-      <span
-        className="text-[10px] truncate flex-1"
+        className="text-[10px] truncate flex-1 flex items-center gap-1"
         style={{
           color: cmdHeld ? colors.accent : colors.textSecondary,
           textDecoration: cmdHeld ? 'underline' : undefined,
           textUnderlineOffset: 2,
           marginLeft: 6,
         }}
-        title={file.path}
       >
-        {fileName}
+        {oldName && (
+          <>
+            <span style={{ color: colors.textMuted, textDecoration: 'line-through' }}>{oldName}</span>
+            <ArrowRight size={9} color={colors.textMuted} />
+          </>
+        )}
+        <span className="truncate">{fileName}</span>
+        {isConflict && file.conflictKind && (
+          <span className="text-[8px] font-mono" style={{ color: STATUS_COLORS.conflict, marginLeft: 2 }}>{file.conflictKind}</span>
+        )}
       </span>
       {/* Hover actions */}
       <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">

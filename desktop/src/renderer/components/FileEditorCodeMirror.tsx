@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } from '@codemirror/view'
 import { EditorState, Extension } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
@@ -9,6 +9,7 @@ import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { useSessionStore, FileEditorTab } from '../stores/sessionStore'
 import { getLanguageExtension } from './FileEditorShared'
+import { blameExtension, dispatchBlame, clearBlame } from './git/blameGutter'
 
 interface FileEditorCodeMirrorProps {
   dir: string
@@ -32,6 +33,23 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
   // Keep save handler ref current for CodeMirror keybinding
   const saveHandlerRef = useRef(onSave)
   saveHandlerRef.current = onSave
+
+  const [blameActive, setBlameActive] = useState(false)
+
+  // Toggle blame
+  const handleToggleBlame = useCallback(async () => {
+    if (!viewRef.current) return
+    if (blameActive) {
+      clearBlame(viewRef.current)
+      setBlameActive(false)
+    } else {
+      const result = await window.ion.gitBlame(dir, activeFile.filePath || activeFile.fileName)
+      if (result.ok && result.lines.length > 0 && viewRef.current) {
+        dispatchBlame(viewRef.current, result.lines)
+        setBlameActive(true)
+      }
+    }
+  }, [blameActive, dir, activeFile])
 
   // ---- CodeMirror theme ----
   const ionTheme = useMemo(() => EditorView.theme({
@@ -102,6 +120,8 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
       exts.push(EditorState.readOnly.of(true))
       exts.push(EditorView.editable.of(false))
     }
+
+    exts.push(blameExtension())
 
     // Update content on change (non-readOnly)
     if (!file.isReadOnly) {
@@ -205,6 +225,26 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
           READ-ONLY
         </div>
       )}
+      <button
+        onClick={handleToggleBlame}
+        style={{
+          position: 'absolute',
+          top: 6,
+          right: activeFile.isReadOnly ? 80 : 12,
+          fontSize: 9,
+          fontFamily: 'monospace',
+          color: blameActive ? colors.accent : colors.textTertiary,
+          background: colors.surfacePrimary,
+          padding: '1px 6px',
+          borderRadius: 3,
+          cursor: 'pointer',
+          border: 'none',
+          opacity: 0.8,
+        }}
+        title={blameActive ? 'Hide blame' : 'Show blame'}
+      >
+        BLAME
+      </button>
     </div>
   )
 }

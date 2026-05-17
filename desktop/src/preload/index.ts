@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
-import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, FileAttachment, SessionMeta, SessionLoadMessage, GitGraphData, GitChangesData, GitBranchInfo, GitCommitDetail, PersistedTabState, FsEntry, WorktreeInfo, WorktreeStatus, EngineConfig, EngineEvent, RemoteTransportState, DiscoveredCommand, ImageAttachmentPayload } from '../shared/types'
+import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, FileAttachment, SessionMeta, SessionLoadMessage, GitGraphData, GitChangesData, GitBranchInfo, GitCommitDetail, PersistedTabState, FsEntry, WorktreeInfo, WorktreeStatus, EngineConfig, EngineEvent, RemoteTransportState, DiscoveredCommand, ImageAttachmentPayload, GitEvent, RepoSnapshot } from '../shared/types'
 
 export interface IonAPI {
   // ─── Request-response (renderer → main) ───
@@ -64,9 +64,9 @@ export interface IonAPI {
 
   // ─── Git operations ───
   gitIsRepo(directory: string): Promise<{ isRepo: boolean }>
-  gitGraph(directory: string, skip?: number, limit?: number): Promise<GitGraphData>
+  gitGraph(directory: string, skip?: number, limit?: number, search?: string, author?: string, extra?: { path?: string; refKind?: string; dateAfter?: string; dateBefore?: string }): Promise<GitGraphData>
   gitChanges(directory: string): Promise<GitChangesData>
-  gitCommit(directory: string, message: string): Promise<{ ok: boolean; error?: string }>
+  gitCommit(directory: string, message: string, opts?: { amend?: boolean; signoff?: boolean; gpg?: boolean } | boolean): Promise<{ ok: boolean; error?: string }>
   gitFetch(directory: string): Promise<{ ok: boolean; error?: string }>
   gitPull(directory: string): Promise<{ ok: boolean; error?: string }>
   gitPush(directory: string): Promise<{ ok: boolean; error?: string }>
@@ -82,6 +82,30 @@ export interface IonAPI {
   gitCommitFiles(directory: string, hash: string): Promise<{ files: Array<{ path: string; status: string; oldPath?: string }> }>
   gitCommitFileDiff(directory: string, hash: string, path: string): Promise<{ diff: string; fileName: string }>
   gitIgnoredFiles(directory: string): Promise<{ paths: string[] }>
+  gitStashList(directory: string): Promise<{ stashes: Array<{ ref: string; message: string; date: string; parentSha?: string }> }>
+  gitStashSave(directory: string, message?: string): Promise<{ ok: boolean; error?: string }>
+  gitStashPop(directory: string, ref?: string): Promise<{ ok: boolean; error?: string }>
+  gitStashDrop(directory: string, ref: string): Promise<{ ok: boolean; error?: string }>
+  gitCherryPick(directory: string, hash: string): Promise<{ ok: boolean; error?: string }>
+  gitRevert(directory: string, hash: string): Promise<{ ok: boolean; error?: string }>
+  gitReset(directory: string, hash: string, mode: 'soft' | 'mixed' | 'hard'): Promise<{ ok: boolean; error?: string }>
+  gitBlame(directory: string, path: string): Promise<{ lines: Array<{ hash: string; author: string; date: string; lineNo: number; content: string }>; ok: boolean; error?: string }>
+  gitConflicts(directory: string): Promise<{ files: string[]; ok: boolean; error?: string }>
+  gitConflictFile(directory: string, path: string): Promise<{ content: string; ok: boolean; error?: string }>
+  gitResolveConflict(directory: string, path: string, content: string): Promise<{ ok: boolean; error?: string }>
+  gitRebaseTodo(directory: string, onto: string): Promise<{ commits: Array<{ hash: string; subject: string; action: string }>; ok: boolean; error?: string }>
+  gitRebaseExec(directory: string, onto: string, commits: Array<{ hash: string; action: string }>): Promise<{ ok: boolean; error?: string }>
+  gitRebaseAbort(directory: string): Promise<{ ok: boolean; error?: string }>
+  gitRebaseContinue(directory: string): Promise<{ ok: boolean; error?: string }>
+  gitSubscribe(directory: string): Promise<{ snapshot: RepoSnapshot | null }>
+  gitUnsubscribe(directory: string): Promise<{ ok: boolean }>
+  gitRefresh(directory: string): Promise<{ ok: boolean }>
+  gitApplyPatch(directory: string, patch: string, opts?: { reverse?: boolean; cached?: boolean }): Promise<{ ok: boolean; error?: string }>
+  gitTagCreate(directory: string, name: string, ref?: string, message?: string): Promise<{ ok: boolean; error?: string }>
+  gitShowFile(directory: string, hash: string, path: string): Promise<{ ok: boolean; content: string; error?: string }>
+  gitCommitSignature(directory: string, hash: string): Promise<{ ok: boolean; status?: string; signer?: string; key?: string; error?: string }>
+  gitRecentRefs(directory: string, limit?: number): Promise<{ ok: boolean; refs: string[]; error?: string }>
+  onGitEvent(callback: (event: GitEvent) => void): () => void
 
   // ─── Git worktree operations ───
   gitWorktreeAdd(repoPath: string, sourceBranch: string): Promise<{ ok: boolean; worktree?: WorktreeInfo; error?: string }>
@@ -229,9 +253,14 @@ const api: IonAPI = {
 
   // ─── Git operations ───
   gitIsRepo: (directory) => ipcRenderer.invoke(IPC.GIT_IS_REPO, directory),
-  gitGraph: (directory, skip, limit) => ipcRenderer.invoke(IPC.GIT_GRAPH, { directory, skip, limit }),
+  gitGraph: (directory, skip, limit, search, author, extra) => ipcRenderer.invoke(IPC.GIT_GRAPH, { directory, skip, limit, search, author, ...(extra ?? {}) }),
   gitChanges: (directory) => ipcRenderer.invoke(IPC.GIT_CHANGES, { directory }),
-  gitCommit: (directory, message) => ipcRenderer.invoke(IPC.GIT_COMMIT, { directory, message }),
+  gitCommit: (directory, message, opts) => {
+    const args = typeof opts === 'boolean'
+      ? { directory, message, amend: opts }
+      : { directory, message, amend: opts?.amend, signoff: opts?.signoff, gpg: opts?.gpg }
+    return ipcRenderer.invoke(IPC.GIT_COMMIT, args)
+  },
   gitFetch: (directory) => ipcRenderer.invoke(IPC.GIT_FETCH, { directory }),
   gitPull: (directory) => ipcRenderer.invoke(IPC.GIT_PULL, { directory }),
   gitPush: (directory) => ipcRenderer.invoke(IPC.GIT_PUSH, { directory }),
@@ -247,6 +276,34 @@ const api: IonAPI = {
   gitCommitFiles: (directory, hash) => ipcRenderer.invoke(IPC.GIT_COMMIT_FILES, { directory, hash }),
   gitCommitFileDiff: (directory, hash, path) => ipcRenderer.invoke(IPC.GIT_COMMIT_FILE_DIFF, { directory, hash, path }),
   gitIgnoredFiles: (directory) => ipcRenderer.invoke(IPC.GIT_IGNORED_FILES, directory),
+  gitStashList: (directory: string) => ipcRenderer.invoke(IPC.GIT_STASH_LIST, { directory }),
+  gitStashSave: (directory: string, message?: string) => ipcRenderer.invoke(IPC.GIT_STASH_SAVE, { directory, message }),
+  gitStashPop: (directory: string, ref?: string) => ipcRenderer.invoke(IPC.GIT_STASH_POP, { directory, ref }),
+  gitStashDrop: (directory: string, ref: string) => ipcRenderer.invoke(IPC.GIT_STASH_DROP, { directory, ref }),
+  gitCherryPick: (directory: string, hash: string) => ipcRenderer.invoke(IPC.GIT_CHERRY_PICK, { directory, hash }),
+  gitRevert: (directory: string, hash: string) => ipcRenderer.invoke(IPC.GIT_REVERT, { directory, hash }),
+  gitReset: (directory: string, hash: string, mode: 'soft' | 'mixed' | 'hard') => ipcRenderer.invoke(IPC.GIT_RESET, { directory, hash, mode }),
+  gitBlame: (directory: string, path: string) => ipcRenderer.invoke(IPC.GIT_BLAME, { directory, path }),
+  gitConflicts: (directory: string) => ipcRenderer.invoke(IPC.GIT_CONFLICTS, { directory }),
+  gitConflictFile: (directory: string, path: string) => ipcRenderer.invoke(IPC.GIT_CONFLICT_FILE, { directory, path }),
+  gitResolveConflict: (directory: string, path: string, content: string) => ipcRenderer.invoke(IPC.GIT_RESOLVE_CONFLICT, { directory, path, content }),
+  gitRebaseTodo: (directory: string, onto: string) => ipcRenderer.invoke(IPC.GIT_REBASE_TODO, { directory, onto }),
+  gitRebaseExec: (directory: string, onto: string, commits: Array<{ hash: string; action: string }>) => ipcRenderer.invoke(IPC.GIT_REBASE_EXEC, { directory, onto, commits }),
+  gitRebaseAbort: (directory: string) => ipcRenderer.invoke(IPC.GIT_REBASE_ABORT, { directory }),
+  gitRebaseContinue: (directory: string) => ipcRenderer.invoke(IPC.GIT_REBASE_CONTINUE, { directory }),
+  gitSubscribe: (directory) => ipcRenderer.invoke(IPC.GIT_SUBSCRIBE, { directory }),
+  gitUnsubscribe: (directory) => ipcRenderer.invoke(IPC.GIT_UNSUBSCRIBE, { directory }),
+  gitRefresh: (directory) => ipcRenderer.invoke(IPC.GIT_REFRESH, { directory }),
+  gitApplyPatch: (directory, patch, opts) => ipcRenderer.invoke(IPC.GIT_APPLY_PATCH, { directory, patch, reverse: opts?.reverse, cached: opts?.cached }),
+  gitTagCreate: (directory, name, ref, message) => ipcRenderer.invoke(IPC.GIT_TAG_CREATE, { directory, name, ref, message }),
+  gitShowFile: (directory, hash, path) => ipcRenderer.invoke(IPC.GIT_SHOW_FILE, { directory, hash, path }),
+  gitCommitSignature: (directory, hash) => ipcRenderer.invoke(IPC.GIT_COMMIT_SIGNATURE, { directory, hash }),
+  gitRecentRefs: (directory, limit) => ipcRenderer.invoke(IPC.GIT_RECENT_REFS, { directory, limit }),
+  onGitEvent: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, event: GitEvent) => callback(event)
+    ipcRenderer.on(IPC.GIT_EVENT, handler)
+    return () => ipcRenderer.removeListener(IPC.GIT_EVENT, handler)
+  },
 
   // ─── Git worktree operations ───
   gitWorktreeAdd: (repoPath, sourceBranch) => ipcRenderer.invoke(IPC.GIT_WORKTREE_ADD, { repoPath, sourceBranch }),

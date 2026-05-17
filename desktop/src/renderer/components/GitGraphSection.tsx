@@ -9,14 +9,19 @@ import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { computeGraphLayout } from '../utils/gitGraphLayout'
-import { DiffViewer } from './DiffViewer'
-import { useGitPollingStore } from '../hooks/useGitPolling'
+import { FloatingPanel } from './FloatingPanel'
+import { DiffPane } from './git/DiffPane'
+import { useRepoBranch } from '../stores/git'
 import type { GitCommit, GitCommitDetail, GitCommitFile } from '../../shared/types'
 import { BranchPicker } from './GitBranchPicker'
 import { GraphRow, CommitFileList } from './GitGraphRow'
 import { CommitPopup } from './GitCommitPopup'
 import { CommitContextMenu } from './GitCommitContextMenu'
 import { FinishWorkContextMenu } from './GitFinishWorkMenu'
+import { CommitDetailsPane } from './git/CommitDetailsPane'
+import { VirtualCommitList } from './git/VirtualCommitList'
+import { GraphFilterBar, EMPTY_FILTERS, type GraphFilters } from './git/GraphFilterBar'
+import { RebaseEditor, type RebaseCommit } from './git/RebaseEditor'
 
 // ─── Graph Section ───
 
@@ -37,13 +42,15 @@ export function GitGraphSection({
   const [commits, setCommits] = useState<GitCommit[]>([])
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(false)
-  const branch = useGitPollingStore((s) => s.branch)
+  const branch = useRepoBranch(directory)
   const [fetchingAction, setFetchingAction] = useState<string | null>(null)
   const [pushConfirm, setPushConfirm] = useState(false)
   const [rebaseError, setRebaseError] = useState<string | null>(null)
   const [finishMenuAnchor, setFinishMenuAnchor] = useState<{ x: number; y: number } | null>(null)
   const strategy = usePreferencesStore((s) => s.worktreeCompletionStrategy)
   const activeTabId = useSessionStore((s) => s.activeTabId)
+  const [graphFilters, setGraphFilters] = useState<GraphFilters>(EMPTY_FILTERS)
+  const [rebaseTarget, setRebaseTarget] = useState<{ onto: string; commits: RebaseCommit[] } | null>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -54,7 +61,17 @@ export function GitGraphSection({
     setLoading(true)
     try {
       const skip = append ? commitsRef.current.length : 0
-      const result = await window.ion.gitGraph(directory, skip, 100)
+      const result = await window.ion.gitGraph(
+        directory, skip, 100,
+        graphFilters.search || undefined,
+        graphFilters.author || undefined,
+        {
+          path: graphFilters.path || undefined,
+          refKind: graphFilters.refKind && graphFilters.refKind !== 'all' ? graphFilters.refKind : undefined,
+          dateAfter: graphFilters.dateAfter || undefined,
+          dateBefore: graphFilters.dateBefore || undefined,
+        },
+      )
       if (result.isGitRepo) {
         const newCommits = append ? [...commitsRef.current, ...result.commits] : result.commits
         setCommits(newCommits)
@@ -62,12 +79,15 @@ export function GitGraphSection({
       }
     } catch {}
     setLoading(false)
-  }, [directory])
+  }, [directory, graphFilters])
 
   useEffect(() => {
-    // Reset commits when directory changes, then load fresh
+    // Reset commits when directory or filters change, then load fresh
     setCommits([])
     setTotalCount(0)
+    setExpandedHash(null)
+    setCommitFiles([])
+    setCommitFileDiff(null)
     loadGraph()
   }, [directory, loadGraph])
 
@@ -93,7 +113,29 @@ export function GitGraphSection({
     return () => observer.disconnect()
   }, [commits.length, totalCount, loading, loadGraph])
 
-  const graphNodes = useMemo(() => computeGraphLayout(commits), [commits])
+  const [stashes, setStashes] = useState<Array<{ ref: string; message: string; parentSha?: string }>>([])
+  useEffect(() => {
+    window.ion.gitStashList(directory).then((r) => setStashes(r.stashes)).catch(() => setStashes([]))
+  }, [directory, refreshKey])
+
+  const decoratedCommits = useMemo(() => {
+    if (stashes.length === 0) return commits
+    const byParent = new Map<string, typeof stashes>()
+    for (const s of stashes) {
+      if (!s.parentSha) continue
+      const arr = byParent.get(s.parentSha) ?? []
+      arr.push(s)
+      byParent.set(s.parentSha, arr)
+    }
+    return commits.map((c) => {
+      const matched = byParent.get(c.fullHash)
+      if (!matched) return c
+      const stashRefs = matched.map((s) => ({ name: s.ref, type: 'tag' as const, isCurrent: false }))
+      return { ...c, refs: [...c.refs, ...stashRefs] }
+    })
+  }, [commits, stashes])
+
+  const graphNodes = useMemo(() => computeGraphLayout(decoratedCommits), [decoratedCommits])
 
 
   // ─── Commit hover popup ───
@@ -162,11 +204,17 @@ export function GitGraphSection({
     // Expand
     setExpandedHash(commit.hash)
     setCommitFileDiff(null)
+    setCommitDetail(null)
     try {
-      const result = await window.ion.gitCommitFiles(directory, commit.hash)
-      setCommitFiles(result.files as GitCommitFile[])
+      const [filesResult, detailResult] = await Promise.all([
+        window.ion.gitCommitFiles(directory, commit.hash),
+        window.ion.gitCommitDetail(directory, commit.hash),
+      ])
+      setCommitFiles(filesResult.files as GitCommitFile[])
+      setCommitDetail(detailResult)
     } catch {
       setCommitFiles([])
+      setCommitDetail(null)
     }
   }, [expandedHash, directory])
 
@@ -179,6 +227,20 @@ export function GitGraphSection({
       setCommitFileDiff(null)
     }
   }, [expandedHash, directory])
+
+  const handleRebase = useCallback(async (commit: GitCommit) => {
+    const result = await window.ion.gitRebaseTodo(directory, commit.fullHash)
+    if (result.ok && result.commits.length > 0) {
+      setRebaseTarget({
+        onto: commit.fullHash,
+        commits: result.commits.map(c => ({
+          hash: c.hash,
+          subject: c.subject,
+          action: c.action as RebaseCommit['action'],
+        })),
+      })
+    }
+  }, [directory])
 
   // Clean up timer on unmount
   useEffect(() => () => {
@@ -321,6 +383,8 @@ export function GitGraphSection({
         </div>
       </div>
 
+      <GraphFilterBar filters={graphFilters} onFilterChange={setGraphFilters} />
+
       {/* Rebase error */}
       {rebaseError && (
         <div
@@ -340,26 +404,18 @@ export function GitGraphSection({
 
       {/* Commit list */}
       <div ref={scrollRef} className="flex-1 overflow-auto" style={{ minHeight: 0 }}>
-        {graphNodes.map((node) => (
-          <React.Fragment key={node.commit.hash}>
-            <GraphRow
-              node={node}
-              onHover={handleRowHover}
-              onLeave={handleRowLeave}
-              onContextMenu={handleContextMenu}
-              onClick={() => handleCommitClick(node.commit)}
-              isExpanded={expandedHash === node.commit.hash}
-            />
-            {expandedHash === node.commit.hash && commitFiles.length > 0 && (
-              <CommitFileList
-                files={commitFiles}
-                directory={directory}
-                hash={expandedHash}
-                onFileClick={handleCommitFileClick}
-              />
-            )}
-          </React.Fragment>
-        ))}
+        <VirtualCommitList
+          graphNodes={graphNodes}
+          expandedHash={expandedHash}
+          commitDetail={commitDetail}
+          commitFiles={commitFiles}
+          scrollRef={scrollRef}
+          onHover={handleRowHover}
+          onLeave={handleRowLeave}
+          onContextMenu={handleContextMenu}
+          onClick={handleCommitClick}
+          onFileClick={handleCommitFileClick}
+        />
         {commits.length < totalCount && (
           <div ref={sentinelRef} className="py-2 text-center text-[10px]" style={{ color: colors.textTertiary }}>
             {loading ? 'Loading...' : ''}
@@ -380,7 +436,7 @@ export function GitGraphSection({
 
       {/* Commit context menu */}
       {popoverLayer && contextMenu && createPortal(
-        <CommitContextMenu anchor={contextMenu} commit={contextMenu.commit} onClose={() => setContextMenu(null)} />,
+        <CommitContextMenu anchor={contextMenu} commit={contextMenu.commit} directory={directory} onRefresh={() => loadGraph()} onClose={() => setContextMenu(null)} onRebase={handleRebase} />,
         popoverLayer,
       )}
 
@@ -396,13 +452,34 @@ export function GitGraphSection({
       {/* Commit file diff viewer */}
       <AnimatePresence>
         {commitFileDiff && (
-          <DiffViewer
-            diff={commitFileDiff.diff}
-            fileName={commitFileDiff.fileName}
-            onClose={() => setCommitFileDiff(null)}
-          />
+          <FloatingPanel title={commitFileDiff.fileName} onClose={() => setCommitFileDiff(null)}>
+            <DiffPane
+              diff={commitFileDiff.diff}
+              fileName={commitFileDiff.fileName}
+              filePath={commitFileDiff.fileName}
+              staged={false}
+              directory={directory}
+              onClose={() => setCommitFileDiff(null)}
+              onRefresh={() => {}}
+            />
+          </FloatingPanel>
         )}
       </AnimatePresence>
+
+      {/* Rebase editor */}
+      {rebaseTarget && (
+        <RebaseEditor
+          directory={directory}
+          onto={rebaseTarget.onto}
+          initialCommits={rebaseTarget.commits}
+          onClose={() => setRebaseTarget(null)}
+          onComplete={() => {
+            setRebaseTarget(null)
+            loadGraph()
+            onRefresh()
+          }}
+        />
+      )}
     </>
   )
 }

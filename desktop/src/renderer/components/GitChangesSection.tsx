@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { AnimatePresence } from 'framer-motion'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Plus, Minus } from '@phosphor-icons/react'
 import { useColors } from '../theme'
-import { DiffViewer } from './DiffViewer'
+import { FloatingPanel } from './FloatingPanel'
+import { DiffPane } from './git/DiffPane'
 import type { GitChangedFile } from '../../shared/types'
 import { buildFileTree, type FileTreeNode } from './GitPanelTypes'
-import { FileRow, FileTreeRow } from './GitFileRow'
+import { useRepoGroups } from '../stores/git'
+import { ConflictResolver } from './git/ConflictResolver'
+import { SectionBlock } from './git/SectionBlock'
 
 // ─── Changes Section ───
 
@@ -13,15 +15,11 @@ export function GitChangesSection({
   directory,
   files,
   onRefresh,
-  commitMsg: _commitMsg,
-  setCommitMsg: _setCommitMsg,
   treeView,
 }: {
   directory: string
   files: GitChangedFile[]
   onRefresh: () => void
-  commitMsg: string
-  setCommitMsg: (msg: string) => void
   treeView: boolean
 }) {
   const colors = useColors()
@@ -29,6 +27,48 @@ export function GitChangesSection({
   const [diffData, setDiffData] = useState<{ diff: string; fileName: string } | null>(null)
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+  const [lastClickedPath, setLastClickedPath] = useState<string | null>(null)
+  const [stashes, setStashes] = useState<Array<{ ref: string; message: string; date: string }>>([])
+  const [stashExpanded, setStashExpanded] = useState(false)
+  const [conflicts, setConflicts] = useState<string[]>([])
+  const [showResolver, setShowResolver] = useState(false)
+
+  // Load stashes
+  const loadStashes = useCallback(async () => {
+    try {
+      const result = await window.ion.gitStashList(directory)
+      setStashes(result.stashes)
+    } catch { setStashes([]) }
+  }, [directory])
+
+  useEffect(() => { loadStashes() }, [loadStashes])
+
+  // Detect merge conflicts
+  useEffect(() => {
+    window.ion.gitConflicts(directory).then(r => {
+      if (r.ok) setConflicts(r.files)
+      else setConflicts([])
+    }).catch(() => setConflicts([]))
+  }, [directory, files])
+
+  const handleStashSave = async () => {
+    const result = await window.ion.gitStashSave(directory)
+    if (!result.ok) { setError(result.error || 'Stash failed'); return }
+    onRefresh(); loadStashes()
+  }
+
+  const handleStashPop = async (ref: string) => {
+    const result = await window.ion.gitStashPop(directory, ref)
+    if (!result.ok) { setError(result.error || 'Stash pop failed'); return }
+    onRefresh(); loadStashes()
+  }
+
+  const handleStashDrop = async (ref: string) => {
+    const result = await window.ion.gitStashDrop(directory, ref)
+    if (!result.ok) { setError(result.error || 'Stash drop failed'); return }
+    loadStashes()
+  }
 
   useEffect(() => {
     if (!error) return
@@ -36,8 +76,27 @@ export function GitChangesSection({
     return () => clearTimeout(t)
   }, [error])
 
-  const stagedFiles = files.filter((f) => f.staged)
-  const unstagedFiles = files.filter((f) => !f.staged)
+  const groups = useRepoGroups(directory)
+  const stagedFiles = useMemo(() => groups?.index ?? files.filter((f) => f.staged), [groups, files])
+  const unstagedFiles = useMemo(() => groups?.workingTree ?? files.filter((f) => !f.staged && f.status !== 'untracked' && f.status !== 'conflict'), [groups, files])
+  const untrackedFiles = useMemo(() => groups?.untracked ?? files.filter((f) => f.status === 'untracked'), [groups, files])
+  const mergeFiles = useMemo(() => groups?.merge ?? files.filter((f) => f.status === 'conflict'), [groups, files])
+
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    if (typeof localStorage === 'undefined') return { merge: true, staged: true, changes: true, untracked: true }
+    try {
+      return JSON.parse(localStorage.getItem('ion:git-section-open') ?? '') || { merge: true, staged: true, changes: true, untracked: true }
+    } catch {
+      return { merge: true, staged: true, changes: true, untracked: true }
+    }
+  })
+  const toggleSection = useCallback((k: string) => {
+    setOpenSections((prev) => {
+      const next = { ...prev, [k]: !prev[k] }
+      try { localStorage.setItem('ion:git-section-open', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }, [])
 
   // Collect all directory paths from a file tree
   const collectDirPaths = useCallback((nodes: FileTreeNode[]): string[] => {
@@ -124,111 +183,192 @@ export function GitChangesSection({
     setDiffData(data)
   }
 
+  const allFiles = [...stagedFiles, ...unstagedFiles]
+
+  const handleFileSelect = useCallback((file: GitChangedFile, event: React.MouseEvent) => {
+    const key = `${file.staged ? 's' : 'u'}:${file.path}`
+    if (event.metaKey || event.ctrlKey) {
+      // Toggle selection
+      setSelectedPaths(prev => {
+        const next = new Set(prev)
+        next.has(key) ? next.delete(key) : next.add(key)
+        return next
+      })
+    } else if (event.shiftKey && lastClickedPath) {
+      // Range selection
+      const keys = allFiles.map(f => `${f.staged ? 's' : 'u'}:${f.path}`)
+      const startIdx = keys.indexOf(lastClickedPath)
+      const endIdx = keys.indexOf(key)
+      if (startIdx >= 0 && endIdx >= 0) {
+        const [lo, hi] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx]
+        setSelectedPaths(new Set(keys.slice(lo, hi + 1)))
+      }
+    } else {
+      // Single click — open diff
+      handleFileClick(file)
+      setSelectedPaths(new Set([key]))
+    }
+    setLastClickedPath(key)
+  }, [allFiles, lastClickedPath, handleFileClick])
+
+  const [focusIndex, setFocusIndex] = useState(-1)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (allFiles.length === 0) return
+    switch (e.key) {
+      case 'j':
+      case 'ArrowDown':
+        e.preventDefault()
+        setFocusIndex(i => Math.min(i + 1, allFiles.length - 1))
+        break
+      case 'k':
+      case 'ArrowUp':
+        e.preventDefault()
+        setFocusIndex(i => Math.max(i - 1, 0))
+        break
+      case ' ':
+        e.preventDefault()
+        if (focusIndex >= 0 && focusIndex < allFiles.length) {
+          const file = allFiles[focusIndex]
+          if (file.staged) handleUnstage(file.path)
+          else handleStage(file.path)
+        }
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (focusIndex >= 0 && focusIndex < allFiles.length) {
+          handleFileClick(allFiles[focusIndex])
+        }
+        break
+      case 'd':
+        if (focusIndex >= 0 && focusIndex < allFiles.length) {
+          const file = allFiles[focusIndex]
+          if (!file.staged) handleDiscard(file.path)
+        }
+        break
+    }
+  }, [allFiles, focusIndex, handleStage, handleUnstage, handleFileClick, handleDiscard])
+
   return (
     <>
       {/* File list */}
-      <div className="flex-1 overflow-y-auto" style={{ minHeight: 0 }}>
-        {/* Staged changes */}
-        {stagedFiles.length > 0 && (
-          <div>
-            <div
-              className="flex items-center justify-between px-2 py-1"
-              style={{ fontSize: 10, color: colors.textTertiary }}
-            >
-              <span>Staged Changes ({stagedFiles.length})</span>
-              <button
-                onClick={handleUnstageAll}
-                className="text-[9px] px-1.5 py-1 rounded transition-colors"
-                style={{ color: colors.textTertiary }}
-                title="Unstage all"
-              >
-                <Minus size={12} />
-              </button>
-            </div>
-            {treeView
-              ? buildFileTree(stagedFiles).map((node) => (
-                <FileTreeRow
-                  key={node.path}
-                  node={node}
-                  depth={0}
-                  directory={directory}
-                  expandedDirs={expandedDirs}
-                  onToggleDirExpand={toggleDirExpand}
-                  onStage={handleStage}
-                  onUnstage={handleUnstage}
-                  onDiscard={handleDiscard}
-                  onClick={handleFileClick}
-                  selectedFile={diffFile}
-                />
-              ))
-              : stagedFiles.map((file) => (
-                <FileRow
-                  key={`s-${file.path}`}
-                  file={file}
-                  depth={0}
-                  directory={directory}
-                  onStage={handleStage}
-                  onUnstage={handleUnstage}
-                  onDiscard={handleDiscard}
-                  onClick={handleFileClick}
-                  isSelected={diffFile?.path === file.path && diffFile?.staged === file.staged}
-                />
-              ))}
-          </div>
-        )}
+      <div ref={containerRef} className="flex-1 overflow-y-auto" style={{ minHeight: 0 }} tabIndex={0} onKeyDown={handleKeyDown}>
+        <SectionBlock
+          label="Merge"
+          files={mergeFiles}
+          open={openSections.merge}
+          onToggle={() => toggleSection('merge')}
+          accentColor="#c47060"
+          actions={mergeFiles.length > 0 && (
+            <button
+              onClick={() => setShowResolver(true)}
+              className="text-[9px] px-1.5 py-0.5 rounded"
+              style={{ color: colors.accent }}
+            >Resolve</button>
+          )}
+          directory={directory}
+          treeView={treeView}
+          expandedDirs={expandedDirs}
+          onToggleDirExpand={toggleDirExpand}
+          onStage={handleStage}
+          onUnstage={handleUnstage}
+          onDiscard={handleDiscard}
+          onClick={handleFileClick}
+          selectedFile={diffFile}
+        />
 
-        {/* Unstaged changes */}
-        {unstagedFiles.length > 0 && (
-          <div>
-            <div
-              className="flex items-center justify-between px-2 py-1"
-              style={{ fontSize: 10, color: colors.textTertiary }}
-            >
-              <span>Changes ({unstagedFiles.length})</span>
-              <button
-                onClick={handleStageAll}
-                className="text-[9px] px-1.5 py-1 rounded transition-colors"
-                style={{ color: colors.textTertiary }}
-                title="Stage all"
-              >
-                <Plus size={12} />
-              </button>
-            </div>
-            {treeView
-              ? buildFileTree(unstagedFiles).map((node) => (
-                <FileTreeRow
-                  key={node.path}
-                  node={node}
-                  depth={0}
-                  directory={directory}
-                  expandedDirs={expandedDirs}
-                  onToggleDirExpand={toggleDirExpand}
-                  onStage={handleStage}
-                  onUnstage={handleUnstage}
-                  onDiscard={handleDiscard}
-                  onClick={handleFileClick}
-                  selectedFile={diffFile}
-                />
-              ))
-              : unstagedFiles.map((file) => (
-                <FileRow
-                  key={`u-${file.path}`}
-                  file={file}
-                  depth={0}
-                  directory={directory}
-                  onStage={handleStage}
-                  onUnstage={handleUnstage}
-                  onDiscard={handleDiscard}
-                  onClick={handleFileClick}
-                  isSelected={diffFile?.path === file.path && diffFile?.staged === file.staged}
-                />
-              ))}
-          </div>
-        )}
+        <SectionBlock
+          label="Staged Changes"
+          files={stagedFiles}
+          open={openSections.staged}
+          onToggle={() => toggleSection('staged')}
+          actions={(
+            <button onClick={handleUnstageAll} className="text-[9px] px-1.5 py-0.5 rounded" style={{ color: colors.textTertiary }} title="Unstage all">
+              <Minus size={11} />
+            </button>
+          )}
+          directory={directory}
+          treeView={treeView}
+          expandedDirs={expandedDirs}
+          onToggleDirExpand={toggleDirExpand}
+          onStage={handleStage}
+          onUnstage={handleUnstage}
+          onDiscard={handleDiscard}
+          onClick={handleFileClick}
+          selectedFile={diffFile}
+        />
+
+        <SectionBlock
+          label="Changes"
+          files={unstagedFiles}
+          open={openSections.changes}
+          onToggle={() => toggleSection('changes')}
+          actions={(
+            <>
+              <button onClick={handleStashSave} className="text-[9px] px-1 py-0.5 rounded" style={{ color: colors.textTertiary }} title="Stash all">⊡</button>
+              <button onClick={handleStageAll} className="text-[9px] px-1.5 py-0.5 rounded" style={{ color: colors.textTertiary }} title="Stage all"><Plus size={11} /></button>
+            </>
+          )}
+          directory={directory}
+          treeView={treeView}
+          expandedDirs={expandedDirs}
+          onToggleDirExpand={toggleDirExpand}
+          onStage={handleStage}
+          onUnstage={handleUnstage}
+          onDiscard={handleDiscard}
+          onClick={handleFileClick}
+          selectedFile={diffFile}
+        />
+
+        <SectionBlock
+          label="Untracked"
+          files={untrackedFiles}
+          open={openSections.untracked}
+          onToggle={() => toggleSection('untracked')}
+          actions={(
+            <button onClick={async () => { const paths = untrackedFiles.map((f) => f.path); if (paths.length > 0) { const r = await window.ion.gitStage(directory, paths); if (!r.ok) setError(r.error || 'Failed'); else onRefresh() } }} className="text-[9px] px-1.5 py-0.5 rounded" style={{ color: colors.textTertiary }} title="Stage all untracked"><Plus size={11} /></button>
+          )}
+          directory={directory}
+          treeView={treeView}
+          expandedDirs={expandedDirs}
+          onToggleDirExpand={toggleDirExpand}
+          onStage={handleStage}
+          onUnstage={handleUnstage}
+          onDiscard={handleDiscard}
+          onClick={handleFileClick}
+          selectedFile={diffFile}
+        />
 
         {files.length === 0 && (
           <div className="px-3 py-4 text-center text-[10px]" style={{ color: colors.textTertiary }}>
             No changes
+          </div>
+        )}
+
+        {/* Stash section */}
+        {stashes.length > 0 && (
+          <div>
+            <div
+              className="flex items-center justify-between px-2 py-1"
+              style={{ fontSize: 10, color: colors.textTertiary, borderTop: `1px solid ${colors.containerBorder}` }}
+            >
+              <button onClick={() => setStashExpanded(!stashExpanded)} className="flex items-center gap-1">
+                <span style={{ fontSize: 8, display: 'inline-block', transform: stashExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                Stashes ({stashes.length})
+              </button>
+              <button onClick={handleStashSave} className="text-[9px] px-1.5 py-0.5 rounded" style={{ color: colors.textTertiary }} title="Stash changes">
+                + Stash
+              </button>
+            </div>
+            {stashExpanded && stashes.map((s) => (
+              <div key={s.ref} className="flex items-center px-2 group" style={{ height: 22 }}>
+                <span className="text-[9px] font-mono flex-shrink-0" style={{ color: colors.textMuted, width: 50 }}>{s.ref}</span>
+                <span className="text-[10px] flex-1 truncate" style={{ color: colors.textSecondary }}>{s.message}</span>
+                <button onClick={() => handleStashPop(s.ref)} className="text-[9px] px-1 opacity-0 group-hover:opacity-100" style={{ color: colors.accent }} title="Pop stash">Pop</button>
+                <button onClick={() => handleStashDrop(s.ref)} className="text-[9px] px-1 opacity-0 group-hover:opacity-100" style={{ color: '#c47060' }} title="Drop stash">Drop</button>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -278,16 +418,30 @@ export function GitChangesSection({
         </div>
       )}
 
-      {/* Diff viewer overlay */}
-      <AnimatePresence>
-        {diffFile && diffData && (
-          <DiffViewer
+      {/* Diff popup */}
+      {diffFile && diffData && (
+        <FloatingPanel title={diffData.fileName} onClose={() => { setDiffFile(null); setDiffData(null) }}>
+          <DiffPane
             diff={diffData.diff}
             fileName={diffData.fileName}
+            filePath={diffFile.path}
+            staged={diffFile.staged}
+            directory={directory}
             onClose={() => { setDiffFile(null); setDiffData(null) }}
+            onRefresh={onRefresh}
           />
-        )}
-      </AnimatePresence>
+        </FloatingPanel>
+      )}
+
+      {/* Conflict resolver */}
+      {showResolver && conflicts.length > 0 && (
+        <ConflictResolver
+          directory={directory}
+          files={conflicts}
+          onClose={() => setShowResolver(false)}
+          onResolved={() => { setShowResolver(false); setConflicts([]); onRefresh() }}
+        />
+      )}
     </>
   )
 }

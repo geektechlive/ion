@@ -1,38 +1,70 @@
 /**
- * GitRepository — manages state, caching, and operation queue for a single git repo.
+ * GitRepository — owns watcher, operation queue, caches, and the live snapshot
+ * for a single git repository.
  *
- * Owns:
- * - An OperationQueue for serialized mutations and concurrent reads.
- * - LRU caches for commit details, commit files, diffs, and branches.
- * - A revision counter that bumps on every mutation for change detection.
+ * On retain → watcher starts and the snapshot is hydrated; mutations bump
+ * `revision` and emit deltas (`status:changed`, `head:changed`, `refs:changed`,
+ * `upstream:changed`, `merge:changed`) that subscribers forward to renderers.
+ *
+ * Caches: commitDetail / commitFiles / commitFileDiff are content-addressed
+ * (never invalidated); diff / branch / graph are volatile and cleared on
+ * relevant watch events.
  */
 
 import { EventEmitter } from 'events'
 import { OperationQueue } from './operationQueue'
 import { LruCache } from './cache'
+import { createGitWatcher } from './watcher'
+import type { GitWatcher, GitWatchEvent } from './watcher'
+import { focusState } from './focus-state'
 import { runGit } from '../git-runner'
-import { parseGitStatus } from './diffs'
-import type { StatusEntry } from './diffs'
+import { partitionStatus } from './diffs'
+import type { StatusEntry, PartitionedStatus } from './diffs'
 import { parseGitLog, parseCommitStats, parseCommitFiles, parseBranches, LOG_FORMAT } from './refs'
 import type { GitCommitRaw, CommitFileEntry, BranchEntry } from './refs'
+import type {
+  GitEvent, HeadInfo, UpstreamInfo, MergeState, RefDelta, RepoSnapshot,
+} from '../../shared/types-git-events'
+import type { GitChangedFile } from '../../shared/types-session'
 import { log as _log } from '../logger'
 
-function log(msg: string): void {
-  _log('main', msg)
+function log(msg: string): void { _log('main', msg) }
+
+function keyOf(f: GitChangedFile): string {
+  return `${f.staged ? 's' : 'u'}:${f.status}:${f.conflictKind ?? ''}:${f.path}`
 }
 
-export interface RepoSnapshot {
-  head: { branch: string | null; sha: string | null }
-  upstream: { ahead: number; behind: number }
-  files: StatusEntry[]
-  revision: number
+function diffFiles(prev: GitChangedFile[], next: GitChangedFile[]): {
+  added: GitChangedFile[]; removed: string[]; modified: GitChangedFile[]
+} {
+  const prevByPath = new Map(prev.map((f) => [keyOf(f), f]))
+  const nextByPath = new Map(next.map((f) => [keyOf(f), f]))
+  const added: GitChangedFile[] = []
+  const modified: GitChangedFile[] = []
+  for (const [k, f] of nextByPath) {
+    if (!prevByPath.has(k)) added.push(f)
+  }
+  for (const f of prev) {
+    const k = keyOf(f)
+    if (!nextByPath.has(k)) {
+      const inNext = next.find((n) => n.path === f.path && n.staged === f.staged)
+      if (inNext) modified.push(inNext)
+    }
+  }
+  const removedPaths = new Set<string>()
+  const nextKeys = new Set(next.map(keyOf))
+  for (const f of prev) {
+    if (!nextKeys.has(keyOf(f)) && !next.find((n) => n.path === f.path && n.staged === f.staged)) {
+      removedPaths.add(f.path)
+    }
+  }
+  return { added, removed: [...removedPaths], modified }
 }
 
 export class GitRepository extends EventEmitter {
   readonly path: string
   readonly queue: OperationQueue
 
-  // Caches
   readonly commitDetailCache = new LruCache<string, { filesChanged: number; insertions: number; deletions: number }>(200)
   readonly commitFilesCache = new LruCache<string, CommitFileEntry[]>(200)
   readonly commitFileDiffCache = new LruCache<string, { diff: string; fileName: string }>(500)
@@ -42,63 +74,224 @@ export class GitRepository extends EventEmitter {
 
   private _revision = 0
   private _refCount = 0
+  private readonly _watcher: GitWatcher
+  private readonly _onFocusChange = (focused: boolean): void => { this._watcher.setSuspended(!focused) }
+  private _snapshot: RepoSnapshot | null = null
+  private _refreshing = false
+  private _refreshAgain = false
 
-  constructor(path: string) {
+  constructor(path: string, watcher?: GitWatcher) {
     super()
     this.path = path
     this.queue = new OperationQueue(4)
+    this._watcher = watcher ?? createGitWatcher()
   }
 
   get revision(): number { return this._revision }
   get refCount(): number { return this._refCount }
+  get watcherActive(): boolean { return this._watcher.active }
+  get snapshot(): RepoSnapshot | null { return this._snapshot }
 
-  retain(): void { this._refCount++ }
-  release(): boolean {
-    this._refCount--
-    return this._refCount <= 0
+  retain(): void {
+    this._refCount++
+    if (this._refCount === 1) {
+      this._watcher.start(this.path, (event) => this.handleWatchEvent(event))
+      this._watcher.setSuspended(!focusState.focused)
+      focusState.on('change', this._onFocusChange)
+      this.refreshSnapshot().catch((err: Error) => log(`Initial snapshot failed for ${this.path}: ${err.message}`))
+    }
   }
 
-  /** Bump revision after mutations — invalidates caches that depend on HEAD or working tree. */
+  release(): boolean {
+    this._refCount--
+    if (this._refCount <= 0) {
+      focusState.off('change', this._onFocusChange)
+      this._watcher.stop()
+      return true
+    }
+    return false
+  }
+
   bumpRevision(): void {
     this._revision++
-    // Invalidate volatile caches
     this.diffCache.clear()
     this.branchCache.clear()
     this.graphCache.clear()
   }
 
-  /** Invalidate diff cache entries for a specific path. */
-  invalidatePath(path: string): void {
-    this.diffCache.invalidate((key) => key.startsWith(path + ':'))
+  invalidatePath(p: string): void {
+    this.diffCache.invalidate((key) => key.startsWith(p + ':'))
   }
 
-  // ─── Cached operations ───
+  private handleWatchEvent(event: GitWatchEvent): void {
+    switch (event.kind) {
+      case 'head:changed':
+        this.bumpRevision()
+        this.refreshSnapshot().catch(() => {})
+        break
+      case 'status:dirty':
+        this.diffCache.clear()
+        this._revision++
+        this.refreshSnapshot().catch(() => {})
+        break
+      case 'refs:dirty':
+        this.branchCache.clear()
+        this.graphCache.clear()
+        this._revision++
+        this.emitRefsChanged().catch(() => {})
+        break
+      case 'config:dirty':
+        this.branchCache.clear()
+        this.refreshSnapshot().catch(() => {})
+        break
+    }
+    this.emit('watch', event)
+  }
 
-  async getStatus(): Promise<{ files: StatusEntry[]; branch: string; ahead: number; behind: number; isGitRepo: boolean }> {
+  // ─── Snapshot + delta computation ───
+
+  async refreshSnapshot(): Promise<void> {
+    if (this._refreshing) { this._refreshAgain = true; return }
+    this._refreshing = true
+    try {
+      do {
+        this._refreshAgain = false
+        const next = await this.computeSnapshot()
+        const prev = this._snapshot
+        this._snapshot = next
+
+        if (!prev) {
+          this.emitEvent({ kind: 'status:changed', repoPath: this.path, revision: next.revision, added: next.groups.index.concat(next.groups.workingTree, next.groups.untracked, next.groups.merge), removed: [], modified: [] })
+          this.emitEvent({ kind: 'head:changed', repoPath: this.path, revision: next.revision, head: next.head })
+          this.emitEvent({ kind: 'upstream:changed', repoPath: this.path, revision: next.revision, ahead: next.upstream.ahead, behind: next.upstream.behind })
+          if (next.mergeState !== 'none') {
+            this.emitEvent({ kind: 'merge:changed', repoPath: this.path, revision: next.revision, state: next.mergeState })
+          }
+        } else {
+          const prevAll = [...prev.groups.index, ...prev.groups.workingTree, ...prev.groups.untracked, ...prev.groups.merge]
+          const nextAll = [...next.groups.index, ...next.groups.workingTree, ...next.groups.untracked, ...next.groups.merge]
+          const { added, removed, modified } = diffFiles(prevAll, nextAll)
+          if (added.length || removed.length || modified.length) {
+            this.emitEvent({ kind: 'status:changed', repoPath: this.path, revision: next.revision, added, removed, modified })
+          }
+          if (prev.head.sha !== next.head.sha || prev.head.branch !== next.head.branch || prev.head.detached !== next.head.detached) {
+            this.emitEvent({ kind: 'head:changed', repoPath: this.path, revision: next.revision, head: next.head })
+          }
+          if (prev.upstream.ahead !== next.upstream.ahead || prev.upstream.behind !== next.upstream.behind || prev.upstream.name !== next.upstream.name) {
+            this.emitEvent({ kind: 'upstream:changed', repoPath: this.path, revision: next.revision, ahead: next.upstream.ahead, behind: next.upstream.behind })
+          }
+          if (prev.mergeState !== next.mergeState) {
+            this.emitEvent({ kind: 'merge:changed', repoPath: this.path, revision: next.revision, state: next.mergeState })
+          }
+        }
+      } while (this._refreshAgain)
+    } finally {
+      this._refreshing = false
+    }
+  }
+
+  private async computeSnapshot(): Promise<RepoSnapshot> {
+    const empty: RepoSnapshot = {
+      repoPath: this.path,
+      isGitRepo: false,
+      head: { branch: null, detached: false, sha: null },
+      upstream: { name: null, ahead: 0, behind: 0 },
+      mergeState: 'none',
+      groups: { index: [], workingTree: [], untracked: [], merge: [] },
+      revision: this._revision,
+    }
     try {
       await runGit(this.path, ['rev-parse', '--is-inside-work-tree'])
     } catch {
-      return { files: [], branch: '', ahead: 0, behind: 0, isGitRepo: false }
+      return empty
     }
 
-    let branch = ''
+    let branch: string | null = null
+    let sha: string | null = null
+    let detached = false
     try {
-      branch = (await runGit(this.path, ['branch', '--show-current'])).trim()
+      branch = (await runGit(this.path, ['branch', '--show-current'])).trim() || null
+      sha = (await runGit(this.path, ['rev-parse', 'HEAD'])).trim() || null
+      if (!branch && sha) detached = true
     } catch {}
 
-    let ahead = 0
-    let behind = 0
+    let ahead = 0, behind = 0
+    let upstreamName: string | null = null
     try {
-      ahead = parseInt((await runGit(this.path, ['rev-list', '--count', '@{upstream}..HEAD'])).trim(), 10) || 0
-      behind = parseInt((await runGit(this.path, ['rev-list', '--count', 'HEAD..@{upstream}'])).trim(), 10) || 0
+      upstreamName = (await runGit(this.path, ['rev-parse', '--abbrev-ref', '@{upstream}'])).trim() || null
     } catch {}
+    if (upstreamName) {
+      try {
+        ahead = parseInt((await runGit(this.path, ['rev-list', '--count', '@{upstream}..HEAD'])).trim(), 10) || 0
+        behind = parseInt((await runGit(this.path, ['rev-list', '--count', 'HEAD..@{upstream}'])).trim(), 10) || 0
+      } catch {}
+    }
 
+    let groups: PartitionedStatus = { flat: [], index: [], workingTree: [], untracked: [], merge: [] }
     try {
       const output = await runGit(this.path, ['status', '--porcelain=v1', '-uall'])
-      const files = parseGitStatus(output)
-      return { files, branch, ahead, behind, isGitRepo: true }
-    } catch {
-      return { files: [], branch, ahead, behind, isGitRepo: true }
+      groups = partitionStatus(output)
+    } catch {}
+
+    return {
+      repoPath: this.path,
+      isGitRepo: true,
+      head: { branch, detached, sha },
+      upstream: { name: upstreamName, ahead, behind },
+      mergeState: await this.detectMergeState(),
+      groups: { index: groups.index, workingTree: groups.workingTree, untracked: groups.untracked, merge: groups.merge },
+      revision: this._revision,
+    }
+  }
+
+  private async detectMergeState(): Promise<MergeState> {
+    const { stat } = await import('fs/promises')
+    const tryRead = async (p: string): Promise<boolean> => {
+      try { await stat(p); return true } catch { return false }
+    }
+    const join = (await import('path')).join
+    const gitDir = join(this.path, '.git')
+    if (await tryRead(join(gitDir, 'MERGE_HEAD'))) return 'merging'
+    if (await tryRead(join(gitDir, 'rebase-merge')) || await tryRead(join(gitDir, 'rebase-apply'))) return 'rebasing'
+    if (await tryRead(join(gitDir, 'CHERRY_PICK_HEAD'))) return 'cherry-picking'
+    return 'none'
+  }
+
+  private async emitRefsChanged(): Promise<void> {
+    // Delta computation against the branch cache is left as a follow-up;
+    // for now consumers re-read on this signal.
+    this.emitEvent({ kind: 'refs:changed', repoPath: this.path, revision: this._revision, added: [], removed: [], updated: [] })
+  }
+
+  private emitEvent(event: GitEvent): void {
+    this.emit('event', event)
+  }
+
+  // ─── Operation hooks ───
+
+  notifyOpStarted(opId: string, opKind: string): void {
+    this.emitEvent({ kind: 'op:started', repoPath: this.path, opId, opKind })
+  }
+
+  notifyOpCompleted(opId: string, ok: boolean, durationMs: number, error?: string): void {
+    this.emitEvent({ kind: 'op:completed', repoPath: this.path, opId, ok, error, durationMs })
+  }
+
+  // ─── Cached reads ───
+
+  async getStatus(): Promise<{ files: StatusEntry[]; branch: string; ahead: number; behind: number; isGitRepo: boolean }> {
+    let snap = this._snapshot
+    if (!snap) {
+      snap = await this.computeSnapshot()
+      this._snapshot = snap
+    }
+    const flat = [...snap.groups.index, ...snap.groups.workingTree, ...snap.groups.untracked, ...snap.groups.merge]
+    return {
+      files: flat,
+      branch: snap.head.branch ?? '',
+      ahead: snap.upstream.ahead,
+      behind: snap.upstream.behind,
+      isGitRepo: snap.isGitRepo,
     }
   }
 
@@ -165,6 +358,8 @@ export class GitRepository extends EventEmitter {
   }
 
   dispose(): void {
+    focusState.off('change', this._onFocusChange)
+    this._watcher.stop()
     this.queue.cancelAll()
     this.commitDetailCache.clear()
     this.commitFilesCache.clear()
@@ -175,3 +370,5 @@ export class GitRepository extends EventEmitter {
     this.removeAllListeners()
   }
 }
+
+export type { HeadInfo, UpstreamInfo, MergeState, RefDelta }

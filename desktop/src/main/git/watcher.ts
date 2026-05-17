@@ -5,13 +5,14 @@
  * changes in a git repository. Two subscriptions per repo:
  *
  * 1. `.git` metadata — HEAD, index, refs, config changes
- * 2. Working tree — file creates/edits/deletes (filtered by .gitignore)
+ * 2. Working tree — file creates/edits/deletes (with .git/node_modules ignored)
  *
- * Gated by the `gitWatcher` feature flag. When unavailable or disabled,
- * exports a no-op implementation so callers don't need conditionals.
+ * Trailing-edge debounce at 250 ms to coalesce bursts (e.g. `git pull`
+ * touching hundreds of files). When suspended (window blurred), pending events
+ * are dropped instead of flushed — on resume the consumer should re-snapshot.
  *
- * Trailing-edge debounce at 250ms to coalesce bursts (e.g. `git pull`
- * touching hundreds of files).
+ * Falls back to a no-op when @parcel/watcher isn't available so callers don't
+ * need conditionals.
  */
 
 import { join } from 'path'
@@ -28,69 +29,75 @@ export type GitWatchEvent =
   | { kind: 'config:dirty' }
 
 export interface GitWatcher {
-  /** Start watching. Calls `onEvent` when git-relevant changes are detected. */
   start(repoPath: string, onEvent: (event: GitWatchEvent) => void): void
-  /** Stop watching and clean up. */
   stop(): void
-  /** Whether the watcher is currently active. */
+  setSuspended(suspended: boolean): void
   readonly active: boolean
+  readonly suspended: boolean
 }
 
-/** Debounce timer ID type. */
 type Timer = ReturnType<typeof setTimeout>
 
-/**
- * Create a watcher that attempts to use @parcel/watcher.
- * Falls back to a no-op if the native module isn't available.
- */
-export function createGitWatcher(): GitWatcher {
-  let parcelWatcher: any = null
-  try {
-    // Dynamic require — @parcel/watcher is a native module that may not be installed
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    parcelWatcher = require('@parcel/watcher')
-  } catch {
-    log('Git watcher: @parcel/watcher not available, falling back to no-op')
+interface ParcelEvent { path: string; type: string }
+interface ParcelSubscription { unsubscribe: () => Promise<void> }
+interface ParcelOptions { ignore?: string[] }
+export interface ParcelModule {
+  subscribe(
+    dir: string,
+    cb: (err: Error | null, events: ParcelEvent[]) => void,
+    opts?: ParcelOptions,
+  ): Promise<ParcelSubscription>
+}
+
+export function createGitWatcher(parcel?: ParcelModule): GitWatcher {
+  let mod: ParcelModule | null = parcel ?? null
+  if (!mod) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mod = require('@parcel/watcher') as ParcelModule
+    } catch {
+      log('Git watcher: @parcel/watcher not available, falling back to no-op')
+    }
   }
 
-  if (!parcelWatcher) {
-    return createNoOpWatcher()
-  }
-
-  return createParcelWatcher(parcelWatcher)
+  if (!mod) return createNoOpWatcher()
+  return createParcelWatcher(mod)
 }
 
 function createNoOpWatcher(): GitWatcher {
   return {
     start: () => { log('Git watcher: no-op (parcel/watcher not available)') },
     stop: () => {},
+    setSuspended: () => {},
     get active() { return false },
+    get suspended() { return false },
   }
 }
 
-function createParcelWatcher(pw: any): GitWatcher {
-  let subscriptions: Array<{ unsubscribe: () => Promise<void> }> = []
+const GIT_META_FILES = new Set([
+  'HEAD', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD',
+  'CHERRY_PICK_HEAD', 'REBASE_HEAD', 'index', 'packed-refs', 'config',
+])
+
+function classifyGitMetaChange(path: string): GitWatchEvent['kind'] | null {
+  const basename = path.split('/').pop() || ''
+  if (basename === 'HEAD' || basename === 'MERGE_HEAD' ||
+      basename === 'CHERRY_PICK_HEAD' || basename === 'REBASE_HEAD') {
+    return 'head:changed'
+  }
+  if (basename === 'config') return 'config:dirty'
+  if (basename === 'index' || basename === 'packed-refs') return 'status:dirty'
+  if (path.includes('/refs/')) return 'refs:dirty'
+  if (GIT_META_FILES.has(basename)) return 'status:dirty'
+  return null
+}
+
+function createParcelWatcher(pw: ParcelModule): GitWatcher {
+  let subscriptions: ParcelSubscription[] = []
   let isActive = false
+  let isSuspended = false
   let debounceTimer: Timer | null = null
   let pendingEvents = new Set<GitWatchEvent['kind']>()
-
-  const GIT_META_FILES = new Set([
-    'HEAD', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD',
-    'CHERRY_PICK_HEAD', 'REBASE_HEAD', 'index', 'packed-refs', 'config',
-  ])
-
-  function classifyGitMetaChange(path: string): GitWatchEvent['kind'] | null {
-    const basename = path.split('/').pop() || ''
-    if (basename === 'HEAD' || basename === 'MERGE_HEAD' ||
-        basename === 'CHERRY_PICK_HEAD' || basename === 'REBASE_HEAD') {
-      return 'head:changed'
-    }
-    if (basename === 'config') return 'config:dirty'
-    if (basename === 'index' || basename === 'packed-refs') return 'status:dirty'
-    if (path.includes('/refs/')) return 'refs:dirty'
-    if (GIT_META_FILES.has(basename)) return 'status:dirty'
-    return null
-  }
 
   return {
     start(repoPath: string, onEvent: (event: GitWatchEvent) => void): void {
@@ -98,9 +105,8 @@ function createParcelWatcher(pw: any): GitWatcher {
 
       const flush = (): void => {
         debounceTimer = null
-        for (const kind of pendingEvents) {
-          onEvent({ kind })
-        }
+        if (isSuspended) { pendingEvents.clear(); return }
+        for (const kind of pendingEvents) onEvent({ kind })
         pendingEvents.clear()
       }
 
@@ -111,36 +117,25 @@ function createParcelWatcher(pw: any): GitWatcher {
 
       const gitDir = join(repoPath, '.git')
 
-      // Subscribe to .git metadata
-      pw.subscribe(gitDir, (err: Error | null, events: Array<{ path: string; type: string }>) => {
+      pw.subscribe(gitDir, (err, events) => {
         if (err) { log(`Git watcher .git error: ${err.message}`); return }
         for (const event of events) {
           const kind = classifyGitMetaChange(event.path)
-          if (kind) {
-            pendingEvents.add(kind)
-          }
+          if (kind) pendingEvents.add(kind)
         }
         if (pendingEvents.size > 0) scheduleFlush()
-      }).then((sub: { unsubscribe: () => Promise<void> }) => {
-        subscriptions.push(sub)
-      }).catch((err: Error) => {
-        log(`Git watcher: failed to watch .git: ${err.message}`)
-      })
+      }).then((sub) => { subscriptions.push(sub) })
+        .catch((err: Error) => log(`Git watcher: failed to watch .git: ${err.message}`))
 
-      // Subscribe to working tree
-      pw.subscribe(repoPath, (err: Error | null, events: Array<{ path: string; type: string }>) => {
+      pw.subscribe(repoPath, (err, events) => {
         if (err) { log(`Git watcher tree error: ${err.message}`); return }
         if (events.length > 0) {
           pendingEvents.add('status:dirty')
           scheduleFlush()
         }
-      }, {
-        ignore: ['.git', 'node_modules', '.DS_Store'],
-      }).then((sub: { unsubscribe: () => Promise<void> }) => {
-        subscriptions.push(sub)
-      }).catch((err: Error) => {
-        log(`Git watcher: failed to watch tree: ${err.message}`)
-      })
+      }, { ignore: ['.git', 'node_modules', '.DS_Store'] })
+        .then((sub) => { subscriptions.push(sub) })
+        .catch((err: Error) => log(`Git watcher: failed to watch tree: ${err.message}`))
 
       isActive = true
       log(`Git watcher started: ${repoPath}`)
@@ -153,14 +148,23 @@ function createParcelWatcher(pw: any): GitWatcher {
         debounceTimer = null
       }
       pendingEvents.clear()
-      for (const sub of subscriptions) {
-        sub.unsubscribe().catch(() => {})
-      }
+      for (const sub of subscriptions) sub.unsubscribe().catch(() => {})
       subscriptions = []
       isActive = false
       log('Git watcher stopped')
     },
 
+    setSuspended(suspended: boolean): void {
+      if (isSuspended === suspended) return
+      isSuspended = suspended
+      if (suspended && debounceTimer) {
+        clearTimeout(debounceTimer)
+        debounceTimer = null
+        pendingEvents.clear()
+      }
+    },
+
     get active() { return isActive },
+    get suspended() { return isSuspended },
   }
 }
