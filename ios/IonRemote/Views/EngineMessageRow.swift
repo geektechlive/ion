@@ -74,12 +74,12 @@ struct EngineMessageRow: View {
             toolStatusIcon
             Text(chipLabel)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(IonTheme.accent)
+                .foregroundStyle(JarvisTheme.accent)
             Spacer()
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(IonTheme.accent.opacity(0.12))
+        .background(JarvisTheme.accent.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
