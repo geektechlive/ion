@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import os
 
 private let ionLog = Logger(subsystem: "com.sprague.ion.mobile", category: "engine")
@@ -265,6 +266,38 @@ extension SessionViewModel {
             gitDiffResult = response
             gitDiffLoading = false
 
+        case .gitCommitResult(let result):
+            if result.ok {
+                Haptic.success()
+                gitToast = GitToast(message: "Committed successfully", isError: false)
+            } else {
+                Haptic.error()
+                gitToast = GitToast(message: result.error ?? "Commit failed", isError: true)
+            }
+
+        case .gitStageResult(let result):
+            if result.ok {
+                Haptic.success()
+            } else {
+                Haptic.error()
+                gitToast = GitToast(message: result.error ?? "Stage failed", isError: true)
+            }
+
+        case .gitUnstageResult(let result):
+            if result.ok {
+                Haptic.success()
+            } else {
+                Haptic.error()
+                gitToast = GitToast(message: result.error ?? "Unstage failed", isError: true)
+            }
+
+        case .gitCommitFilesResponse(let response):
+            gitCommitFiles[response.hash] = response
+
+        case .gitCommitFileDiffResponse(let response):
+            let key = "\(response.hash):\(response.path)"
+            gitCommitFileDiff[key] = response
+
         // File explorer events
         case .fsDirListing(let directory, let response):
             fileListings[directory] = response
@@ -286,6 +319,10 @@ extension SessionViewModel {
         // Command discovery events
         case .discoverCommandsResponse(let directory, let commands):
             discoveredCommands[directory] = commands
+
+        // Diagnostic log request from desktop
+        case .requestDiagnosticLogs:
+            handleRequestDiagnosticLogs()
         }
     }
 
@@ -458,6 +495,16 @@ extension SessionViewModel {
         } else {
             pendingUploadResults.append(UploadAttachmentResult(id: id, name: name, path: path, correlationId: correlationId, error: nil))
         }
+    }
+
+    // MARK: - Diagnostic log request
+
+    @MainActor
+    private func handleRequestDiagnosticLogs() {
+        let logs = DiagnosticLog.exportAllSessions()
+        let deviceId = activeDeviceId ?? "unknown"
+        let deviceName = UIDevice.current.name
+        send(.diagnosticLogsResponse(logs: logs, deviceId: deviceId, deviceName: deviceName))
     }
 
 }

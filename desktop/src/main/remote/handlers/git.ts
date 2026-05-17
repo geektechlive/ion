@@ -215,6 +215,60 @@ export async function handleGitCommit(cmd: Extract<RemoteCommand, { type: 'git_c
   await broadcastGitGraph(directory)
 }
 
+export async function handleGitCommitFiles(cmd: Extract<RemoteCommand, { type: 'git_commit_files' }>, deviceId: string): Promise<void> {
+  const { directory, hash } = cmd
+  try {
+    // Run both queries in parallel — both are lightweight index-only reads
+    const [statusOutput, numstatOutput] = await Promise.all([
+      runGit(directory, ['diff-tree', '--no-commit-id', '-r', '--name-status', hash]),
+      runGit(directory, ['diff-tree', '--no-commit-id', '-r', '--numstat', hash]),
+    ])
+
+    // Parse name-status for file list + status codes
+    const codeMap: Record<string, string> = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed', C: 'copied' }
+    const files: Array<{ path: string; status: string; oldPath?: string }> = []
+    for (const line of statusOutput.trim().split('\n').filter(Boolean)) {
+      const parts = line.split('\t')
+      const code = parts[0][0]
+      const status = codeMap[code] || 'modified'
+      if (code === 'R') {
+        files.push({ path: parts[2], status, oldPath: parts[1] })
+      } else {
+        files.push({ path: parts[1], status })
+      }
+    }
+
+    // Parse numstat for aggregate stats
+    let totalInsertions = 0
+    let totalDeletions = 0
+    for (const line of numstatOutput.trim().split('\n').filter(Boolean)) {
+      const m = line.match(/^(\d+|-)\t(\d+|-)\t/)
+      if (m) {
+        if (m[1] !== '-') totalInsertions += parseInt(m[1], 10)
+        if (m[2] !== '-') totalDeletions += parseInt(m[2], 10)
+      }
+    }
+
+    const stats = { filesChanged: files.length, insertions: totalInsertions, deletions: totalDeletions }
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'git_commit_files_response', directory, hash, files, stats })
+  } catch (err) {
+    log(`git_commit_files error: ${(err as Error).message}`)
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'git_commit_files_response', directory, hash, files: [], stats: { filesChanged: 0, insertions: 0, deletions: 0 } })
+  }
+}
+
+export async function handleGitCommitFileDiff(cmd: Extract<RemoteCommand, { type: 'git_commit_file_diff' }>, deviceId: string): Promise<void> {
+  const { directory, hash, path: filePath } = cmd
+  try {
+    const output = await runGit(directory, ['diff-tree', '-p', '--root', hash, '--', filePath])
+    const fileName = basename(filePath)
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'git_commit_file_diff_response', hash, path: filePath, diff: output, fileName })
+  } catch (err) {
+    log(`git_commit_file_diff error: ${(err as Error).message}`)
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'git_commit_file_diff_response', hash, path: filePath, diff: '', fileName: basename(filePath) })
+  }
+}
+
 /** Broadcast git changes to all connected devices (used after mutations). */
 async function broadcastGitChanges(directory: string): Promise<void> {
   try {

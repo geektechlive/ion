@@ -54,6 +54,8 @@ import {
   handleGitFetch,
   handleGitPull,
   handleGitPush,
+  handleGitCommitFiles,
+  handleGitCommitFileDiff,
 } from './handlers/git'
 import {
   handleFsListDir,
@@ -116,6 +118,8 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'git_fetch': await handleGitFetch(cmd); break
     case 'git_pull': await handleGitPull(cmd); break
     case 'git_push': await handleGitPush(cmd); break
+    case 'git_commit_files': await handleGitCommitFiles(cmd, deviceId); break
+    case 'git_commit_file_diff': await handleGitCommitFileDiff(cmd, deviceId); break
     case 'fs_list_dir': await handleFsListDir(cmd, deviceId); break
     case 'fs_read_file': await handleFsReadFile(cmd, deviceId); break
     case 'fs_read_image': await handleFsReadImage(cmd); break
