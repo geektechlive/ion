@@ -14,8 +14,12 @@ relay:
 relay-local:
 	@cd relay && go run .
 
+# iPhone UDID: BB98AF19-BD09-5432-89B6-054CC2C02847
+# If Apple Watch is also connected and detection picks it up, pass --device explicitly:
+#   make ios DEVICE=BB98AF19-BD09-5432-89B6-054CC2C02847
+# (install.command xctrace fallback now filters Watch entries, but --device is the sure fix)
 ios:
-	@cd ios && bash commands/install.command
+	@cd ios && bash commands/install.command $(if $(DEVICE),--device $(DEVICE),)
 
 ios-check:
 	@cd ios && xcodebuild -project IonRemote.xcodeproj -scheme IonRemote \

@@ -136,11 +136,15 @@ for r in results:
   fi
 
   # Fallback: xctrace (older Xcode or devicectl returned nothing)
+  # Exclude Apple Watch entries — Watch is paired over Bluetooth and appears in
+  # xctrace output even when no iPhone is connected. Without this filter, the
+  # first entry is the Watch and ios-deploy fails with 0xe8000080.
   local line
   line=$(xcrun xctrace list devices 2>/dev/null \
     | grep -v "Simulator" \
     | grep -v "^==" \
     | grep -v "^$" \
+    | grep -vi "watch" \
     | grep -vE "^$(scutil --get ComputerName 2>/dev/null || hostname -s)" \
     | head -1)
 
