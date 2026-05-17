@@ -9,18 +9,33 @@ final class BriefingsStore {
 
     private static let key = "jarvis.briefings.v1"
     private static let maxCount = 14
+    private static let maxAgeDays = 5
 
-    init() { load() }
+    init() { load(); purgeExpired() }
 
     func receive(briefingId: String, title: String, text: String) {
+        purgeExpired()
         let today = Calendar.current.startOfDay(for: Date())
         // One entry per briefingId per calendar day — deduplicates retries.
-        if briefings.first(where: {
+        let truncatedMarker = "…[truncated — open Briefings for full text]"
+        if let idx = briefings.firstIndex(where: {
             $0.briefingId == briefingId && Calendar.current.startOfDay(for: $0.receivedAt) == today
-        }) != nil { return }
+        }) {
+            if briefings[idx].text.hasSuffix(truncatedMarker) {
+                briefings[idx].text = text
+                briefings[idx].isRead = false
+                save()
+            }
+            return
+        }
         let item = BriefingItem(id: UUID(), briefingId: briefingId, title: title, text: text, receivedAt: Date())
         briefings.insert(item, at: 0)
         if briefings.count > Self.maxCount { briefings = Array(briefings.prefix(Self.maxCount)) }
+        save()
+    }
+
+    func delete(id: UUID) {
+        briefings.removeAll { $0.id == id }
         save()
     }
 
@@ -28,6 +43,13 @@ final class BriefingsStore {
         guard let idx = briefings.firstIndex(where: { $0.id == id }) else { return }
         briefings[idx].isRead = true
         save()
+    }
+
+    private func purgeExpired() {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -Self.maxAgeDays, to: Date()) ?? .distantPast
+        let before = briefings.count
+        briefings.removeAll { $0.receivedAt < cutoff }
+        if briefings.count != before { save() }
     }
 
     private func load() {

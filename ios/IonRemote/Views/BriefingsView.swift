@@ -15,18 +15,27 @@ struct BriefingsView: View {
                         ContentUnavailableView("No Briefings", systemImage: "newspaper")
                             .foregroundStyle(JarvisTheme.textSecondary)
                     } else {
-                        List(store.briefings) { item in
-                            BriefingRowView(item: item)
-                                .listRowBackground(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(JarvisTheme.surfaceElevated.opacity(0.65))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .stroke(JarvisTheme.accent.opacity(0.12), lineWidth: 0.5)
-                                        )
-                                        .padding(.horizontal, 4)
-                                )
-                                .listRowSeparator(.hidden)
+                        List {
+                            ForEach(store.briefings) { item in
+                                BriefingRowView(item: item)
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        Button(role: .destructive) {
+                                            store.delete(id: item.id)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                                    .listRowBackground(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .fill(JarvisTheme.surfaceElevated.opacity(0.65))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .stroke(JarvisTheme.accent.opacity(0.12), lineWidth: 0.5)
+                                            )
+                                            .padding(.horizontal, 4)
+                                    )
+                                    .listRowSeparator(.hidden)
+                            }
                         }
                         .scrollContentBackground(.hidden)
                         .background(Color.clear)
