@@ -65,6 +65,7 @@
 		A1B2C3D4E5F60001000902AA /* SessionViewModel+Snapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000903AA /* SessionViewModel+Snapshot.swift */; };
 		A1B2C3D4E5F60001000220AA /* TransportManager+Send.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000221AA /* TransportManager+Send.swift */; };
 		A1B2C3D4E5F60001000222AA /* TransportManager+Receive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000223AA /* TransportManager+Receive.swift */; };
+		A1B2C3D4E5F60001001100AA /* RemoteModelEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001101AA /* RemoteModelEntry.swift */; };
 		A1B2C3D4E5F60001000230AA /* NormalizedEvent+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000231AA /* NormalizedEvent+Lifecycle.swift */; };
 		A1B2C3D4E5F60001000232AA /* NormalizedEvent+Stream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000233AA /* NormalizedEvent+Stream.swift */; };
 		A1B2C3D4E5F60001000234AA /* NormalizedEvent+Permission.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000235AA /* NormalizedEvent+Permission.swift */; };
@@ -221,6 +222,7 @@
 		A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventTerminalTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractSyncTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000601AA /* DiscoveredSlashCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveredSlashCommand.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001001101AA /* RemoteModelEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModelEntry.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000603AA /* SlashCommandMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashCommandMenu.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000701AA /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000703AA /* ToolGroupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolGroupView.swift; sourceTree = "<group>"; };
@@ -329,6 +331,7 @@
 				A1B2C3D4E5F60001000400AA /* FileTypes.swift */,
 				A1B2C3D4E5F60001000500AA /* ConnectionQuality.swift */,
 				A1B2C3D4E5F60001000601AA /* DiscoveredSlashCommand.swift */,
+				A1B2C3D4E5F60001001101AA /* RemoteModelEntry.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -682,6 +685,7 @@
 				A1B2C3D4E5F60001000501AA /* ConnectionQuality.swift in Sources */,
 				A1B2C3D4E5F60001000503AA /* ConnectionQualityView.swift in Sources */,
 				A1B2C3D4E5F60001000600AA /* DiscoveredSlashCommand.swift in Sources */,
+				A1B2C3D4E5F60001001100AA /* RemoteModelEntry.swift in Sources */,
 				A1B2C3D4E5F60001000602AA /* SlashCommandMenu.swift in Sources */,
 				A1B2C3D4E5F60001000700AA /* MessageBubble.swift in Sources */,
 				A1B2C3D4E5F60001000702AA /* ToolGroupView.swift in Sources */,
