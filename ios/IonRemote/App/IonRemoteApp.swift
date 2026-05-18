@@ -70,6 +70,17 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         completionHandler()
     }
 
+    // Scan all delivered notifications for unprocessed briefings. Called on
+    // every foreground transition so briefings land even when the background
+    // wake didn't fire (iOS throttles content-available on mixed alert+data pushes).
+    static func processDeliveredBriefings() {
+        UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
+            for note in notifications {
+                Self.handleBriefingPayload(note.request.content.userInfo)
+            }
+        }
+    }
+
     private static func handleBriefingPayload(_ userInfo: [AnyHashable: Any], openSheet: Bool = false) {
         guard let briefingId = userInfo["briefingId"] as? String,
               let briefingText = userInfo["briefingText"] as? String else { return }
@@ -137,6 +148,7 @@ struct IonRemoteApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
                     case .active:
+                        AppDelegate.processDeliveredBriefings()
                         guard !viewModel.pairedDevices.isEmpty else { break }
                         if didGoToBackground {
                             didGoToBackground = false
