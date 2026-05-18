@@ -249,22 +249,23 @@ echo "  App: $APP_PATH"
 install_to_device() {
   local dev_id="$1"
 
-  # Resolve legacy UDID for ios-deploy if available
-  local legacy_id=""
-  if command -v idevice_id &>/dev/null; then
-    legacy_id=$(idevice_id -l 2>/dev/null | head -1)
-  fi
-  local install_id="${legacy_id:-$dev_id}"
+  # Prefer devicectl (CoreDevice, Xcode 15+) — faster and more reliable than
+  # ios-deploy when the tunnel is up. Fall back to ios-deploy if devicectl fails.
+  echo "  Using devicectl (device: $dev_id)..."
+  xcrun devicectl device install app --device "$dev_id" "$APP_PATH" 2>&1 && return
 
   if command -v ios-deploy &>/dev/null; then
-    echo "  Using ios-deploy (device: $install_id)..."
-    ios-deploy --id "$install_id" --bundle "$APP_PATH" --no-wifi 2>&1 || {
-      echo "  ios-deploy failed, trying devicectl..."
-      xcrun devicectl device install app --device "$dev_id" "$APP_PATH" 2>&1
-    }
+    local legacy_id=""
+    if command -v idevice_id &>/dev/null; then
+      legacy_id=$(idevice_id -l 2>/dev/null | head -1)
+    fi
+    local install_id="${legacy_id:-$dev_id}"
+    echo "  devicectl failed, falling back to ios-deploy (device: $install_id)..."
+    ios-deploy --id "$install_id" --bundle "$APP_PATH" --no-wifi 2>&1
   else
-    echo "  Using devicectl..."
-    xcrun devicectl device install app --device "$dev_id" "$APP_PATH" 2>&1
+    echo "✗ devicectl failed and ios-deploy is not installed."
+    echo "  brew install ios-deploy"
+    exit 1
   fi
 }
 
