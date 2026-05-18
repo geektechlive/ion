@@ -55,3 +55,26 @@ export const useModelStore = create<ModelStoreState>((set, get) => ({
     return get().models.find((m) => m.id === id)
   },
 }))
+
+const MODEL_REFRESH_INTERVAL = 5 * 60 * 1000 // 5 minutes
+
+/**
+ * Call once from app initialization to set up background model sync.
+ * - Fetches models immediately
+ * - Refreshes periodically (every 5 minutes)
+ * - Listens for main-process cache updates (engine reconnect, credential changes)
+ */
+export function setupModelSync(): void {
+  // Initial fetch
+  useModelStore.getState().fetchModels()
+
+  // Periodic refresh
+  setInterval(() => {
+    useModelStore.getState().fetchModels()
+  }, MODEL_REFRESH_INTERVAL)
+
+  // Listen for main process model cache updates
+  window.ion.on('ion:models-updated', () => {
+    useModelStore.getState().fetchModels()
+  })
+}

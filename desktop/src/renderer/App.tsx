@@ -29,6 +29,7 @@ import { useSessionStore, editorDirForTab } from './stores/sessionStore'
 import { useColors, spacing } from './theme'
 import { usePreferencesStore } from './preferences'
 import { useUpdateStore } from './stores/update-store'
+import { setupModelSync } from './stores/model-store'
 
 const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
 
@@ -45,6 +46,11 @@ export default function App() {
     return window.ion.onUpdateDownloaded((info) => {
       useUpdateStore.getState().setAvailable(info.version)
     })
+  }, [])
+
+  // Set up background model sync (initial fetch, periodic refresh, IPC listener)
+  useEffect(() => {
+    setupModelSync()
   }, [])
 
   const [closeConfirmTab, setCloseConfirmTab] = useState<{ id: string; title: string; directory: string } | null>(null)

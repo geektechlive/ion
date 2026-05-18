@@ -17,6 +17,7 @@ import { registerSettingsIpc } from './settings'
 import { registerRemoteControlIpc } from './remote-control'
 import { registerMigrationIpc } from './migration'
 import { registerModelsIpc } from './models'
+import { registerOAuthIpc } from './oauth'
 
 export function registerAllIpc(): void {
   registerWindowIpc()
@@ -38,4 +39,5 @@ export function registerAllIpc(): void {
   registerRemoteControlIpc()
   registerMigrationIpc()
   registerModelsIpc()
+  registerOAuthIpc()
 }
