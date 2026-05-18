@@ -161,6 +161,16 @@ final class SessionViewModel {
     var preferredModel: String = "claude-sonnet-4-6"
     /// Engine default model (synced from desktop settings).
     var engineDefaultModel: String = ""
+    /// Available models from the desktop (dynamic list from engine).
+    /// Falls back to default Claude models until the first snapshot with model data arrives.
+    var availableModels: [RemoteModelEntry] = SessionViewModel.defaultModels
+
+    /// Default model list used before the desktop sends a dynamic list.
+    static let defaultModels: [RemoteModelEntry] = [
+        RemoteModelEntry(id: "claude-opus-4-6", providerId: "anthropic", label: "Opus 4.6", contextWindow: 1_000_000, hasAuth: true),
+        RemoteModelEntry(id: "claude-sonnet-4-6", providerId: "anthropic", label: "Sonnet 4.6", contextWindow: 200_000, hasAuth: true),
+        RemoteModelEntry(id: "claude-haiku-4-5-20251001", providerId: "anthropic", label: "Haiku 4.5", contextWindow: 200_000, hasAuth: true),
+    ]
     /// Active tool calls per tab, keyed by toolId.
     var activeTools: [String: [String: ActiveToolInfo]] = [:]
     /// Tab IDs that iOS has requested to close but hasn't received tab_closed confirmation for.
