@@ -332,11 +332,15 @@ export interface GitGraphData {
   totalCount: number
 }
 
+export type GitConflictKind = 'UU' | 'AA' | 'DD' | 'AU' | 'UA' | 'DU' | 'UD'
+
 export interface GitChangedFile {
   path: string
-  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked' | 'conflict'
   staged: boolean
   oldPath?: string
+  conflictKind?: GitConflictKind
+  isSubmodule?: boolean
 }
 
 export interface GitChangesData {

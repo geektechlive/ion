@@ -260,7 +260,7 @@ export default function App() {
                 </div>
               </motion.div>
             )}
-            {/* StatusBar must always mount so useGitPolling runs for terminal-only/tall/engine tabs */}
+            {/* StatusBar must always mount so useGitRepo subscribes for terminal-only/tall/engine tabs */}
             {(isTerminalOnly || isTerminalTall || isEngine) && (
               <div style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' }}>
                 <StatusBar />

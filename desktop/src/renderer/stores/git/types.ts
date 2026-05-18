@@ -2,7 +2,7 @@
  * Git store types — shared between store and components.
  */
 
-import type { GitChangedFile } from '../../../shared/types'
+import type { GitChangedFile, ResourceGroups, HeadInfo, UpstreamInfo, MergeState, RepoSnapshot } from '../../../shared/types'
 
 // ─── Status badge colors ───
 export const STATUS_COLORS: Record<string, string> = {
@@ -11,6 +11,7 @@ export const STATUS_COLORS: Record<string, string> = {
   deleted: '#c47060',
   renamed: '#b08fd8',
   untracked: '#d4a843',
+  conflict: '#d97757',
 }
 
 export const STATUS_LETTERS: Record<string, string> = {
@@ -19,6 +20,7 @@ export const STATUS_LETTERS: Record<string, string> = {
   deleted: 'D',
   renamed: 'R',
   untracked: 'U',
+  conflict: '!',
 }
 
 // ─── File tree grouping ───
@@ -59,7 +61,6 @@ export function buildFileTree(files: GitChangedFile[]): FileTreeNode[] {
     }
   }
 
-  // Collapse single-child directories
   function collapse(nodes: FileTreeNode[]): FileTreeNode[] {
     return nodes.map((node) => {
       if (node.isDir && node.children.length === 1 && node.children[0].isDir) {
@@ -77,7 +78,6 @@ export function buildFileTree(files: GitChangedFile[]): FileTreeNode[] {
   return collapse(root)
 }
 
-// ─── Relative date formatter ───
 export function relativeDate(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(diff / 60000)
@@ -91,30 +91,49 @@ export function relativeDate(iso: string): string {
   return `${months}mo ago`
 }
 
-// ─── Git event types (from main process) ───
-
-export type GitEventKind =
-  | 'status:changed'
-  | 'head:changed'
-  | 'refs:changed'
-  | 'upstream:changed'
-  | 'merge:changed'
-  | 'op:started'
-  | 'op:completed'
-
-export interface GitEvent {
-  repoPath: string
-  kind: GitEventKind
-  data?: unknown
-}
-
 // ─── Repo state shape ───
 
 export interface RepoState {
+  isGitRepo: boolean
+  head: HeadInfo
+  upstream: UpstreamInfo
+  mergeState: MergeState
+  groups: ResourceGroups
+  revision: number
+  // Legacy mirror — flat files & branch — kept while consumers migrate.
   files: GitChangedFile[]
   branch: string
   ahead: number
   behind: number
-  isGitRepo: boolean
-  revision: number
+}
+
+export function snapshotToRepoState(snap: RepoSnapshot): RepoState {
+  const files = [...snap.groups.index, ...snap.groups.workingTree, ...snap.groups.untracked, ...snap.groups.merge]
+  return {
+    isGitRepo: snap.isGitRepo,
+    head: snap.head,
+    upstream: snap.upstream,
+    mergeState: snap.mergeState,
+    groups: snap.groups,
+    revision: snap.revision,
+    files,
+    branch: snap.head.branch ?? '',
+    ahead: snap.upstream.ahead,
+    behind: snap.upstream.behind,
+  }
+}
+
+export function emptyRepoState(): RepoState {
+  return {
+    isGitRepo: false,
+    head: { branch: null, detached: false, sha: null },
+    upstream: { name: null, ahead: 0, behind: 0 },
+    mergeState: 'none',
+    groups: { index: [], workingTree: [], untracked: [], merge: [] },
+    revision: 0,
+    files: [],
+    branch: '',
+    ahead: 0,
+    behind: 0,
+  }
 }

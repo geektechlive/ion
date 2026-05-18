@@ -69,20 +69,47 @@ export function diffStats(lines: DiffLine[]): { insertions: number; deletions: n
 /**
  * Parse git status --porcelain=v1 output into structured file entries.
  */
-export interface StatusEntry {
-  path: string
-  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
-  staged: boolean
-  oldPath?: string
+import type { GitChangedFile, GitConflictKind } from '../../shared/types-session'
+
+export type StatusEntry = GitChangedFile
+
+const CONFLICT_CODES: Record<string, GitConflictKind> = {
+  UU: 'UU', AA: 'AA', DD: 'DD', AU: 'AU', UA: 'UA', DU: 'DU', UD: 'UD',
+}
+
+export interface PartitionedStatus {
+  flat: GitChangedFile[]
+  index: GitChangedFile[]
+  workingTree: GitChangedFile[]
+  untracked: GitChangedFile[]
+  merge: GitChangedFile[]
+}
+
+function statusFromCode(code: string): GitChangedFile['status'] {
+  if (code === 'A') return 'added'
+  if (code === 'D') return 'deleted'
+  if (code === 'R') return 'renamed'
+  if (code === '?') return 'untracked'
+  return 'modified'
 }
 
 export function parseGitStatus(porcelainOutput: string): StatusEntry[] {
-  const result: StatusEntry[] = []
+  return partitionStatus(porcelainOutput).flat
+}
+
+export function partitionStatus(porcelainOutput: string): PartitionedStatus {
+  const flat: GitChangedFile[] = []
+  const index: GitChangedFile[] = []
+  const workingTree: GitChangedFile[] = []
+  const untracked: GitChangedFile[] = []
+  const merge: GitChangedFile[] = []
+
   for (const line of porcelainOutput.split('\n').filter((l) => l.length >= 4)) {
     const match = line.match(/^(.)(.) (.+)$/)
     if (!match) continue
     const x = match[1]
     const y = match[2]
+    const xy = `${x}${y}`
     let filePath = match[3]
     let oldPath: string | undefined
     if (filePath.includes(' -> ')) {
@@ -91,23 +118,25 @@ export function parseGitStatus(porcelainOutput: string): StatusEntry[] {
       filePath = parts[1]
     }
 
-    if (x !== ' ' && x !== '?' && x !== '!') {
-      let status: StatusEntry['status']
-      if (x === 'A') status = 'added'
-      else if (x === 'D') status = 'deleted'
-      else if (x === 'R') status = 'renamed'
-      else status = 'modified'
-      result.push({ path: filePath, status, staged: true, oldPath })
+    const conflictKind = CONFLICT_CODES[xy]
+    if (conflictKind) {
+      const entry: GitChangedFile = { path: filePath, status: 'conflict', staged: false, conflictKind, oldPath }
+      flat.push(entry); merge.push(entry)
+      continue
     }
-    if (y !== ' ' && y !== '!') {
-      let status: StatusEntry['status']
-      if (y === '?') status = 'untracked'
-      else if (y === 'A') status = 'added'
-      else if (y === 'D') status = 'deleted'
-      else if (y === 'R') status = 'renamed'
-      else status = 'modified'
-      result.push({ path: filePath, status, staged: false, oldPath })
+
+    if (x !== ' ' && x !== '?' && x !== '!') {
+      const entry: GitChangedFile = { path: filePath, status: statusFromCode(x), staged: true, oldPath }
+      flat.push(entry); index.push(entry)
+    }
+    if (y === '?') {
+      const entry: GitChangedFile = { path: filePath, status: 'untracked', staged: false }
+      flat.push(entry); untracked.push(entry)
+    } else if (y !== ' ' && y !== '!') {
+      const entry: GitChangedFile = { path: filePath, status: statusFromCode(y), staged: false, oldPath }
+      flat.push(entry); workingTree.push(entry)
     }
   }
-  return result
+
+  return { flat, index, workingTree, untracked, merge }
 }

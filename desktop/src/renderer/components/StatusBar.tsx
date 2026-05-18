@@ -3,7 +3,7 @@ import { TreeStructure, NotePencil } from '@phosphor-icons/react'
 import { useShallow } from 'zustand/shallow'
 import { useSessionStore } from '../stores/sessionStore'
 import { useColors } from '../theme'
-import { useGitPolling } from '../hooks/useGitPolling'
+import { useGitRepo } from '../hooks/useGitRepo'
 import { BackendIndicator } from './StatusBarBackendIndicator'
 import { ModelPicker } from './StatusBarModelPicker'
 import { ContextIndicator } from './StatusBarContextIndicator'
@@ -69,8 +69,8 @@ export function StatusBar() {
     })
   }, [tab?.workingDirectory, closeGitPanel])
 
-  // Centralized git polling — one interval for StatusBar, GitPanel, and graph
-  useGitPolling(tab?.workingDirectory || '', isGitRepo)
+  // Subscribe to git events for the current tab — pushes updates into useGitStore.
+  useGitRepo(tab?.workingDirectory, isGitRepo)
 
   if (!tab) return null
 
@@ -137,7 +137,7 @@ export function StatusBar() {
         {isGitRepo && (
           <>
             <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
-            <GitButton />
+            <GitButton directory={tab?.workingDirectory ?? ''} />
           </>
         )}
       </div>

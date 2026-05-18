@@ -11,6 +11,7 @@ import { registerFileDialogIpc } from './file-dialog'
 import { registerAttachmentsIpc } from './attachments'
 import { registerFilesIpc } from './files'
 import { registerGitIpc } from './git'
+import { registerGitExtrasIpc } from './git-extras'
 import { registerWorktreeIpc } from './worktree'
 import { registerSettingsIpc } from './settings'
 import { registerRemoteControlIpc } from './remote-control'
@@ -30,6 +31,7 @@ export function registerAllIpc(): void {
   registerAttachmentsIpc()
   registerFilesIpc()
   registerGitIpc()
+  registerGitExtrasIpc()
   registerWorktreeIpc()
   registerSettingsIpc()
   registerRemoteControlIpc()

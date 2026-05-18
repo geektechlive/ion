@@ -18,21 +18,37 @@ export interface GitGraphConnection {
   color: string
 }
 
-const LANE_COLORS = [
+export const DEFAULT_LANE_COLORS = [
   '#d97757', '#7aac8c', '#6b9bd2', '#c47060',
   '#b08fd8', '#d4a843', '#5bbfbf', '#d97ba3',
 ]
 
-export function computeGraphLayout(commits: GitCommit[]): GitGraphNode[] {
-  if (commits.length === 0) return []
+/** Stable hash → palette index. Used so a branch name always picks the same color. */
+function hashIndex(s: string, palette: string[]): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
+  return Math.abs(h) % palette.length
+}
 
-  // activeLanes[i] = hash that lane i is tracking toward
+export function computeGraphLayout(
+  commits: GitCommit[],
+  options: { palette?: string[] } = {},
+): GitGraphNode[] {
+  if (commits.length === 0) return []
+  const palette = options.palette ?? DEFAULT_LANE_COLORS
+
   const activeLanes: (string | null)[] = []
-  // Map hash -> assigned lane
   const hashToLane = new Map<string, number>()
+  /** Stable color per lane, decided on first commit that occupies it. */
+  const laneColor = new Map<number, string>()
+  /** Color decided per branch ref name, so the same branch keeps its color across refreshes. */
+  const refColor = new Map<string, string>()
   const result: GitGraphNode[] = []
 
   function findFreeLane(): number {
+    for (let i = 0; i < activeLanes.length; i++) {
+      if (activeLanes[i] === null && !laneColor.has(i)) return i
+    }
     for (let i = 0; i < activeLanes.length; i++) {
       if (activeLanes[i] === null) return i
     }
@@ -40,15 +56,25 @@ export function computeGraphLayout(commits: GitCommit[]): GitGraphNode[] {
     return activeLanes.length - 1
   }
 
-  function laneColor(lane: number): string {
-    return LANE_COLORS[lane % LANE_COLORS.length]
+  function colorForLane(lane: number, commit: GitCommit | null): string {
+    const existing = laneColor.get(lane)
+    if (existing) return existing
+    let color: string | undefined
+    if (commit) {
+      // Prefer a stable color from any local branch/HEAD ref the commit carries.
+      const branchRef = commit.refs?.find((r) => r.type === 'head' && r.name !== 'HEAD' && r.name !== 'origin/HEAD')
+      if (branchRef) {
+        color = refColor.get(branchRef.name) ?? palette[hashIndex(branchRef.name, palette)]
+        refColor.set(branchRef.name, color)
+      }
+    }
+    if (!color) color = palette[lane % palette.length]
+    laneColor.set(lane, color)
+    return color
   }
 
   for (const commit of commits) {
     const connections: GitGraphConnection[] = []
-
-    // Determine which lane this commit occupies
-    // Use fullHash for lane tracking since parent hashes (%P) are full hashes
     let lane: number
     const hasIncoming = hashToLane.has(commit.fullHash)
     if (hasIncoming) {
@@ -58,52 +84,30 @@ export function computeGraphLayout(commits: GitCommit[]): GitGraphNode[] {
       lane = findFreeLane()
     }
 
-    activeLanes[lane] = null // commit consumed this lane
-    const color = laneColor(lane)
+    activeLanes[lane] = null
+    const color = colorForLane(lane, commit)
 
-    // Collect pass-through lanes BEFORE processing parents, so newly forked
-    // lanes don't get a stray vertical line above the fork point
     const passThroughLanes: { lane: number; color: string }[] = []
     for (let i = 0; i < activeLanes.length; i++) {
       if (activeLanes[i] !== null && i !== lane) {
-        passThroughLanes.push({ lane: i, color: laneColor(i) })
+        passThroughLanes.push({ lane: i, color: colorForLane(i, null) })
       }
     }
 
-    // Process parents
     for (let i = 0; i < commit.parents.length; i++) {
       const parentHash = commit.parents[i]
-
       if (hashToLane.has(parentHash)) {
-        // Parent already has a lane assigned (merge)
         const parentLane = hashToLane.get(parentHash)!
-        connections.push({
-          fromLane: lane,
-          toLane: parentLane,
-          type: 'merge',
-          color: laneColor(parentLane),
-        })
+        connections.push({ fromLane: lane, toLane: parentLane, type: 'merge', color: colorForLane(parentLane, null) })
       } else if (i === 0) {
-        // First parent: continues in the same lane
         activeLanes[lane] = parentHash
         hashToLane.set(parentHash, lane)
-        connections.push({
-          fromLane: lane,
-          toLane: lane,
-          type: 'straight',
-          color,
-        })
+        connections.push({ fromLane: lane, toLane: lane, type: 'straight', color })
       } else {
-        // Additional parents: fork to a new lane
         const newLane = findFreeLane()
         activeLanes[newLane] = parentHash
         hashToLane.set(parentHash, newLane)
-        connections.push({
-          fromLane: lane,
-          toLane: newLane,
-          type: 'fork',
-          color: laneColor(newLane),
-        })
+        connections.push({ fromLane: lane, toLane: newLane, type: 'fork', color: colorForLane(newLane, null) })
       }
     }
 

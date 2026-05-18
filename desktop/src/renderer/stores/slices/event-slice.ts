@@ -271,7 +271,7 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
                   if (updated.permissionMode !== 'plan' || exitPlanIsStale) {
                     const nonPlanDenials = event.permissionDenials.filter((d) => d.toolName !== 'ExitPlanMode')
                     updated.permissionDenied = nonPlanDenials.length > 0 ? { tools: nonPlanDenials } : null
-                    if (updated.permissionMode !== 'plan') {
+                    if (updated.permissionMode !== 'plan' && s.backend !== 'cli') {
                       setTimeout(() => {
                         get().sendMessage('Plan mode is not active. Do not create plans or call ExitPlanMode. Implement the requested changes directly using Edit, Write, and Bash tools.')
                       }, 100)

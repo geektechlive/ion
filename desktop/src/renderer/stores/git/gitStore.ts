@@ -1,92 +1,117 @@
 /**
  * Git Zustand store — keyed by repo path.
  *
- * During migration, this coexists with useGitPollingStore.
- * After cutover (step 6), useGitPollingStore is deleted and
- * all consumers read from this store via selectors.
+ * Fed by the main process via `ion:git-event` + `ion:git-snapshot`. Applies
+ * deltas with Immer to keep React subscriptions cheap.
  */
 
 import { create } from 'zustand'
-import type { GitChangedFile } from '../../../shared/types'
-import type { RepoState, GitEvent } from './types'
+import { produce } from 'immer'
+import type { GitChangedFile, GitEvent, RepoSnapshot } from '../../../shared/types'
+import { emptyRepoState, snapshotToRepoState } from './types'
+import type { RepoState } from './types'
 
 interface GitStoreState {
   repos: Record<string, RepoState>
   inflightOps: Record<string, string>
 
-  /** Update repo state from a status refresh. */
-  updateRepo: (path: string, data: {
-    files: GitChangedFile[]
-    branch: string
-    ahead: number
-    behind: number
-    isGitRepo: boolean
-  }) => void
-
-  /** Clear repo state (e.g. on tab close). */
+  applySnapshot: (snap: RepoSnapshot) => void
+  applyEvent: (event: GitEvent) => void
   clearRepo: (path: string) => void
-
-  /** Handle a git event from main process. */
-  handleEvent: (event: GitEvent) => void
 }
 
-export const useGitStore = create<GitStoreState>((set, get) => ({
+function syncLegacyMirror(state: RepoState): void {
+  state.files = [
+    ...state.groups.index,
+    ...state.groups.workingTree,
+    ...state.groups.untracked,
+    ...state.groups.merge,
+  ]
+  state.branch = state.head.branch ?? ''
+  state.ahead = state.upstream.ahead
+  state.behind = state.upstream.behind
+}
+
+function applyStatusDelta(
+  state: RepoState,
+  delta: { added: GitChangedFile[]; removed: string[]; modified: GitChangedFile[] },
+): void {
+  const removed = new Set(delta.removed)
+  const groupFor = (f: GitChangedFile): GitChangedFile[] => {
+    if (f.status === 'conflict') return state.groups.merge
+    if (f.status === 'untracked') return state.groups.untracked
+    if (f.staged) return state.groups.index
+    return state.groups.workingTree
+  }
+  for (const key of Object.keys(state.groups) as Array<keyof typeof state.groups>) {
+    state.groups[key] = state.groups[key].filter((f) => !removed.has(f.path))
+  }
+  for (const f of delta.modified) {
+    const g = groupFor(f)
+    const idx = g.findIndex((x) => x.path === f.path && x.staged === f.staged)
+    if (idx >= 0) g[idx] = f
+    else g.push(f)
+  }
+  for (const f of delta.added) {
+    const g = groupFor(f)
+    if (!g.find((x) => x.path === f.path && x.staged === f.staged)) g.push(f)
+  }
+}
+
+export const useGitStore = create<GitStoreState>((set) => ({
   repos: {},
   inflightOps: {},
 
-  updateRepo: (path, data) => {
-    const prev = get().repos[path]
-    // Signature-based dedup (same as useGitPollingStore)
-    const sig = data.branch + '\n' + data.files.map((f) => `${f.staged}:${f.status}:${f.path}`).join('\n')
-    const prevSig = prev
-      ? prev.branch + '\n' + prev.files.map((f) => `${f.staged}:${f.status}:${f.path}`).join('\n')
-      : ''
-    const changed = sig !== prevSig || data.ahead !== (prev?.ahead ?? 0) || data.behind !== (prev?.behind ?? 0)
+  applySnapshot: (snap) => {
+    set(produce((draft: GitStoreState) => {
+      draft.repos[snap.repoPath] = snapshotToRepoState(snap)
+    }))
+  },
 
-    if (changed) {
-      set((state) => ({
-        repos: {
-          ...state.repos,
-          [path]: {
-            files: data.files,
-            branch: data.branch,
-            ahead: data.ahead,
-            behind: data.behind,
-            isGitRepo: data.isGitRepo,
-            revision: (prev?.revision ?? 0) + 1,
-          },
-        },
-      }))
-    }
+  applyEvent: (event) => {
+    set(produce((draft: GitStoreState) => {
+      const path = event.repoPath
+      if (!draft.repos[path]) draft.repos[path] = emptyRepoState()
+      const repo = draft.repos[path]
+      const knownRevision = (event as { revision?: number }).revision
+      if (typeof knownRevision === 'number') repo.revision = knownRevision
+
+      switch (event.kind) {
+        case 'status:changed':
+          applyStatusDelta(repo, event)
+          syncLegacyMirror(repo)
+          break
+        case 'head:changed':
+          repo.head = event.head
+          repo.branch = event.head.branch ?? ''
+          break
+        case 'upstream:changed':
+          repo.upstream.ahead = event.ahead
+          repo.upstream.behind = event.behind
+          repo.ahead = event.ahead
+          repo.behind = event.behind
+          break
+        case 'merge:changed':
+          repo.mergeState = event.state
+          break
+        case 'refs:changed':
+          // Branch picker re-reads on this signal.
+          break
+        case 'op:started':
+          draft.inflightOps[`${event.repoPath}:${event.opId}`] = event.opKind
+          break
+        case 'op:completed':
+        case 'op:cancelled':
+          delete draft.inflightOps[`${event.repoPath}:${event.opId}`]
+          break
+      }
+    }))
   },
 
   clearRepo: (path) => {
-    set((state) => {
-      const repos = { ...state.repos }
-      delete repos[path]
-      return { repos }
-    })
-  },
-
-  handleEvent: (event) => {
-    switch (event.kind) {
-      case 'op:started':
-        set((state) => ({
-          inflightOps: { ...state.inflightOps, [event.repoPath]: event.kind },
-        }))
-        break
-      case 'op:completed':
-        set((state) => {
-          const ops = { ...state.inflightOps }
-          delete ops[event.repoPath]
-          return { inflightOps: ops }
-        })
-        break
-      default:
-        // Other events trigger a refresh — the polling hook or
-        // watcher will call updateRepo with fresh data.
-        break
-    }
+    set(produce((draft: GitStoreState) => {
+      delete draft.repos[path]
+    }))
   },
 }))
 
@@ -102,4 +127,12 @@ export function useRepoFiles(path: string | undefined): GitChangedFile[] {
 
 export function useRepoBranch(path: string | undefined): string {
   return useGitStore((s) => path ? s.repos[path]?.branch ?? '' : '')
+}
+
+export function useRepoGroups(path: string | undefined) {
+  return useGitStore((s) => path ? s.repos[path]?.groups : undefined)
+}
+
+export function useRepoMergeState(path: string | undefined) {
+  return useGitStore((s) => path ? (s.repos[path]?.mergeState ?? 'none') : 'none')
 }
