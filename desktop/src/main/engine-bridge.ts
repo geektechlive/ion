@@ -480,6 +480,13 @@ export class EngineBridge extends EventEmitter {
     return this._sendWithResult({ cmd: 'store_credential', provider, credential })
   }
 
+  async refreshModels(provider?: string): Promise<{ ok: boolean; error?: string }> {
+    await this.connect()
+    const msg: Record<string, unknown> = { cmd: 'refresh_models' }
+    if (provider) msg.provider = provider
+    return this._sendWithResult(msg)
+  }
+
   sendReconcileState(key: string): void {
     log(`sendReconcileState: key=${key}`)
     this._send({ cmd: 'reconcile_state', key })

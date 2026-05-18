@@ -144,6 +144,7 @@ export interface IonAPI {
   // ─── Model & provider management ───
   listModels(): Promise<{ models: import('../shared/types-models').ModelEntry[]; providers: import('../shared/types-models').ProviderEntry[] }>
   storeCredential(provider: string, credential: string): Promise<{ ok: boolean; error?: string }>
+  refreshModels(provider?: string): Promise<{ ok: boolean; error?: string }>
 
   // ─── OAuth ───
   startOAuth(provider: string): Promise<{ ok: boolean; error?: string }>
@@ -362,6 +363,7 @@ const api: IonAPI = {
   // ─── Model & provider management ───
   listModels: () => ipcRenderer.invoke(IPC.LIST_MODELS),
   storeCredential: (provider, credential) => ipcRenderer.invoke(IPC.STORE_CREDENTIAL, { provider, credential }),
+  refreshModels: (provider) => ipcRenderer.invoke(IPC.REFRESH_MODELS, { provider }),
 
   // ─── OAuth ───
   startOAuth: (provider) => ipcRenderer.invoke(IPC.OAUTH_START, { provider }),

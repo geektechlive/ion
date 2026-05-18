@@ -222,6 +222,7 @@ export const IPC = {
   // Model & provider management
   LIST_MODELS: 'ion:list-models',
   STORE_CREDENTIAL: 'ion:store-credential',
+  REFRESH_MODELS: 'ion:refresh-models',
 
   // OAuth
   OAUTH_START: 'ion:oauth-start',

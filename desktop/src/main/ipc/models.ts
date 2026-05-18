@@ -60,8 +60,19 @@ export function registerModelsIpc(): void {
     log(`IPC STORE_CREDENTIAL: provider=${provider}`)
     const result = await engineBridge.storeCredential(provider, credential)
     if (result.ok) {
-      // Auth status changed — refresh model list to update hasAuth flags
-      setTimeout(() => refreshModelCache(), 500)
+      // Auth status changed — engine runs discovery for this provider,
+      // then we refresh our cache after a delay to pick up new models.
+      setTimeout(() => refreshModelCache(), 2000)
+    }
+    return result
+  })
+
+  ipcMain.handle(IPC.REFRESH_MODELS, async (_event, { provider }: { provider?: string } = {}) => {
+    log(`IPC REFRESH_MODELS: provider=${provider || 'all'}`)
+    const result = await engineBridge.refreshModels(provider)
+    if (result.ok) {
+      // Re-fetch the model list to pick up discovery results
+      setTimeout(() => refreshModelCache(), 1000)
     }
     return result
   })

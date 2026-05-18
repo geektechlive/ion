@@ -10,6 +10,7 @@ export interface ModelEntry {
   supportsCaching?: boolean
   supportsThinking?: boolean
   supportsImages?: boolean
+  isCustom?: boolean
 }
 
 /** Wire-format provider information returned by the engine's list_models command. */
@@ -17,6 +18,8 @@ export interface ProviderEntry {
   id: string
   hasAuth: boolean
   authSource?: string
+  baseURL?: string
+  apiKeyRef?: string
 }
 
 /** Response shape from the list_models engine command. */
@@ -61,6 +64,21 @@ export function getModelDisplayLabel(model: ModelEntry): string {
     'gpt-4.1-mini': 'GPT-4.1 Mini',
     'o4-mini': 'o4-mini',
     'o3': 'o3',
+    'gemini-2.5-pro': 'Gemini 2.5 Pro',
+    'gemini-2.5-flash': 'Gemini 2.5 Flash',
+    'grok-3': 'Grok 3',
+    'grok-3-fast': 'Grok 3 Fast',
+    'grok-3-mini': 'Grok 3 Mini',
+    'grok-3-mini-fast': 'Grok 3 Mini Fast',
+    'grok-2': 'Grok 2',
+    'deepseek-chat': 'DeepSeek Chat',
+    'deepseek-reasoner': 'DeepSeek Reasoner',
+    'llama-3.3-70b-versatile': 'Llama 3.3 70B',
+    'llama-3.1-8b-instant': 'Llama 3.1 8B',
+    'mistral-large-latest': 'Mistral Large',
+    'mistral-small-latest': 'Mistral Small',
+    'llama-3.3-70b': 'Llama 3.3 70B',
+    'llama-3.1-8b': 'Llama 3.1 8B',
   }
   return LABELS[id] || id
 }
