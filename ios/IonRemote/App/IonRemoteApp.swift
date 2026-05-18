@@ -145,10 +145,32 @@ struct IonRemoteApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     viewModel.scenePhase = newPhase
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .briefingFromPush)) { note in
+                    guard let info = note.userInfo,
+                          let briefingId = info["briefingId"] as? String,
+                          let title = info["title"] as? String,
+                          let text = info["briefingText"] as? String else { return }
+                    viewModel.briefingsStore.receive(briefingId: briefingId, title: title, text: text)
+                }
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
                     case .active:
-                        AppDelegate.processDeliveredBriefings()
+                        // Scan delivered notifications and write directly to the store.
+                        // TabListView.onReceive is only active when connected, so we can't
+                        // rely on the NotificationCenter path here.
+                        UNUserNotificationCenter.current().getDeliveredNotifications { notes in
+                            for note in notes {
+                                let ui = note.request.content.userInfo
+                                guard let briefingId = ui["briefingId"] as? String,
+                                      let briefingText = ui["briefingText"] as? String else { continue }
+                                let title = note.request.content.title.isEmpty
+                                    ? "Briefing" : note.request.content.title
+                                DispatchQueue.main.async {
+                                    viewModel.briefingsStore.receive(
+                                        briefingId: briefingId, title: title, text: briefingText)
+                                }
+                            }
+                        }
                         guard !viewModel.pairedDevices.isEmpty else { break }
                         if didGoToBackground {
                             didGoToBackground = false
