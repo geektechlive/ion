@@ -34,6 +34,18 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         print("[Ion] APNs registration failed: \(error)")
     }
 
+    // Called when iOS wakes the app in the background for a content-available:1 push.
+    // Ensures briefing payloads land in BriefingsStore even when the user opens
+    // the app directly without tapping the notification.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Self.handleBriefingPayload(userInfo)
+        completionHandler(.newData)
+    }
+
     // MARK: - UNUserNotificationCenterDelegate
 
     /// Foreground delivery: surface the briefing payload to the app and keep
