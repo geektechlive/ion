@@ -1,34 +1,54 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars } from '@codemirror/view'
+import {
+  EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars,
+  highlightActiveLineGutter, scrollPastEnd, dropCursor, rectangularSelection, crosshairCursor,
+} from '@codemirror/view'
 import { EditorState, Extension } from '@codemirror/state'
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { bracketMatching, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
-import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment } from '@codemirror/commands'
+import { bracketMatching, syntaxHighlighting, defaultHighlightStyle, indentOnInput } from '@codemirror/language'
+import { searchKeymap, highlightSelectionMatches, search, selectNextOccurrence, gotoLine } from '@codemirror/search'
+import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { useSessionStore, FileEditorTab } from '../stores/sessionStore'
 import { getLanguageExtension } from './FileEditorShared'
 import { blameExtension, dispatchBlame, clearBlame } from './git/blameGutter'
+import { FileEditorContextMenu } from './FileEditorContextMenu'
+
+export interface CursorPosition {
+  line: number
+  col: number
+}
 
 interface FileEditorCodeMirrorProps {
   dir: string
   activeFile: FileEditorTab
   onSave: () => void
+  onCursorChange?: (pos: CursorPosition) => void
+  editorViewRef?: React.MutableRefObject<EditorView | null>
 }
 
 /**
  * The CodeMirror editing surface. Lives only when a non-preview file is
  * active; preview rendering is handled by FileEditorPreview.
  */
-export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCodeMirrorProps) {
+export function FileEditorCodeMirror({ dir, activeFile, onSave, onCursorChange, editorViewRef }: FileEditorCodeMirrorProps) {
+  console.log('[FileEditorCodeMirror] render', { dir, fileId: activeFile.id, fileName: activeFile.fileName, isReadOnly: activeFile.isReadOnly, contentLen: activeFile.content.length })
   const colors = useColors()
   const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap)
+  const editorFontSize = usePreferencesStore((s) => s.editorFontSize)
   const updateEditorContent = useSessionStore((s) => s.updateEditorContent)
 
   const editorContainerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const activeFileIdRef = useRef<string | null>(null)
+  const cursorCbRef = useRef(onCursorChange)
+  cursorCbRef.current = onCursorChange
+  const setEditorFontSize = usePreferencesStore((s) => s.setEditorFontSize)
+
+  // Context menu state
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
 
   // Keep save handler ref current for CodeMirror keybinding
   const saveHandlerRef = useRef(onSave)
@@ -56,7 +76,7 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
     '&': {
       backgroundColor: colors.containerBg,
       color: colors.textPrimary,
-      fontSize: '12px',
+      fontSize: `${editorFontSize}px`,
       fontFamily: 'monospace',
       height: '100%',
     },
@@ -83,7 +103,7 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
     '.cm-activeLine': {
       backgroundColor: colors.surfaceHover,
     },
-  }), [colors])
+  }), [colors, editorFontSize])
 
   // ---- Build extensions for active file ----
   const buildExtensions = useCallback((file: FileEditorTab): Extension[] => {
@@ -92,19 +112,46 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
       ionTheme,
       lineNumbers(),
       highlightActiveLine(),
+      highlightActiveLineGutter(),
       highlightSpecialChars(),
       bracketMatching(),
+      closeBrackets(),
       highlightSelectionMatches(),
       history(),
+      indentOnInput(),
+      search(),
+      dropCursor(),
+      rectangularSelection(),
+      crosshairCursor(),
+      scrollPastEnd(),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       keymap.of([
+        ...closeBracketsKeymap,
         ...defaultKeymap,
         ...historyKeymap,
         ...searchKeymap,
+        indentWithTab,
+        { key: 'Mod-/', run: toggleComment },
+        { key: 'Mod-d', run: selectNextOccurrence, preventDefault: true },
+        { key: 'Mod-g', run: gotoLine },
         {
           key: 'Mod-s',
           run: () => {
             saveHandlerRef.current()
+            return true
+          },
+        },
+        {
+          key: 'Mod-=',
+          run: () => {
+            setEditorFontSize(usePreferencesStore.getState().editorFontSize + 1)
+            return true
+          },
+        },
+        {
+          key: 'Mod--',
+          run: () => {
+            setEditorFontSize(usePreferencesStore.getState().editorFontSize - 1)
             return true
           },
         },
@@ -123,6 +170,15 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
 
     exts.push(blameExtension())
 
+    // Track cursor position for status bar
+    exts.push(EditorView.updateListener.of((update) => {
+      if (update.selectionSet || update.docChanged) {
+        const pos = update.state.selection.main.head
+        const line = update.state.doc.lineAt(pos)
+        cursorCbRef.current?.({ line: line.number, col: pos - line.from + 1 })
+      }
+    }))
+
     // Update content on change (non-readOnly)
     if (!file.isReadOnly) {
       exts.push(EditorView.updateListener.of((update) => {
@@ -134,7 +190,7 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
     }
 
     return exts
-  }, [ionTheme, dir, updateEditorContent, editorWordWrap])
+  }, [ionTheme, dir, updateEditorContent, editorWordWrap, editorFontSize])
 
   // ---- CodeMirror lifecycle ----
   useEffect(() => {
@@ -148,7 +204,7 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
     }
 
     const container = editorContainerRef.current
-    const stateKey = `${activeFile.id}:${activeFile.isReadOnly}:${editorWordWrap}`
+    const stateKey = `${activeFile.id}:${activeFile.isReadOnly}:${editorWordWrap}:${editorFontSize}`
 
     // If same file with same config, skip recreation
     if (viewRef.current && activeFileIdRef.current === stateKey) {
@@ -168,18 +224,24 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
 
     const view = new EditorView({ state, parent: container })
     viewRef.current = view
+    if (editorViewRef) editorViewRef.current = view
     activeFileIdRef.current = stateKey
+
+    // Fire initial cursor position
+    const pos = view.state.selection.main.head
+    const line = view.state.doc.lineAt(pos)
+    cursorCbRef.current?.({ line: line.number, col: pos - line.from + 1 })
 
     return () => {
       // Only destroy if switching away or unmounting
       // The next effect run will handle re-creation
     }
-  }, [activeFile.id, activeFile.isReadOnly, buildExtensions, editorWordWrap])
+  }, [activeFile.id, activeFile.isReadOnly, buildExtensions, editorWordWrap, editorFontSize])
 
   // Sync external content changes into the editor (e.g., after file load)
   useEffect(() => {
     if (!viewRef.current) return
-    const stateKey = `${activeFile.id}:${activeFile.isReadOnly}:${editorWordWrap}`
+    const stateKey = `${activeFile.id}:${activeFile.isReadOnly}:${editorWordWrap}:${editorFontSize}`
     if (activeFileIdRef.current !== stateKey) return
 
     const currentDoc = viewRef.current.state.doc.toString()
@@ -188,7 +250,7 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
         changes: { from: 0, to: currentDoc.length, insert: activeFile.content },
       })
     }
-  }, [activeFile.content, activeFile.id, activeFile.isReadOnly, editorWordWrap])
+  }, [activeFile.content, activeFile.id, activeFile.isReadOnly, editorWordWrap, editorFontSize])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -205,7 +267,20 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave }: FileEditorCode
       <div
         ref={editorContainerRef}
         style={{ position: 'absolute', inset: 0 }}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setCtxMenu({ x: e.clientX, y: e.clientY })
+        }}
       />
+      {ctxMenu && (
+        <FileEditorContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          isReadOnly={activeFile.isReadOnly}
+          viewRef={viewRef}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
       {activeFile.isReadOnly && (
         <div
           style={{
