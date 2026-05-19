@@ -38,8 +38,8 @@ struct ConversationStatusBar: View {
 
     private var contextColor: Color {
         guard let pct = resolvedContextPercent else { return .secondary }
-        if pct > 90 { return .red }
-        if pct > 75 { return .orange }
+        if pct >= 80 { return .red }
+        if pct >= 60 { return .orange }
         return .secondary
     }
 

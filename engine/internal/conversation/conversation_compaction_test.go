@@ -773,3 +773,43 @@ func TestGetContextUsageFallsBackToEstimateAfterCompactReset(t *testing.T) {
 		t.Errorf("post-compact estimate should be far below the stale 165000, got %d", postInfo.Tokens)
 	}
 }
+
+// --- Context usage edge cases ---
+
+func TestGetContextUsage_EstimatedBranch_WhenLastInputTokensZero(t *testing.T) {
+	conv := CreateConversation("est-zero", "", "claude-3")
+	AddUserMessage(conv, "hello world this is a message")
+	AddAssistantMessage(conv, []types.LlmContentBlock{{Type: "text", Text: "hi there, here is a response"}}, types.LlmUsage{InputTokens: 100, OutputTokens: 50})
+	// Simulate scenario where LastInputTokens is zero (e.g. after compaction reset)
+	conv.LastInputTokens = 0
+	conv.LastInputTokensMsgCount = 0
+
+	info := GetContextUsage(conv, 200000)
+	if !info.Estimated {
+		t.Error("expected estimated=true when LastInputTokens is zero")
+	}
+	if info.Tokens <= 0 {
+		t.Errorf("expected positive estimated tokens, got %d", info.Tokens)
+	}
+}
+
+func TestGetContextUsage_AddsEstimateForNewMessages(t *testing.T) {
+	conv := CreateConversation("est-incr", "", "claude-3")
+	for i := 0; i < 5; i++ {
+		AddUserMessage(conv, fmt.Sprintf("message %d with some content", i))
+		AddAssistantMessage(conv, []types.LlmContentBlock{{Type: "text", Text: fmt.Sprintf("response %d with some content", i)}}, types.LlmUsage{InputTokens: 50000, OutputTokens: 100})
+	}
+	// Simulate: API reported 50000 tokens at message count 8 (after 4 pairs).
+	// Then 2 more messages were added (pair 5).
+	conv.LastInputTokens = 50000
+	conv.LastInputTokensMsgCount = 8
+
+	info := GetContextUsage(conv, 200000)
+	if info.Estimated {
+		t.Error("expected estimated=false when LastInputTokens > 0")
+	}
+	// Should be 50000 + estimate for messages at index 8 and 9
+	if info.Tokens <= 50000 {
+		t.Errorf("expected tokens > 50000 (added estimates for new messages), got %d", info.Tokens)
+	}
+}

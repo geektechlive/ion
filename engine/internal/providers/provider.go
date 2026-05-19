@@ -335,36 +335,8 @@ func init() {
 		RegisterProvider(NewOpenAICompatibleProvider(c))
 	}
 
-	// Register models
-	// Anthropic
-	RegisterModel("claude-opus-4-6", types.ModelInfo{ProviderID: "anthropic", ContextWindow: 1000000, CostPer1kInput: 0.015, CostPer1kOutput: 0.075, SupportsCaching: true, SupportsThinking: true, SupportsImages: true})
-	RegisterModel("claude-opus-4-7", types.ModelInfo{ProviderID: "anthropic", ContextWindow: 1000000, CostPer1kInput: 0.015, CostPer1kOutput: 0.075, SupportsCaching: true, SupportsThinking: true, SupportsImages: true})
-	RegisterModel("claude-sonnet-4-6", types.ModelInfo{ProviderID: "anthropic", ContextWindow: 200000, CostPer1kInput: 0.003, CostPer1kOutput: 0.015, SupportsCaching: true, SupportsThinking: true, SupportsImages: true})
-	RegisterModel("claude-haiku-4-5-20251001", types.ModelInfo{ProviderID: "anthropic", ContextWindow: 200000, CostPer1kInput: 0.0008, CostPer1kOutput: 0.004, SupportsCaching: true, SupportsImages: true})
-	// OpenAI
-	RegisterModel("gpt-4.1", types.ModelInfo{ProviderID: "openai", ContextWindow: 1047576, CostPer1kInput: 0.002, CostPer1kOutput: 0.008, SupportsImages: true})
-	RegisterModel("gpt-4.1-mini", types.ModelInfo{ProviderID: "openai", ContextWindow: 1047576, CostPer1kInput: 0.0004, CostPer1kOutput: 0.0016, SupportsImages: true})
-	RegisterModel("o4-mini", types.ModelInfo{ProviderID: "openai", ContextWindow: 200000, CostPer1kInput: 0.0011, CostPer1kOutput: 0.0044, SupportsThinking: true, SupportsImages: true})
-	RegisterModel("o3", types.ModelInfo{ProviderID: "openai", ContextWindow: 200000, CostPer1kInput: 0.01, CostPer1kOutput: 0.04, SupportsThinking: true, SupportsImages: true})
-	// Google
-	RegisterModel("gemini-2.5-pro", types.ModelInfo{ProviderID: "google", ContextWindow: 1048576, CostPer1kInput: 0.00125, CostPer1kOutput: 0.01, SupportsThinking: true, SupportsImages: true})
-	RegisterModel("gemini-2.5-flash", types.ModelInfo{ProviderID: "google", ContextWindow: 1048576, CostPer1kInput: 0.00015, CostPer1kOutput: 0.0006, SupportsThinking: true, SupportsImages: true})
-	// xAI
-	RegisterModel("grok-3", types.ModelInfo{ProviderID: "xai", ContextWindow: 131072, CostPer1kInput: 0.003, CostPer1kOutput: 0.015, SupportsImages: true})
-	RegisterModel("grok-3-fast", types.ModelInfo{ProviderID: "xai", ContextWindow: 131072, CostPer1kInput: 0.005, CostPer1kOutput: 0.025, SupportsImages: true})
-	RegisterModel("grok-3-mini", types.ModelInfo{ProviderID: "xai", ContextWindow: 131072, CostPer1kInput: 0.0003, CostPer1kOutput: 0.0005, SupportsThinking: true})
-	RegisterModel("grok-3-mini-fast", types.ModelInfo{ProviderID: "xai", ContextWindow: 131072, CostPer1kInput: 0.0006, CostPer1kOutput: 0.004, SupportsThinking: true})
-	RegisterModel("grok-2", types.ModelInfo{ProviderID: "xai", ContextWindow: 131072, CostPer1kInput: 0.002, CostPer1kOutput: 0.01, SupportsImages: true})
-	// DeepSeek
-	RegisterModel("deepseek-chat", types.ModelInfo{ProviderID: "deepseek", ContextWindow: 65536, CostPer1kInput: 0.00014, CostPer1kOutput: 0.00028})
-	RegisterModel("deepseek-reasoner", types.ModelInfo{ProviderID: "deepseek", ContextWindow: 65536, CostPer1kInput: 0.00055, CostPer1kOutput: 0.0022, SupportsThinking: true})
-	// Groq
-	RegisterModel("llama-3.3-70b-versatile", types.ModelInfo{ProviderID: "groq", ContextWindow: 131072, CostPer1kInput: 0.00059, CostPer1kOutput: 0.00079})
-	RegisterModel("llama-3.1-8b-instant", types.ModelInfo{ProviderID: "groq", ContextWindow: 131072, CostPer1kInput: 0.00005, CostPer1kOutput: 0.00008})
-	// Mistral
-	RegisterModel("mistral-large-latest", types.ModelInfo{ProviderID: "mistral", ContextWindow: 131072, CostPer1kInput: 0.002, CostPer1kOutput: 0.006, SupportsImages: true})
-	RegisterModel("mistral-small-latest", types.ModelInfo{ProviderID: "mistral", ContextWindow: 131072, CostPer1kInput: 0.0001, CostPer1kOutput: 0.0003, SupportsImages: true})
-	// Cerebras
-	RegisterModel("llama-3.3-70b", types.ModelInfo{ProviderID: "cerebras", ContextWindow: 131072, CostPer1kInput: 0.00085, CostPer1kOutput: 0.0012})
-	RegisterModel("llama-3.1-8b", types.ModelInfo{ProviderID: "cerebras", ContextWindow: 131072, CostPer1kInput: 0.0001, CostPer1kOutput: 0.0001})
+	// Register models from embedded catalog
+	if err := loadModelsFromJSON(modelCatalogJSON); err != nil {
+		panic("failed to load model catalog: " + err.Error())
+	}
 }

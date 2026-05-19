@@ -95,6 +95,9 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	contextWindow := conversation.DefaultContext
 	if info := providers.GetModelInfo(model); info != nil {
 		contextWindow = info.ContextWindow
+		utils.Log("ApiBackend", fmt.Sprintf("context window: model=%s window=%d (from registry)", model, contextWindow))
+	} else {
+		utils.Warn("ApiBackend", fmt.Sprintf("context window: model=%s window=%d (fallback, model not in registry)", model, contextWindow))
 	}
 
 	// Track consecutive prompt_too_long compaction failures to prevent infinite loops

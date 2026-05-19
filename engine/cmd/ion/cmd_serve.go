@@ -40,8 +40,15 @@ func cmdServe() {
 
 	// Load models config (tiers, provider auto-detect) and register
 	// user-defined model names so they resolve to the correct provider.
+	// When a user model overlaps with a catalog model, merge: catalog
+	// metadata (context window, costs, capabilities) serves as the default
+	// and user-config values overlay only what the user explicitly set.
 	modelsConfig := modelconfig.LoadModelsConfig()
 	for model, info := range modelconfig.UserModels(modelsConfig) {
+		if existing := providers.GetModelInfo(model); existing != nil {
+			info = providers.MergeModelInfo(*existing, info)
+			utils.Debug("Config", fmt.Sprintf("user model %s merged with catalog (contextWindow=%d)", model, info.ContextWindow))
+		}
 		info.IsCustom = true
 		providers.RegisterModel(model, info)
 	}

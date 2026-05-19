@@ -2,10 +2,12 @@ package conversation
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 
 	"github.com/dsswift/ion/engine/internal/types"
+	"github.com/dsswift/ion/engine/internal/utils"
 )
 
 // DefaultMaxOutputTokens is the headroom reserved for the model's next
@@ -90,11 +92,13 @@ func GetContextUsage(conv *Conversation, contextWindow int) ContextUsageInfo {
 			}
 		}
 		pct := int(math.Min(100, math.Round(float64(total)/float64(limit)*100)))
+		utils.Debug("Compaction", fmt.Sprintf("GetContextUsage: branch=api-cached reported=%d msgCount=%d currentMsgs=%d total=%d limit=%d pct=%d", reported, conv.LastInputTokensMsgCount, len(conv.Messages), total, limit, pct))
 		return ContextUsageInfo{Percent: pct, Tokens: total, Limit: limit, Estimated: false}
 	}
 
 	estimated := EstimateTokens(conv.Messages)
 	pct := int(math.Min(100, math.Round(float64(estimated)/float64(limit)*100)))
+	utils.Debug("Compaction", fmt.Sprintf("GetContextUsage: branch=heuristic msgs=%d estimated=%d limit=%d pct=%d", len(conv.Messages), estimated, limit, pct))
 	return ContextUsageInfo{Percent: pct, Tokens: estimated, Limit: limit, Estimated: true}
 }
 
