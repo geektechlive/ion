@@ -10,6 +10,14 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.31.0](https://github.com/dsswift/ion/compare/desktop-v1.30.0...desktop-v1.31.0) (2026-05-19)
+
+### Features
+
+* **desktop:** add fast-forward merge option for worktrees ([89b65d9](https://github.com/dsswift/ion/commit/89b65d9688db01ff88cbdbd607ac7141ce97640b))
+* **desktop:** add editor chrome and codemirror extensions ([df0e8c0](https://github.com/dsswift/ion/commit/df0e8c0b8e607ffd79a576e670b78a50708973b6))
+* **desktop:** add markdown preview and editor font settings ([841bfaf](https://github.com/dsswift/ion/commit/841bfafa8e719fac5300cdd4af5f80683af518ce))
+
 ## [1.30.0](https://github.com/dsswift/ion/compare/desktop-v1.29.0...desktop-v1.30.0) (2026-05-19)
 
 ### Features
