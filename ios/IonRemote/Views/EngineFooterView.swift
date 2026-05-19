@@ -88,8 +88,8 @@ struct EngineFooterView: View {
     }
 
     private var contextColor: Color {
-        if fields.contextPercent > 90 { return .red }
-        if fields.contextPercent > 75 { return .orange }
+        if fields.contextPercent >= 80 { return .red }
+        if fields.contextPercent >= 60 { return .orange }
         return .secondary
     }
 }

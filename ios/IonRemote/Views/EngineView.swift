@@ -446,7 +446,7 @@ struct EngineView: View {
     }
 
     private func contextBarColor(_ percent: Double) -> Color {
-        if percent < 50 { return .green }
+        if percent < 60 { return .green }
         if percent < 80 { return .orange }
         return .red
     }

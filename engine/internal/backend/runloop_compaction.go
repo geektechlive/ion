@@ -29,8 +29,10 @@ const maxPromptTooLongRetries = 3
 func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversation, hooks RunHooks, contextWindow, tokenLimit int) {
 	usage := conversation.GetContextUsage(conv, contextWindow)
 	if usage.Tokens <= tokenLimit {
+		utils.Debug("ApiBackend", fmt.Sprintf("compactIfNeeded: no compaction needed tokens=%d limit=%d pct=%d%% estimated=%v", usage.Tokens, tokenLimit, usage.Percent, usage.Estimated))
 		return
 	}
+	utils.Log("ApiBackend", fmt.Sprintf("compactIfNeeded: compaction needed tokens=%d limit=%d pct=%d%% estimated=%v contextWindow=%d", usage.Tokens, tokenLimit, usage.Percent, usage.Estimated, contextWindow))
 
 	// Circuit breaker: stop attempting if we have already compacted
 	// maxConsecutiveCompactions times without a successful API response.
