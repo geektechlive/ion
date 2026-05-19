@@ -43,6 +43,8 @@ type ClientCommand struct {
 	Offset             int                 `json:"offset,omitempty"`
 	AppendSystemPrompt string              `json:"appendSystemPrompt,omitempty"`
 	Source             string              `json:"source,omitempty"`
+	Provider           string              `json:"provider,omitempty"`
+	Credential         string              `json:"credential,omitempty"`
 
 	// elicitation_response: client reply to an engine_elicitation_request event.
 	ElicitRequestID string                 `json:"elicitRequestId,omitempty"`
@@ -84,6 +86,9 @@ var validCommands = map[string]bool{
 	"health":                true,
 	"reconcile_state":       true,
 	"migrate_conversation":  true,
+	"list_models":           true,
+	"store_credential":      true,
+	"refresh_models":        true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -246,6 +251,12 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasNonEmptyString(raw, "key")
 	case "migrate_conversation":
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "text") && hasNonEmptyString(raw, "message")
+	case "list_models":
+		return true
+	case "store_credential":
+		return hasNonEmptyString(raw, "provider") && hasString(raw, "credential")
+	case "refresh_models":
+		return true // optional: provider field to refresh a single provider
 	}
 	return false
 }

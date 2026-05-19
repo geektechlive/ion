@@ -8,8 +8,8 @@ private let ionLog = Logger(subsystem: "com.sprague.ion.mobile", category: "engi
 extension SessionViewModel {
 
     @MainActor
-    func handleSnapshot(snapshotTabs: [RemoteTabState], recentDirs: [String], groupMode: String?, groups: [RemoteTabGroup]?, preferredModel: String? = nil, engineDefaultModel: String? = nil) {
-        DiagnosticLog.log("SNAP: received tabs=\(snapshotTabs.count) dirs=\(recentDirs.count) groupMode=\(groupMode ?? "nil")")
+    func handleSnapshot(snapshotTabs: [RemoteTabState], recentDirs: [String], groupMode: String?, groups: [RemoteTabGroup]?, preferredModel: String? = nil, engineDefaultModel: String? = nil, availableModels: [RemoteModelEntry]? = nil) {
+        DiagnosticLog.log("SNAP: received tabs=\(snapshotTabs.count) dirs=\(recentDirs.count) groupMode=\(groupMode ?? "nil") models=\(availableModels?.count ?? 0)")
         if connectionState != .connected {
             DiagnosticLog.log("SNAP: connected (was \(connectionState))")
             connectionState = .connected
@@ -31,6 +31,9 @@ extension SessionViewModel {
         }
         if let edm = engineDefaultModel {
             self.engineDefaultModel = edm
+        }
+        if let models = availableModels, !models.isEmpty {
+            self.availableModels = models
         }
         // Filter out tabs that iOS requested to close but hasn't received
         // tab_closed confirmation for yet. Without this, the snapshot

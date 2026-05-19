@@ -219,6 +219,18 @@ export const IPC = {
   ENGINE_STOP: 'ion:engine-stop',
   ENGINE_EVENT: 'ion:engine-event',
 
+  // Model & provider management
+  LIST_MODELS: 'ion:list-models',
+  STORE_CREDENTIAL: 'ion:store-credential',
+  REFRESH_MODELS: 'ion:refresh-models',
+
+  // OAuth
+  OAUTH_START: 'ion:oauth-start',
+  OAUTH_LOGOUT: 'ion:oauth-logout',
+  OAUTH_STATUS: 'ion:oauth-status',
+  OAUTH_DEVICE_CODE: 'ion:oauth-device-code',
+  OAUTH_DEVICE_POLL: 'ion:oauth-device-poll',
+
   // Auto-update
   INSTALL_UPDATE: 'ion:install-update',
   UPDATE_DOWNLOADED: 'ion:update-downloaded',

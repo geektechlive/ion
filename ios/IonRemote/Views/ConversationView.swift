@@ -229,6 +229,7 @@ struct ConversationView: View {
                 contextTokens: tab?.contextTokens,
                 isRunning: isRunning,
                 permissionMode: tab?.permissionMode,
+                availableModels: viewModel.availableModels,
                 onSelectModel: { model in
                     viewModel.setTabModel(tabId: tabId, model: model)
                 },

@@ -42,17 +42,23 @@ func cmdServe() {
 	// user-defined model names so they resolve to the correct provider.
 	modelsConfig := modelconfig.LoadModelsConfig()
 	for model, info := range modelconfig.UserModels(modelsConfig) {
+		info.IsCustom = true
 		providers.RegisterModel(model, info)
 	}
 
-	// Resolve provider API keys: env var names (e.g. "ION_API_KEY") are
+	// Resolve provider API keys: env var names (e.g. "OPENROUTER_API_KEY") are
 	// expanded from environment before passing to providers and auth.
+	// If the env var is not set, the reference is cleared so it doesn't get
+	// used as a literal API key value.
 	for name, pcfg := range cfg.Providers {
 		if pcfg.APIKey != "" && isEnvVarName(pcfg.APIKey) {
 			if v := os.Getenv(pcfg.APIKey); v != "" {
 				pcfg.APIKey = v
-				cfg.Providers[name] = pcfg
+			} else {
+				utils.Log("config", fmt.Sprintf("provider %s: env var %s not set, skipping", name, pcfg.APIKey))
+				pcfg.APIKey = ""
 			}
+			cfg.Providers[name] = pcfg
 		}
 	}
 
@@ -115,6 +121,11 @@ func cmdServe() {
 
 	srv.SetConfig(cfg)
 	srv.SetVersion(version)
+	srv.SetAuthResolver(resolver)
+
+	// Start async model discovery (fetches /v1/models from each provider).
+	// Results cached and used by list_models; falls back to hardcoded catalog.
+	providers.StartModelDiscovery(resolver.ResolveKey, cfg.Providers)
 
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to start: %s\n", err)

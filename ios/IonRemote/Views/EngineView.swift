@@ -264,6 +264,7 @@ struct EngineView: View {
                     onSelectModel: { model in
                         viewModel.setEngineModel(tabId: tabId, model: model)
                     },
+                    availableModels: viewModel.availableModels,
                     selectedModel: viewModel.engineModelOverrides[compoundKey] ?? ""
                 )
             }

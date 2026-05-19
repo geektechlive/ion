@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/auth"
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/protocol"
+	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/session"
 	"github.com/dsswift/ion/engine/internal/titling"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -48,6 +50,7 @@ type Server struct {
 	mu                 sync.RWMutex
 	manager            *session.Manager
 	config             *types.EngineRuntimeConfig
+	authResolver       *auth.Resolver
 	broadcastListeners []*listenerHandle
 	done               chan struct{}
 	stopOnce           sync.Once
@@ -67,6 +70,11 @@ func (s *Server) SetConfig(cfg *types.EngineRuntimeConfig) {
 // SetVersion stores the engine binary version for the health command.
 func (s *Server) SetVersion(v string) {
 	s.version = v
+}
+
+// SetAuthResolver stores the auth resolver for credential operations.
+func (s *Server) SetAuthResolver(r *auth.Resolver) {
+	s.authResolver = r
 }
 
 // NewServer creates a Server backed by the given RunBackend.
@@ -544,6 +552,111 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 
 			s.sendResult(c, command, nil, result)
 		}(conn, cmd)
+
+	case "list_models":
+		models := providers.ListModels()
+		providerIDs := providers.ListProviderIDs()
+		providerEntries := make([]types.ProviderEntry, len(providerIDs))
+		for i, pid := range providerIDs {
+			entry := types.ProviderEntry{ID: pid}
+			if s.authResolver != nil {
+				entry.HasAuth, entry.AuthSource = s.authResolver.HasKey(pid)
+			}
+			// Special case: ollama doesn't need auth
+			if pid == "ollama" {
+				entry.HasAuth = true
+				entry.AuthSource = "none"
+			}
+			// Populate config details (gateway URL, API key reference)
+			if s.config != nil {
+				if pc, ok := s.config.Providers[pid]; ok {
+					entry.BaseURL = pc.BaseURL
+					// Show the API key reference if it looks like an env var
+					// (starts with $), otherwise just indicate it's set.
+					if pc.APIKey != "" {
+						if len(pc.APIKey) > 0 && pc.APIKey[0] == '$' {
+							entry.APIKeyRef = pc.APIKey
+						} else {
+							entry.APIKeyRef = "configured"
+						}
+					}
+				}
+			}
+			providerEntries[i] = entry
+		}
+		// For providers with a custom gateway (baseURL), only show
+		// user-configured models or live-discovered models — the hardcoded
+		// catalog doesn't apply to private gateways.
+		customGatewayProviders := make(map[string]bool)
+		if s.config != nil {
+			for pid, pc := range s.config.Providers {
+				if pc.BaseURL != "" {
+					customGatewayProviders[pid] = true
+				}
+			}
+		}
+		if len(customGatewayProviders) > 0 {
+			// Build set of discovered model IDs so we don't filter them out
+			discoveredIDs := make(map[string]bool)
+			for pid := range customGatewayProviders {
+				for _, dm := range providers.GetDiscoveredModels(pid) {
+					discoveredIDs[dm.ID] = true
+				}
+			}
+			filtered := make([]types.ModelEntry, 0, len(models))
+			for _, m := range models {
+				if customGatewayProviders[m.ProviderID] && !m.IsCustom && !discoveredIDs[m.ID] {
+					continue // skip hardcoded catalog models for custom gateway providers
+				}
+				filtered = append(filtered, m)
+			}
+			models = filtered
+		}
+		s.sendResult(conn, cmd, nil, map[string]interface{}{
+			"models":    models,
+			"providers": providerEntries,
+		})
+
+	case "store_credential":
+		if s.authResolver == nil {
+			s.sendResult(conn, cmd, fmt.Errorf("auth resolver not configured"), nil)
+			break
+		}
+		fs := auth.NewFileStore()
+		if cmd.Credential == "" {
+			// Empty credential means "clear this key"
+			_ = fs.DeleteKey(cmd.Provider)
+			providers.SetProviderKey(cmd.Provider, "")
+		} else {
+			if err := fs.SetKey(cmd.Provider, cmd.Credential); err != nil {
+				s.sendResult(conn, cmd, err, nil)
+				break
+			}
+			providers.SetProviderKey(cmd.Provider, cmd.Credential)
+			// Trigger model discovery for the newly-authed provider so its
+			// models appear in the picker without requiring an engine restart.
+			providerConfigs := make(map[string]types.ProviderConfig)
+			if s.config != nil {
+				providerConfigs = s.config.Providers
+			}
+			providers.DiscoverProvider(cmd.Provider, cmd.Credential, providerConfigs)
+		}
+		s.sendResult(conn, cmd, nil, nil)
+
+	case "refresh_models":
+		providerConfigs := make(map[string]types.ProviderConfig)
+		if s.config != nil {
+			providerConfigs = s.config.Providers
+		}
+		var resolveKey func(string) (string, error)
+		if s.authResolver != nil {
+			resolveKey = s.authResolver.ResolveKey
+		} else {
+			resolveKey = func(string) (string, error) { return "", nil }
+		}
+		// Provider field is optional: empty = refresh all
+		providers.RefreshModels(cmd.Provider, true, resolveKey, providerConfigs)
+		s.sendResult(conn, cmd, nil, nil)
 
 	case "shutdown":
 		_ = s.Stop()

@@ -249,17 +249,13 @@ struct SettingsView: View {
     }
 
     private var modelsSection: some View {
-        let models: [(id: String, label: String)] = [
-            ("claude-opus-4-6", "Opus 4.6"),
-            ("claude-sonnet-4-6", "Sonnet 4.6"),
-            ("claude-haiku-4-5-20251001", "Haiku 4.5"),
-        ]
+        let models = viewModel.availableModels
         return Section("Models") {
             Picker("Conversation", selection: Binding<String>(
                 get: { viewModel.preferredModel },
                 set: { newValue in viewModel.setPreferredModelDefault(newValue) }
             )) {
-                ForEach(models, id: \.id) { model in
+                ForEach(models) { model in
                     Text(model.label).tag(model.id)
                 }
             }
@@ -268,7 +264,7 @@ struct SettingsView: View {
                 set: { newValue in viewModel.setEngineDefaultModelDefault(newValue) }
             )) {
                 Text("Same as Conversation").tag("")
-                ForEach(models, id: \.id) { model in
+                ForEach(models) { model in
                     Text(model.label).tag(model.id)
                 }
             }

@@ -11,7 +11,7 @@ struct RemoteTabGroup: Codable, Identifiable, Sendable {
 }
 
 enum RemoteEvent: Codable, Sendable {
-    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?)
+    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?, availableModels: [RemoteModelEntry]?)
     case tabCreated(tab: RemoteTabState)
     case tabClosed(tabId: String)
     case tabStatus(tabId: String, status: TabStatus)
@@ -163,7 +163,7 @@ enum RemoteEvent: Codable, Sendable {
         case level, dialogId, method, title, defaultValue
         case agents, fields, inputTokens, outputTokens, contextPercent
         case signal, stderrTail, label, profiles, elapsed, usage, model
-        case tabGroupMode, tabGroups, preferredModel, engineDefaultModel
+        case tabGroupMode, tabGroups, preferredModel, engineDefaultModel, availableModels
         case directory, files, branch, isGitRepo, ahead, behind, stagedCount, unstagedCount
         case commits, totalCount, diff, fileName, graphLayout, hash, stats
         case entries, filePath, ok, error

@@ -16,6 +16,8 @@ import { registerWorktreeIpc } from './worktree'
 import { registerSettingsIpc } from './settings'
 import { registerRemoteControlIpc } from './remote-control'
 import { registerMigrationIpc } from './migration'
+import { registerModelsIpc } from './models'
+import { registerOAuthIpc } from './oauth'
 
 export function registerAllIpc(): void {
   registerWindowIpc()
@@ -36,4 +38,6 @@ export function registerAllIpc(): void {
   registerSettingsIpc()
   registerRemoteControlIpc()
   registerMigrationIpc()
+  registerModelsIpc()
+  registerOAuthIpc()
 }

@@ -60,6 +60,7 @@ export function useTabRestoration() {
                       bashResults: st.bashResults || [],
                       pillColor: st.pillColor || null,
                       pillIcon: st.pillIcon || null,
+                      modelOverride: st.modelOverride || null,
                       worktree: restoredWorktree,
                       historicalSessionIds: st.historicalSessionIds || [],
                       lastKnownSessionId: st.lastKnownSessionId || null,
@@ -140,6 +141,7 @@ export function useTabRestoration() {
                       customTitle: st.customTitle || null,
                       pillColor: st.pillColor || null,
                       groupId: st.groupId || null,
+                      modelOverride: st.modelOverride || null,
                       conversationId: st.conversationId || null,
                     }
                   : t
@@ -220,6 +222,7 @@ export function useTabRestoration() {
                       permissionMode: st.permissionMode,
                       pillColor: st.pillColor || null,
                       pillIcon: st.pillIcon || null,
+                      modelOverride: st.modelOverride || null,
                       forkedFromSessionId: st.forkedFromSessionId || null,
                       worktree: st.worktree || null,
                       historicalSessionIds: st.historicalSessionIds || [],
