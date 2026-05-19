@@ -1,31 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { useColors } from '../../theme'
+import { ImageViewer, useImageDataUrl } from '../ImageViewer'
 import type { Attachment } from '../../../shared/types'
-
-/** Module-level cache so the same image isn't re-read from disk per render. */
-const dataUrlCache = new Map<string, string>()
-
-function useImageDataUrl(path: string): string | null {
-  const [dataUrl, setDataUrl] = useState<string | null>(() => dataUrlCache.get(path) ?? null)
-
-  useEffect(() => {
-    if (dataUrlCache.has(path)) {
-      setDataUrl(dataUrlCache.get(path) ?? null)
-      return
-    }
-    let cancelled = false
-    window.ion.readImageDataUrl(path).then((res) => {
-      if (cancelled) return
-      if (res.dataUrl) {
-        dataUrlCache.set(path, res.dataUrl)
-        setDataUrl(res.dataUrl)
-      }
-    })
-    return () => { cancelled = true }
-  }, [path])
-
-  return dataUrl
-}
 
 const ATTACHED_IMAGE_RE = /\[Attached image: ([^\]]+)\]/g
 
@@ -61,23 +37,38 @@ export function deriveMessageImages(content: string, attachments?: Attachment[])
 
 /**
  * Renders image attachments as inline thumbnails above the user-message bubble.
- * Non-image attachments are passed through to MessageAttachments below the bubble
- * (this component renders nothing for them).
+ * Clicking opens an ImageViewer floating panel with save-as and reveal actions.
  */
 export function InlineMessageImages({ content, attachments }: { content: string; attachments?: Attachment[] }) {
   const images = deriveMessageImages(content, attachments)
+  const [previewImage, setPreviewImage] = useState<{ path: string; name: string } | null>(null)
+
   if (images.length === 0) return null
 
   return (
-    <div className="flex flex-col gap-1 mb-1 items-end">
-      {images.map((img) => (
-        <InlineImage key={img.key} path={img.path} name={img.name} />
-      ))}
-    </div>
+    <>
+      <div className="flex flex-col gap-1 mb-1 items-end">
+        {images.map((img) => (
+          <InlineImage
+            key={img.key}
+            path={img.path}
+            name={img.name}
+            onPreview={() => setPreviewImage({ path: img.path, name: img.name })}
+          />
+        ))}
+      </div>
+      {previewImage && (
+        <ImageViewer
+          filePath={previewImage.path}
+          fileName={previewImage.name}
+          onClose={() => setPreviewImage(null)}
+        />
+      )}
+    </>
   )
 }
 
-function InlineImage({ path, name }: { path: string; name: string }) {
+function InlineImage({ path, name, onPreview }: { path: string; name: string; onPreview: () => void }) {
   const colors = useColors()
   const dataUrl = useImageDataUrl(path)
 
@@ -98,7 +89,7 @@ function InlineImage({ path, name }: { path: string; name: string }) {
       type="button"
       className="block rounded-lg overflow-hidden border cursor-pointer"
       style={{ borderColor: colors.toolBorder, background: colors.surfacePrimary, maxWidth: 280 }}
-      onClick={() => window.ion.openExternal(`file://${path}`)}
+      onClick={onPreview}
       title={name}
     >
       <img

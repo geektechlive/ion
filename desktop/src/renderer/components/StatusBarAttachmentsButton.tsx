@@ -8,6 +8,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { PlanViewer } from './PlanViewer'
+import { ImageViewer } from './ImageViewer'
 
 /* ─── Extension sets for icon picking ─── */
 
@@ -27,7 +28,7 @@ interface ParsedAttachment {
   path: string
 }
 
-const ATTACHMENT_RE = /\[Attached (image|file|plan): ([^\]]+)\]/g
+const ATTACHMENT_LINE_RE = /^\[Attached (image|file|plan): ([^\]]+)\]$/
 
 interface MsgLike {
   role: string
@@ -59,10 +60,15 @@ function parseAttachmentsFromMessages(
       }
     }
 
-    // 2. Content markers (available for historical/reloaded messages from JSONL)
-    let m: RegExpExecArray | null
-    ATTACHMENT_RE.lastIndex = 0
-    while ((m = ATTACHMENT_RE.exec(msg.content)) !== null) {
+    // 2. Content markers (available for historical/reloaded messages from JSONL).
+    //    The send-slice places markers as a contiguous block at the very start of
+    //    the message content, one per line, followed by a blank line. We only scan
+    //    leading lines to avoid false positives from example text in plan documents
+    //    or user prose that happens to match the marker format.
+    const lines = msg.content.split('\n')
+    for (const line of lines) {
+      const m = ATTACHMENT_LINE_RE.exec(line)
+      if (!m) break // stop at first non-marker line
       const kind = m[1] as 'image' | 'file' | 'plan'
       const path = m[2]
       const name = path.includes('/') ? path.split('/').pop()! : path
@@ -102,6 +108,7 @@ export function AttachmentsButton() {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ bottom: 0, left: 0 })
   const [planData, setPlanData] = useState<{ content: string; fileName: string } | null>(null)
+  const [imagePreview, setImagePreview] = useState<{ path: string; name: string } | null>(null)
 
   const { messages, planFilePath, activeTabId, workingDir } = useSessionStore(
     useShallow((s) => {
@@ -171,6 +178,7 @@ export function AttachmentsButton() {
   /* ─── Click handlers ─── */
 
   const handlePlanClick = useCallback(async (path: string) => {
+    setOpen(false)
     const result = await window.ion.readPlan(path)
     if (result.content && result.fileName) {
       setPlanData({ content: result.content, fileName: result.fileName })
@@ -178,7 +186,12 @@ export function AttachmentsButton() {
   }, [])
 
   const handleFileClick = useCallback(async (a: ParsedAttachment) => {
+    setOpen(false)
     const ext = extOf(a.name)
+    if (IMAGE_EXTS.has(ext)) {
+      setImagePreview({ path: a.path, name: a.name })
+      return
+    }
     if (EDITABLE_EXTS.has(ext) && activeTabId) {
       const { openFileInEditor } = useSessionStore.getState()
       openFileInEditor(workingDir, activeTabId, a.path)
@@ -231,6 +244,7 @@ export function AttachmentsButton() {
       {popoverLayer && open && createPortal(
         <div
           ref={popoverRef}
+          data-ion-ui
           style={{
             position: 'fixed',
             bottom: pos.bottom,
@@ -371,6 +385,15 @@ export function AttachmentsButton() {
           content={planData.content}
           fileName={planData.fileName}
           onClose={() => setPlanData(null)}
+        />
+      )}
+
+      {/* ImageViewer modal */}
+      {imagePreview && (
+        <ImageViewer
+          filePath={imagePreview.path}
+          fileName={imagePreview.name}
+          onClose={() => setImagePreview(null)}
         />
       )}
     </>
