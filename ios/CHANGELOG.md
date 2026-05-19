@@ -10,6 +10,16 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.26.0](https://github.com/dsswift/ion/compare/ios-v1.25.0...ios-v1.26.0) (2026-05-19)
+
+### Features
+
+* **ios:** add tab group reordering support ([7ea1733](https://github.com/dsswift/ion/commit/7ea1733569d5a841308814d6feea3cd4dbadd62c))
+
+### Bug Fixes
+
+* **ios:** filter stale device pairings from install detection ([999f58b](https://github.com/dsswift/ion/commit/999f58bd36140a2a6994aa5cb67402701197ac44))
+
 ## [1.25.0](https://github.com/dsswift/ion/compare/ios-v1.24.0...ios-v1.25.0) (2026-05-19)
 
 ### Features

@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.30.0](https://github.com/dsswift/ion/compare/desktop-v1.29.0...desktop-v1.30.0) (2026-05-19)
+
+### Features
+
+* **desktop:** add tab group reordering support ([557e549](https://github.com/dsswift/ion/commit/557e5493810b287add9a15c39e815c8debdbf7d9))
+
 ## [1.29.0](https://github.com/dsswift/ion/compare/desktop-v1.28.0...desktop-v1.29.0) (2026-05-19)
 
 ### Features
