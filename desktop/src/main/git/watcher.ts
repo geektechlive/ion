@@ -98,14 +98,21 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
   let isSuspended = false
   let debounceTimer: Timer | null = null
   let pendingEvents = new Set<GitWatchEvent['kind']>()
+  let startGeneration = 0
 
   return {
     start(repoPath: string, onEvent: (event: GitWatchEvent) => void): void {
       if (isActive) return
+      const gen = ++startGeneration
 
       const flush = (): void => {
         debounceTimer = null
-        if (isSuspended) { pendingEvents.clear(); return }
+        if (isSuspended) {
+          log(`Git watcher flush: suspended, dropping ${pendingEvents.size} events`)
+          pendingEvents.clear()
+          return
+        }
+        log(`Git watcher flush: emitting ${pendingEvents.size} events [${[...pendingEvents].join(', ')}]`)
         for (const kind of pendingEvents) onEvent({ kind })
         pendingEvents.clear()
       }
@@ -118,23 +125,40 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
       const gitDir = join(repoPath, '.git')
 
       pw.subscribe(gitDir, (err, events) => {
+        if (gen !== startGeneration) return   // stale callback from previous start
         if (err) { log(`Git watcher .git error: ${err.message}`); return }
         for (const event of events) {
           const kind = classifyGitMetaChange(event.path)
           if (kind) pendingEvents.add(kind)
         }
         if (pendingEvents.size > 0) scheduleFlush()
-      }).then((sub) => { subscriptions.push(sub) })
-        .catch((err: Error) => log(`Git watcher: failed to watch .git: ${err.message}`))
+      }).then((sub) => {
+        if (gen !== startGeneration) {
+          log('Git watcher: unsubscribing stale .git subscription')
+          sub.unsubscribe().catch(() => {})
+          return
+        }
+        subscriptions.push(sub)
+        log(`Git watcher .git subscription ready: ${repoPath}`)
+      }).catch((err: Error) => log(`Git watcher: failed to watch .git: ${err.message}`))
 
       pw.subscribe(repoPath, (err, events) => {
+        if (gen !== startGeneration) return   // stale callback from previous start
         if (err) { log(`Git watcher tree error: ${err.message}`); return }
         if (events.length > 0) {
           pendingEvents.add('status:dirty')
           scheduleFlush()
         }
       }, { ignore: ['.git', 'node_modules', '.DS_Store'] })
-        .then((sub) => { subscriptions.push(sub) })
+        .then((sub) => {
+          if (gen !== startGeneration) {
+            log('Git watcher: unsubscribing stale tree subscription')
+            sub.unsubscribe().catch(() => {})
+            return
+          }
+          subscriptions.push(sub)
+          log(`Git watcher tree subscription ready: ${repoPath}`)
+        })
         .catch((err: Error) => log(`Git watcher: failed to watch tree: ${err.message}`))
 
       isActive = true
@@ -148,15 +172,18 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
         debounceTimer = null
       }
       pendingEvents.clear()
+      log(`Git watcher stop: unsubscribing ${subscriptions.length} subscriptions`)
       for (const sub of subscriptions) sub.unsubscribe().catch(() => {})
       subscriptions = []
       isActive = false
+      startGeneration++  // invalidate any in-flight subscribe callbacks
       log('Git watcher stopped')
     },
 
     setSuspended(suspended: boolean): void {
       if (isSuspended === suspended) return
       isSuspended = suspended
+      log(`Git watcher setSuspended: ${suspended}`)
       if (suspended && debounceTimer) {
         clearTimeout(debounceTimer)
         debounceTimer = null
