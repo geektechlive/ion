@@ -144,8 +144,9 @@ export function GitGraphSection({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; commit: GitCommit } | null>(null)
   const [hoveredCommit, setHoveredCommit] = useState<GitCommit | null>(null)
   const [hoverRect, setHoverRect] = useState<DOMRect | null>(null)
-  const [commitDetail, setCommitDetail] = useState<GitCommitDetail | null>(null)
+  const [hoverDetail, setHoverDetail] = useState<GitCommitDetail | null>(null)
   const [expandedHash, setExpandedHash] = useState<string | null>(null)
+  const [expandedDetail, setExpandedDetail] = useState<GitCommitDetail | null>(null)
   const [commitFiles, setCommitFiles] = useState<GitCommitFile[]>([])
   const [commitFileDiff, setCommitFileDiff] = useState<{ diff: string; fileName: string } | null>(null)
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -157,7 +158,7 @@ export function GitGraphSection({
     activeHashRef.current = null
     setHoveredCommit(null)
     setHoverRect(null)
-    setCommitDetail(null)
+    setHoverDetail(null)
   }, [])
 
   const handleRowHover = useCallback((commit: GitCommit, rect: DOMRect) => {
@@ -170,10 +171,10 @@ export function GitGraphSection({
     hoverTimerRef.current = setTimeout(() => {
       setHoveredCommit(commit)
       setHoverRect(rect)
-      setCommitDetail(null)
+      setHoverDetail(null)
       activeHashRef.current = commit.hash
       window.ion.gitCommitDetail(directory, commit.hash).then((detail) => {
-        if (activeHashRef.current === commit.hash) setCommitDetail(detail)
+        if (activeHashRef.current === commit.hash) setHoverDetail(detail)
       }).catch(() => {})
     }, 300)
   }, [directory, dismissPopup])
@@ -234,17 +235,17 @@ export function GitGraphSection({
     // Expand
     setExpandedHash(commit.hash)
     setCommitFileDiff(null)
-    setCommitDetail(null)
+    setExpandedDetail(null)
     try {
       const [filesResult, detailResult] = await Promise.all([
         window.ion.gitCommitFiles(directory, commit.hash),
         window.ion.gitCommitDetail(directory, commit.hash),
       ])
       setCommitFiles(filesResult.files as GitCommitFile[])
-      setCommitDetail(detailResult)
+      setExpandedDetail(detailResult)
     } catch {
       setCommitFiles([])
-      setCommitDetail(null)
+      setExpandedDetail(null)
     }
   }, [expandedHash, directory])
 
@@ -444,7 +445,7 @@ export function GitGraphSection({
         <VirtualCommitList
           graphNodes={graphNodes}
           expandedHash={expandedHash}
-          commitDetail={commitDetail}
+          commitDetail={expandedDetail}
           commitFiles={commitFiles}
           scrollRef={scrollRef}
           onHover={handleRowHover}
@@ -467,7 +468,7 @@ export function GitGraphSection({
 
       {/* Commit detail popup */}
       {popoverLayer && hoveredCommit && hoverRect && createPortal(
-        <CommitPopup commit={hoveredCommit} rect={hoverRect} detail={commitDetail} panelRight={scrollRef.current?.getBoundingClientRect().right ?? hoverRect.right} onMouseEnter={handlePopupEnter} onMouseLeave={handlePopupLeave} />,
+        <CommitPopup commit={hoveredCommit} rect={hoverRect} detail={hoverDetail} panelRight={scrollRef.current?.getBoundingClientRect().right ?? hoverRect.right} onMouseEnter={handlePopupEnter} onMouseLeave={handlePopupLeave} />,
         popoverLayer,
       )}
 

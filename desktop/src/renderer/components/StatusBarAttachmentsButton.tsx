@@ -29,8 +29,14 @@ interface ParsedAttachment {
 
 const ATTACHMENT_RE = /\[Attached (image|file|plan): ([^\]]+)\]/g
 
+interface MsgLike {
+  role: string
+  content: string
+  attachments?: Array<{ type: string; name: string; path: string }> | undefined
+}
+
 function parseAttachmentsFromMessages(
-  messages: Array<{ role: string; content: string }>,
+  messages: MsgLike[],
   planFilePath: string | null,
 ): ParsedAttachment[] {
   const seen = new Set<string>()
@@ -44,6 +50,16 @@ function parseAttachmentsFromMessages(
 
   for (const msg of messages) {
     if (msg.role !== 'user') continue
+
+    // 1. Structured attachments (available for in-session messages)
+    if (msg.attachments) {
+      for (const a of msg.attachments) {
+        const kind = (a.type === 'image' || a.type === 'plan') ? a.type : 'file' as const
+        add({ kind, name: a.name, path: a.path })
+      }
+    }
+
+    // 2. Content markers (available for historical/reloaded messages from JSONL)
     let m: RegExpExecArray | null
     ATTACHMENT_RE.lastIndex = 0
     while ((m = ATTACHMENT_RE.exec(msg.content)) !== null) {
