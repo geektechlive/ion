@@ -10,8 +10,10 @@ struct ConversationStatusBar: View {
     let isRunning: Bool
     let permissionMode: PermissionMode?
     let availableModels: [RemoteModelEntry]
+    let attachmentCount: Int
     let onSelectModel: (String) -> Void
     let onToggleMode: () -> Void
+    let onTapAttachments: () -> Void
 
     /// The effective model: override > preferred > default fallback.
     private var effectiveModel: String {
@@ -87,6 +89,19 @@ struct ConversationStatusBar: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // Attachments button
+            Button(action: onTapAttachments) {
+                HStack(spacing: 3) {
+                    Image(systemName: "paperclip")
+                    if attachmentCount > 0 {
+                        Text("\(attachmentCount)")
+                            .fontWeight(.medium)
+                    }
+                }
+                .foregroundStyle(attachmentCount > 0 ? IonTheme.accent : .secondary)
+            }
+            .buttonStyle(.plain)
 
             // Context usage (only when data is available)
             if let pct = resolvedContextPercent {

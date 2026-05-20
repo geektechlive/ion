@@ -331,10 +331,6 @@ export function useTabRestoration() {
               activeInstanceId: st.terminalInstances[0].id,
             })
             useSessionStore.setState({ terminalPanes: panes })
-            // Also mark terminal as open so the pane is visible
-            useSessionStore.setState((s) => ({
-              terminalOpenTabIds: new Set([...s.terminalOpenTabIds, tabId]),
-            }))
             // Pre-populate saved buffers for history restore
             if (st.terminalBuffers) {
               for (const inst of st.terminalInstances) {

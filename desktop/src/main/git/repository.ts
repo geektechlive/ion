@@ -75,7 +75,13 @@ export class GitRepository extends EventEmitter {
   private _revision = 0
   private _refCount = 0
   private readonly _watcher: GitWatcher
-  private readonly _onFocusChange = (focused: boolean): void => { this._watcher.setSuspended(!focused) }
+  private readonly _onFocusChange = (focused: boolean): void => {
+    this._watcher.setSuspended(!focused)
+    if (focused) {
+      log('Focus returned, refreshing snapshot for ' + this.path)
+      this.refreshSnapshot().catch(() => {})
+    }
+  }
   private _snapshot: RepoSnapshot | null = null
   private _refreshing = false
   private _refreshAgain = false
@@ -124,6 +130,7 @@ export class GitRepository extends EventEmitter {
   }
 
   private handleWatchEvent(event: GitWatchEvent): void {
+    log(`Watch event ${event.kind} for ${this.path}`)
     switch (event.kind) {
       case 'head:changed':
         this.bumpRevision()
