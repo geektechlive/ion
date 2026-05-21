@@ -10,6 +10,12 @@ extension SessionViewModel {
     @MainActor
     func handleSnapshot(snapshotTabs: [RemoteTabState], recentDirs: [String], groupMode: String?, groups: [RemoteTabGroup]?, preferredModel: String? = nil, engineDefaultModel: String? = nil, availableModels: [RemoteModelEntry]? = nil) {
         DiagnosticLog.log("SNAP: received tabs=\(snapshotTabs.count) dirs=\(recentDirs.count) groupMode=\(groupMode ?? "nil") models=\(availableModels?.count ?? 0)")
+        // Log any tabs that arrive with a non-empty permission queue so we can
+        // confirm the blue dot has the data it needs at relaunch.
+        for t in snapshotTabs where !t.permissionQueue.isEmpty {
+            let tools = t.permissionQueue.map { "\($0.toolName)(id=\($0.questionId.prefix(12)))" }.joined(separator: ", ")
+            DiagnosticLog.log("SNAP: tab=\(t.id.prefix(8)) status=\(t.status.rawValue) queue=[\(tools)]")
+        }
         if connectionState != .connected {
             DiagnosticLog.log("SNAP: connected (was \(connectionState))")
             connectionState = .connected

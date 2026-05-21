@@ -403,6 +403,10 @@ extension SessionViewModel {
 
     @MainActor
     private func handlePermissionRequest(tabId: String, questionId: String, toolName: String, toolInput: [String: AnyCodable]?, options: [PermissionOption]) {
+        let inputKeys = toolInput?.keys.sorted() ?? []
+        let inputSummary = toolInput?.map { "\($0.key): \(type(of: $0.value.value))" }.joined(separator: ", ") ?? "nil"
+        DiagnosticLog.log("PERM: handlePermissionRequest: tabId=\(tabId.prefix(8)) questionId=\(questionId.prefix(16)) toolName=\(toolName) inputKeys=\(inputKeys) inputTypes=[\(inputSummary)] options=\(options.map(\.label))")
+
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             // Normalize AnyCodable toolInput to Foundation types so the
             // card views can parse with simple `as?` casts. The Codable
@@ -414,6 +418,10 @@ extension SessionViewModel {
                let data = try? JSONEncoder().encode(input),
                let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 normalizedInput = dict.mapValues { AnyCodable($0) }
+                let normalizedSummary = normalizedInput?.map { "\($0.key): \(type(of: $0.value.value))" }.joined(separator: ", ") ?? "nil"
+                DiagnosticLog.log("PERM: handlePermissionRequest: normalized toolInput types=[\(normalizedSummary)]")
+            } else {
+                DiagnosticLog.log("PERM: handlePermissionRequest: normalization failed or skipped, using raw toolInput")
             }
             let request = PermissionRequest(
                 questionId: questionId,
@@ -421,7 +429,10 @@ extension SessionViewModel {
                 toolInput: normalizedInput,
                 options: options
             )
+            DiagnosticLog.log("PERM: handlePermissionRequest: queued request for tabId=\(tabId.prefix(8)) queueSize=\(self.tabs[idx].permissionQueue.count + 1)")
             tabs[idx].permissionQueue.append(request)
+        } else {
+            DiagnosticLog.log("PERM: handlePermissionRequest: tab \(tabId.prefix(8)) not found, dropping permission request")
         }
     }
 
@@ -445,6 +456,12 @@ extension SessionViewModel {
             messages[tabId] = deduped
         }
         messageCountByTab[tabId] = messages[tabId]?.count ?? 0
+
+        // Log the last 3 messages for diagnostics (permission card restoration depends on message content).
+        let allMsgs = messages[tabId] ?? []
+        let tail = allMsgs.suffix(3)
+        let tailSummary = tail.map { "role=\($0.role.rawValue) toolName=\($0.toolName ?? "nil") isTool=\($0.isTool) toolInput=\($0.toolInput?.prefix(60) ?? "nil")" }.joined(separator: " | ")
+        DiagnosticLog.log("CONV-HIST: tabId=\(tabId.prefix(8)) total=\(allMsgs.count) hasMore=\(hasMore) cursor=\(cursor?.prefix(8) ?? "nil") tail=[\(tailSummary)]")
     }
 
     @MainActor
