@@ -208,6 +208,25 @@ export function wireRemoteSessionPlaneForwarding(): void {
             options: [],
           }, true, { title: 'Ion needs your attention', body: 'Plan ready for your review' })
         }
+
+        // Forward AskUserQuestion denials the same way. The engine records
+        // these as PermissionDenials in task_complete (same as ExitPlanMode)
+        // but the task_complete handler previously ignored them, so iOS never
+        // received a permission_request and the card never appeared.
+        const askDenial = event.permissionDenials?.find(
+          (d) => d.toolName === 'AskUserQuestion',
+        )
+        if (askDenial && state.remoteTransport) {
+          log(`task_complete: forwarding AskUserQuestion denial to remote questionId=denied-${askDenial.toolUseId}`)
+          state.remoteTransport.send({
+            type: 'permission_request',
+            tabId,
+            questionId: `denied-${askDenial.toolUseId}`,
+            toolName: 'AskUserQuestion',
+            toolInput: askDenial.toolInput,
+            options: [],
+          }, true, { title: 'Ion needs your attention', body: 'Question waiting for your answer' })
+        }
         break
       }
       case 'compacting': {

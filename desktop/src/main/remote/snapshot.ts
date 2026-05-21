@@ -50,6 +50,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                       denied[d].toolName !== 'AskUserQuestion') continue;
                   queue.push({
                     questionId: 'denied-' + denied[d].toolUseId,
+                    toolName: denied[d].toolName,
                     toolTitle: denied[d].toolName,
                     toolInput: denied[d].toolInput,
                     options: [],

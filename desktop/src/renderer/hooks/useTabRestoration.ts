@@ -4,6 +4,12 @@ import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { setSavedBuffer } from '../components/TerminalInstance'
 
+/** Parse a JSON toolInput string into a Record, or undefined on failure. */
+function parseToolInput(raw?: string): Record<string, unknown> | undefined {
+  if (!raw) return undefined
+  try { return JSON.parse(raw) } catch { return undefined }
+}
+
 /**
  * Bootstrap effect run once at app start. Initializes static info, restores
  * any persisted tabs (sessions, engine, terminal-only, sessionless), reapplies
@@ -271,7 +277,7 @@ export function useTabRestoration() {
               if (!restoredDenied && !tab?.conversationId) {
                 const lastTool = [...combinedMessages].reverse().find((m) => m.toolName)
                 if (lastTool?.toolName === 'ExitPlanMode' || lastTool?.toolName === 'AskUserQuestion') {
-                  restoredDenied = { tools: [{ toolName: lastTool.toolName, toolUseId: 'restored' }] }
+                  restoredDenied = { tools: [{ toolName: lastTool.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastTool.toolInput) }] }
                 }
               }
 
