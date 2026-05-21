@@ -64,23 +64,57 @@ struct EngineView: View {
         }
     }
 
+    private static let bootstrapPrefix = "Session bootstrapped"
+
     private var groupedMessages: [GroupedItem] {
+        DiagnosticLog.log("ENGINE-BOOTSTRAP: groupedMessages entry total=\(engineMsgs.count)")
         var result: [GroupedItem] = []
         var toolBuf: [EngineMessage] = []
+        var bootstrapBuf: [EngineMessage] = []
+        var totalRunsFlushed = 0
+        var totalSuppressed = 0
+
+        let flushBootstrap = {
+            guard !bootstrapBuf.isEmpty else { return }
+            var representative = bootstrapBuf.last!
+            let suppressed = bootstrapBuf.count - 1
+            if suppressed > 0 {
+                representative.bootstrapCollapsedCount = suppressed
+            }
+            DiagnosticLog.log(
+                "ENGINE-BOOTSTRAP: flush run count=\(bootstrapBuf.count) kept=\(representative.id) suppressed=\(suppressed)"
+            )
+            result.append(.single(representative))
+            totalRunsFlushed += 1
+            totalSuppressed += suppressed
+            bootstrapBuf = []
+        }
+
         for msg in engineMsgs {
             if msg.role == "tool" {
+                flushBootstrap()
                 toolBuf.append(msg)
             } else {
                 if !toolBuf.isEmpty {
                     result.append(.toolGroup(toolBuf))
                     toolBuf = []
                 }
-                result.append(.single(msg))
+                if msg.role == "harness" && msg.content.hasPrefix(Self.bootstrapPrefix) {
+                    DiagnosticLog.log("ENGINE-BOOTSTRAP: enqueue id=\(msg.id) buf=\(bootstrapBuf.count + 1)")
+                    bootstrapBuf.append(msg)
+                } else {
+                    flushBootstrap()
+                    result.append(.single(msg))
+                }
             }
         }
+        flushBootstrap()
         if !toolBuf.isEmpty {
             result.append(.toolGroup(toolBuf))
         }
+        DiagnosticLog.log(
+            "ENGINE-BOOTSTRAP: groupedMessages done runs=\(totalRunsFlushed) suppressed=\(totalSuppressed) output=\(result.count)"
+        )
         return result
     }
 
