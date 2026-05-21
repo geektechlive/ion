@@ -114,11 +114,9 @@ func (m *Manager) fireBeforePromptCli(s *engineSession, key string, extGroup *ex
 		opts.Prompt = rewritten
 	}
 	if extraSystem != "" {
-		if opts.AppendSystemPrompt == "" {
-			opts.AppendSystemPrompt = extraSystem
-		} else {
-			opts.AppendSystemPrompt += "\n\n" + extraSystem
-		}
+		// Use SystemPrompt (--system-prompt) so the Jarvis persona is the primary
+		// system context. AppendSystemPrompt (git context, SystemHint) is secondary.
+		opts.SystemPrompt = extraSystem
 	}
 }
 
