@@ -10,6 +10,18 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.34.0](https://github.com/dsswift/ion/compare/desktop-v1.33.0...desktop-v1.34.0) (2026-05-21)
+
+### Features
+
+* **desktop:** add engine session key remapping ([3f168c9](https://github.com/dsswift/ion/commit/3f168c920de1402c0f690aedf7d61a5d3e6ecfcc))
+* **desktop:** add remote engine instance move command ([49b8bc3](https://github.com/dsswift/ion/commit/49b8bc3c6c1f4e157d5838abe94ae3bd534f5821))
+* **desktop:** add ui for moving engine instances ([82bbbdb](https://github.com/dsswift/ion/commit/82bbbdb2ae4f48d4ba37d18828e6f81812b95909))
+
+### Bug Fixes
+
+* **desktop:** repair git panel auto-refresh and refresh button ([e313491](https://github.com/dsswift/ion/commit/e31349120586b918c1eaece08b1d35b6998d5230))
+
 ## [1.33.0](https://github.com/dsswift/ion/compare/desktop-v1.32.3...desktop-v1.33.0) (2026-05-21)
 
 ### Features

@@ -10,6 +10,21 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.28.0](https://github.com/dsswift/ion/compare/ios-v1.27.0...ios-v1.28.0) (2026-05-21)
+
+### Features
+
+* **ios:** add tab search functionality ([1d036c2](https://github.com/dsswift/ion/commit/1d036c2bec2963d64d78140c801be666876e0ba0))
+* **ios:** show thinking status on prompt send ([a809371](https://github.com/dsswift/ion/commit/a809371de2cb079b389f647841b760e323e8973a))
+* **ios:** add multiline input to prompt field ([555f5d5](https://github.com/dsswift/ion/commit/555f5d5ebcde85d34d298541c672629b86a1e138))
+* **ios:** add engine instance move command ([3d6b7de](https://github.com/dsswift/ion/commit/3d6b7de549b6ace4940d7d5ac1874c755d0891e2))
+* **ios:** add engine instance move event handling ([4a4d73b](https://github.com/dsswift/ion/commit/4a4d73b5d769dc01f78627fd3696ab7cca3caf13))
+* **ios:** add ui for moving engine instances ([a45619a](https://github.com/dsswift/ion/commit/a45619a77c73428afb5ee548f5d6bc985d0523fd))
+
+### Bug Fixes
+
+* **ios:** remove delay when loading engine messages ([671aeb7](https://github.com/dsswift/ion/commit/671aeb7d2fb10badc462f26b1dea6ecc2e765883))
+
 ## [1.27.0](https://github.com/dsswift/ion/compare/ios-v1.26.1...ios-v1.27.0) (2026-05-20)
 
 ### Features
