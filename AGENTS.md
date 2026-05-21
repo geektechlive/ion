@@ -90,6 +90,8 @@ When labeling work: engine, harness, or client. If a harness gap is caused by mi
 
 The client is the consumer of the Ion engine — desktop, iOS, and harness extensions all depend on published contracts. **Never ship a breaking change to a published contract.**
 
+Event-shape contracts are not just about field names. Event **semantics** (snapshot vs. incremental, replace vs. merge, idempotency) are also part of the contract. See [docs/architecture/agent-state.md](docs/architecture/agent-state.md) for the canonical example: `engine_agent_state` is always a complete snapshot, and consumers replace local state with the payload.
+
 ### What counts as a contract
 
 | Surface | Key files |
