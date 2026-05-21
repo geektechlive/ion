@@ -46,6 +46,13 @@ func (m *Manager) handleNormalizedEvent(runID string, event types.NormalizedEven
 	}
 	m.emit(key, ee)
 
+	// Track plan mode exit so re-entering plan mode triggers reentry
+	// detection in SendPrompt. We do this here (rather than in the pure
+	// translateToEngineEvent) because we need access to the session manager.
+	if pmc, ok := event.Data.(*types.PlanModeChangedEvent); ok && !pmc.Enabled {
+		m.MarkPlanModeExited(key)
+	}
+
 	// Track last-known context usage on the session so subsequent
 	// engine_status emissions carry the latest values.
 	if ee.EndUsage != nil && ee.EndUsage.ContextPercent > 0 {
