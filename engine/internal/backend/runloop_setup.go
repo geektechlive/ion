@@ -96,6 +96,12 @@ func buildSystemPrompt(opts *types.RunOptions, conv *conversation.Conversation, 
 			_, err := os.Stat(opts.PlanFilePath)
 			planPrompt = buildPlanModePrompt(opts.PlanFilePath, err == nil)
 		}
+		// Prepend reentry guidance when returning to plan mode after a
+		// previous exit. This tells the LLM to read the existing plan and
+		// decide whether to amend, replace, or extend it.
+		if opts.PlanModeReentry {
+			planPrompt = buildPlanModeReentryPrompt(opts.PlanFilePath) + "\n\n" + planPrompt
+		}
 		systemPrompt += "\n\n" + planPrompt
 	}
 	// Fire before_prompt hook (before finalizing system prompt)
@@ -163,6 +169,14 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 			Name:        exitPlanDef.Name,
 			Description: exitPlanDef.Description,
 			InputSchema: exitPlanDef.InputSchema,
+		})
+
+		// Always inject AskUserQuestion sentinel when in plan mode
+		askDef := tools.AskUserQuestionTool()
+		toolDefs = append(toolDefs, types.LlmToolDef{
+			Name:        askDef.Name,
+			Description: askDef.Description,
+			InputSchema: askDef.InputSchema,
 		})
 
 		// Signal to the desktop that plan mode is now active for this run.
