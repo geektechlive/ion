@@ -391,14 +391,16 @@ struct EngineView: View {
     private var engineInputBar: some View {
         HStack(spacing: 8) {
             attachButton
-            TextField("Send a prompt...", text: $promptText)
+            TextField("Send a prompt...", text: $promptText, axis: .vertical)
+                .lineLimit(1...5)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color(.tertiarySystemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.medium))
                 .overlay(RoundedRectangle(cornerRadius: IonTheme.Radius.medium).stroke(Color(.separator), lineWidth: 1))
                 .focused($isInputFocused)
-                .onSubmit { submitPrompt() }
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
             Button { submitPrompt() } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title)
