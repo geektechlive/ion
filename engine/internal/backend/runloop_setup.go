@@ -141,6 +141,18 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 		toolDefs = append(toolDefs, opts.CapabilityTools...)
 	}
 
+	// Always inject AskUserQuestion so the LLM can pause the run to ask a
+	// clarifying question in any mode. The engine intercepts calls to this tool
+	// unconditionally (see runloop_tools.go), records a PermissionDenial with
+	// the question payload, and terminates the run so the client can surface
+	// the question and feed the user's answer back as the next prompt.
+	askDef := tools.AskUserQuestionTool()
+	toolDefs = append(toolDefs, types.LlmToolDef{
+		Name:        askDef.Name,
+		Description: askDef.Description,
+		InputSchema: askDef.InputSchema,
+	})
+
 	// Filter tools if plan mode and inject ExitPlanMode
 	if opts.PlanMode {
 		planTools := opts.PlanModeTools
@@ -155,6 +167,9 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 		// (plan-file-only gate in executeTools enforces the target restriction)
 		allowed["Write"] = true
 		allowed["Edit"] = true
+		// AskUserQuestion is injected unconditionally above; keep it through
+		// the plan-mode filter so it is still available during plan mode.
+		allowed[tools.AskUserQuestionName] = true
 		var filtered []types.LlmToolDef
 		for _, td := range toolDefs {
 			if allowed[td.Name] {
@@ -169,14 +184,6 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 			Name:        exitPlanDef.Name,
 			Description: exitPlanDef.Description,
 			InputSchema: exitPlanDef.InputSchema,
-		})
-
-		// Always inject AskUserQuestion sentinel when in plan mode
-		askDef := tools.AskUserQuestionTool()
-		toolDefs = append(toolDefs, types.LlmToolDef{
-			Name:        askDef.Name,
-			Description: askDef.Description,
-			InputSchema: askDef.InputSchema,
 		})
 
 		// Signal to the desktop that plan mode is now active for this run.

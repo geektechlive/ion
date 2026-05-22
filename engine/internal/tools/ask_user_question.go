@@ -9,11 +9,12 @@ import (
 // AskUserQuestionName is the tool name used to identify the ask-user-question sentinel.
 const AskUserQuestionName = "AskUserQuestion"
 
-// AskUserQuestionTool is a sentinel tool injected during plan mode that lets the LLM
-// pause the run to ask the user a clarifying question. The engine intercepts calls to
-// this tool before execution (see runloop_tools.go), records a PermissionDenial with
-// the question payload, and terminates the run so the desktop can surface the question
-// and feed the user's answer back as the next prompt.
+// AskUserQuestionTool is a sentinel tool available in all runs that lets the
+// LLM pause the run to ask the user a clarifying question. The engine
+// intercepts calls to this tool unconditionally (see runloop_tools.go),
+// records a PermissionDenial with the question payload, and terminates the
+// run so the client can surface the question and feed the user's answer back
+// as the next prompt.
 func AskUserQuestionTool() *types.ToolDef {
 	return &types.ToolDef{
 		Name: AskUserQuestionName,

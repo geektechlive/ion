@@ -281,12 +281,12 @@ func (b *ApiBackend) executeTools(
 				return nil
 			}
 
-			// Intercept AskUserQuestion sentinel — only during plan-mode runs.
-			// Same pattern as ExitPlanMode: record a PermissionDenial so the
-			// desktop surfaces the question, then terminate the run. The user's
-			// answer arrives as the next prompt in the same session.
-			if run.planMode && block.Name == tools.AskUserQuestionName {
-				utils.Info("PlanMode", fmt.Sprintf("run=%s ask_user plan_file=%s question=%v", run.requestID, run.planFilePath, block.Input["question"]))
+			// Intercept AskUserQuestion sentinel — available in all runs, not
+			// just plan mode. Record a PermissionDenial so the desktop surfaces
+			// the question, then terminate the run. The user's answer arrives
+			// as the next prompt in the same session.
+			if block.Name == tools.AskUserQuestionName {
+				utils.Info("ApiBackend", fmt.Sprintf("run=%s ask_user question=%v", run.requestID, block.Input["question"]))
 				run.mu.Lock()
 				run.exitPlanMode = true
 				run.permissionDenials = append(run.permissionDenials, types.PermissionDenial{

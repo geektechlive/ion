@@ -361,7 +361,7 @@ func TestBuildToolDefs_PlanModeInjectsExitAndAsk(t *testing.T) {
 	}
 }
 
-func TestBuildToolDefs_NoPlanModeNoSentinels(t *testing.T) {
+func TestBuildToolDefs_NoPlanModeHasAskButNoExit(t *testing.T) {
 	b := NewApiBackend()
 	run := &activeRun{requestID: "test"}
 	opts := types.RunOptions{} // not plan mode
@@ -369,10 +369,17 @@ func TestBuildToolDefs_NoPlanModeNoSentinels(t *testing.T) {
 
 	toolDefs, _ := b.buildToolDefs(run, opts, provider)
 
+	hasAsk := false
 	for _, td := range toolDefs {
-		if td.Name == "ExitPlanMode" || td.Name == "AskUserQuestion" {
-			t.Errorf("sentinel tool %q should not appear outside plan mode", td.Name)
+		if td.Name == "ExitPlanMode" {
+			t.Error("ExitPlanMode sentinel should not appear outside plan mode")
 		}
+		if td.Name == "AskUserQuestion" {
+			hasAsk = true
+		}
+	}
+	if !hasAsk {
+		t.Error("expected AskUserQuestion tool to be available outside plan mode")
 	}
 }
 
