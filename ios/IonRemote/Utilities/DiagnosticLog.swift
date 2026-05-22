@@ -24,7 +24,7 @@ final class DiagnosticLog: @unchecked Sendable {
     private static let maxTotalBytes = 2_097_152
 
     private let lock = OSAllocatedUnfairLock(initialState: [Entry]())
-    private let logger = Logger(subsystem: "com.sprague.ion.mobile", category: "diag")
+    private let logger = Logger(subsystem: "com.geektechlive.ion.mobile", category: "diag")
     private let logDirectory: URL
     private let currentLogURL: URL
     private var fileHandle: FileHandle?

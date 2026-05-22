@@ -3,7 +3,7 @@ import Foundation
 import UIKit
 import os
 
-private let ionLog = Logger(subsystem: "com.sprague.ion.mobile", category: "engine")
+private let ionLog = Logger(subsystem: "com.geektechlive.ion.mobile", category: "engine")
 
 // MARK: - Event Listening
 

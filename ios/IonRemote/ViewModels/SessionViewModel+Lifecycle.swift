@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 import os
 
-private let ionLog = Logger(subsystem: "com.sprague.ion.mobile", category: "lifecycle")
+private let ionLog = Logger(subsystem: "com.geektechlive.ion.mobile", category: "lifecycle")
 
 // MARK: - Lifecycle
 
