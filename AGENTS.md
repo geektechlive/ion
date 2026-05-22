@@ -29,6 +29,7 @@ Cohesion of change: a feature lives in one folder. Full reference: `docs/archite
 - `AGENTS.md` is canonical and committed.
 - `CLAUDE.md` is a local-only symlink to sibling `AGENTS.md`. Gitignored. Run `make claude-symlinks` (or `npm install` in `desktop/`) to create.
 - Do not seed per-bounded-context `AGENTS.md`. Defer until traces show confusion.
+- **Before any work that touches `engine/`, read [`docs/engine-grounding.md`](docs/engine-grounding.md).** It is the non-negotiable framing for engine changes — contract stability, snapshot semantics, engine-vs-harness boundaries, and the "modifying the engine is restricted" default. Engine work without this grounding is a defect.
 
 ## Local hooks
 

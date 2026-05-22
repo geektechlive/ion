@@ -2,6 +2,8 @@
 
 Single static binary. Communicates over `~/.ion/engine.sock` (NDJSON).
 
+> **Read [`../docs/engine-grounding.md`](../docs/engine-grounding.md) before touching engine code.** It is the canonical framing: engine is a headless library, contracts are additive only, event semantics count, modifying the engine is a restricted operation. This file covers mechanics; the grounding doc covers principles. Both apply.
+
 ## Commands
 
 ```bash
