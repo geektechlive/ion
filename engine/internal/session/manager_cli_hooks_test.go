@@ -48,37 +48,41 @@ func TestFireBeforePromptCli_ModifiesPromptAndSystem(t *testing.T) {
 	if opts.Prompt != "rewritten by extension" {
 		t.Errorf("expected prompt rewritten, got %q", opts.Prompt)
 	}
-	if opts.AppendSystemPrompt != "injected system prompt" {
-		t.Errorf("expected system prompt injected, got %q", opts.AppendSystemPrompt)
+	if opts.SystemPrompt != "injected system prompt" {
+		t.Errorf("expected system prompt injected, got %q", opts.SystemPrompt)
 	}
 }
 
-func TestFireBeforePromptCli_AppendsToExistingSystem(t *testing.T) {
+// TestFireBeforePromptCli_SetsSystemPromptLeavesAppendUntouched verifies the
+// post-900eaf5 contract: the hook result goes to opts.SystemPrompt (--system-prompt,
+// primary) and opts.AppendSystemPrompt (--append-system-prompt, secondary) is not
+// touched. This is intentional -- Jarvis persona must be primary context.
+func TestFireBeforePromptCli_SetsSystemPromptLeavesAppendUntouched(t *testing.T) {
 	cb := backend.NewCliBackend()
 	mgr := NewManager(cb)
 	s := newCliSession("cli2")
 
 	host := extension.NewHost()
 	host.SDK().On(extension.HookBeforePrompt, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
-		return extension.BeforePromptResult{SystemPrompt: "extra"}, nil
+		return extension.BeforePromptResult{SystemPrompt: "persona injection"}, nil
 	})
 	group := extension.NewExtensionGroup()
 	group.Add(host)
 
 	opts := types.RunOptions{
 		Prompt:             "keep this",
-		AppendSystemPrompt: "existing",
+		AppendSystemPrompt: "git context",
 	}
 	mgr.fireBeforePromptCli(s, "cli2", group, false, &opts)
 
 	if opts.Prompt != "keep this" {
 		t.Errorf("expected prompt unchanged, got %q", opts.Prompt)
 	}
-	if !strings.Contains(opts.AppendSystemPrompt, "existing") {
-		t.Error("expected existing system prompt preserved")
+	if opts.SystemPrompt != "persona injection" {
+		t.Errorf("expected SystemPrompt set to hook result, got %q", opts.SystemPrompt)
 	}
-	if !strings.Contains(opts.AppendSystemPrompt, "extra") {
-		t.Error("expected new system prompt appended")
+	if opts.AppendSystemPrompt != "git context" {
+		t.Errorf("expected AppendSystemPrompt untouched, got %q", opts.AppendSystemPrompt)
 	}
 }
 
