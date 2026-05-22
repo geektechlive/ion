@@ -5,15 +5,46 @@ struct AskUserQuestionCardView: View {
     let tabId: String
     let request: PermissionRequest
 
-    private var questionData: (header: String, question: String, options: [[String: String]])? {
-        guard let toolInput = request.toolInput,
-              let questions = toolInput["questions"]?.value as? [[String: Any]],
-              let first = questions.first,
-              let question = first["question"] as? String,
-              let options = first["options"] as? [[String: String]]
-        else { return nil }
-        let header = first["header"] as? String ?? "Input Required"
-        return (header, question, options)
+    @State private var freeText: String = ""
+    @FocusState private var textFieldFocused: Bool
+
+    /// Parse engine format: { question: "...", options?: ["A","B"] }
+    private var questionData: (question: String, options: [String])? {
+        guard let toolInput = request.toolInput else {
+            DiagnosticLog.log("ASK-CARD: toolInput is nil for questionId=\(request.questionId) toolName=\(request.toolName)")
+            return nil
+        }
+
+        // Log the raw keys and types for diagnostics
+        let keysSummary = toolInput.map { "\($0.key): \(type(of: $0.value.value))=\($0.value)" }.joined(separator: ", ")
+        DiagnosticLog.log("ASK-CARD: toolInput keys=[\(keysSummary)]")
+
+        guard let questionEntry = toolInput["question"] else {
+            DiagnosticLog.log("ASK-CARD: no 'question' key in toolInput. Available keys=\(Array(toolInput.keys))")
+            return nil
+        }
+
+        guard let question = questionEntry.value as? String else {
+            DiagnosticLog.log("ASK-CARD: 'question' value is not String. Type=\(type(of: questionEntry.value)), value=\(String(describing: questionEntry.value))")
+            return nil
+        }
+
+        let options: [String]
+        if let arr = toolInput["options"]?.value as? [String] {
+            // Direct [String] — best case.
+            options = arr
+        } else if let arr = toolInput["options"]?.value as? [AnyCodable] {
+            // PermissionRequest.toolInput is [String: AnyCodable], so array
+            // elements are also boxed as AnyCodable. Unwrap each one.
+            options = arr.compactMap { $0.value as? String }
+        } else if let arr = toolInput["options"]?.value as? [Any] {
+            // Fallback: Foundation NSArray from JSON deserialisation.
+            options = arr.compactMap { $0 as? String }
+        } else {
+            options = []
+        }
+        DiagnosticLog.log("ASK-CARD: parsed OK question=\(question.prefix(80)), options=\(options)")
+        return (question, options)
     }
 
     var body: some View {
@@ -22,8 +53,8 @@ struct AskUserQuestionCardView: View {
                 // Header
                 HStack(spacing: 6) {
                     Image(systemName: "questionmark.circle.fill")
-                        .foregroundStyle(Color(hex: 0x4ECDC4))
-                    Text(data.header)
+                        .foregroundStyle(JarvisTheme.accent)
+                    Text("Question")
                         .font(.headline)
                 }
 
@@ -33,42 +64,64 @@ struct AskUserQuestionCardView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                // Option buttons
-                FlowLayout(spacing: 8) {
-                    ForEach(data.options, id: \.self) { option in
-                        if let label = option["label"] {
+                if data.options.isEmpty {
+                    // Free-text input for open-ended questions
+                    HStack(spacing: 8) {
+                        TextField("Type your answer…", text: $freeText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.subheadline)
+                            .focused($textFieldFocused)
+                            .onSubmit { submitFreeText() }
+
+                        Button {
+                            submitFreeText()
+                        } label: {
+                            Text("Send")
+                                .font(.subheadline.weight(.medium))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .clipShape(Capsule())
+                        .tint(JarvisTheme.accent)
+                        .disabled(freeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                } else {
+                    // Option buttons
+                    FlowLayout(spacing: 8) {
+                        ForEach(data.options, id: \.self) { option in
                             Button {
-                                triggerHaptic()
+                                Haptic.medium()
                                 viewModel.dismissSpecialPermission(tabId: tabId, questionId: request.questionId)
-                                viewModel.sendPrompt(tabId: tabId, text: label)
+                                viewModel.sendPrompt(tabId: tabId, text: option)
                             } label: {
-                                Text(label)
+                                Text(option)
                                     .font(.subheadline.weight(.medium))
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
                             }
                             .buttonStyle(.borderedProminent)
-                            .tint(Color(hex: 0x4ECDC4))
-                            .help(option["description"] ?? "")
+                            .clipShape(Capsule())
+                            .tint(JarvisTheme.accent)
                         }
                     }
                 }
             }
             .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.ultraThickMaterial)
-                    .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
-            )
+            .cardStyle()
+            .onAppear { textFieldFocused = questionData?.options.isEmpty == true }
         } else {
             // Fallback to generic card if question data can't be parsed
             PermissionCardGenericView(tabId: tabId, request: request)
         }
     }
 
-    private func triggerHaptic() {
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.impactOccurred()
+    private func submitFreeText() {
+        let trimmed = freeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        Haptic.medium()
+        viewModel.dismissSpecialPermission(tabId: tabId, questionId: request.questionId)
+        viewModel.sendPrompt(tabId: tabId, text: trimmed)
     }
 }
 

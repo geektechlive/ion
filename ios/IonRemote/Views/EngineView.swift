@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 struct EngineView: View {
     let tabId: String
     @Environment(SessionViewModel.self) var viewModel
-    @State private var promptText = ""
     @FocusState private var isInputFocused: Bool
     @State private var agentsPanelExpanded = true
     @State private var agentPanelFullscreen = false
@@ -21,6 +20,9 @@ struct EngineView: View {
     @State private var showPhotoPicker = false
     @State private var showDocumentPicker = false
     @State private var photosPickerItems: [PhotosPickerItem] = []
+    /// Set to true when a reconnect-triggered reload is in flight so the next
+    /// engine-message count change force-scrolls to the bottom.
+    @State private var pendingScrollAfterReload = false
 
     private var instances: [EngineInstanceInfo] {
         viewModel.engineInstances[tabId] ?? []
@@ -28,6 +30,16 @@ struct EngineView: View {
     private var activeInstanceId: String {
         viewModel.activeEngineInstance[tabId] ?? instances.first?.id ?? ""
     }
+    /// Two-way binding to the per-engine-instance draft owned by SessionViewModel.
+    /// Re-evaluates `activeInstanceId` on every access, so switching instances
+    /// transparently surfaces that instance's draft — no manual save/restore.
+    private var promptTextBinding: Binding<String> {
+        Binding(
+            get: { viewModel.engineDraft(tabId: tabId, instanceId: activeInstanceId) },
+            set: { viewModel.setEngineDraft(tabId: tabId, instanceId: activeInstanceId, $0) }
+        )
+    }
+    private var promptText: String { viewModel.engineDraft(tabId: tabId, instanceId: activeInstanceId) }
     private var compoundKey: String {
         viewModel.engineCompoundKey(tabId: tabId)
     }
@@ -48,6 +60,10 @@ struct EngineView: View {
             }
     }
 
+    private var runningAgentCount: Int {
+        visibleAgents.filter { $0.status == "running" }.count
+    }
+
     private var activeToolsList: [ActiveToolInfo] {
         (viewModel.activeTools[compoundKey] ?? [:]).values.sorted { $0.startTime < $1.startTime }
     }
@@ -66,23 +82,57 @@ struct EngineView: View {
         }
     }
 
+    private static let bootstrapPrefix = "Session bootstrapped"
+
     private var groupedMessages: [GroupedItem] {
+        DiagnosticLog.log("ENGINE-BOOTSTRAP: groupedMessages entry total=\(engineMsgs.count)")
         var result: [GroupedItem] = []
         var toolBuf: [EngineMessage] = []
+        var bootstrapBuf: [EngineMessage] = []
+        var totalRunsFlushed = 0
+        var totalSuppressed = 0
+
+        let flushBootstrap = {
+            guard !bootstrapBuf.isEmpty else { return }
+            var representative = bootstrapBuf.last!
+            let suppressed = bootstrapBuf.count - 1
+            if suppressed > 0 {
+                representative.bootstrapCollapsedCount = suppressed
+            }
+            DiagnosticLog.log(
+                "ENGINE-BOOTSTRAP: flush run count=\(bootstrapBuf.count) kept=\(representative.id) suppressed=\(suppressed)"
+            )
+            result.append(.single(representative))
+            totalRunsFlushed += 1
+            totalSuppressed += suppressed
+            bootstrapBuf = []
+        }
+
         for msg in engineMsgs {
             if msg.role == "tool" {
+                flushBootstrap()
                 toolBuf.append(msg)
             } else {
                 if !toolBuf.isEmpty {
                     result.append(.toolGroup(toolBuf))
                     toolBuf = []
                 }
-                result.append(.single(msg))
+                if msg.role == "harness" && msg.content.hasPrefix(Self.bootstrapPrefix) {
+                    DiagnosticLog.log("ENGINE-BOOTSTRAP: enqueue id=\(msg.id) buf=\(bootstrapBuf.count + 1)")
+                    bootstrapBuf.append(msg)
+                } else {
+                    flushBootstrap()
+                    result.append(.single(msg))
+                }
             }
         }
+        flushBootstrap()
         if !toolBuf.isEmpty {
             result.append(.toolGroup(toolBuf))
         }
+        DiagnosticLog.log(
+            "ENGINE-BOOTSTRAP: groupedMessages done runs=\(totalRunsFlushed) suppressed=\(totalSuppressed) output=\(result.count)"
+        )
         return result
     }
 
@@ -158,6 +208,11 @@ struct EngineView: View {
                         Text("(\(visibleAgents.count))")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
+                        if runningAgentCount > 0 {
+                            Text("\(runningAgentCount) active")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(IonTheme.accent)
+                        }
                     }
                     .foregroundStyle(.secondary)
                 }
@@ -398,6 +453,19 @@ struct EngineView: View {
             GitPaneView(tabId: tabId)
                 .environment(viewModel)
         }
+        .task {
+            // Present git pane if navigated here via the branch badge tap
+            if viewModel.pendingGitPaneTabId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
+        }
+        .onChange(of: viewModel.pendingGitPaneTabId) { _, newId in
+            if newId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
+        }
         .fullScreenCover(isPresented: $showFileExplorer) {
             FileExplorerView(tabId: tabId)
                 .environment(viewModel)
@@ -414,6 +482,12 @@ struct EngineView: View {
         .onChange(of: photosPickerItems) { _, items in
             for item in items { handlePhotoSelection(item) }
             photosPickerItems = []
+        }
+        .onChange(of: viewModel.connectionState) { oldState, newState in
+            handleConnectionStateChange(oldState: oldState, newState: newState)
+        }
+        .onChange(of: engineMsgs.count) {
+            consumePendingScrollAfterReload()
         }
         .photosPicker(
             isPresented: $showPhotoPicker,
@@ -441,7 +515,7 @@ struct EngineView: View {
     private var engineInputBar: some View {
         HStack(spacing: 8) {
             attachButton
-            TextField("Send a prompt...", text: $promptText, axis: .vertical)
+            TextField("Send a prompt...", text: promptTextBinding, axis: .vertical)
                 .lineLimit(1...5)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -479,6 +553,30 @@ struct EngineView: View {
         return (empty && pendingAttachments.isEmpty) || hasUploading
     }
 
+    /// Re-sync engine history when we recover from a transient disconnect
+    /// (e.g. phone locked while the conversation was running). The snapshot
+    /// handler also calls `loadEngineConversation` for engine tabs, but this
+    /// handler arms `pendingScrollAfterReload` so the view auto-scrolls to
+    /// the new bottom once history arrives.
+    private func handleConnectionStateChange(oldState: ConnectionState, newState: ConnectionState) {
+        guard oldState == .reconnecting && newState == .connected else { return }
+        // Only refresh tabs the user has actually opened; unopened tabs are
+        // handled by the snapshot prefetch in handleSnapshot.
+        guard !engineMsgs.isEmpty else { return }
+        DiagnosticLog.log("RESUME-SYNC: EngineView reloading tabId=\(tabId.prefix(8))")
+        pendingScrollAfterReload = true
+        viewModel.loadEngineConversation(tabId: tabId)
+    }
+
+    /// When a reconnect-triggered reload delivers new history, force-scroll
+    /// to the bottom regardless of the user's prior scroll position.
+    private func consumePendingScrollAfterReload() {
+        guard pendingScrollAfterReload else { return }
+        pendingScrollAfterReload = false
+        isNearBottom = true
+        forceScrollCounter += 1
+    }
+
     private func submitPrompt() {
         let trimmed = promptText.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }
@@ -493,7 +591,7 @@ struct EngineView: View {
             attachments: attachments.isEmpty ? nil : attachments
         )
         isInputFocused = false
-        promptText = ""
+        viewModel.setEngineDraft(tabId: tabId, instanceId: activeInstanceId, "")
         pendingAttachments = []
     }
 

@@ -5,6 +5,7 @@ import SwiftUI
 /// Uses the composite `MarkdownContentView` for GitHub-style block rendering.
 struct PlanFullScreenView: View {
     let content: String
+    var onImplement: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -19,11 +20,19 @@ struct PlanFullScreenView: View {
             .navigationTitle("Plan")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Done") {
                         dismiss()
                     }
-                    .fontWeight(.semibold)
+                }
+                if onImplement != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Implement") {
+                            onImplement?()
+                        }
+                        .fontWeight(.semibold)
+                        .tint(.green)
+                    }
                 }
             }
         }

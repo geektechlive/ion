@@ -10,9 +10,8 @@ struct DesktopPickerMenu: View {
     var body: some View {
         Menu {
             ForEach(viewModel.pairedDevices) { device in
-                let activeId = viewModel.activeDeviceId
-                let isActive = device.id == activeId
-                    || (activeId == nil && device.id == viewModel.pairedDevices.first?.id)
+                let isActive = device.id == viewModel.activeDeviceId
+                    || (viewModel.activeDeviceId == nil && device.id == viewModel.pairedDevices.first?.id)
                 Button {
                     if !isActive {
                         viewModel.switchToDevice(id: device.id)
@@ -21,7 +20,7 @@ struct DesktopPickerMenu: View {
                 } label: {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Label(device.name, systemImage: "desktopcomputer")
+                            Label(device.displayName, systemImage: device.displayIcon)
                             if isActive {
                                 Text(connectionStateLabel)
                                     .font(.caption2)
@@ -54,9 +53,14 @@ struct DesktopPickerMenu: View {
             } label: {
                 Label("Pair New Desktop…", systemImage: "plus")
             }
-            .tint(JarvisTheme.accent)
+            .tint(IonTheme.accent)
         } label: {
             HStack(spacing: 6) {
+                if let device = viewModel.activeDevice {
+                    Image(systemName: device.displayIcon)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text(activeDeviceName)
                     .font(.headline)
                 Image(systemName: "chevron.down")
@@ -74,7 +78,7 @@ struct DesktopPickerMenu: View {
     // MARK: - Helpers
 
     private var activeDeviceName: String {
-        viewModel.pairedDevices.first?.name ?? "Ion"
+        viewModel.activeDevice?.displayName ?? "Ion"
     }
 
     @ViewBuilder
