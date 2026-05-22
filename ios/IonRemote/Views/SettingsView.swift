@@ -19,6 +19,7 @@ struct SettingsView: View {
                 voiceSection
                 diagnosticsSection
                 newTabSection
+                tabListSection
                 modelsSection
                 tabGroupsSection
                 pairedDevicesSection
@@ -250,6 +251,21 @@ struct SettingsView: View {
                     Text((dir as NSString).lastPathComponent).tag(dir as String?)
                 }
             }
+        }
+    }
+
+    private var tabListSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { viewModel.showGitInfoInTabList },
+                set: { viewModel.showGitInfoInTabList = $0 }
+            )) {
+                Label("Show Git Info", systemImage: "arrow.triangle.branch")
+            }
+        } header: {
+            Text("Tab List")
+        } footer: {
+            Text("Shows the current branch and commit counts on each tab.")
         }
     }
 

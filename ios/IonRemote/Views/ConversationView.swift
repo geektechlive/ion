@@ -409,6 +409,19 @@ struct ConversationView: View {
             }
         }
         .animation(.default, value: pendingPermission?.id)
+        .task {
+            // Present git pane if navigated here via the branch badge tap
+            if viewModel.pendingGitPaneTabId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
+        }
+        .onChange(of: viewModel.pendingGitPaneTabId) { _, newId in
+            if newId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
+        }
         .fullScreenCover(isPresented: $showGitPane) {
             GitPaneView(tabId: tabId)
                 .environment(viewModel)

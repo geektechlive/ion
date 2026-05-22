@@ -242,6 +242,9 @@ final class SessionViewModel {
     var recentDirectories: [String] = []
     /// Tab ID to auto-navigate to after remote creation.
     var pendingNavigationTabId: String? = nil
+    /// Tab ID to auto-open the Git pane for (set by tapping the branch badge in tab list).
+    /// Observed by ConversationView and EngineView; cleared after the pane is presented.
+    var pendingGitPaneTabId: String? = nil
     /// Set `true` before sending a create-tab command so the `tabCreated`
     /// handler knows the creation was locally initiated and should navigate.
     var awaitingLocalTabCreation = false
@@ -257,6 +260,12 @@ final class SessionViewModel {
     var defaultBaseDirectory: String? {
         get { UserDefaults.standard.string(forKey: "defaultBaseDirectory") }
         set { UserDefaults.standard.set(newValue, forKey: "defaultBaseDirectory") }
+    }
+
+    /// Whether to show the branch/ahead/behind row in the tab list (off by default).
+    var showGitInfoInTabList: Bool {
+        get { UserDefaults.standard.bool(forKey: "showGitInfoInTabList") }
+        set { UserDefaults.standard.set(newValue, forKey: "showGitInfoInTabList") }
     }
 
     /// APNs device token (set by AppDelegate on registration success).

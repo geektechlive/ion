@@ -224,11 +224,33 @@ struct TabListView: View {
                             switch selectionStyle {
                             case .navigation:
                                 NavigationLink(value: tab.id) {
-                                    TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual", idleSince: viewModel.tabIdleSince[tab.id], isSpeaking: viewModel.voiceService.speakingTabId == tab.id && viewModel.voiceService.isSpeaking, gitChanges: viewModel.gitChanges[tab.workingDirectory])
+                                    TabRowView(
+                                        tab: tab,
+                                        showDirectory: viewModel.tabGroupMode == "manual",
+                                        showGitInfo: viewModel.showGitInfoInTabList,
+                                        idleSince: viewModel.tabIdleSince[tab.id],
+                                        isSpeaking: viewModel.voiceService.speakingTabId == tab.id && viewModel.voiceService.isSpeaking,
+                                        gitChanges: viewModel.gitChanges[tab.workingDirectory],
+                                        onOpenGit: {
+                                            viewModel.pendingGitPaneTabId = tab.id
+                                            viewModel.pendingNavigationTabId = tab.id
+                                        }
+                                    )
                                 }
                             case .selection:
-                                TabRowView(tab: tab, showDirectory: viewModel.tabGroupMode == "manual", idleSince: viewModel.tabIdleSince[tab.id], isSpeaking: viewModel.voiceService.speakingTabId == tab.id && viewModel.voiceService.isSpeaking, gitChanges: viewModel.gitChanges[tab.workingDirectory])
-                                    .tag(tab.id)
+                                TabRowView(
+                                    tab: tab,
+                                    showDirectory: viewModel.tabGroupMode == "manual",
+                                    showGitInfo: viewModel.showGitInfoInTabList,
+                                    idleSince: viewModel.tabIdleSince[tab.id],
+                                    isSpeaking: viewModel.voiceService.speakingTabId == tab.id && viewModel.voiceService.isSpeaking,
+                                    gitChanges: viewModel.gitChanges[tab.workingDirectory],
+                                    onOpenGit: {
+                                        viewModel.pendingGitPaneTabId = tab.id
+                                        viewModel.pendingNavigationTabId = tab.id
+                                    }
+                                )
+                                .tag(tab.id)
                             }
                         }
                         .swipeActions(edge: .leading, allowsFullSwipe: false) {

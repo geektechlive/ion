@@ -406,6 +406,19 @@ struct EngineView: View {
             GitPaneView(tabId: tabId)
                 .environment(viewModel)
         }
+        .task {
+            // Present git pane if navigated here via the branch badge tap
+            if viewModel.pendingGitPaneTabId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
+        }
+        .onChange(of: viewModel.pendingGitPaneTabId) { _, newId in
+            if newId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
+        }
         .fullScreenCover(isPresented: $showFileExplorer) {
             FileExplorerView(tabId: tabId)
                 .environment(viewModel)
