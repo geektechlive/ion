@@ -523,6 +523,22 @@ export async function handleMoveTabToGroup(cmd: Extract<RemoteCommand, { type: '
   await broadcastSync()
 }
 
+export async function handleToggleTabGroupPin(cmd: Extract<RemoteCommand, { type: 'toggle_tab_group_pin' }>): Promise<void> {
+  try {
+    const escapedTab = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    await state.mainWindow?.webContents.executeJavaScript(`
+      (function() {
+        var store = window.__Ion_SESSION_STORE__;
+        if (!store) return;
+        store.getState().toggleTabGroupPin('${escapedTab}');
+      })()
+    `)
+  } catch (err) {
+    log('toggle_tab_group_pin error: ' + (err as Error).message)
+  }
+  await broadcastSync()
+}
+
 export async function handleDiscoverCommands(cmd: Extract<RemoteCommand, { type: 'discover_commands' }>, deviceId: string): Promise<void> {
   const { directory } = cmd
   try {

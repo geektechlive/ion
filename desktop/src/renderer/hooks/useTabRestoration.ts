@@ -71,6 +71,7 @@ export function useTabRestoration() {
                       historicalSessionIds: st.historicalSessionIds || [],
                       lastKnownSessionId: st.lastKnownSessionId || null,
                       groupId: st.groupId || null,
+                      groupPinned: st.groupPinned ?? false,
                       contextTokens: st.contextTokens || null,
                       queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
                       draftInput: st.draftInput ?? '',
@@ -161,6 +162,7 @@ export function useTabRestoration() {
                       customTitle: st.customTitle || null,
                       pillColor: st.pillColor || null,
                       groupId: st.groupId || null,
+                      groupPinned: st.groupPinned ?? false,
                       modelOverride: st.modelOverride || null,
                       conversationId: st.conversationId || null,
                       draftInput: st.draftInput ?? '',
@@ -208,6 +210,7 @@ export function useTabRestoration() {
                       pillColor: st.pillColor || null,
                       pillIcon: st.pillIcon || 'Terminal',
                       groupId: st.groupId || null,
+                      groupPinned: st.groupPinned ?? false,
                       draftInput: st.draftInput ?? '',
                     }
                   : t
@@ -253,6 +256,7 @@ export function useTabRestoration() {
                       historicalSessionIds: st.historicalSessionIds || [],
                       lastKnownSessionId: st.lastKnownSessionId || null,
                       groupId: st.groupId || null,
+                      groupPinned: st.groupPinned ?? false,
                       contextTokens: st.contextTokens || null,
                       queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
                       draftInput: st.draftInput ?? '',

@@ -302,7 +302,11 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
                   if (autoGroupMovement && tabGroupMode === 'manual' && doneGroupId) {
                     const currentTab = get().tabs.find(t => t.id === capturedTabId2)
                     if (currentTab && currentTab.groupId !== doneGroupId) {
-                      get().moveTabToGroup(capturedTabId2, doneGroupId)
+                      if (currentTab.groupPinned) {
+                        console.log(`[auto-move] suppressed: tab=${capturedTabId2.slice(0, 8)} pinned=true currentGroup=${currentTab.groupId ?? 'none'} wouldMoveTo=${doneGroupId}`)
+                      } else {
+                        get().moveTabToGroup(capturedTabId2, doneGroupId)
+                      }
                     }
                   }
                 }, 0)

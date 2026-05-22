@@ -36,6 +36,7 @@ function persistTabs(useSessionStore: Store): void {
         ...(t.forkedFromSessionId ? { forkedFromSessionId: t.forkedFromSessionId } : {}),
         ...(t.worktree ? { worktree: t.worktree } : {}),
         ...(t.groupId ? { groupId: t.groupId } : {}),
+        ...(t.groupPinned ? { groupPinned: true } : {}),
         ...(t.queuedPrompts.length > 0 ? { queuedPrompts: t.queuedPrompts } : {}),
         ...(t.draftInput ? { draftInput: t.draftInput } : {}),
         ...(t.contextTokens ? { contextTokens: t.contextTokens } : {}),

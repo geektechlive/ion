@@ -22,6 +22,8 @@ export interface PersistedTab {
   forkedFromSessionId?: string | null
   worktree?: WorktreeInfo | null
   groupId?: string | null
+  /** When true, suppresses auto-group movement for this tab. Default false on load for back-compat. */
+  groupPinned?: boolean
   contextTokens?: number | null
   queuedPrompts?: string[]
   /** Unsent text typed into the input bar; restored on relaunch. Absent when empty. */

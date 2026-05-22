@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import {
   Plus, GitFork, FolderOpen, GitBranch, CheckCircle, CaretDown, Rows,
-  PencilSimple, ArrowRight, ArrowsInSimple,
+  PencilSimple, ArrowRight, ArrowsInSimple, PushPin, PushPinSlash,
 } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
 import { useColors } from '../theme'
@@ -44,6 +44,7 @@ export function TabContextMenu({
   const tabGroupMode = usePreferencesStore((s) => s.tabGroupMode)
   const tabGroups = usePreferencesStore((s) => s.tabGroups)
   const moveTabToGroup = useSessionStore((s) => s.moveTabToGroup)
+  const toggleTabGroupPin = useSessionStore((s) => s.toggleTabGroupPin)
   const [moveSubmenu, setMoveSubmenu] = useState<{ x: number; y: number } | null>(null)
   const moveItemRef = useRef<HTMLButtonElement>(null)
   const submenuRef = useRef<HTMLDivElement>(null)
@@ -186,6 +187,19 @@ export function TabContextMenu({
       {tabGroupMode === 'manual' && (
         <>
           <div style={{ height: 1, background: colors.popoverBorder, margin: '2px 0' }} />
+          <button
+            onClick={() => { toggleTabGroupPin(tab.id); onClose() }}
+            className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-left"
+            style={menuItemStyle}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = colors.tabActive }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+          >
+            {tab.groupPinned
+              ? <PushPinSlash size={14} color={colors.textSecondary} />
+              : <PushPin size={14} color={colors.textSecondary} />
+            }
+            <span>{tab.groupPinned ? 'Unpin from group' : 'Pin to group'}</span>
+          </button>
           <button
             ref={moveItemRef}
             className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-left"

@@ -12,6 +12,7 @@ import {
   handleLoadConversation,
   handleSetTabGroupMode,
   handleMoveTabToGroup,
+  handleToggleTabGroupPin,
   handleReorderTabGroups,
   handleDiscoverCommands,
   handleSetTabModel,
@@ -113,6 +114,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'fork_from_message': await handleForkFromMessage(cmd); break
     case 'set_tab_group_mode': await handleSetTabGroupMode(cmd); break
     case 'move_tab_to_group': await handleMoveTabToGroup(cmd); break
+    case 'toggle_tab_group_pin': await handleToggleTabGroupPin(cmd); break
     case 'reorder_tab_groups': await handleReorderTabGroups(cmd); break
     case 'git_changes': await handleGitChanges(cmd, deviceId); break
     case 'git_graph': await handleGitGraph(cmd, deviceId); break

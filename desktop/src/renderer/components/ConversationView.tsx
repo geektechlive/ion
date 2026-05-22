@@ -219,10 +219,12 @@ export function ConversationView() {
               projectPath={staticInfo?.projectPath || process.cwd()}
               messages={tab.messages}
               tabPlanFilePath={tab.planFilePath}
+              tabGroupPinned={tab.groupPinned}
               onDismiss={permissionDeniedHandlers.onDismiss}
               onAnswer={permissionDeniedHandlers.onAnswer}
               onApprove={permissionDeniedHandlers.onApprove}
               onImplement={permissionDeniedHandlers.onImplement}
+              onImplementAndUnpin={permissionDeniedHandlers.onImplementAndUnpin}
             />
           )}
         </AnimatePresence>

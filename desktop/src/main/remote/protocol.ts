@@ -31,6 +31,8 @@ export interface RemoteTabState {
   terminalInstances?: TerminalInstanceInfo[]
   activeTerminalInstanceId?: string | null
   groupId?: string | null
+  /** When true, auto-group movement is suppressed for this tab. */
+  groupPinned?: boolean
   /** Unix ms timestamp of the last status-changing activity (message, status change). */
   lastActivityAt?: number
 }
@@ -101,6 +103,7 @@ export type RemoteCommand =
   | { type: 'load_engine_conversation'; tabId: string; instanceId?: string }
   | { type: 'set_tab_group_mode'; mode: 'auto' | 'manual' }
   | { type: 'move_tab_to_group'; tabId: string; groupId: string }
+  | { type: 'toggle_tab_group_pin'; tabId: string }
   | { type: 'reorder_tab_groups'; orderedIds: string[] }
   | { type: 'set_tab_model'; tabId: string; model: string }
   | { type: 'load_attachments'; tabId: string }
