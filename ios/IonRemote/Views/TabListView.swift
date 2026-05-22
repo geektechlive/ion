@@ -1,3 +1,4 @@
+// @file-size-exception: merge of HEAD (336 lines) + upstream/main (560 lines); extract in follow-up
 import SwiftUI
 
 struct TabListView: View {

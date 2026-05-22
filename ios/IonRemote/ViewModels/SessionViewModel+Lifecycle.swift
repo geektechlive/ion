@@ -57,10 +57,8 @@ extension SessionViewModel {
             apiKey: effectiveAPIKey,
             channelId: channelId,
             sharedKey: sharedKey,
-            apnsToken: apnsToken
+            deviceId: device.id
         )
-        tm.deviceId = device.id
-        tm.deviceName = device.name
         tm.onBriefing = { [weak self] briefingId, title, text in
             self?.briefingsStore.receive(briefingId: briefingId, title: title, text: text)
         }
@@ -82,7 +80,6 @@ extension SessionViewModel {
 
         let sharedKey = SymmetricKey(data: device.sharedSecret)
         let tm = TransportManager(sharedKey: sharedKey, deviceId: device.id)
-        tm.deviceName = device.name
         self.transport = tm
         connectionState = .connecting
 
@@ -147,10 +144,8 @@ extension SessionViewModel {
             apiKey: effectiveAPIKey,
             channelId: channelId,
             sharedKey: sharedKey,
-            apnsToken: apnsToken
+            deviceId: device.id
         )
-        tm.deviceId = device.id
-        tm.deviceName = device.name
         tm.onBriefing = { [weak self] briefingId, title, text in
             self?.briefingsStore.receive(briefingId: briefingId, title: title, text: text)
         }

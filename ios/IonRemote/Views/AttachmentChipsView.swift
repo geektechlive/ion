@@ -9,6 +9,9 @@ struct PendingAttachment: Identifiable {
     var isUploading: Bool
     var correlationId: String = ""
 
+    var commandAttachment: CommandAttachment {
+        CommandAttachment(type: type, name: name, path: path)
+    }
 }
 
 /// Horizontal scroll of attachment chips with remove buttons.

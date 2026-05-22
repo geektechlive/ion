@@ -100,7 +100,6 @@
 		A1B2C3D4E5F60001000800AA /* ActivityIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000801AA /* ActivityIndicatorView.swift */; };
 		A1B2C3D4E5F60001005200AA /* VoicePlaybackBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005201AA /* VoicePlaybackBar.swift */; };
 		A1B2C3D4E5F60001004009AA /* CompactionRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */; };
-		A1B2C3D4E5F60001000900AA /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000901AA /* AppDelegate.swift */; };
 		A1B2C3D4E5F60001001000AA /* LayoutCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001001AA /* LayoutCache.swift */; };
 		A1B2C3D4E5F60001001002AA /* PeerStatusPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001003AA /* PeerStatusPoller.swift */; };
 		A1B2C3D4E5F60001001004AA /* DesktopPickerMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001001005AA /* DesktopPickerMenu.swift */; };
@@ -149,7 +148,6 @@
 
 /* Begin PBXFileReference section */
 		A1B2C3D4E5F60001000002AA /* IonRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IonRemoteApp.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60001000901AA /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEvent.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTabState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteCommand.swift; sourceTree = "<group>"; };
@@ -328,7 +326,6 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F60001000002AA /* IonRemoteApp.swift */,
-				A1B2C3D4E5F60001000901AA /* AppDelegate.swift */,
 				A1B2C3D4E5F60001000024AA /* Assets.xcassets */,
 				A1B2C3D4E5F6000100002EAA /* Info.plist */,
 				A1B2C3D4E5F6000100002FAA /* IonRemote.entitlements */,
@@ -361,6 +358,8 @@
 				A1B2C3D4E5F60001000500AA /* ConnectionQuality.swift */,
 				A1B2C3D4E5F60001000601AA /* DiscoveredSlashCommand.swift */,
 				A1B2C3D4E5F60001001101AA /* RemoteModelEntry.swift */,
+				A1B2C3D4E5F60001000811AA /* BriefingItem.swift */,
+				A1B2C3D4E5F60001000803AA /* BriefingsStore.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -443,11 +442,8 @@
 					A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */,
 					A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */,
 					A1B2C3D4E5F60001006001AA /* ToastView.swift */,
-					A1B2C3D4E5F60001000261AA /* JarvisTheme.swift */,
 					A1B2C3D4E5F600010002A0AA /* ArcReactorBackground.swift */,
-					A1B2C3D4E5F60001000803AA /* BriefingsStore.swift */,
 					A1B2C3D4E5F60001000805AA /* BriefingsView.swift */,
-					A1B2C3D4E5F60001000811AA /* BriefingItem.swift */,
 					A1B2C3D4E5F600010001A0AA /* CompactToolRow.swift */,
 					A1B2C3D4E5F600010001B0AA /* StatusDrawerView.swift */,
 					A1B2C3D4E5F600010001C0AA /* TranscriptFlyout.swift */,
@@ -529,6 +525,7 @@
 				A1B2C3D4E5F60001005301AA /* AttachmentImageCache.swift */,
 				A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */,
 				A1B2C3D4E5F60001009001AA /* TabSearchHelper.swift */,
+				A1B2C3D4E5F60001000261AA /* JarvisTheme.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -748,7 +745,6 @@
 				A1B2C3D4E5F60001000800AA /* ActivityIndicatorView.swift in Sources */,
 				A1B2C3D4E5F60001005200AA /* VoicePlaybackBar.swift in Sources */,
 				A1B2C3D4E5F60001004009AA /* CompactionRowView.swift in Sources */,
-				A1B2C3D4E5F60001000900AA /* AppDelegate.swift in Sources */,
 				A1B2C3D4E5F60001001000AA /* LayoutCache.swift in Sources */,
 				A1B2C3D4E5F60001001002AA /* PeerStatusPoller.swift in Sources */,
 				A1B2C3D4E5F60001001004AA /* DesktopPickerMenu.swift in Sources */,
@@ -948,7 +944,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.22.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sprague.ion.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = com.geektechlive.ion.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -975,7 +971,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.22.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sprague.ion.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = com.geektechlive.ion.mobile;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
