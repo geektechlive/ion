@@ -214,7 +214,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
       })
     },
 
-    submitRemotePrompt: (tabId, prompt) => {
+    submitRemotePrompt: (tabId, prompt, imageAttachments) => {
       const { tabs, staticInfo } = get()
       const preferredModel = usePreferencesStore.getState().preferredModel
       const tab = tabs.find((t) => t.id === tabId)
@@ -294,6 +294,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         addDirs: tab.additionalDirs.length > 0 ? tab.additionalDirs : undefined,
         source: 'remote',
         extensions: remoteExtensions,
+        imageAttachments,
       }).catch((err: Error) => {
         get().handleError(tabId, {
           message: err.message,

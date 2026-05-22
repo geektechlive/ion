@@ -10,6 +10,141 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.34.0](https://github.com/dsswift/ion/compare/desktop-v1.33.0...desktop-v1.34.0) (2026-05-21)
+
+### Features
+
+* **desktop:** add engine session key remapping ([3f168c9](https://github.com/dsswift/ion/commit/3f168c920de1402c0f690aedf7d61a5d3e6ecfcc))
+* **desktop:** add remote engine instance move command ([49b8bc3](https://github.com/dsswift/ion/commit/49b8bc3c6c1f4e157d5838abe94ae3bd534f5821))
+* **desktop:** add ui for moving engine instances ([82bbbdb](https://github.com/dsswift/ion/commit/82bbbdb2ae4f48d4ba37d18828e6f81812b95909))
+
+### Bug Fixes
+
+* **desktop:** repair git panel auto-refresh and refresh button ([e313491](https://github.com/dsswift/ion/commit/e31349120586b918c1eaece08b1d35b6998d5230))
+
+## [1.33.0](https://github.com/dsswift/ion/compare/desktop-v1.32.3...desktop-v1.33.0) (2026-05-21)
+
+### Features
+
+* **desktop:** add plan/implement model splitting ([a659209](https://github.com/dsswift/ion/commit/a6592095ac937b58e794088ffcd60626d9090ab2))
+
+## [1.32.3](https://github.com/dsswift/ion/compare/desktop-v1.32.2...desktop-v1.32.3) (2026-05-20)
+
+## [1.32.2](https://github.com/dsswift/ion/compare/desktop-v1.32.1...desktop-v1.32.2) (2026-05-20)
+
+## [1.32.1](https://github.com/dsswift/ion/compare/desktop-v1.32.0...desktop-v1.32.1) (2026-05-20)
+
+## [1.32.0](https://github.com/dsswift/ion/compare/desktop-v1.31.2...desktop-v1.32.0) (2026-05-20)
+
+### Features
+
+* **desktop:** add tooltip component for git ui ([16ef2e6](https://github.com/dsswift/ion/commit/16ef2e6a106a2f4ff5ef0f52d40b4afe309a3cb2))
+* **desktop:** refresh git on window focus return ([ffd5e8d](https://github.com/dsswift/ion/commit/ffd5e8d2129a70102af56517b56b66cfcc8192fd))
+* **desktop:** add attachment loading support ([dd9bffa](https://github.com/dsswift/ion/commit/dd9bffa33c7a4a29cb05fb86a2db220e26ec632c))
+* **desktop:** enhance commit form with ai and history ([1979862](https://github.com/dsswift/ion/commit/197986230184456e4c4b4f1b3b2a4e7802b08c83))
+* **desktop:** add image viewer component ([b260026](https://github.com/dsswift/ion/commit/b260026845295fdd9e71e89e26611602904dbb61))
+* **ios:** add attachment command and events ([76cc3da](https://github.com/dsswift/ion/commit/76cc3dab94a293724fc19cf500b7da7223dd3de2))
+* **desktop:** add copy relative path to context menus ([c79e422](https://github.com/dsswift/ion/commit/c79e422c5c7c67e271fe80bc60752dc293910a87))
+
+### Bug Fixes
+
+* **desktop:** hide terminal panel on restored tabs ([f4beb9b](https://github.com/dsswift/ion/commit/f4beb9bb61134edcaa7c6e2f624478598ed88473))
+
+## [1.31.2](https://github.com/dsswift/ion/compare/desktop-v1.31.1...desktop-v1.31.2) (2026-05-19)
+
+### Bug Fixes
+
+* **engine:** unify context window and persist token cache ([5024b80](https://github.com/dsswift/ion/commit/5024b805f4b25dff5ea9dc9f6b5cb470d4a3a61c))
+
+## [1.31.1](https://github.com/dsswift/ion/compare/desktop-v1.31.0...desktop-v1.31.1) (2026-05-19)
+
+## [1.31.0](https://github.com/dsswift/ion/compare/desktop-v1.30.0...desktop-v1.31.0) (2026-05-19)
+
+### Features
+
+* **desktop:** add fast-forward merge option for worktrees ([89b65d9](https://github.com/dsswift/ion/commit/89b65d9688db01ff88cbdbd607ac7141ce97640b))
+* **desktop:** add editor chrome and codemirror extensions ([df0e8c0](https://github.com/dsswift/ion/commit/df0e8c0b8e607ffd79a576e670b78a50708973b6))
+* **desktop:** add markdown preview and editor font settings ([841bfaf](https://github.com/dsswift/ion/commit/841bfafa8e719fac5300cdd4af5f80683af518ce))
+
+## [1.30.0](https://github.com/dsswift/ion/compare/desktop-v1.29.0...desktop-v1.30.0) (2026-05-19)
+
+### Features
+
+* **desktop:** add tab group reordering support ([557e549](https://github.com/dsswift/ion/commit/557e5493810b287add9a15c39e815c8debdbf7d9))
+
+## [1.29.0](https://github.com/dsswift/ion/compare/desktop-v1.28.0...desktop-v1.29.0) (2026-05-19)
+
+### Features
+
+* **desktop:** add model management with provider config ([8fb8cf4](https://github.com/dsswift/ion/commit/8fb8cf4b3a3f2ee008a81edfe457626ab35c984b))
+* **desktop:** add oauth provider authentication ([3580b60](https://github.com/dsswift/ion/commit/3580b60af619c652d60f9704d40325172c3027ef))
+* **desktop:** add model refresh and provider filtering ([b49b671](https://github.com/dsswift/ion/commit/b49b67159c2e5a223ae4e05434dfb856da57e06d))
+* **desktop:** persist model override in tab state ([50f8790](https://github.com/dsswift/ion/commit/50f87904981ce80ab83cce8c3e845a7a91c49645))
+
+### Bug Fixes
+
+* **desktop:** move slash command output to user prompt ([dc07b70](https://github.com/dsswift/ion/commit/dc07b70fd3b659655bdaac63eea3a6b2d619da85))
+
+## [1.28.0](https://github.com/dsswift/ion/compare/desktop-v1.27.0...desktop-v1.28.0) (2026-05-18)
+
+### Features
+
+* **engine:** add plan mode support to CLI backend ([ec645fa](https://github.com/dsswift/ion/commit/ec645fa9e82470e2f21c9f8856b7e2ba8bfd6b92))
+* **desktop:** rework git system ([0337588](https://github.com/dsswift/ion/commit/033758896a23e7b63ae0e6576c80fdb9f73118bd))
+
+### Bug Fixes
+
+* **desktop:** suppress ghost plan cards in CLI auto mode ([0c150a2](https://github.com/dsswift/ion/commit/0c150a2fbf7e0235833bcc7775fc9f44fdd4370c))
+
+## [1.27.0](https://github.com/dsswift/ion/compare/desktop-v1.26.0...desktop-v1.27.0) (2026-05-17)
+
+### Features
+
+* **desktop:** pass deviceId to command handlers ([8d574a5](https://github.com/dsswift/ion/commit/8d574a52e07ab5e0cfaa165370ad431276b931e8))
+* **desktop:** add git operations with file system watcher ([4484df1](https://github.com/dsswift/ion/commit/4484df1e22451e285b71fd4200f4956c2b1cc8ff))
+* **ios:** add git operations with graph visualization and commit details ([75c9fb7](https://github.com/dsswift/ion/commit/75c9fb7289c33b23ca688ed7e098e2fecaacefc0))
+* **desktop:** persist ios diagnostic logs to disk ([809cbc0](https://github.com/dsswift/ion/commit/809cbc05f1ff3b143ec5f9a64c55650cf11bcc22))
+
+### Bug Fixes
+
+* **desktop:** add main-process scrollback for terminal snapshots ([69cdd4e](https://github.com/dsswift/ion/commit/69cdd4e141b6b012c249847244770ba5c3ba6b42))
+
+## [1.26.0](https://github.com/dsswift/ion/compare/desktop-v1.25.2...desktop-v1.26.0) (2026-05-16)
+
+### Features
+
+* **desktop:** add settings search functionality ([26874d4](https://github.com/dsswift/ion/commit/26874d49afc62abb5dc1dfba3d766ff59daf48a1))
+
+## [1.25.2](https://github.com/dsswift/ion/compare/desktop-v1.25.1...desktop-v1.25.2) (2026-05-16)
+
+### Bug Fixes
+
+* **desktop:** validate terminal CWD exists before pty.spawn, fall back to homedir ([179d4e3](https://github.com/dsswift/ion/commit/179d4e3734af9fa1ff04109c69aa08f438fa1bdf))
+
+## [1.25.1](https://github.com/dsswift/ion/compare/desktop-v1.25.0...desktop-v1.25.1) (2026-05-16)
+
+### Bug Fixes
+
+* **desktop:** add NSLocalNetworkUsageDescription and log connect errors ([d982564](https://github.com/dsswift/ion/commit/d982564450b0d8ed4e943f94317d96c1907d81dd))
+
+## [1.25.0](https://github.com/dsswift/ion/compare/desktop-v1.24.0...desktop-v1.25.0) (2026-05-16)
+
+### Features
+
+* **desktop:** add tab migration between backends ([8d53980](https://github.com/dsswift/ion/commit/8d539802f0debca0d3699155b5826cd11d10ea58))
+
+## [1.24.0](https://github.com/dsswift/ion/compare/desktop-v1.23.0...desktop-v1.24.0) (2026-05-15)
+
+### Features
+
+* **desktop:** use client message id in prompt handler ([fa4a1a4](https://github.com/dsswift/ion/commit/fa4a1a4e2ff8f39b8b8c19c5719a3186f994dbe8))
+
+## [1.23.0](https://github.com/dsswift/ion/compare/desktop-v1.22.0...desktop-v1.23.0) (2026-05-15)
+
+### Features
+
+* **desktop:** add image attachments to messages ([0f75fdc](https://github.com/dsswift/ion/commit/0f75fdc598feb0edccffaff9bfb7c4174822e18d))
+
 ## [1.22.0](https://github.com/dsswift/ion/compare/desktop-v1.21.0...desktop-v1.22.0) (2026-05-15)
 
 ### Features

@@ -2,27 +2,39 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { IPC } from '../../../shared/types'
 import { log as _log } from '../../logger'
-import { state, sessionPlane, engineBridge } from '../../state'
+import { state, sessionPlane, engineBridge, terminalScrollback, modelCache } from '../../state'
 import { broadcast } from '../../broadcast'
 import { terminalManager } from '../../terminal-manager-instance'
 import { readSettings, writeSettings } from '../../settings-store'
 import { getRemoteTabStates } from '../snapshot'
 import { discoverCommands } from '../../cli-compat/command-discovery'
+import { encodeImageAttachments } from '../attachment-encoder'
+import { autoPullDiagnosticLogs } from './diagnostics'
 import type { RemoteCommand } from '../protocol'
 
 function log(msg: string): void {
   _log('main', msg)
 }
 
-export async function handleSync(): Promise<void> {
+export async function handleSync(deviceId: string): Promise<void> {
+  await _sendSync((event) => state.remoteTransport?.sendToDevice(deviceId, event))
+  autoPullDiagnosticLogs(deviceId)
+}
+
+/** Broadcast sync to all connected devices (used after state-changing operations). */
+async function broadcastSync(): Promise<void> {
+  await _sendSync((event) => state.remoteTransport?.send(event))
+}
+
+async function _sendSync(send: (event: any) => void): Promise<void> {
   const tabs = await getRemoteTabStates()
   const syncSettings = readSettings()
   const recentDirectories: string[] = Array.isArray(syncSettings.recentBaseDirectories) ? syncSettings.recentBaseDirectories : []
   const tabGroupMode = syncSettings.tabGroupMode || 'off'
   const tabGroups = Array.isArray(syncSettings.tabGroups) ? syncSettings.tabGroups.map((g: any) => ({ id: g.id, label: g.label, isDefault: g.isDefault, order: g.order })) : []
-  state.remoteTransport?.send({ type: 'snapshot', tabs, recentDirectories, tabGroupMode, tabGroups, preferredModel: syncSettings.preferredModel || undefined, engineDefaultModel: syncSettings.engineDefaultModel || undefined })
+  send({ type: 'snapshot', tabs, recentDirectories, tabGroupMode, tabGroups, preferredModel: syncSettings.preferredModel || undefined, engineDefaultModel: syncSettings.engineDefaultModel || undefined, availableModels: modelCache.models.length > 0 ? modelCache.models : undefined })
   const engineProfiles = Array.isArray(syncSettings.engineProfiles) ? syncSettings.engineProfiles : []
-  state.remoteTransport?.send({ type: 'engine_profiles', profiles: engineProfiles })
+  send({ type: 'engine_profiles', profiles: engineProfiles })
   for (const tab of tabs) {
     if (tab.isTerminalOnly && tab.terminalInstances && tab.terminalInstances.length > 0) {
       try {
@@ -44,7 +56,14 @@ export async function handleSync(): Promise<void> {
             } catch(e) { return {}; }
           })()
         `) || {}
-        state.remoteTransport?.send({
+        // Fall back to main-process scrollback for instances without renderer xterm
+        for (const inst of tab.terminalInstances!) {
+          if (!buffers[inst.id]) {
+            const scrollback = terminalScrollback.get(`${tab.id}:${inst.id}`)
+            if (scrollback) buffers[inst.id] = scrollback
+          }
+        }
+        send({
           type: 'terminal_snapshot',
           tabId: tab.id,
           instances: tab.terminalInstances,
@@ -171,7 +190,7 @@ export function handleCloseTab(cmd: Extract<RemoteCommand, { type: 'close_tab' }
 }
 
 export function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' }>): void {
-  const reqId = `remote-${Date.now()}`
+  const reqId = cmd.clientMsgId || `remote-${Date.now()}`
   const promptText = cmd.text.trim()
     .replace(/—/g, '--')
     .replace(/–/g, '-')
@@ -192,12 +211,15 @@ export function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' }>): v
   }
 
   // Prepend attachment context lines (same format as desktop send-slice)
+  // for client-side display, then encode each image so the engine can ship
+  // native multimodal content blocks to the LLM.
   let fullPrompt = promptText
   const attachments = cmd.attachments || []
   if (attachments.length > 0) {
     const ctx = attachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
     fullPrompt = `${ctx}\n\n${fullPrompt}`
   }
+  const { encoded, rewrittenText } = encodeImageAttachments(fullPrompt, attachments)
 
   const remoteAttachments = attachments.map((a) => ({
     id: crypto.randomUUID(),
@@ -215,7 +237,13 @@ export function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' }>): v
       attachments: remoteAttachments.length > 0 ? remoteAttachments : undefined,
     },
   })
-  broadcast(IPC.REMOTE_USER_MESSAGE, { tabId: cmd.tabId, requestId: reqId, prompt: fullPrompt, timestamp: now })
+  broadcast(IPC.REMOTE_USER_MESSAGE, {
+    tabId: cmd.tabId,
+    requestId: reqId,
+    prompt: rewrittenText,
+    timestamp: now,
+    imageAttachments: encoded.length > 0 ? encoded : undefined,
+  })
 }
 
 export function handleCancel(cmd: Extract<RemoteCommand, { type: 'cancel' }>): void {
@@ -236,12 +264,12 @@ export function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type: 'set
   broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId: cmd.tabId, mode })
 }
 
-export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type: 'load_conversation' }>): Promise<void> {
+export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type: 'load_conversation' }>, deviceId: string): Promise<void> {
   const PAGE_SIZE = 10
   try {
     if (!state.mainWindow) {
       log(`load_conversation: mainWindow not available`)
-      state.remoteTransport?.send({ type: 'conversation_history', tabId: cmd.tabId, messages: [], hasMore: false })
+      state.remoteTransport?.sendToDevice(deviceId, { type: 'conversation_history', tabId: cmd.tabId, messages: [], hasMore: false })
       return
     }
 
@@ -347,7 +375,7 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
       return m
     }))
 
-    state.remoteTransport?.send({
+    state.remoteTransport?.sendToDevice(deviceId, {
       type: 'conversation_history',
       tabId: cmd.tabId,
       messages: msgs,
@@ -356,7 +384,7 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
     })
   } catch (err) {
     log(`load_conversation error: ${(err as Error).message}`)
-    state.remoteTransport?.send({ type: 'conversation_history', tabId: cmd.tabId, messages: [], hasMore: false })
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'conversation_history', tabId: cmd.tabId, messages: [], hasMore: false })
   }
 }
 
@@ -425,7 +453,42 @@ export async function handleSetTabGroupMode(cmd: Extract<RemoteCommand, { type: 
   const settings = readSettings()
   settings.tabGroupMode = mode
   writeSettings(settings)
-  await handleSync()
+  await broadcastSync()
+}
+
+export async function handleReorderTabGroups(cmd: Extract<RemoteCommand, { type: 'reorder_tab_groups' }>): Promise<void> {
+  const ids = cmd.orderedIds
+  if (!Array.isArray(ids) || ids.length === 0) {
+    log('reorder_tab_groups: empty or invalid orderedIds')
+    return
+  }
+  try {
+    const escaped = JSON.stringify(ids).replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    await state.mainWindow?.webContents.executeJavaScript(`
+      (function() {
+        var prefs = window.__Ion_PREFS_STORE__;
+        if (!prefs) return;
+        var orderedIds = JSON.parse('${escaped}');
+        var allGroups = prefs.getState().tabGroups;
+        var byId = {};
+        for (var i = 0; i < allGroups.length; i++) byId[allGroups[i].id] = allGroups[i];
+        var result = [];
+        for (var j = 0; j < orderedIds.length; j++) {
+          if (byId[orderedIds[j]]) result.push(byId[orderedIds[j]]);
+        }
+        // Append any groups not in the ordered list (safety net)
+        var seen = {};
+        for (var k = 0; k < orderedIds.length; k++) seen[orderedIds[k]] = true;
+        for (var m = 0; m < allGroups.length; m++) {
+          if (!seen[allGroups[m].id]) result.push(allGroups[m]);
+        }
+        prefs.getState().reorderTabGroups(result);
+      })()
+    `)
+  } catch (err) {
+    log('reorder_tab_groups error: ' + (err as Error).message)
+  }
+  await broadcastSync()
 }
 
 export async function handleMoveTabToGroup(cmd: Extract<RemoteCommand, { type: 'move_tab_to_group' }>): Promise<void> {
@@ -442,17 +505,17 @@ export async function handleMoveTabToGroup(cmd: Extract<RemoteCommand, { type: '
   } catch (err) {
     log('move_tab_to_group error: ' + (err as Error).message)
   }
-  await handleSync()
+  await broadcastSync()
 }
 
-export async function handleDiscoverCommands(cmd: Extract<RemoteCommand, { type: 'discover_commands' }>): Promise<void> {
+export async function handleDiscoverCommands(cmd: Extract<RemoteCommand, { type: 'discover_commands' }>, deviceId: string): Promise<void> {
   const { directory } = cmd
   try {
     const commands = await discoverCommands(directory)
-    state.remoteTransport?.send({ type: 'discover_commands_response', directory, commands })
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'discover_commands_response', directory, commands })
   } catch (err) {
     log(`discover_commands error: ${(err as Error).message}`)
-    state.remoteTransport?.send({ type: 'discover_commands_response', directory, commands: [] })
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'discover_commands_response', directory, commands: [] })
   }
 }
 

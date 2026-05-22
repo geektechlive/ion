@@ -1,4 +1,4 @@
-import type { TabState, NormalizedEvent, EnrichedError, Attachment, FileAttachment, TerminalPaneState, EngineInstance, EnginePaneState, AgentStateUpdate, StatusFields, Message } from '../../shared/types'
+import type { TabState, NormalizedEvent, EnrichedError, Attachment, FileAttachment, TerminalPaneState, EngineInstance, EnginePaneState, AgentStateUpdate, StatusFields, Message, ImageAttachmentPayload } from '../../shared/types'
 
 export interface StaticInfo {
   version: string
@@ -122,7 +122,7 @@ export interface State {
   startBashCommand: (command: string, execId: string) => { toolMsgId: string; tabId: string }
   completeBashCommand: (tabId: string, toolMsgId: string, command: string, stdout: string, stderr: string, exitCode: number | null) => void
   sendMessage: (prompt: string, projectPath?: string, extraAttachments?: Attachment[], appendSystemPrompt?: string) => void
-  submitRemotePrompt: (tabId: string, prompt: string) => void
+  submitRemotePrompt: (tabId: string, prompt: string, imageAttachments?: ImageAttachmentPayload[]) => void
   submitRemoteBash: (tabId: string, command: string) => void
   respondPermission: (tabId: string, questionId: string, optionId: string) => void
   addDirectory: (dir: string) => void
@@ -131,7 +131,7 @@ export interface State {
   setupWorktree: (tabId: string, sourceBranch: string, setAsDefault: boolean) => Promise<void>
   convertToWorktree: (tabId: string) => Promise<void>
   cancelWorktreeSetup: (tabId: string) => void
-  finishWorktreeTab: (tabId: string, strategyOverride?: 'merge' | 'pr') => Promise<void>
+  finishWorktreeTab: (tabId: string, strategyOverride?: 'merge-ff' | 'merge' | 'pr') => Promise<void>
   addAttachments: (attachments: FileAttachment[]) => void
   removeAttachment: (attachmentId: string) => void
   clearAttachments: () => void
@@ -147,13 +147,14 @@ export interface State {
   setWorktreeUncommitted: (tabId: string, hasChanges: boolean) => void
   createEngineTab: (dir?: string, profileId?: string) => string
   handleEngineEvent: (key: string, event: any) => void
-  submitEnginePrompt: (tabId: string, text: string, appendSystemPrompt?: string) => void
+  submitEnginePrompt: (tabId: string, text: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]) => void
   respondEngineDialog: (tabId: string, dialogId: string, value: any) => void
   addEngineInstance: (tabId: string) => string
   removeEngineInstance: (tabId: string, instanceId: string) => void
   selectEngineInstance: (tabId: string, instanceId: string) => void
   renameEngineInstance: (tabId: string, instanceId: string, label: string) => void
   reorderEngineInstances: (tabId: string, reordered: EngineInstance[]) => void
+  moveEngineInstance: (sourceTabId: string, instanceId: string, targetTabId: string) => void
   setEngineModel: (tabId: string, modelId: string) => void
   addEngineSystemMessage: (key: string, content: string) => void
   setEngineDraftInput: (key: string, text: string) => void

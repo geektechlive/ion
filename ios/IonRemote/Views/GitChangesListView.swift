@@ -7,6 +7,10 @@ struct GitChangesListView: View {
     let directory: String
     @State private var commitMessage = ""
     @State private var showDiff = false
+    @State private var selectMode = false
+    @State private var selectedPaths: Set<String> = []
+    @State private var recentCommitMessages: [String] = []
+    @State private var discardConfirmPath: String? = nil
 
     private var changesResponse: GitChangesResponse? {
         viewModel.gitChanges[directory]
@@ -32,10 +36,16 @@ struct GitChangesListView: View {
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity)
         } else if changesResponse?.files.isEmpty == true {
-            Text("No changes")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-                .padding(.vertical, 8)
+            VStack(spacing: 12) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 32))
+                    .foregroundStyle(IonTheme.accent)
+                Text("Working tree clean")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity)
         } else {
             VStack(spacing: 0) {
                 // Staged section
@@ -44,6 +54,7 @@ struct GitChangesListView: View {
                         "Staged",
                         count: stagedFiles.count,
                         action: {
+                            Haptic.medium()
                             viewModel.gitUnstage(
                                 directory: directory,
                                 paths: stagedFiles.map(\.path)
@@ -60,6 +71,7 @@ struct GitChangesListView: View {
                         "Changes",
                         count: unstagedFiles.count,
                         action: {
+                            Haptic.medium()
                             viewModel.gitStage(
                                 directory: directory,
                                 paths: unstagedFiles.map(\.path)
@@ -74,12 +86,56 @@ struct GitChangesListView: View {
                 if !stagedFiles.isEmpty {
                     commitBar
                 }
+
+                // Batch actions
+                if selectMode && !selectedPaths.isEmpty {
+                    HStack(spacing: 12) {
+                        Button {
+                            viewModel.gitStage(directory: directory, paths: Array(selectedPaths))
+                            selectedPaths.removeAll()
+                        } label: {
+                            Label("Stage \(selectedPaths.count)", systemImage: "plus.circle")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.green)
+
+                        Button {
+                            viewModel.gitUnstage(directory: directory, paths: Array(selectedPaths))
+                            selectedPaths.removeAll()
+                        } label: {
+                            Label("Unstage \(selectedPaths.count)", systemImage: "minus.circle")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.orange)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
             }
             .fullScreenCover(isPresented: $showDiff) {
                 if let result = viewModel.gitDiffResult {
                     GitDiffView(fileName: result.fileName, diff: result.diff)
                 } else {
                     ProgressView("Loading diff…")
+                }
+            }
+            .alert("Discard Changes?", isPresented: Binding(
+                get: { discardConfirmPath != nil },
+                set: { if !$0 { discardConfirmPath = nil } }
+            )) {
+                Button("Cancel", role: .cancel) { discardConfirmPath = nil }
+                Button("Discard", role: .destructive) {
+                    if let path = discardConfirmPath {
+                        Haptic.medium()
+                        viewModel.gitDiscard(directory: directory, paths: [path])
+                        discardConfirmPath = nil
+                    }
+                }
+            } message: {
+                if let path = discardConfirmPath {
+                    Text("This will permanently discard changes to \(path.split(separator: "/").last.map(String.init) ?? path).")
                 }
             }
         }
@@ -145,6 +201,13 @@ struct GitChangesListView: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
             Spacer()
+            if count >= 3 {
+                Button(selectMode ? "Done" : "Select") {
+                    selectMode.toggle()
+                    if !selectMode { selectedPaths.removeAll() }
+                }
+                .font(.caption)
+            }
             Button(actionLabel, action: action)
                 .font(.caption)
         }
@@ -171,9 +234,21 @@ struct GitChangesListView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundStyle(.quaternary)
+                if selectMode {
+                    Image(systemName: selectedPaths.contains(file.path) ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selectedPaths.contains(file.path) ? IonTheme.accent : Color(.tertiaryLabel))
+                        .onTapGesture {
+                            if selectedPaths.contains(file.path) {
+                                selectedPaths.remove(file.path)
+                            } else {
+                                selectedPaths.insert(file.path)
+                            }
+                        }
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
             }
             .padding(.leading, indented ? 28 : 12)
             .padding(.trailing, 12)
@@ -196,6 +271,15 @@ struct GitChangesListView: View {
                     Label("Stage", systemImage: "plus.circle")
                 }
                 .tint(.green)
+            }
+        }
+        .swipeActions(edge: .leading) {
+            if !file.staged {
+                Button(role: .destructive) {
+                    discardConfirmPath = file.path
+                } label: {
+                    Label("Discard", systemImage: "trash")
+                }
             }
         }
     }
@@ -223,12 +307,27 @@ struct GitChangesListView: View {
 
     private var commitBar: some View {
         HStack(spacing: 8) {
+            if commitMessage.isEmpty && !recentCommitMessages.isEmpty {
+                Menu {
+                    ForEach(recentCommitMessages, id: \.self) { msg in
+                        Button(msg) { commitMessage = msg }
+                    }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
             TextField("Commit message", text: $commitMessage)
                 .textFieldStyle(.roundedBorder)
                 .font(.subheadline)
 
             Button {
                 guard !commitMessage.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                recentCommitMessages.insert(commitMessage, at: 0)
+                if recentCommitMessages.count > 5 { recentCommitMessages.removeLast() }
+                Haptic.medium()
                 viewModel.gitCommit(directory: directory, message: commitMessage)
                 commitMessage = ""
             } label: {
@@ -237,7 +336,7 @@ struct GitChangesListView: View {
                     .foregroundStyle(
                         commitMessage.trimmingCharacters(in: .whitespaces).isEmpty
                             ? .secondary
-                            : Color(hex: 0x2EB8A6)
+                            : IonTheme.accent
                     )
             }
             .disabled(commitMessage.trimmingCharacters(in: .whitespaces).isEmpty)

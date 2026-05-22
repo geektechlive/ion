@@ -32,6 +32,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   closeExplorerOnFileOpen: saved.closeExplorerOnFileOpen,
   openMarkdownInPreview: saved.openMarkdownInPreview,
   editorWordWrap: saved.editorWordWrap,
+  editorFontSize: saved.editorFontSize,
   gitOpsMode: saved.gitOpsMode,
   worktreeCompletionStrategy: saved.worktreeCompletionStrategy,
   worktreeBranchDefaults: saved.worktreeBranchDefaults,
@@ -70,6 +71,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   defaultTallEngine: saved.defaultTallEngine,
   tabRecoveryEnabled: saved.tabRecoveryEnabled,
   tabRecoveryTimeoutSec: saved.tabRecoveryTimeoutSec,
+  planModelSplitEnabled: saved.planModelSplitEnabled,
+  planModeModel: saved.planModeModel,
+  implementModeModel: saved.implementModeModel,
   _systemIsDark: true,
   setDefaultTallConversation: (enabled) => {
     set({ defaultTallConversation: enabled })
@@ -191,6 +195,11 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   setEditorWordWrap: (enabled) => {
     set({ editorWordWrap: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setEditorFontSize: (size) => {
+    const clamped = Math.max(8, Math.min(24, Math.round(size)))
+    set({ editorFontSize: clamped })
     saveSettings(getAllSettings(get))
   },
   setGitOpsMode: (mode) => {
@@ -399,6 +408,18 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   removeEngineProfile: (id) => {
     set({ engineProfiles: get().engineProfiles.filter((p) => p.id !== id) })
+    saveSettings(getAllSettings(get))
+  },
+  setPlanModelSplitEnabled: (enabled) => {
+    set({ planModelSplitEnabled: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setPlanModeModel: (model) => {
+    set({ planModeModel: model })
+    saveSettings(getAllSettings(get))
+  },
+  setImplementModeModel: (model) => {
+    set({ implementModeModel: model })
     saveSettings(getAllSettings(get))
   },
   setSystemTheme: (isDark) => {

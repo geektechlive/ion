@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showPairingSheet = false
     @State private var elevenLabsKey: String = ""
     @State private var keySaved = false
     @State private var voiceTestInProgress = false
@@ -10,13 +11,14 @@ struct SettingsView: View {
     @State private var showVoiceTestAlert = false
     @State private var voicePromptText: String = ""
 
-
     var body: some View {
         NavigationStack {
             List {
                 connectionSection
                 voiceSection
+                diagnosticsSection
                 newTabSection
+                modelsSection
                 tabGroupsSection
                 pairedDevicesSection
                 aboutSection
@@ -27,6 +29,9 @@ struct SettingsView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .sheet(isPresented: $showPairingSheet) {
+                PairingView()
             }
         }
     }
@@ -39,6 +44,14 @@ struct SettingsView: View {
         case .lanPreferred: return "Connected (LAN)"
         case .relayOnly: return "Connected (Relay)"
         case .disconnected: return "Connected"
+        }
+    }
+
+    private var transportLabel: String {
+        switch viewModel.transportState {
+        case .lanPreferred: return "LAN (Bonjour)"
+        case .relayOnly: return "Relay (WebSocket)"
+        case .disconnected: return "Disconnected"
         }
     }
 
@@ -190,6 +203,37 @@ struct SettingsView: View {
         }
     }
 
+    private var diagnosticsSection: some View {
+        Section("Diagnostics") {
+            HStack {
+                Label("Transport", systemImage: "antenna.radiowaves.left.and.right")
+                Spacer()
+                Text(transportLabel)
+                    .foregroundStyle(.secondary)
+            }
+            if let latency = viewModel.connectionQuality.latencyLabel {
+                HStack {
+                    Label("Latency", systemImage: "timer")
+                    Spacer()
+                    Text(latency)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack {
+                Label("Buffered", systemImage: "tray.full")
+                Spacer()
+                Text("\(viewModel.connectionQuality.lastBuffered)")
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Label("Signal", systemImage: "wifi")
+                Spacer()
+                Text(viewModel.connectionQuality.signalLevel.label)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var newTabSection: some View {
         Section("New Tab") {
             Picker("Default Directory", selection: Binding<String?>(
@@ -203,6 +247,30 @@ struct SettingsView: View {
             }
         }
     }
+
+    private var modelsSection: some View {
+        let models = viewModel.availableModels
+        return Section("Models") {
+            Picker("Conversation", selection: Binding<String>(
+                get: { viewModel.preferredModel },
+                set: { newValue in viewModel.setPreferredModelDefault(newValue) }
+            )) {
+                ForEach(models) { model in
+                    Text(model.label).tag(model.id)
+                }
+            }
+            Picker("Engine", selection: Binding<String>(
+                get: { viewModel.engineDefaultModel },
+                set: { newValue in viewModel.setEngineDefaultModelDefault(newValue) }
+            )) {
+                Text("Same as Conversation").tag("")
+                ForEach(models) { model in
+                    Text(model.label).tag(model.id)
+                }
+            }
+        }
+    }
+
 
     private var tabGroupsSection: some View {
         Section {
@@ -227,33 +295,69 @@ struct SettingsView: View {
                         }
                     }
                 }
+                .onMove { source, destination in
+                    var reordered = sorted
+                    reordered.move(fromOffsets: source, toOffset: destination)
+                    let orderedIds = reordered.map(\.id)
+                    viewModel.reorderTabGroups(orderedIds: orderedIds)
+                }
             }
         } header: {
             Text("Tab Groups")
         } footer: {
             if viewModel.tabGroupMode == "manual" {
-                Text("Groups are managed on the desktop app. Create or rearrange groups from the desktop settings.")
+                Text("Drag to reorder groups. Create or delete groups from the desktop settings.")
             }
         }
     }
 
     private var pairedDevicesSection: some View {
-        Section("Paired Device") {
+        Section("Paired Desktops") {
             if viewModel.pairedDevices.isEmpty {
                 Text("No paired devices")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(viewModel.pairedDevices) { device in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(device.name)
-                            .font(.headline)
-                        Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if let lastSeen = device.lastSeen {
-                            Text("Last seen \(lastSeen.formatted(.relative(presentation: .named)))")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                    let isActive = device.id == viewModel.activeDevice?.id
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Text(device.name)
+                                    .font(.headline)
+                                if isActive {
+                                    Text("Active")
+                                        .font(.caption2)
+                                        .foregroundStyle(.green)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            Capsule().stroke(Color.green, lineWidth: 1)
+                                        )
+                                }
+                            }
+                            Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let lastSeen = device.lastSeen {
+                                Text("Last seen \(lastSeen.formatted(.relative(presentation: .named)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Spacer()
+                        Circle()
+                            .fill(isActive && viewModel.connectionState == .connected ? Color.green : Color(.tertiaryLabel))
+                            .frame(width: 8, height: 8)
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if !isActive {
+                            Button {
+                                viewModel.switchToDevice(id: device.id)
+                                Haptic.success()
+                            } label: {
+                                Label("Switch to", systemImage: "arrow.right.arrow.left")
+                            }
+                            .tint(JarvisTheme.accent)
                         }
                     }
                 }
@@ -264,24 +368,59 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            Button {
+                showPairingSheet = true
+            } label: {
+                Label("Pair New Desktop…", systemImage: "plus")
+            }
         }
+    }
+
+    private var appVersionString: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let hash = info?["IonBuildHash"] as? String ?? "?"
+        return "v\(version) (\(build).\(hash))"
     }
 
     private var aboutSection: some View {
         Section("About") {
             HStack {
-                Text("Version")
                 Spacer()
-                Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 8) {
+                    Image(systemName: "bolt.shield.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(JarvisTheme.accent)
+                    Text("Jarvis")
+                        .font(.headline)
+                    Text(appVersionString)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .listRowBackground(Color.clear)
+
+            NavigationLink("Diagnostic Log") {
+                DiagnosticLogView()
             }
 
             Button(role: .destructive) {
                 dismiss()
                 viewModel.resetAll()
             } label: {
-                Text("Unpair Device")
+                HStack {
+                    Spacer()
+                    Text("Unpair All Devices")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                }
             }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .listRowBackground(Color.clear)
         }
     }
 }

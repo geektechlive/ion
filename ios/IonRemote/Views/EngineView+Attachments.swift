@@ -28,6 +28,7 @@ extension EngineView {
                 return
             }
             let compressed = compressImage(data: data, maxBytes: 1_000_000)
+            AttachmentImageCache.shared.store(data: compressed, forKey: placeholderId)
             let base64 = compressed.base64EncodedString()
             let dataUrl = "data:image/jpeg;base64,\(base64)"
             await MainActor.run {
@@ -55,6 +56,7 @@ extension EngineView {
             ))
             if type == "image" {
                 let compressed = compressImage(data: data, maxBytes: 1_000_000)
+                AttachmentImageCache.shared.store(data: compressed, forKey: placeholderId)
                 let base64 = compressed.base64EncodedString()
                 let mimeExt = (ext == "jpg" || ext == "jpeg") ? "jpeg" : ext
                 let dataUrl = "data:image/\(mimeExt);base64,\(base64)"
@@ -89,6 +91,15 @@ extension EngineView {
                 if let error = result.error, !error.isEmpty {
                     pendingAttachments.remove(at: idx)
                 } else {
+                    AttachmentImageCache.shared.rekey(from: pendingAttachments[idx].id, to: result.id)
+                    // Also key the cache by the desktop-side path: this is what
+                    // survives in the rendered message text after rehydration,
+                    // so a path-keyed lookup is what makes the inline image
+                    // render when the user re-enters the conversation.
+                    if pendingAttachments[idx].type == "image", !result.path.isEmpty,
+                       let bytes = AttachmentImageCache.shared.data(forKey: result.id) {
+                        AttachmentImageCache.shared.store(data: bytes, forKey: result.path)
+                    }
                     pendingAttachments[idx] = PendingAttachment(
                         id: result.id, type: pendingAttachments[idx].type, name: result.name, path: result.path, isUploading: false, correlationId: cid
                     )

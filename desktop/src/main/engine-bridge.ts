@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { log as _log, debug as _debug, warn as _warn, error as _error } from './logger'
-import type { EngineConfig, EngineEvent } from '../shared/types'
+import type { EngineConfig, EngineEvent, ImageAttachmentPayload } from '../shared/types'
 
 const TAG = 'EngineBridge'
 function log(msg: string): void { _log(TAG, msg) }
@@ -43,6 +43,8 @@ export class EngineBridge extends EventEmitter {
   private connectPromise: Promise<void> | null = null
   private reconnectDisabled = false
   private activeSessions = new Map<string, { config: EngineConfig; conversationId?: string }>()
+  /** Client-side key aliases: oldKey → newKey. Rewrites incoming event keys. */
+  private keyAliases = new Map<string, string>()
 
   constructor() {
     super()
@@ -249,6 +251,31 @@ export class EngineBridge extends EventEmitter {
     }
   }
 
+  /**
+   * Remap a session key client-side.
+   * Moves the activeSessions entry from oldKey to newKey and registers an alias
+   * so incoming engine events keyed by oldKey are transparently rewritten.
+   */
+  remapSession(oldKey: string, newKey: string): void {
+    log(`remapSession: ${oldKey} -> ${newKey}`)
+    const entry = this.activeSessions.get(oldKey)
+    if (entry) {
+      this.activeSessions.set(newKey, entry)
+      this.activeSessions.delete(oldKey)
+      log(`remapSession: activeSessions entry moved: ${oldKey} -> ${newKey}`)
+    } else {
+      log(`remapSession: no activeSessions entry for ${oldKey} (session may not have started yet)`)
+    }
+    this.keyAliases.set(oldKey, newKey)
+    // Remove any prior alias that pointed to oldKey to avoid stale chains
+    for (const [k, v] of this.keyAliases) {
+      if (v === oldKey && k !== oldKey) {
+        this.keyAliases.set(k, newKey)
+        log(`remapSession: updated transitive alias ${k} -> ${newKey}`)
+      }
+    }
+  }
+
   private _handleMessage(line: string): void {
     let msg: any
     try {
@@ -276,8 +303,10 @@ export class EngineBridge extends EventEmitter {
 
     // Session event -- forward to IPC layer
     if (msg.key && msg.event) {
-      debug(`event: key=${msg.key} type=${msg.event.type}`)
-      this.emit('event', msg.key, msg.event as EngineEvent)
+      // Rewrite key if it has been remapped (client-side alias)
+      const routedKey = this.keyAliases.get(msg.key) ?? msg.key
+      debug(`event: key=${msg.key}${routedKey !== msg.key ? ` (aliased->${routedKey})` : ''} type=${msg.event.type}`)
+      this.emit('event', routedKey, msg.event as EngineEvent)
     }
   }
 
@@ -357,12 +386,20 @@ export class EngineBridge extends EventEmitter {
     }
   }
 
-  async sendPrompt(key: string, text: string, model?: string, appendSystemPrompt?: string): Promise<{ ok: boolean; error?: string }> {
-    log(`sendPrompt: key=${key} len=${text.length} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt}`)
+  async sendPrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]): Promise<{ ok: boolean; error?: string }> {
+    const attCount = imageAttachments?.length ?? 0
+    log(`sendPrompt: key=${key} len=${text.length} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${attCount}`)
     await this.connect()
     const msg: Record<string, unknown> = { cmd: 'send_prompt', key, text }
     if (model) msg.model = model
     if (appendSystemPrompt) msg.appendSystemPrompt = appendSystemPrompt
+    if (imageAttachments && imageAttachments.length > 0) {
+      msg.attachments = imageAttachments.map((a) => ({
+        media_type: a.mediaType,
+        data: a.data,
+        path: a.path,
+      }))
+    }
     return this._sendWithResult(msg)
   }
 
@@ -449,6 +486,34 @@ export class EngineBridge extends EventEmitter {
     await this.connect()
     const result = await this._sendWithData<{ title: string }>({ cmd: 'generate_title', text })
     return result.data?.title || ''
+  }
+
+  async migrateConversation(
+    sessionId: string,
+    targetFormat: string,
+    targetDir: string,
+    sourceDir: string,
+  ): Promise<{ ok: boolean; error?: string; data?: { newSessionId: string; outputPath: string; messageCount: number; contentHash: string } }> {
+    await this.connect()
+    return this._sendWithData({ cmd: 'migrate_conversation', key: sessionId, text: targetFormat, message: targetDir, args: sourceDir })
+  }
+
+  async listModels(): Promise<{ models: any[]; providers: any[] }> {
+    await this.connect()
+    const result = await this._sendWithData<{ models: any[]; providers: any[] }>({ cmd: 'list_models' })
+    return result.data || { models: [], providers: [] }
+  }
+
+  async storeCredential(provider: string, credential: string): Promise<{ ok: boolean; error?: string }> {
+    await this.connect()
+    return this._sendWithResult({ cmd: 'store_credential', provider, credential })
+  }
+
+  async refreshModels(provider?: string): Promise<{ ok: boolean; error?: string }> {
+    await this.connect()
+    const msg: Record<string, unknown> = { cmd: 'refresh_models' }
+    if (provider) msg.provider = provider
+    return this._sendWithResult(msg)
   }
 
   sendReconcileState(key: string): void {
