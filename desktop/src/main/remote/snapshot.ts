@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { state, sessionPlane, lastMessagePreview } from '../state'
 import { TABS_FILE } from '../settings-store'
+import { log } from '../logger'
 import type { RemoteTabState } from './protocol'
 import type { TabStatus } from '../../shared/types'
 
@@ -108,6 +109,15 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
   }
 
   if (rendererTabs.length > 0) {
+    // Log any tabs carrying a non-empty permissionQueue so we can confirm
+    // the blue-dot data survives iOS relaunch.
+    for (const t of rendererTabs) {
+      if (t.permissionQueue?.length > 0 || t.permissionDenied?.tools?.length > 0) {
+        const qIds = (t.permissionQueue || []).map((p: any) => `${p.toolTitle}(${p.questionId?.slice(-8)})`).join(', ')
+        const dIds = (t.permissionDenied?.tools || []).map((d: any) => `${d.toolName}(${d.toolUseId?.slice(-8)})`).join(', ')
+        log('snapshot', `tab=${t.id?.slice(0, 8)} status=${t.status} permQueue=[${qIds}] permDenied=[${dIds}]`)
+      }
+    }
     const mapped = rendererTabs
       .map((t: any) => ({
         id: t.id,
