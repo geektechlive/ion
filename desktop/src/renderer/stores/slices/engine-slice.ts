@@ -178,6 +178,99 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       set({ enginePanes: panes })
     },
 
+    moveEngineInstance: (sourceTabId, instanceId, targetTabId) => {
+      const state = get()
+      const sourcePaneRaw = state.enginePanes.get(sourceTabId)
+      const targetPaneRaw = state.enginePanes.get(targetTabId)
+      if (!sourcePaneRaw) {
+        console.warn(`[engine] moveEngineInstance: source pane not found tabId=${sourceTabId}`)
+        return
+      }
+      const instance = sourcePaneRaw.instances.find((i) => i.id === instanceId)
+      if (!instance) {
+        console.warn(`[engine] moveEngineInstance: instance ${instanceId} not found in tab ${sourceTabId}`)
+        return
+      }
+      const targetTab = state.tabs.find((t) => t.id === targetTabId)
+      if (!targetTab?.isEngine) {
+        console.warn(`[engine] moveEngineInstance: target tab ${targetTabId} is not an engine tab`)
+        return
+      }
+
+      const oldKey = `${sourceTabId}:${instanceId}`
+      const newKey = `${targetTabId}:${instanceId}`
+      console.log(`[engine] moveEngineInstance: ${oldKey} -> ${newKey}`)
+
+      // Re-key all compound-keyed Maps
+      const engineMessages = new Map(state.engineMessages)
+      const engineAgentStates = new Map(state.engineAgentStates)
+      const engineStatusFields = new Map(state.engineStatusFields)
+      const engineWorkingMessages = new Map(state.engineWorkingMessages)
+      const engineNotifications = new Map(state.engineNotifications)
+      const engineDialogs = new Map(state.engineDialogs)
+      const enginePinnedPrompt = new Map(state.enginePinnedPrompt)
+      const engineUsage = new Map(state.engineUsage)
+      const engineDraftInputs = new Map(state.engineDraftInputs)
+      const engineModelOverrides = new Map(state.engineModelOverrides)
+      const engineConversationIds = new Map(state.engineConversationIds)
+
+      const rekey = <V>(m: Map<string, V>) => {
+        if (m.has(oldKey)) { m.set(newKey, m.get(oldKey)!); m.delete(oldKey) }
+      }
+      rekey(engineMessages)
+      rekey(engineAgentStates)
+      rekey(engineStatusFields)
+      rekey(engineWorkingMessages)
+      rekey(engineNotifications)
+      rekey(engineDialogs)
+      rekey(enginePinnedPrompt)
+      rekey(engineUsage)
+      rekey(engineDraftInputs)
+      rekey(engineModelOverrides)
+      rekey(engineConversationIds)
+
+      // Update enginePanes: remove from source, add to target
+      const enginePanes = new Map(state.enginePanes)
+      const sourceRemaining = sourcePaneRaw.instances.filter((i) => i.id !== instanceId)
+      if (sourceRemaining.length === 0) {
+        enginePanes.delete(sourceTabId)
+      } else {
+        const newActiveId = sourcePaneRaw.activeInstanceId === instanceId
+          ? (sourceRemaining[sourceRemaining.length - 1]?.id || null)
+          : sourcePaneRaw.activeInstanceId
+        enginePanes.set(sourceTabId, { instances: sourceRemaining, activeInstanceId: newActiveId })
+      }
+
+      const targetPane = targetPaneRaw || { instances: [], activeInstanceId: null }
+      enginePanes.set(targetTabId, {
+        instances: [...targetPane.instances, instance],
+        activeInstanceId: instance.id,
+      })
+
+      set({
+        enginePanes,
+        engineMessages,
+        engineAgentStates,
+        engineStatusFields,
+        engineWorkingMessages,
+        engineNotifications,
+        engineDialogs,
+        enginePinnedPrompt,
+        engineUsage,
+        engineDraftInputs,
+        engineModelOverrides,
+        engineConversationIds,
+      })
+
+      // Close source tab if it's now empty
+      if (sourceRemaining.length === 0) {
+        get().closeTab(sourceTabId)
+      }
+
+      // Tell the bridge to remap the session key so future events route correctly
+      window.ion.engineRemapSession(oldKey, newKey)
+    },
+
     reorderEngineInstances: (tabId, reordered) => {
       const panes = new Map(get().enginePanes)
       const pane = panes.get(tabId)
@@ -196,24 +289,43 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       set({ engineModelOverrides: overrides })
     },
 
-    submitEnginePrompt: (tabId, text, appendSystemPrompt) => {
+    submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments) => {
       const pane = get().enginePanes.get(tabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
+      // Build a FileAttachment list from the encoded image attachments so
+      // the user-message bubble can render images inline. The path is the
+      // only field needed at render time; main-side READ_IMAGE_DATA_URL
+      // turns it into a data URL for <img>.
+      const userAttachments = (imageAttachments || [])
+        .filter((a) => !!a.path)
+        .map((a) => ({
+          id: crypto.randomUUID(),
+          type: 'image' as const,
+          name: (a.path?.split('/').pop() || 'image'),
+          path: a.path!,
+          mimeType: a.mediaType,
+        }))
       set((state) => {
         const pinnedPrompt = new Map(state.enginePinnedPrompt)
         pinnedPrompt.set(key, text)
         const messages = new Map(state.engineMessages)
         const msgs = [...(messages.get(key) || [])]
-        msgs.push({ id: nextMsgId(), role: 'user' as const, content: text, timestamp: Date.now() })
+        msgs.push({
+          id: nextMsgId(),
+          role: 'user' as const,
+          content: text,
+          timestamp: Date.now(),
+          ...(userAttachments.length > 0 ? { attachments: userAttachments } : {}),
+        })
         messages.set(key, msgs)
         const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const } : t)
         return { enginePinnedPrompt: pinnedPrompt, engineMessages: messages, tabs }
       })
       const prefs = usePreferencesStore.getState()
       const modelOverride = get().engineModelOverrides.get(key) || prefs.engineDefaultModel || prefs.preferredModel || undefined
-      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt).then((result) => {
+      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt, imageAttachments).then((result) => {
         if (result && !result.ok) {
           set((state) => {
             const messages = new Map(state.engineMessages)

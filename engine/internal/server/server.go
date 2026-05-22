@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/auth"
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/protocol"
+	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/session"
 	"github.com/dsswift/ion/engine/internal/titling"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -48,6 +50,7 @@ type Server struct {
 	mu                 sync.RWMutex
 	manager            *session.Manager
 	config             *types.EngineRuntimeConfig
+	authResolver       *auth.Resolver
 	broadcastListeners []*listenerHandle
 	done               chan struct{}
 	stopOnce           sync.Once
@@ -67,6 +70,11 @@ func (s *Server) SetConfig(cfg *types.EngineRuntimeConfig) {
 // SetVersion stores the engine binary version for the health command.
 func (s *Server) SetVersion(v string) {
 	s.version = v
+}
+
+// SetAuthResolver stores the auth resolver for credential operations.
+func (s *Server) SetAuthResolver(r *auth.Resolver) {
+	s.authResolver = r
 }
 
 // NewServer creates a Server backed by the given RunBackend.
@@ -270,8 +278,13 @@ func (s *Server) handleClient(conn net.Conn) {
 	}()
 
 	scanner := bufio.NewScanner(conn)
-	// Allow large messages (1MB)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// 8 MB per NDJSON line. Generous enough for an image-bearing prompt
+	// (Anthropic caps inputs at ~5 MB raw per image; base64 inflates by
+	// 4/3, so ~7 MB worst case + envelope) without inviting clients to
+	// spray multi-megabyte payloads. Old cap of 1 MB caused mid-stream
+	// EPIPE on the client write whenever an image attachment landed on
+	// the wire.
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -315,7 +328,7 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 	case "send_prompt":
 		var overrides *session.PromptOverrides
 		resolvedExts := cmd.ResolveExtensions()
-		if cmd.Model != "" || cmd.MaxTurns > 0 || cmd.MaxBudgetUsd > 0 || len(resolvedExts) > 0 || cmd.NoExtensions || cmd.AppendSystemPrompt != "" {
+		if cmd.Model != "" || cmd.MaxTurns > 0 || cmd.MaxBudgetUsd > 0 || len(resolvedExts) > 0 || cmd.NoExtensions || cmd.AppendSystemPrompt != "" || len(cmd.Attachments) > 0 {
 			overrides = &session.PromptOverrides{
 				Model:              cmd.Model,
 				MaxTurns:           cmd.MaxTurns,
@@ -323,6 +336,7 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 				Extensions:         resolvedExts,
 				NoExtensions:       cmd.NoExtensions,
 				AppendSystemPrompt: cmd.AppendSystemPrompt,
+				Attachments:        cmd.Attachments,
 			}
 		}
 		err := s.manager.SendPrompt(cmd.Key, cmd.Text, overrides)
@@ -474,6 +488,174 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 
 	case "reconcile_state":
 		s.manager.ReconcileState(cmd.Key)
+		s.sendResult(conn, cmd, nil, nil)
+
+	case "migrate_conversation":
+		go func(c net.Conn, command *protocol.ClientCommand) {
+			defer func() {
+				if r := recover(); r != nil {
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					utils.Error("Server", fmt.Sprintf("panic in migrate_conversation: %v\n%s", r, buf[:n]))
+					s.sendResult(c, command, fmt.Errorf("internal error"), nil)
+				}
+			}()
+
+			sourceID := command.Key
+			targetFormat := command.Text
+			targetDir := command.Message
+			newSessionID := conversation.GenEntryID() + "-" + conversation.GenEntryID()
+
+			var result *conversation.MigrateResult
+			var sourceMsgs []conversation.ValidationMsg
+			var err error
+
+			switch targetFormat {
+			case "claude_code":
+				var conv *conversation.Conversation
+				conv, err = conversation.Load(sourceID, "")
+				if err != nil {
+					s.sendResult(c, command, fmt.Errorf("load source conversation: %w", err), nil)
+					return
+				}
+				sourceMsgs = conversation.ExtractValidationMsgs(conv)
+				result, err = conversation.ConvertIonToClaudeCode(conv, newSessionID, targetDir)
+			case "ion":
+				// For Claude Code → Ion, key is the source session ID and
+				// args contains the source directory for the Claude Code JSONL.
+				sourceDir := command.Args
+				if sourceDir == "" {
+					s.sendResult(c, command, fmt.Errorf("args (source dir) required for ion conversion"), nil)
+					return
+				}
+				sourcePath := filepath.Join(sourceDir, sourceID+".jsonl")
+				sourceMsgs, err = conversation.ExtractValidationMsgsFromClaudeCode(sourcePath)
+				if err != nil {
+					s.sendResult(c, command, fmt.Errorf("load source messages: %w", err), nil)
+					return
+				}
+				result, err = conversation.ConvertClaudeCodeToIon(sourcePath, newSessionID, targetDir)
+			default:
+				s.sendResult(c, command, fmt.Errorf("unknown target format: %s", targetFormat), nil)
+				return
+			}
+
+			if err != nil {
+				s.sendResult(c, command, err, nil)
+				return
+			}
+
+			if err := conversation.ValidateConversion(sourceMsgs, result.OutputPath, targetFormat); err != nil {
+				s.sendResult(c, command, fmt.Errorf("validation failed: %w", err), nil)
+				return
+			}
+
+			s.sendResult(c, command, nil, result)
+		}(conn, cmd)
+
+	case "list_models":
+		models := providers.ListModels()
+		providerIDs := providers.ListProviderIDs()
+		providerEntries := make([]types.ProviderEntry, len(providerIDs))
+		for i, pid := range providerIDs {
+			entry := types.ProviderEntry{ID: pid}
+			if s.authResolver != nil {
+				entry.HasAuth, entry.AuthSource = s.authResolver.HasKey(pid)
+			}
+			// Special case: ollama doesn't need auth
+			if pid == "ollama" {
+				entry.HasAuth = true
+				entry.AuthSource = "none"
+			}
+			// Populate config details (gateway URL, API key reference)
+			if s.config != nil {
+				if pc, ok := s.config.Providers[pid]; ok {
+					entry.BaseURL = pc.BaseURL
+					// Show the API key reference if it looks like an env var
+					// (starts with $), otherwise just indicate it's set.
+					if pc.APIKey != "" {
+						if len(pc.APIKey) > 0 && pc.APIKey[0] == '$' {
+							entry.APIKeyRef = pc.APIKey
+						} else {
+							entry.APIKeyRef = "configured"
+						}
+					}
+				}
+			}
+			providerEntries[i] = entry
+		}
+		// For providers with a custom gateway (baseURL), only show
+		// user-configured models or live-discovered models — the hardcoded
+		// catalog doesn't apply to private gateways.
+		customGatewayProviders := make(map[string]bool)
+		if s.config != nil {
+			for pid, pc := range s.config.Providers {
+				if pc.BaseURL != "" {
+					customGatewayProviders[pid] = true
+				}
+			}
+		}
+		if len(customGatewayProviders) > 0 {
+			// Build set of discovered model IDs so we don't filter them out
+			discoveredIDs := make(map[string]bool)
+			for pid := range customGatewayProviders {
+				for _, dm := range providers.GetDiscoveredModels(pid) {
+					discoveredIDs[dm.ID] = true
+				}
+			}
+			filtered := make([]types.ModelEntry, 0, len(models))
+			for _, m := range models {
+				if customGatewayProviders[m.ProviderID] && !m.IsCustom && !discoveredIDs[m.ID] {
+					continue // skip hardcoded catalog models for custom gateway providers
+				}
+				filtered = append(filtered, m)
+			}
+			models = filtered
+		}
+		s.sendResult(conn, cmd, nil, map[string]interface{}{
+			"models":    models,
+			"providers": providerEntries,
+		})
+
+	case "store_credential":
+		if s.authResolver == nil {
+			s.sendResult(conn, cmd, fmt.Errorf("auth resolver not configured"), nil)
+			break
+		}
+		fs := auth.NewFileStore()
+		if cmd.Credential == "" {
+			// Empty credential means "clear this key"
+			_ = fs.DeleteKey(cmd.Provider)
+			providers.SetProviderKey(cmd.Provider, "")
+		} else {
+			if err := fs.SetKey(cmd.Provider, cmd.Credential); err != nil {
+				s.sendResult(conn, cmd, err, nil)
+				break
+			}
+			providers.SetProviderKey(cmd.Provider, cmd.Credential)
+			// Trigger model discovery for the newly-authed provider so its
+			// models appear in the picker without requiring an engine restart.
+			providerConfigs := make(map[string]types.ProviderConfig)
+			if s.config != nil {
+				providerConfigs = s.config.Providers
+			}
+			providers.DiscoverProvider(cmd.Provider, cmd.Credential, providerConfigs)
+		}
+		s.sendResult(conn, cmd, nil, nil)
+
+	case "refresh_models":
+		providerConfigs := make(map[string]types.ProviderConfig)
+		if s.config != nil {
+			providerConfigs = s.config.Providers
+		}
+		var resolveKey func(string) (string, error)
+		if s.authResolver != nil {
+			resolveKey = s.authResolver.ResolveKey
+		} else {
+			resolveKey = func(string) (string, error) { return "", nil }
+		}
+		// Provider field is optional: empty = refresh all
+		providers.RefreshModels(cmd.Provider, true, resolveKey, providerConfigs)
 		s.sendResult(conn, cmd, nil, nil)
 
 	case "shutdown":

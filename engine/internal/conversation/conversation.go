@@ -13,6 +13,8 @@ import (
 const CurrentVersion = 2
 
 // DefaultContext is the default context window size in tokens.
+// Auto-compaction triggers below this — see AutoCompactTokenLimit, which
+// reserves room for the next response and for the compaction summary itself.
 const DefaultContext = 200000
 
 // SessionEntryType identifies the kind of tree entry.
@@ -28,9 +30,11 @@ const (
 
 // MessageData holds a chat message entry.
 type MessageData struct {
-	Role    string          `json:"role"`
-	Content any             `json:"content"` // string or []types.LlmContentBlock
-	Usage   *types.LlmUsage `json:"usage,omitempty"`
+	Role       string          `json:"role"`
+	Content    any             `json:"content"` // string or []types.LlmContentBlock
+	Usage      *types.LlmUsage `json:"usage,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	StopReason string          `json:"stopReason,omitempty"`
 }
 
 // CompactionData holds metadata about a compaction event.
@@ -83,6 +87,7 @@ type Conversation struct {
 	ParentID                string             `json:"parentId,omitempty"`
 	Entries                 []SessionEntry     `json:"entries,omitempty"`
 	LeafID                  *string            `json:"leafId"`
+	WorkingDirectory        string             `json:"workingDirectory,omitempty"`
 }
 
 // ContextUsageInfo describes current context window consumption.
@@ -218,4 +223,27 @@ func AddToolResults(conv *Conversation, results []ToolResultEntry) {
 // UpdateCost adds to the running cost total.
 func UpdateCost(conv *Conversation, costUsd float64) {
 	conv.TotalCost += costUsd
+}
+
+// SetAssistantMeta annotates the most recent assistant entry with model and
+// stop reason metadata. This is called after AddAssistantMessage so callers
+// that don't need metadata don't have to change.
+func SetAssistantMeta(conv *Conversation, model, stopReason string) {
+	if conv.Entries == nil {
+		return
+	}
+	// Walk backwards to find the last assistant entry.
+	for i := len(conv.Entries) - 1; i >= 0; i-- {
+		if conv.Entries[i].Type != EntryMessage {
+			continue
+		}
+		md := asMessageData(conv.Entries[i].Data)
+		if md == nil || md.Role != "assistant" {
+			continue
+		}
+		md.Model = model
+		md.StopReason = stopReason
+		conv.Entries[i].Data = *md
+		return
+	}
 }

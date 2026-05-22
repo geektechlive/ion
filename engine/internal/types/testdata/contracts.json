@@ -166,10 +166,28 @@
       "inputTokens",
       "outputTokens"
     ],
+    "ModelEntry": [
+      "contextWindow",
+      "costPer1kInput",
+      "costPer1kOutput",
+      "id",
+      "isCustom",
+      "providerId",
+      "supportsCaching",
+      "supportsImages",
+      "supportsThinking"
+    ],
     "PermissionOpt": [
       "id",
       "kind",
       "label"
+    ],
+    "ProviderEntry": [
+      "apiKeyRef",
+      "authSource",
+      "baseURL",
+      "hasAuth",
+      "id"
     ],
     "StatusFields": [
       "contextPercent",

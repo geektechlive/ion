@@ -29,6 +29,7 @@ import { useSessionStore, editorDirForTab } from './stores/sessionStore'
 import { useColors, spacing } from './theme'
 import { usePreferencesStore } from './preferences'
 import { useUpdateStore } from './stores/update-store'
+import { setupModelSync } from './stores/model-store'
 
 const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
 
@@ -45,6 +46,11 @@ export default function App() {
     return window.ion.onUpdateDownloaded((info) => {
       useUpdateStore.getState().setAvailable(info.version)
     })
+  }, [])
+
+  // Set up background model sync (initial fetch, periodic refresh, IPC listener)
+  useEffect(() => {
+    setupModelSync()
   }, [])
 
   const [closeConfirmTab, setCloseConfirmTab] = useState<{ id: string; title: string; directory: string } | null>(null)
@@ -76,11 +82,19 @@ export default function App() {
   const explorerOpen = useSessionStore((s) => s.fileExplorerOpenDirs.has(s.tabs.find((t) => t.id === s.activeTabId)?.workingDirectory || ''))
   const editorOpen = useSessionStore((s) => {
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
-    return tab ? s.fileEditorOpenDirs.has(editorDirForTab(tab)) : false
+    if (!tab) return false
+    const dir = editorDirForTab(tab)
+    const isOpen = s.fileEditorOpenDirs.has(dir)
+    console.log('[App] editorOpen selector', { dir, isOpen, workingDir: tab.workingDirectory, worktreeRepo: tab.worktree?.repoPath, openDirs: [...s.fileEditorOpenDirs] })
+    return isOpen
   })
   const editorDirState = useSessionStore((s) => {
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
-    return tab ? s.fileEditorStates.get(editorDirForTab(tab)) : undefined
+    if (!tab) return undefined
+    const dir = editorDirForTab(tab)
+    const state = s.fileEditorStates.get(dir)
+    console.log('[App] editorDirState selector', { dir, hasState: !!state, fileCount: state?.files.length, activeFileId: state?.activeFileId })
+    return state
   })
   const isRunning = activeTabStatus === 'running' || activeTabStatus === 'connecting'
 
@@ -260,7 +274,7 @@ export default function App() {
                 </div>
               </motion.div>
             )}
-            {/* StatusBar must always mount so useGitPolling runs for terminal-only/tall/engine tabs */}
+            {/* StatusBar must always mount so useGitRepo subscribes for terminal-only/tall/engine tabs */}
             {(isTerminalOnly || isTerminalTall || isEngine) && (
               <div style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' }}>
                 <StatusBar />

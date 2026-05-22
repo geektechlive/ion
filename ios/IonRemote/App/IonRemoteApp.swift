@@ -114,6 +114,10 @@ struct IonRemoteApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var didGoToBackground = false
 
+    init() {
+        CrashReporter.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -212,6 +216,12 @@ struct ContentView: View {
             } else {
                 TabListView()
             }
+        }
+        .overlay(alignment: .top) {
+            ToastOverlay(
+                messages: viewModel.toastMessages,
+                onDismiss: { viewModel.dismissToast(id: $0) }
+            )
         }
         .onChange(of: viewModel.connectionState) { _, newState in
             if newState == .authFailed {

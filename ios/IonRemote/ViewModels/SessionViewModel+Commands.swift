@@ -15,8 +15,38 @@ extension SessionViewModel {
         send(.sync)
     }
 
-    func sendPrompt(tabId: String, text: String) {
-        send(.prompt(tabId: tabId, text: text))
+    func sendPrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
+        let clientMsgId = UUID().uuidString
+        send(.prompt(tabId: tabId, text: text, clientMsgId: clientMsgId, attachments: attachments))
+        // Optimistic local insert so the user's message appears immediately
+        // (dismisses empty state, enables scroll-to-bottom) rather than waiting
+        // for the desktop to echo it back via messageAdded.
+        if conversationLoaded.contains(tabId) {
+            let optimistic = Message(
+                id: clientMsgId,
+                role: .user,
+                content: text,
+                timestamp: Date().timeIntervalSince1970,
+                source: .remote
+            )
+            if var existing = messages[tabId] {
+                existing.append(optimistic)
+                messages[tabId] = existing
+            } else {
+                messages[tabId] = [optimistic]
+            }
+            messageCountByTab[tabId] = messages[tabId]?.count ?? 0
+        }
+        // Optimistic status: show activity indicator immediately so the user
+        // sees "Thinking…" rather than staring at their sent message while the
+        // prompt travels over the relay to the desktop engine.
+        // Mirrors desktop send-slice.ts which sets 'connecting' on send.
+        // Guard against downgrading from .running (queued-prompt case).
+        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            if tabs[idx].status != .running {
+                tabs[idx].status = .connecting
+            }
+        }
     }
 
     func cancel(tabId: String) {
@@ -53,6 +83,7 @@ extension SessionViewModel {
         guard !loadingConversation.contains(tabId) else { return }
         messages.removeValue(forKey: tabId)
         messageCountByTab.removeValue(forKey: tabId)
+        liveText.removeValue(forKey: tabId)
         conversationLoaded.remove(tabId)
         conversationHasMore.removeValue(forKey: tabId)
         conversationCursor.removeValue(forKey: tabId)
@@ -68,6 +99,8 @@ extension SessionViewModel {
         conversationLoaded.remove(tabId)
         conversationHasMore.removeValue(forKey: tabId)
         conversationCursor.removeValue(forKey: tabId)
+        loadingConversation.remove(tabId)
+        cancelLoadTimer(tabId: tabId)
         dismissedRestoredCards = dismissedRestoredCards.filter { !$0.hasPrefix("restored-") }
     }
 
@@ -127,19 +160,40 @@ extension SessionViewModel {
         conversationCursor.removeValue(forKey: tabId)
     }
 
-    /// Set the model override for a conversation tab (optimistic local update only).
-    func setTabModel(tabId: String, model: String) {
-        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-            tabs[idx].modelOverride = model.isEmpty ? nil : model
-        }
-    }
-
     func setPermissionMode(tabId: String, mode: PermissionMode) {
         // Optimistic local update for responsive UI
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].permissionMode = mode
         }
         send(.setPermissionMode(tabId: tabId, mode: mode))
+    }
+
+    /// Switch to auto mode and send the implementation prompt in a single
+    /// ordered Task so the mode change is guaranteed to arrive at the desktop
+    /// before the prompt. Without this, two separate `Task {}` blocks can
+    /// race and the prompt may arrive while the engine is still in plan mode.
+    func implementPlan(tabId: String, prompt: String) {
+        // Optimistic local update for responsive UI
+        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            tabs[idx].permissionMode = .auto
+        }
+        guard let transport else {
+            Task { @MainActor [weak self] in
+                self?.showToast(ToastMessage(style: .error, title: "Not connected", detail: "Command could not be sent"))
+            }
+            return
+        }
+        Task { [weak self] in
+            do {
+                try await transport.send(.setPermissionMode(tabId: tabId, mode: .auto))
+                try await transport.send(.prompt(tabId: tabId, text: prompt))
+            } catch {
+                let detail = error.localizedDescription
+                await MainActor.run {
+                    self?.showToast(ToastMessage(style: .error, title: "Send failed", detail: detail))
+                }
+            }
+        }
     }
 
     /// Request the desktop to change the tab group mode.
@@ -154,6 +208,17 @@ extension SessionViewModel {
             tabs[idx].groupId = groupId
         }
         send(.moveTabToGroup(tabId: tabId, groupId: groupId))
+    }
+
+    /// Reorder tab groups. Sends the new ordering to the desktop.
+    func reorderTabGroups(orderedIds: [String]) {
+        // Optimistic local update: reorder tabGroups to match orderedIds
+        let idOrder = Dictionary(uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) })
+        tabGroups.sort { (idOrder[$0.id] ?? Int.max) < (idOrder[$1.id] ?? Int.max) }
+        for i in tabGroups.indices {
+            tabGroups[i].order = i
+        }
+        send(.reorderTabGroups(orderedIds: orderedIds))
     }
 
     // MARK: - Terminal Commands
@@ -172,19 +237,32 @@ extension SessionViewModel {
         send(.createEngineTab(workingDirectory: dir, profileId: profileId))
     }
 
-    func submitEnginePrompt(tabId: String, text: String) {
+    func submitEnginePrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
         let key = engineCompoundKey(tabId: tabId)
         enginePinnedPrompt[key] = text
-        // Add user message to conversation
-        var msgs = engineMessages[key] ?? []
-        msgs.append(EngineMessage(id: UUID().uuidString, role: "user", content: text, timestamp: Date().timeIntervalSince1970 * 1000))
-        engineMessages[key] = msgs
         // Set tab running
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].status = .running
         }
         let instanceId = activeEngineInstance[tabId] ?? engineInstances[tabId]?.first?.id
-        send(.enginePrompt(tabId: tabId, text: text, instanceId: instanceId))
+        send(.enginePrompt(tabId: tabId, text: text, instanceId: instanceId, attachments: attachments))
+    }
+
+    func setTabModel(tabId: String, model: String) {
+        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            tabs[idx].modelOverride = model
+        }
+        send(.setTabModel(tabId: tabId, model: model))
+    }
+
+    func setPreferredModelDefault(_ model: String) {
+        preferredModel = model
+        send(.setPreferredModel(model: model))
+    }
+
+    func setEngineDefaultModelDefault(_ model: String) {
+        engineDefaultModel = model
+        send(.setEngineDefaultModel(model: model))
     }
 
     func setEngineModel(tabId: String, model: String) {
@@ -216,11 +294,44 @@ extension SessionViewModel {
         send(.engineRemoveInstance(tabId: tabId, instanceId: instanceId))
     }
 
+    func moveEngineInstance(sourceTabId: String, instanceId: String, targetTabId: String) {
+        ionLog.info("moveEngineInstance: \(sourceTabId):\(instanceId) -> \(targetTabId)")
+        // Optimistic local update: move instance between engineInstances dictionaries
+        if var srcInstances = engineInstances[sourceTabId],
+           let idx = srcInstances.firstIndex(where: { $0.id == instanceId }) {
+            let inst = srcInstances.remove(at: idx)
+            engineInstances[sourceTabId] = srcInstances.isEmpty ? nil : srcInstances
+            var tgtInstances = engineInstances[targetTabId] ?? []
+            tgtInstances.append(inst)
+            engineInstances[targetTabId] = tgtInstances
+            // Update active instance on target
+            activeEngineInstance[targetTabId] = instanceId
+            // Update active instance on source (last remaining or nil)
+            if srcInstances.isEmpty {
+                activeEngineInstance.removeValue(forKey: sourceTabId)
+            } else if activeEngineInstance[sourceTabId] == instanceId {
+                activeEngineInstance[sourceTabId] = srcInstances.last?.id
+            }
+        }
+        send(.engineMoveInstance(sourceTabId: sourceTabId, instanceId: instanceId, targetTabId: targetTabId))
+    }
+
     func selectEngineInstance(tabId: String, instanceId: String) {
         activeEngineInstance[tabId] = instanceId
         send(.engineSelectInstance(tabId: tabId, instanceId: instanceId))
         // Load conversation for the newly selected instance
         loadEngineConversation(tabId: tabId)
+    }
+
+    func renameEngineInstance(tabId: String, instanceId: String, label: String) {
+        // Update local state immediately
+        if var instances = engineInstances[tabId] {
+            if let idx = instances.firstIndex(where: { $0.id == instanceId }) {
+                instances[idx].label = label
+                engineInstances[tabId] = instances
+            }
+        }
+        send(.engineRenameInstance(tabId: tabId, instanceId: instanceId, label: label))
     }
 
     func loadEngineConversation(tabId: String) {
@@ -297,14 +408,36 @@ extension SessionViewModel {
         send(.gitCommit(directory: directory, message: message))
     }
 
-    // MARK: - File Explorer Commands
+    func gitDiscard(directory: String, paths: [String]) {
+        send(.gitDiscard(directory: directory, paths: paths))
+    }
 
+    func gitFetch(directory: String) {
+        send(.gitFetch(directory: directory))
+    }
+
+    func gitPull(directory: String) {
+        send(.gitPull(directory: directory))
+    }
+
+    func gitPush(directory: String) {
+        send(.gitPush(directory: directory))
+    }
+
+    func requestGitCommitFiles(directory: String, hash: String) {
+        send(.gitCommitFiles(directory: directory, hash: hash))
+    }
+
+    func requestGitCommitFileDiff(directory: String, hash: String, path: String) {
+        send(.gitCommitFileDiff(directory: directory, hash: hash, path: path))
+    }
+
+    // MARK: - File Explorer Commands
 
     /// Upload an image from the iOS device to the desktop as a temp file.
     func uploadAttachment(dataUrl: String, name: String, correlationId: String) {
         send(.uploadAttachment(dataUrl: dataUrl, name: name, correlationId: correlationId))
     }
-
 
     func requestFsListDir(directory: String, includeHidden: Bool = false) {
         fileListingLoading.insert(directory)
@@ -320,6 +453,9 @@ extension SessionViewModel {
         send(.fsWriteFile(filePath: filePath, content: content))
     }
 
+    func requestLoadAttachments(tabId: String) {
+        send(.loadAttachments(tabId: tabId))
+    }
 
     // MARK: - Command Discovery
 
@@ -342,13 +478,26 @@ extension SessionViewModel {
         ))
     }
 
-
     // MARK: - Send
 
     func send(_ command: RemoteCommand) {
-        guard let transport else { return }
-        Task {
-            try? await transport.send(command)
+        DiagnosticLog.logCommand(command)
+        guard let transport else {
+            DiagnosticLog.log("CMD: dropped (no transport)")
+            Task { @MainActor [weak self] in
+                self?.showToast(ToastMessage(style: .error, title: "Not connected", detail: "Command could not be sent"))
+            }
+            return
+        }
+        Task { [weak self] in
+            do {
+                try await transport.send(command)
+            } catch {
+                let detail = error.localizedDescription
+                await MainActor.run {
+                    self?.showToast(ToastMessage(style: .error, title: "Send failed", detail: detail))
+                }
+            }
         }
     }
 }
