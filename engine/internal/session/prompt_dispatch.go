@@ -72,11 +72,13 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	s.cliTurnActive = false
 
 	if s.planMode && s.planFilePath == "" {
-		// CLI backend: place the plan file inside the project working directory
-		// because the Claude CLI's native plan mode restricts writes to paths
-		// within or under the project root. API backend: use ~/.ion/plans/ since
-		// it controls its own tool execution and can write anywhere.
-		if _, isCli := m.backend.(*backend.CliBackend); isCli && s.config.WorkingDirectory != "" {
+		// CLI backend (and HybridBackend, which often routes to CLI for Claude models):
+		// place the plan file inside the project working directory because the Claude
+		// CLI's native plan mode restricts writes to paths within or under the project
+		// root. API backend: use ~/.ion/plans/ since it controls its own tool execution.
+		_, isCli := m.backend.(*backend.CliBackend)
+		_, isHybrid := m.backend.(*backend.HybridBackend)
+		if (isCli || isHybrid) && s.config.WorkingDirectory != "" {
 			plansDir := filepath.Join(s.config.WorkingDirectory, ".ion", "plans")
 			_ = os.MkdirAll(plansDir, 0755)
 			s.planFilePath = filepath.Join(plansDir, generatePlanID()+".md")
@@ -136,7 +138,7 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	// closures. Without this, two desktop tabs running in parallel would
 	// see each other's extension context, MCP tools, and agent spawn rules.
 	var runCfg *backend.RunConfig
-	if apiBackend, ok := m.backend.(*backend.ApiBackend); ok {
+	if apiBackend, ok := m.resolvedBackend(opts.Model).(*backend.ApiBackend); ok {
 		runCfg = m.buildRunConfig(s, key, requestID, apiBackend, extGroup, skipExtensions, permEng, telemCollector, mcpConns, opts.Model)
 	}
 
@@ -174,12 +176,15 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 		},
 	})
 
-	// Dispatch to backend. ApiBackend uses the per-run config built above so
-	// every closure on this run sees this session's hooks/tools/perms.
+	// Dispatch to backend. ApiBackend and HybridBackend use the per-run config
+	// built above so every closure sees this session's hooks/tools/perms.
 	// CliBackend ignores runCfg and follows its own subprocess wiring.
-	if apiBackend, ok := m.backend.(*backend.ApiBackend); ok {
-		apiBackend.StartRunWithConfig(requestID, opts, runCfg)
-	} else {
+	switch b := m.backend.(type) {
+	case *backend.ApiBackend:
+		b.StartRunWithConfig(requestID, opts, runCfg)
+	case *backend.HybridBackend:
+		b.StartRunWithConfig(requestID, opts, runCfg)
+	default:
 		m.backend.StartRun(requestID, opts)
 	}
 	return nil

@@ -107,12 +107,14 @@ func cmdServe() {
 	switch cfg.Backend {
 	case "cli":
 		b = backend.NewCliBackend()
+	case "hybrid":
+		hb := backend.NewHybridBackend()
+		hb.SetAuthResolver(resolver)
+		b = hb
 	default:
-		b = backend.NewApiBackend()
-	}
-
-	if apiBackend, ok := b.(*backend.ApiBackend); ok {
-		apiBackend.SetAuthResolver(resolver)
+		ab := backend.NewApiBackend()
+		ab.SetAuthResolver(resolver)
+		b = ab
 	}
 
 	// Wire auth resolver into titling so it can resolve keychain-stored keys

@@ -92,7 +92,7 @@ func (m *Manager) fireBeforeAgentStart(s *engineSession, key string, extGroup *e
 // so we fire the hook here and materialise the result into RunOptions before
 // the subprocess is launched. No-op when the backend is not CliBackend.
 func (m *Manager) fireBeforePromptCli(s *engineSession, key string, extGroup *extension.ExtensionGroup, skipExtensions bool, opts *types.RunOptions) {
-	if _, isCli := m.backend.(*backend.CliBackend); !isCli {
+	if _, isCli := m.resolvedBackend(opts.Model).(*backend.CliBackend); !isCli {
 		return
 	}
 	if extGroup == nil || extGroup.IsEmpty() || skipExtensions {

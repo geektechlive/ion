@@ -306,7 +306,7 @@ func (m *Manager) handleRunError(runID string, err error) {
 //   - TaskCompleteEvent: final result; close any active turn before the
 //     run finishes.
 func (m *Manager) fireCliTurnHooks(s *engineSession, key string, sOk bool, event types.NormalizedEvent) {
-	if _, isCli := m.backend.(*backend.CliBackend); !isCli {
+	if _, isCli := m.resolvedBackend(s.lastModel).(*backend.CliBackend); !isCli {
 		return
 	}
 	if !sOk || s.extGroup == nil || s.extGroup.IsEmpty() {

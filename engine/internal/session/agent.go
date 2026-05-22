@@ -1,7 +1,6 @@
 package session
 
 import (
-	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
@@ -62,8 +61,28 @@ func (m *Manager) SteerAgent(key, agentName, message string) {
 		rid := s.requestID
 		m.mu.RUnlock()
 		if rid != "" {
-			if apiBackend, ok := m.backend.(*backend.ApiBackend); ok {
-				apiBackend.Steer(rid, message)
+			// steerable covers both ApiBackend (direct Steer call) and
+			// HybridBackend (routes to the inner backend that owns this run).
+			// CliBackend does not implement this interface — falls to stdin.
+			type steerable interface {
+				Steer(requestID, message string) bool
+			}
+			if sb, ok := m.backend.(steerable); ok {
+				if !sb.Steer(rid, message) {
+					// hybrid run routed to CLI: fall through to stdin
+					stdinMsg := map[string]interface{}{
+						"type": "user",
+						"message": map[string]interface{}{
+							"role": "user",
+							"content": []map[string]interface{}{
+								{"type": "text", "text": message},
+							},
+						},
+					}
+					if err := m.backend.WriteToStdin(rid, stdinMsg); err != nil {
+						utils.Log("Session", "steer via stdin failed: "+err.Error())
+					}
+				}
 			} else {
 				// CliBackend: write follow-up message over stdin pipe
 				stdinMsg := map[string]interface{}{
