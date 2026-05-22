@@ -37,6 +37,7 @@ function persistTabs(useSessionStore: Store): void {
         ...(t.worktree ? { worktree: t.worktree } : {}),
         ...(t.groupId ? { groupId: t.groupId } : {}),
         ...(t.queuedPrompts.length > 0 ? { queuedPrompts: t.queuedPrompts } : {}),
+        ...(t.draftInput ? { draftInput: t.draftInput } : {}),
         ...(t.contextTokens ? { contextTokens: t.contextTokens } : {}),
         ...(t.permissionDenied ? { permissionDenied: t.permissionDenied } : {}),
         ...(t.planFilePath ? { planFilePath: t.planFilePath } : {}),
@@ -70,6 +71,13 @@ function persistTabs(useSessionStore: Store): void {
             }
           }
           if (Object.keys(agentStates).length > 0) result.engineAgentStates = agentStates
+          const { engineDraftInputs: eDrafts } = useSessionStore.getState()
+          const drafts: Record<string, string> = {}
+          for (const inst of hPane.instances) {
+            const d = eDrafts.get(`${t.id}:${inst.id}`)
+            if (d && d.length > 0) drafts[inst.id] = d
+          }
+          if (Object.keys(drafts).length > 0) result.engineDrafts = drafts
           return result
         })() : {}),
         ...(pane && pane.instances.length > 0 ? { terminalInstances: pane.instances } : {}),
@@ -173,7 +181,7 @@ function scanForStuckTabs(useSessionStore: Store): void {
 export function setupPersistence(useSessionStore: Store): void {
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   useSessionStore.subscribe((state, prev) => {
-    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes) {
+    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes || state.engineDraftInputs !== prev.engineDraftInputs) {
       if (saveTimer) clearTimeout(saveTimer)
       saveTimer = setTimeout(() => persistTabs(useSessionStore), 100)
     }

@@ -73,6 +73,7 @@ export function useTabRestoration() {
                       groupId: st.groupId || null,
                       contextTokens: st.contextTokens || null,
                       queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
+                      draftInput: st.draftInput ?? '',
                       // Persisted permissionDenied is authoritative over resumeSession reconstruction
                       ...(st.permissionDenied ? { permissionDenied: st.permissionDenied } : {}),
                       ...(st.planFilePath ? { planFilePath: st.planFilePath } : {}),
@@ -86,6 +87,7 @@ export function useTabRestoration() {
               ),
             }))
             window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
+            if (st.draftInput) console.log(`[restore] draft for tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
           } else if (st.isEngine) {
             // Engine tab
             const tabId = useSessionStore.getState().createEngineTab(st.workingDirectory, st.engineProfileId || undefined)
@@ -98,6 +100,7 @@ export function useTabRestoration() {
             const restoredPanes = new Map(useSessionStore.getState().enginePanes)
             const restoredEngineMessages = new Map(useSessionStore.getState().engineMessages)
             const restoredEngineAgentStates = new Map(useSessionStore.getState().engineAgentStates)
+            const restoredEngineDraftInputs = new Map(useSessionStore.getState().engineDraftInputs)
 
             if (st.engineInstances && st.engineInstances.length > 0) {
               restoredPanes.set(tabId, {
@@ -136,9 +139,20 @@ export function useTabRestoration() {
                   }
                 }
               }
+
+              if (st.engineDrafts) {
+                for (const inst of st.engineInstances) {
+                  const d = st.engineDrafts[inst.id]
+                  if (d && d.length > 0) {
+                    const key = `${tabId}:${inst.id}`
+                    restoredEngineDraftInputs.set(key, d)
+                    console.log(`[restore] engine draft for ${tabId.slice(0, 8)}:${inst.id.slice(0, 8)} len=${d.length}`)
+                  }
+                }
+              }
             }
 
-            // Single atomic setState: tab metadata + panes + messages + agent states
+            // Single atomic setState: tab metadata + panes + messages + agent states + drafts
             useSessionStore.setState((s) => ({
               tabs: s.tabs.map((t) =>
                 t.id === tabId
@@ -149,13 +163,16 @@ export function useTabRestoration() {
                       groupId: st.groupId || null,
                       modelOverride: st.modelOverride || null,
                       conversationId: st.conversationId || null,
+                      draftInput: st.draftInput ?? '',
                     }
                   : t
               ),
               enginePanes: restoredPanes,
               engineMessages: restoredEngineMessages,
               engineAgentStates: restoredEngineAgentStates,
+              engineDraftInputs: restoredEngineDraftInputs,
             }))
+            if (st.draftInput) console.log(`[restore] draft for engine tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
 
             // Start engine processes (state is fully set up)
             if (st.engineInstances && st.engineInstances.length > 0) {
@@ -191,10 +208,12 @@ export function useTabRestoration() {
                       pillColor: st.pillColor || null,
                       pillIcon: st.pillIcon || 'Terminal',
                       groupId: st.groupId || null,
+                      draftInput: st.draftInput ?? '',
                     }
                   : t
               ),
             }))
+            if (st.draftInput) console.log(`[restore] draft for terminal tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
 
             // Restore terminal instances from persisted state
             if (st.terminalInstances && st.terminalInstances.length > 0) {
@@ -236,11 +255,13 @@ export function useTabRestoration() {
                       groupId: st.groupId || null,
                       contextTokens: st.contextTokens || null,
                       queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
+                      draftInput: st.draftInput ?? '',
                     }
                   : t
               ),
             }))
             window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
+            if (st.draftInput) console.log(`[restore] draft for sessionless tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
           }
         }
 

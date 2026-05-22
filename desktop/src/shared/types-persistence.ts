@@ -24,6 +24,10 @@ export interface PersistedTab {
   groupId?: string | null
   contextTokens?: number | null
   queuedPrompts?: string[]
+  /** Unsent text typed into the input bar; restored on relaunch. Absent when empty. */
+  draftInput?: string
+  /** Per-engine-instance unsent input text, keyed by `instanceId`. Only non-empty values. */
+  engineDrafts?: Record<string, string>
   isTerminalOnly?: boolean
   isEngine?: boolean
   engineProfileId?: string | null
