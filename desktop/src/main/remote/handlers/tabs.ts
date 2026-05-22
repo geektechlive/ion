@@ -10,6 +10,7 @@ import { getRemoteTabStates } from '../snapshot'
 import { discoverCommands } from '../../cli-compat/command-discovery'
 import { encodeImageAttachments } from '../attachment-encoder'
 import { autoPullDiagnosticLogs } from './diagnostics'
+import { readRemoteDisplay } from './display'
 import type { RemoteCommand } from '../protocol'
 
 function log(msg: string): void {
@@ -32,7 +33,21 @@ async function _sendSync(send: (event: any) => void): Promise<void> {
   const recentDirectories: string[] = Array.isArray(syncSettings.recentBaseDirectories) ? syncSettings.recentBaseDirectories : []
   const tabGroupMode = syncSettings.tabGroupMode || 'off'
   const tabGroups = Array.isArray(syncSettings.tabGroups) ? syncSettings.tabGroups.map((g: any) => ({ id: g.id, label: g.label, isDefault: g.isDefault, order: g.order })) : []
-  send({ type: 'snapshot', tabs, recentDirectories, tabGroupMode, tabGroups, preferredModel: syncSettings.preferredModel || undefined, engineDefaultModel: syncSettings.engineDefaultModel || undefined, availableModels: modelCache.models.length > 0 ? modelCache.models : undefined })
+  const remoteDisplay = readRemoteDisplay()
+  log(`SNAP-SEND: tabs=${tabs.length} dirs=${recentDirectories.length} remoteDisplay=${remoteDisplay ? `name=${remoteDisplay.customName === null ? 'null' : 'set'} icon=${remoteDisplay.customIcon ?? 'null'} ts=${remoteDisplay.updatedAt}` : 'unset'}`)
+  send({
+    type: 'snapshot',
+    tabs,
+    recentDirectories,
+    tabGroupMode,
+    tabGroups,
+    preferredModel: syncSettings.preferredModel || undefined,
+    engineDefaultModel: syncSettings.engineDefaultModel || undefined,
+    availableModels: modelCache.models.length > 0 ? modelCache.models : undefined,
+    customName: remoteDisplay?.customName ?? undefined,
+    customIcon: remoteDisplay?.customIcon ?? undefined,
+    remoteDisplayUpdatedAt: remoteDisplay?.updatedAt ?? undefined,
+  })
   const engineProfiles = Array.isArray(syncSettings.engineProfiles) ? syncSettings.engineProfiles : []
   send({ type: 'engine_profiles', profiles: engineProfiles })
   for (const tab of tabs) {
