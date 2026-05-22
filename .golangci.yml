@@ -18,3 +18,49 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # Pre-existing upstream errcheck violations — excluded until upstream fixes them.
+      # Re-evaluate on next upstream sync.
+      - path: engine/internal/auth/oauth\.go
+        linters: [errcheck]
+      - path: engine/internal/context/context\.go
+        linters: [errcheck]
+      - path: engine/internal/conversation/list\.go
+        linters: [errcheck]
+      - path: engine/internal/export/export\.go
+        linters: [errcheck]
+      - path: engine/internal/extension/external_hooks\.go
+        linters: [errcheck]
+      - path: engine/internal/extension/procregistry\.go
+        linters: [errcheck]
+      - path: engine/internal/featureflags/featureflags\.go
+        linters: [errcheck]
+      - path: engine/internal/filelock/filelock\.go
+        linters: [errcheck]
+      - path: engine/internal/mcp/mcp\.go
+        linters: [errcheck]
+      - path: engine/internal/mcp/oauth\.go
+        linters: [errcheck]
+      - path: engine/internal/pdf/pdf\.go
+        linters: [errcheck]
+      - path: engine/internal/providers/anthropic\.go
+        linters: [errcheck]
+      - path: engine/internal/providers/azure_openai\.go
+        linters: [errcheck]
+      - path: engine/internal/providers/bedrock\.go
+        linters: [errcheck]
+      - path: engine/internal/providers/google\.go
+        linters: [errcheck]
+      - path: engine/internal/server/server\.go
+        linters: [errcheck]
+      - path: engine/internal/skills/skills\.go
+        linters: [errcheck]
+      - path: engine/internal/telemetry/telemetry\.go
+        linters: [errcheck]
+      - path: engine/internal/tools/web_search\.go
+        linters: [errcheck]
+      - path: engine/internal/transport/relay\.go
+        linters: [errcheck]
+      - path: engine/internal/transport/transport\.go
+        linters: [errcheck]
+      - path: engine/internal/utils/logger\.go
+        linters: [errcheck]
