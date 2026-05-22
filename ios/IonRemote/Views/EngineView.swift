@@ -19,6 +19,9 @@ struct EngineView: View {
     @State private var showPhotoPicker = false
     @State private var showDocumentPicker = false
     @State private var photosPickerItems: [PhotosPickerItem] = []
+    /// Set to true when a reconnect-triggered reload is in flight so the next
+    /// engine-message count change force-scrolls to the bottom.
+    @State private var pendingScrollAfterReload = false
 
     private var instances: [EngineInstanceInfo] {
         viewModel.engineInstances[tabId] ?? []
@@ -402,6 +405,12 @@ struct EngineView: View {
             for item in items { handlePhotoSelection(item) }
             photosPickerItems = []
         }
+        .onChange(of: viewModel.connectionState) { oldState, newState in
+            handleConnectionStateChange(oldState: oldState, newState: newState)
+        }
+        .onChange(of: engineMsgs.count) {
+            consumePendingScrollAfterReload()
+        }
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $photosPickerItems,
@@ -464,6 +473,30 @@ struct EngineView: View {
     private var cannotSend: Bool {
         let empty = promptText.trimmingCharacters(in: .whitespaces).isEmpty
         return (empty && pendingAttachments.isEmpty) || hasUploading
+    }
+
+    /// Re-sync engine history when we recover from a transient disconnect
+    /// (e.g. phone locked while the conversation was running). The snapshot
+    /// handler also calls `loadEngineConversation` for engine tabs, but this
+    /// handler arms `pendingScrollAfterReload` so the view auto-scrolls to
+    /// the new bottom once history arrives.
+    private func handleConnectionStateChange(oldState: ConnectionState, newState: ConnectionState) {
+        guard oldState == .reconnecting && newState == .connected else { return }
+        // Only refresh tabs the user has actually opened; unopened tabs are
+        // handled by the snapshot prefetch in handleSnapshot.
+        guard !engineMsgs.isEmpty else { return }
+        DiagnosticLog.log("RESUME-SYNC: EngineView reloading tabId=\(tabId.prefix(8))")
+        pendingScrollAfterReload = true
+        viewModel.loadEngineConversation(tabId: tabId)
+    }
+
+    /// When a reconnect-triggered reload delivers new history, force-scroll
+    /// to the bottom regardless of the user's prior scroll position.
+    private func consumePendingScrollAfterReload() {
+        guard pendingScrollAfterReload else { return }
+        pendingScrollAfterReload = false
+        isNearBottom = true
+        forceScrollCounter += 1
     }
 
     private func submitPrompt() {

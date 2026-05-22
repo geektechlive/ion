@@ -12,6 +12,10 @@ struct ConversationView: View {
     @State private var showFileExplorer = false
     @State private var showTerminal = false
     @State private var showAttachments = false
+    /// Set to true when a reconnect-triggered reload is in flight so the next
+    /// `messageCountByTab` change force-scrolls to the bottom regardless of
+    /// whether the last message is from the user.
+    @State private var pendingScrollAfterReload = false
 
     private var tab: RemoteTabState? {
         viewModel.tab(for: tabId)
@@ -364,6 +368,16 @@ struct ConversationView: View {
                 viewModel.suppressScrollToBottom = false
                 return
             }
+            // If a reconnect-triggered reload just delivered fresh history,
+            // force-scroll to the new bottom regardless of who sent the last
+            // message. The user backgrounded the app; on return they expect
+            // to see the latest state of the conversation.
+            if pendingScrollAfterReload {
+                pendingScrollAfterReload = false
+                isNearBottom = true
+                forceScrollCounter += 1
+                return
+            }
             // Always scroll to bottom when the user sends a message,
             // even if they were scrolled up — matches desktop behavior.
             let userSent = conversationMessages.last?.role == .user
@@ -372,9 +386,20 @@ struct ConversationView: View {
                 forceScrollCounter += 1
             }
         }
-        .onChange(of: viewModel.connectionState) { _, newState in
+        .onChange(of: viewModel.connectionState) { oldState, newState in
             if newState == .disconnected {
                 dismiss()
+            }
+            // Re-sync the conversation when we recover from a transient
+            // disconnect (e.g. the phone was locked while the conversation
+            // continued on the desktop). The snapshot updates tab status,
+            // but message_added/message_updated events emitted during the
+            // disconnect window are lost — only an explicit reload pulls
+            // the desktop's current truth (completed tools, new messages).
+            if oldState == .reconnecting && newState == .connected {
+                DiagnosticLog.log("RESUME-SYNC: ConversationView reloading tabId=\(tabId.prefix(8))")
+                pendingScrollAfterReload = true
+                viewModel.loadConversation(tabId: tabId)
             }
         }
         .onChange(of: viewModel.tabIds) { _, newIds in
