@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { randomUUID } from 'crypto'
 import { EngineBridge } from './engine-bridge'
+import { engineIsRemote, getEngineHostInfo, listEngineDirectory } from './engine-bridge-fs'
 import { log as _log, warn as _warn, error as _error } from './logger'
 import { handleEngineEvent, type TabEntry, type EventEmitterContext } from './engine-control-plane-events'
 import type {
@@ -151,16 +152,16 @@ export class EngineControlPlane extends EventEmitter {
     // from this desktop's filesystem is sent, the CLI dies with chdir errors
     // and the tab silently stays idle. Resolve ~/~-prefixed paths against the
     // engine's home, then probe the engine and surface a clear error instead.
-    if (this.bridge.isRemote && config.workingDirectory) {
+    if (engineIsRemote() && config.workingDirectory) {
       let wd = config.workingDirectory
       if (wd === '~' || wd.startsWith('~/')) {
-        const hostInfo = await this.bridge.getHostInfo()
+        const hostInfo = await getEngineHostInfo()
         if (hostInfo.ok && hostInfo.data?.home) {
           wd = wd === '~' ? hostInfo.data.home : `${hostInfo.data.home}/${wd.slice(2)}`
           config.workingDirectory = wd
         }
       }
-      const probe = await this.bridge.listDirectory(wd, false)
+      const probe = await listEngineDirectory(wd, false)
       if (!probe.ok) {
         warn(`workingDirectory unreachable on engine: tabId=${tabId} dir=${wd} err=${probe.error}`)
         this._setStatus(tabId, 'failed')
