@@ -3,7 +3,7 @@ import { X, GitBranch, GitFork, FolderSimple, PushPin } from '@phosphor-icons/re
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import type { TabState } from '../../shared/types'
-import { getWaitingState } from './TabStripShared'
+import { getWaitingState, formatRelativeShort } from './TabStripShared'
 import { StatusDot } from './TabStripStatusDot'
 import { InlineRenameInput } from './TabStripInlineRenameInput'
 
@@ -161,14 +161,24 @@ export function TabPill({
         />
       ) : (
         <span
-          className="truncate flex-1"
+          className="flex-1 min-w-0 flex flex-col items-start leading-tight"
           onContextMenu={(e) => {
             e.preventDefault()
             e.stopPropagation()
             onStartEdit()
           }}
+          title={tab.lastMessagePreview ?? undefined}
         >
-          {displayTitle}
+          <span className="truncate w-full">{displayTitle}</span>
+          {tab.lastMessagePreview && (
+            <span
+              className="truncate w-full text-[9px]"
+              style={{ color: colors.textTertiary }}
+            >
+              {tab.lastMessagePreview}
+              {tab.lastEventAt ? ` · ${formatRelativeShort(tab.lastEventAt)}` : ''}
+            </span>
+          )}
         </span>
       )}
       {tab.worktree ? null : isConfirmingClose ? (
