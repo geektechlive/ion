@@ -1,6 +1,6 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────
-#  Ion — Install App
+#  Jarvis — Install App
 #
 #  Double-click this file in Finder to:
 #   1. Set up dependencies
@@ -15,7 +15,7 @@ set -e
 # Resolve to repo root (one level up from commands/)
 cd "$(dirname "$0")/.."
 
-APP_NAME="Ion"
+APP_NAME="Jarvis"
 DEST="/Applications/${APP_NAME}.app"
 
 step() { echo; echo "═══ $1 ═══"; echo; }
@@ -125,7 +125,7 @@ fi  # SKIP_WHISPER guard
 
 # ── 3. Build ──
 
-step "Step 3/6 — Building Ion Engine into desktop resources"
+step "Step 3/6 — Building ion engine into desktop resources"
 
 ENGINE_OUT="resources/engine/ion"
 mkdir -p "resources/engine"
@@ -163,7 +163,7 @@ step "Step 4/6 — Installing to /Applications"
 APP_PID=""
 
 # Check packaged-app PID file (written by Electron main process)
-PACKAGED_PID_FILE="$HOME/Library/Application Support/Ion/ion.pid"
+PACKAGED_PID_FILE="$HOME/Library/Application Support/ion/ion.pid"
 if [ -f "$PACKAGED_PID_FILE" ]; then
   APP_PID=$(cat "$PACKAGED_PID_FILE" 2>/dev/null)
 fi
@@ -177,7 +177,7 @@ fi
 
 # Fallback: pgrep
 if [ -z "$APP_PID" ] || ! kill -0 "$APP_PID" 2>/dev/null; then
-  APP_PID=$(pgrep -f "Ion.app/Contents/MacOS/Ion$" 2>/dev/null | head -1 || true)
+  APP_PID=$(pgrep -f "${APP_NAME}.app/Contents/MacOS/${APP_NAME}$" 2>/dev/null | head -1 || true)
 fi
 
 if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
@@ -205,7 +205,7 @@ if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
 fi
 
 # Kill any stray helper processes (GPU, network, audio)
-STRAY_PIDS=$(pgrep -f "Ion.app/Contents" 2>/dev/null || true)
+STRAY_PIDS=$(pgrep -f "${APP_NAME}.app/Contents" 2>/dev/null || true)
 if [ -n "$STRAY_PIDS" ]; then
   kill -9 $STRAY_PIDS 2>/dev/null || true
   sleep 1
