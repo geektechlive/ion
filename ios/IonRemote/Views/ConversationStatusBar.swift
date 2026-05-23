@@ -82,7 +82,7 @@ struct ConversationStatusBar: View {
                         Text(mode == .plan ? "Plan" : "Auto")
                             .fontWeight(.medium)
                     }
-                    .foregroundStyle(mode == .plan ? IonTheme.accent : .secondary)
+                    .foregroundStyle(mode == .plan ? JarvisTheme.accent : .secondary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .background(Capsule().fill(Color(.tertiarySystemFill)))
@@ -99,7 +99,7 @@ struct ConversationStatusBar: View {
                             .fontWeight(.medium)
                     }
                 }
-                .foregroundStyle(attachmentCount > 0 ? IonTheme.accent : .secondary)
+                .foregroundStyle(attachmentCount > 0 ? JarvisTheme.accent : .secondary)
             }
             .buttonStyle(.plain)
 

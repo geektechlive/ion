@@ -347,7 +347,7 @@ struct SettingsView: View {
                         HStack {
                             Image(systemName: device.displayIcon)
                                 .font(.title3)
-                                .foregroundStyle(IonTheme.accent)
+                                .foregroundStyle(JarvisTheme.accent)
                                 .frame(width: 28, height: 28)
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 6) {

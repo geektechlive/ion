@@ -39,7 +39,7 @@ struct GitChangesListView: View {
             VStack(spacing: 12) {
                 Image(systemName: "checkmark.circle")
                     .font(.system(size: 32))
-                    .foregroundStyle(IonTheme.accent)
+                    .foregroundStyle(JarvisTheme.accent)
                 Text("Working tree clean")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -236,7 +236,7 @@ struct GitChangesListView: View {
                 Spacer()
                 if selectMode {
                     Image(systemName: selectedPaths.contains(file.path) ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selectedPaths.contains(file.path) ? IonTheme.accent : Color(.tertiaryLabel))
+                        .foregroundStyle(selectedPaths.contains(file.path) ? JarvisTheme.accent : Color(.tertiaryLabel))
                         .onTapGesture {
                             if selectedPaths.contains(file.path) {
                                 selectedPaths.remove(file.path)
@@ -336,7 +336,7 @@ struct GitChangesListView: View {
                     .foregroundStyle(
                         commitMessage.trimmingCharacters(in: .whitespaces).isEmpty
                             ? .secondary
-                            : IonTheme.accent
+                            : JarvisTheme.accent
                     )
             }
             .disabled(commitMessage.trimmingCharacters(in: .whitespaces).isEmpty)

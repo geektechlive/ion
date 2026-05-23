@@ -113,7 +113,7 @@ struct InputBar: View {
                     .background(Color(.tertiarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.medium))
                     .overlay(RoundedRectangle(cornerRadius: IonTheme.Radius.medium).stroke(
-                        isRecordingVoice ? IonTheme.accent.opacity(0.5) : Color(.separator),
+                        isRecordingVoice ? JarvisTheme.accent.opacity(0.5) : Color(.separator),
                         lineWidth: isRecordingVoice ? 1.5 : 1
                     ))
                     .textInputAutocapitalization(.never)
@@ -371,7 +371,7 @@ struct InputBar: View {
         if !isConnected {
             return .gray
         }
-        return isQueued ? .orange : IonTheme.accent
+        return isQueued ? .orange : JarvisTheme.accent
     }
 
     // MARK: - Attachments

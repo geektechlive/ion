@@ -135,13 +135,13 @@ struct DeviceCustomizationSheet: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? IonTheme.accent.opacity(0.18) : Color(.tertiarySystemBackground))
+                    .fill(isSelected ? JarvisTheme.accent.opacity(0.18) : Color(.tertiarySystemBackground))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(isSelected ? IonTheme.accent : Color.clear, lineWidth: 2)
+                    .stroke(isSelected ? JarvisTheme.accent : Color.clear, lineWidth: 2)
             )
-            .foregroundStyle(isSelected ? IonTheme.accent : .primary)
+            .foregroundStyle(isSelected ? JarvisTheme.accent : .primary)
         }
         .buttonStyle(.plain)
         .disabled(saving)

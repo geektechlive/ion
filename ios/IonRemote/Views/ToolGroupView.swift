@@ -91,7 +91,7 @@ struct ToolGroupView: View {
                             } label: {
                                 Text(forceExpandAll == true ? "Collapse all" : "Expand all")
                                     .font(.caption2)
-                                    .foregroundStyle(IonTheme.accent)
+                                    .foregroundStyle(JarvisTheme.accent)
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)

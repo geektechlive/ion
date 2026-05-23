@@ -52,7 +52,7 @@ struct TabRowView: View {
             if isSpeaking {
                 Image(systemName: "speaker.wave.2.fill")
                     .font(.caption)
-                    .foregroundStyle(IonTheme.accent)
+                    .foregroundStyle(JarvisTheme.accent)
                     .symbolEffect(.variableColor.iterative)
             }
 

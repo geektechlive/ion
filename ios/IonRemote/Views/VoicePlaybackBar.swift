@@ -13,7 +13,7 @@ struct VoicePlaybackBar: View {
             // Animated speaker icon
             Image(systemName: "speaker.wave.2.fill")
                 .font(.caption)
-                .foregroundStyle(IonTheme.accent)
+                .foregroundStyle(JarvisTheme.accent)
                 .symbolEffect(.variableColor.iterative)
 
             Text("Voice playing…")

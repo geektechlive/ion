@@ -200,7 +200,7 @@ struct EngineView: View {
                         if runningAgentCount > 0 {
                             Text("\(runningAgentCount) active")
                                 .font(.caption2.weight(.semibold))
-                                .foregroundStyle(IonTheme.accent)
+                                .foregroundStyle(JarvisTheme.accent)
                         }
                     }
                     .foregroundStyle(.secondary)

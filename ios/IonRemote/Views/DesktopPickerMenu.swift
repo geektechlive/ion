@@ -53,7 +53,7 @@ struct DesktopPickerMenu: View {
             } label: {
                 Label("Pair New Desktop…", systemImage: "plus")
             }
-            .tint(IonTheme.accent)
+            .tint(JarvisTheme.accent)
         } label: {
             HStack(spacing: 6) {
                 if let device = viewModel.activeDevice {

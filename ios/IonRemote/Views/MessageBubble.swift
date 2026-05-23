@@ -77,7 +77,7 @@ struct MessageBubble: View {
             .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.large))
             .overlay(alignment: .leading) {
                 Rectangle()
-                    .fill(IonTheme.accent)
+                    .fill(JarvisTheme.accent)
                     .frame(width: 2.5)
                     .padding(.vertical, 4)
                     .padding(.leading, 1)

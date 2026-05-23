@@ -13,7 +13,7 @@ struct GitToastView: View {
             HStack(spacing: 8) {
                 Image(systemName: toast.isError ? "xmark.circle.fill" : "checkmark.circle.fill")
                     .font(.subheadline)
-                    .foregroundStyle(toast.isError ? IonTheme.statusError : IonTheme.accent)
+                    .foregroundStyle(toast.isError ? IonTheme.statusError : JarvisTheme.accent)
 
                 Text(toast.message)
                     .font(.subheadline.weight(.medium))
