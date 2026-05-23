@@ -26,7 +26,16 @@ extension SessionViewModel {
                 id: clientMsgId,
                 role: .user,
                 content: text,
-                timestamp: Date().timeIntervalSince1970,
+                // Milliseconds since epoch — matches every other timestamp
+                // insertion in iOS (SessionViewModel+EngineEvents.swift,
+                // +EventHandlers.swift, NormalizedEvent+Lifecycle.swift,
+                // RemoteCommand+Encode.swift) and the ms shape used by
+                // MessageBubble.relativeTimestamp which divides by 1000 to
+                // reconstruct seconds for Date(timeIntervalSince1970:).
+                // Without the * 1000 the optimistic bubble briefly shows
+                // "56 years ago" before the desktop echoes the canonical
+                // message_added back and id-replacement fixes it.
+                timestamp: Date().timeIntervalSince1970 * 1000,
                 source: .remote
             )
             if var existing = messages[tabId] {

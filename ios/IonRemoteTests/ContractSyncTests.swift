@@ -341,4 +341,31 @@ final class ContractSyncTests: XCTestCase {
             "Go ProviderEntry has fields not tracked in Swift test: \(unhandled.sorted())"
         )
     }
+
+    // MARK: - EngineCommandListing decode
+
+    /// EngineCommandListing rides inside engine_command_registry snapshots
+    /// emitted by the engine when a session's extension command set changes.
+    /// iOS does not yet consume the registry for autocomplete (see Phase 0.5
+    /// of the unified slash-pipeline plan — iOS UI is intentionally out of
+    /// scope for that change), but the contract must stay in sync so future
+    /// iOS work picks up the type cleanly. Test verifies the shape decodes
+    /// and all Go fields are tracked.
+    func testEngineCommandListingDecode() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.sharedTypes["EngineCommandListing"] else {
+            XCTFail("EngineCommandListing not found in Go manifest")
+            return
+        }
+
+        let swiftHandled: Set<String> = [
+            "name", "description",
+        ]
+        let goSet = Set(goFields)
+        let unhandled = goSet.subtracting(swiftHandled)
+        XCTAssert(
+            unhandled.isEmpty,
+            "Go EngineCommandListing has fields not tracked in Swift test: \(unhandled.sorted())"
+        )
+    }
 }
