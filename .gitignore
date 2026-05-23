@@ -70,3 +70,5 @@ ios/build/
 
 # E2E test config (contains API keys)
 engine/tests/e2e/testconfig.json
+
+docs/diagrams/
