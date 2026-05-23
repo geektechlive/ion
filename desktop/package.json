@@ -110,12 +110,12 @@
       "entitlementsInherit": "resources/entitlements.mac.plist",
       "notarize": false,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Ion uses your microphone to transcribe voice input locally with Whisper.",
-        "NSAppleEventsUsageDescription": "Ion uses AppleScript to detect available monospace fonts on your system.",
-        "NSDesktopFolderUsageDescription": "Ion needs access to your Desktop to read and edit project files.",
-        "NSDocumentsFolderUsageDescription": "Ion needs access to your Documents to read and edit project files.",
-        "NSDownloadsFolderUsageDescription": "Ion needs access to your Downloads to read and edit project files.",
-        "NSLocalNetworkUsageDescription": "Ion needs access to your local network to connect to the engine running on a nearby Mac.",
+        "NSMicrophoneUsageDescription": "Jarvis uses your microphone to transcribe voice input locally with Whisper.",
+        "NSAppleEventsUsageDescription": "Jarvis uses AppleScript to detect available monospace fonts on your system.",
+        "NSDesktopFolderUsageDescription": "Jarvis needs access to your Desktop to read and edit project files.",
+        "NSDocumentsFolderUsageDescription": "Jarvis needs access to your Documents to read and edit project files.",
+        "NSDownloadsFolderUsageDescription": "Jarvis needs access to your Downloads to read and edit project files.",
+        "NSLocalNetworkUsageDescription": "Jarvis needs access to your local network to connect to the engine running on a nearby Mac.",
         "NSBonjourServices": [
           "_ion-relay._tcp",
           "_ion._tcp"
