@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.35.1](https://github.com/dsswift/ion/compare/desktop-v1.35.0...desktop-v1.35.1) (2026-05-23)
+
+### Bug Fixes
+
+* **desktop:** declare NSBonjourServices for Local Network prompt ([10869ee](https://github.com/dsswift/ion/commit/10869ee396ab31faa036f773d0b9adf91f4fffa0))
+
 ## [1.35.0](https://github.com/dsswift/ion/compare/desktop-v1.34.0...desktop-v1.35.0) (2026-05-22)
 
 ### Features
