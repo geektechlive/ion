@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -16,9 +17,18 @@ import (
 // runs a child backend synchronously, observes parent context cancellation,
 // and updates s.agents with progress so the harness can render an agent
 // pill.
-func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel string, runCfg *backend.RunConfig) {
+//
+// The spawner also fires agent_start / agent_end on the parent session's
+// extension group, so user-installed observers can pair start+end events
+// without resorting to tool_start/tool_end watchdog tricks on the Agent
+// tool. Hooks fire on the parent host (not the child) because they are
+// documented as "Observe only": the parent observes its children's
+// lifecycle. Firing on the parent matches the same direction of travel as
+// the engine_agent_state snapshots emitted on capturedKey.
+func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel string, extGroup *extension.ExtensionGroup, runCfg *backend.RunConfig) {
 	capturedModel := parentModel
 	capturedKey := key
+	capturedExtGroup := extGroup
 
 	runCfg.AgentSpawner = func(ctx context.Context, requestedName, prompt, description, cwd, model string) (string, error) {
 		// If the LLM named a specialist, resolve it. Fires capability_match
@@ -87,6 +97,21 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 
 		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_start name=%s", capturedKey, len(snapshot), agentName))
 		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
+
+		// Fire agent_start on the parent extension group so user observers
+		// can pair start+end. Observe-only: errors logged inside the group
+		// dispatcher, never propagate. Guard mirrors fireBeforeAgentStart
+		// in prompt_extensions.go.
+		if capturedExtGroup != nil && !capturedExtGroup.IsEmpty() {
+			utils.Log("Session", fmt.Sprintf("firing agent_start key=%s name=%s task_len=%d", capturedKey, agentName, len(prompt)))
+			startCtx := m.newExtContext(s, capturedKey)
+			capturedExtGroup.FireAgentStart(startCtx, extension.AgentInfo{
+				Name: agentName,
+				Task: prompt,
+			})
+		} else {
+			utils.Debug("Session", fmt.Sprintf("agent_start skipped: no extensions key=%s name=%s", capturedKey, agentName))
+		}
 
 		child := m.newChildBackend()
 		var result string
@@ -171,6 +196,21 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		utils.Log("Session", fmt.Sprintf("agent_terminated name=%s status=%s reason=spawner_exit key=%s elapsed=%.2fs", agentName, terminalStatus, capturedKey, elapsed))
 		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_end name=%s", capturedKey, len(snapshot2), agentName))
 		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot2})
+
+		// Fire agent_end on the parent extension group. Must fire on every
+		// terminal path (success, error, cancelled) so observers can pair
+		// it 1:1 with agent_start; firing it here -- before the cancellation
+		// early-return below -- preserves that invariant.
+		if capturedExtGroup != nil && !capturedExtGroup.IsEmpty() {
+			utils.Log("Session", fmt.Sprintf("firing agent_end key=%s name=%s status=%s elapsed=%.2fs", capturedKey, agentName, terminalStatus, elapsed))
+			endCtx := m.newExtContext(s, capturedKey)
+			capturedExtGroup.FireAgentEnd(endCtx, extension.AgentInfo{
+				Name: agentName,
+				Task: prompt,
+			})
+		} else {
+			utils.Debug("Session", fmt.Sprintf("agent_end skipped: no extensions key=%s name=%s", capturedKey, agentName))
+		}
 
 		if cancelled {
 			return "", ctx.Err()

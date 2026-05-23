@@ -55,7 +55,15 @@ func (m *Manager) buildRunConfig(
 	}
 
 	m.wireExternalTools(s, key, extGroup, mcpConns, runCfg)
-	m.wireAgentSpawner(s, key, currentModel, runCfg)
+	// Pass extGroup to the spawner so it can fire agent_start / agent_end on
+	// the parent extension host. When the caller opted out of extensions
+	// (skipExtensions), pass nil so the spawner's own guard short-circuits
+	// the fires -- mirroring how wireExtensionHooks above is gated.
+	spawnerExtGroup := extGroup
+	if skipExtensions {
+		spawnerExtGroup = nil
+	}
+	m.wireAgentSpawner(s, key, currentModel, spawnerExtGroup, runCfg)
 	return runCfg
 }
 

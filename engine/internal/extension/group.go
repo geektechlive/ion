@@ -386,6 +386,40 @@ func (g *ExtensionGroup) FireTurnEnd(ctx *Context, info TurnInfo) {
 	}
 }
 
+// FireAgentStart fans the agent_start hook out to every host. Observe-only:
+// per-host errors are logged but do not propagate. Fired by the parent
+// session's agent-spawner when a child agent begins running, so parent-host
+// extensions can observe child-agent lifecycle (start time, identity, task).
+func (g *ExtensionGroup) FireAgentStart(ctx *Context, info AgentInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireAgentStart: dispatching to %d host(s) name=%s",
+		len(g.hosts), info.Name,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireAgentStart(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireAgentStart error: %v", err))
+		}
+	}
+}
+
+// FireAgentEnd fans the agent_end hook out to every host. Observe-only:
+// per-host errors are logged but do not propagate. Fired by the parent
+// session's agent-spawner when a child agent terminates (success, error,
+// or cancellation). Parent-host extensions pair this with agent_start to
+// observe child-agent lifecycle without resorting to tool_start/tool_end
+// watchdog tricks on the Agent tool.
+func (g *ExtensionGroup) FireAgentEnd(ctx *Context, info AgentInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireAgentEnd: dispatching to %d host(s) name=%s",
+		len(g.hosts), info.Name,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireAgentEnd(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireAgentEnd error: %v", err))
+		}
+	}
+}
+
 func (g *ExtensionGroup) FireSessionCompact(ctx *Context, info CompactionInfo) {
 	for _, h := range g.hosts {
 		if err := h.SDK().FireSessionCompact(ctx, info); err != nil {
