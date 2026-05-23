@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -836,6 +837,306 @@ rl.on("line", async (line) => {
 	}
 	if !contains(err.Error(), "simulated queue full") {
 		t.Errorf("expected error to mention 'simulated queue full', got %q", err.Error())
+	}
+}
+
+// ─── ctx.getContextUsage and ctx.searchHistory bridge (#127) ───
+//
+// Smoke test for the TS SDK bridge added in issue #127. The extension
+// registers a `peek` tool that calls both ctx.getContextUsage() and
+// ctx.searchHistory("ping", 3) and returns the JSON-stringified results.
+// The test wires fixed values into the Context's GetContextUsage and
+// SearchHistory closures and asserts the tool output reflects them.
+//
+// This exercises the full round-trip: TS SDK runtime.ts -> JSON-RPC ->
+// host_rpc.go handlers -> ctx getters -> back through the bridge.
+func TestSDK_ContextUsageAndSearchHistory_Bridge(t *testing.T) {
+	extDir := t.TempDir()
+	jsCode := `const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+
+let nextId = 1;
+const pending = new Map();
+
+function send(obj) {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+function request(method, params) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    send({ jsonrpc: "2.0", id, method, params: params || {} });
+  });
+}
+
+rl.on("line", async (line) => {
+  let msg;
+  try { msg = JSON.parse(line.trim()); } catch { return; }
+
+  // Response to one of our outgoing requests.
+  if (msg.id !== undefined && !msg.method) {
+    const p = pending.get(msg.id);
+    if (p) {
+      pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error.message || "rpc error"));
+      else p.resolve(msg.result);
+    }
+    return;
+  }
+
+  if (msg.method === "init") {
+    send({ jsonrpc: "2.0", id: msg.id, result: {
+      tools: [{ name: "peek", description: "peek at usage + history", parameters: {} }],
+      commands: {},
+    }});
+    return;
+  }
+  if (msg.method === "tool/peek") {
+    try {
+      const usage = await request("ext/get_context_usage", {});
+      const matches = await request("ext/search_history", { query: "ping", maxResults: 3 });
+      const out = JSON.stringify({ usage, matches });
+      send({ jsonrpc: "2.0", id: msg.id, result: { content: out, isError: false } });
+    } catch (err) {
+      send({ jsonrpc: "2.0", id: msg.id, result: { content: String(err && err.message || err), isError: true } });
+    }
+    return;
+  }
+  send({ jsonrpc: "2.0", id: msg.id, result: null });
+});
+`
+	entry := filepath.Join(extDir, "index.js")
+	if err := os.WriteFile(entry, []byte(jsCode), 0644); err != nil {
+		t.Fatalf("write extension: %v", err)
+	}
+
+	host := extension.NewHost()
+	t.Cleanup(func() { host.Dispose() })
+
+	if err := host.Load(entry, &extension.ExtensionConfig{
+		ExtensionDir:     extDir,
+		WorkingDirectory: "/tmp",
+	}); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Capture what the extension asks for so we can assert query/maxResults
+	// pass through verbatim.
+	var (
+		searchMu          sync.Mutex
+		capturedQuery     string
+		capturedMaxResult int
+	)
+
+	ctx := &extension.Context{
+		SessionKey: "ctx-usage-history-bridge",
+		Cwd:        "/tmp",
+		GetContextUsage: func() *extension.ContextUsage {
+			return &extension.ContextUsage{Percent: 55, Tokens: 110000, Cost: 0.42}
+		},
+		SearchHistory: func(query string, maxResults int) ([]extension.HistoryMatch, error) {
+			searchMu.Lock()
+			capturedQuery = query
+			capturedMaxResult = maxResults
+			searchMu.Unlock()
+			return []extension.HistoryMatch{
+				{Index: 1, Role: "user", Type: "text", Snippet: "ping the server"},
+				{Index: 4, Role: "assistant", Type: "tool_use", Snippet: "Bash(ping)", ToolName: "Bash", ToolUseID: "tu_xyz"},
+			}, nil
+		},
+	}
+
+	tools := host.Tools()
+	if len(tools) != 1 || tools[0].Name != "peek" {
+		t.Fatalf("expected single 'peek' tool, got %v", toolNames(tools))
+	}
+
+	result, err := tools[0].Execute(map[string]interface{}{}, ctx)
+	if err != nil {
+		t.Fatalf("Execute peek: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Execute returned nil result")
+	}
+
+	// Assert ctx.SearchHistory was called with the values the extension passed.
+	searchMu.Lock()
+	if capturedQuery != "ping" {
+		t.Errorf("SearchHistory query = %q, want %q", capturedQuery, "ping")
+	}
+	if capturedMaxResult != 3 {
+		t.Errorf("SearchHistory maxResults = %d, want 3", capturedMaxResult)
+	}
+	searchMu.Unlock()
+
+	// Parse the tool output back out and verify both payloads round-tripped.
+	// The host pretty-prints the JS tool's result object ({content,isError}),
+	// so we unwrap the outer envelope first, then parse the inner `content`
+	// string (which holds our JSON-stringified payload).
+	var outer struct {
+		Content string `json:"content"`
+		IsError bool   `json:"isError"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &outer); err != nil {
+		t.Fatalf("parse tool envelope: %v; raw=%s", err, result.Content)
+	}
+	if outer.IsError {
+		t.Fatalf("tool reported isError; content=%s", outer.Content)
+	}
+	var payload struct {
+		Usage *struct {
+			Percent int     `json:"percent"`
+			Tokens  int     `json:"tokens"`
+			Cost    float64 `json:"cost"`
+		} `json:"usage"`
+		Matches []struct {
+			Index     int    `json:"index"`
+			Role      string `json:"role"`
+			Type      string `json:"type"`
+			Snippet   string `json:"snippet"`
+			ToolName  string `json:"toolName,omitempty"`
+			ToolUseID string `json:"toolUseId,omitempty"`
+		} `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(outer.Content), &payload); err != nil {
+		t.Fatalf("parse inner content as JSON: %v; raw=%s", err, outer.Content)
+	}
+	if payload.Usage == nil {
+		t.Fatal("expected usage payload, got null")
+	}
+	if payload.Usage.Percent != 55 || payload.Usage.Tokens != 110000 {
+		t.Errorf("usage = %+v, want {Percent:55 Tokens:110000 ...}", *payload.Usage)
+	}
+	if payload.Usage.Cost < 0.41 || payload.Usage.Cost > 0.43 {
+		t.Errorf("usage.Cost = %v, want ~0.42", payload.Usage.Cost)
+	}
+	if len(payload.Matches) != 2 {
+		t.Fatalf("expected 2 history matches, got %d", len(payload.Matches))
+	}
+	if payload.Matches[0].Snippet != "ping the server" {
+		t.Errorf("matches[0].Snippet = %q, want %q", payload.Matches[0].Snippet, "ping the server")
+	}
+	if payload.Matches[1].ToolName != "Bash" || payload.Matches[1].ToolUseID != "tu_xyz" {
+		t.Errorf("matches[1] tool fields = %+v, want Bash/tu_xyz", payload.Matches[1])
+	}
+}
+
+// TestSDK_ContextUsageAndSearchHistory_UnwiredCtx verifies the no-active-run
+// path: when the ctx has no GetContextUsage or SearchHistory closures wired,
+// the bridge returns null/[] respectively rather than RPC errors. This is
+// the contract extensions rely on when the SDK is loaded before a run is
+// active (e.g. extension load time, slash commands fired before first prompt).
+func TestSDK_ContextUsageAndSearchHistory_UnwiredCtx(t *testing.T) {
+	extDir := t.TempDir()
+	jsCode := `const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin, terminal: false });
+
+let nextId = 1;
+const pending = new Map();
+
+function send(obj) {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+function request(method, params) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    send({ jsonrpc: "2.0", id, method, params: params || {} });
+  });
+}
+
+rl.on("line", async (line) => {
+  let msg;
+  try { msg = JSON.parse(line.trim()); } catch { return; }
+
+  if (msg.id !== undefined && !msg.method) {
+    const p = pending.get(msg.id);
+    if (p) {
+      pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error.message || "rpc error"));
+      else p.resolve(msg.result);
+    }
+    return;
+  }
+
+  if (msg.method === "init") {
+    send({ jsonrpc: "2.0", id: msg.id, result: {
+      tools: [{ name: "peek", description: "...", parameters: {} }],
+      commands: {},
+    }});
+    return;
+  }
+  if (msg.method === "tool/peek") {
+    try {
+      const usage = await request("ext/get_context_usage", {});
+      const matches = await request("ext/search_history", { query: "", maxResults: 0 });
+      // Encode usage as the literal string "null" so JSON null vs missing
+      // is unambiguous when the test parses it back.
+      const out = JSON.stringify({ usage, matchesLength: matches.length, matchesIsArray: Array.isArray(matches) });
+      send({ jsonrpc: "2.0", id: msg.id, result: { content: out, isError: false } });
+    } catch (err) {
+      send({ jsonrpc: "2.0", id: msg.id, result: { content: String(err && err.message || err), isError: true } });
+    }
+    return;
+  }
+  send({ jsonrpc: "2.0", id: msg.id, result: null });
+});
+`
+	entry := filepath.Join(extDir, "index.js")
+	if err := os.WriteFile(entry, []byte(jsCode), 0644); err != nil {
+		t.Fatalf("write extension: %v", err)
+	}
+
+	host := extension.NewHost()
+	t.Cleanup(func() { host.Dispose() })
+
+	if err := host.Load(entry, &extension.ExtensionConfig{
+		ExtensionDir:     extDir,
+		WorkingDirectory: "/tmp",
+	}); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Deliberately leave GetContextUsage and SearchHistory nil.
+	ctx := &extension.Context{
+		SessionKey: "unwired",
+		Cwd:        "/tmp",
+	}
+
+	tools := host.Tools()
+	result, err := tools[0].Execute(map[string]interface{}{}, ctx)
+	if err != nil {
+		t.Fatalf("Execute peek: %v", err)
+	}
+
+	var outer struct {
+		Content string `json:"content"`
+		IsError bool   `json:"isError"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &outer); err != nil {
+		t.Fatalf("parse tool envelope: %v; raw=%s", err, result.Content)
+	}
+	if outer.IsError {
+		t.Fatalf("tool reported isError; content=%s", outer.Content)
+	}
+	var payload struct {
+		Usage          interface{} `json:"usage"`
+		MatchesLength  int         `json:"matchesLength"`
+		MatchesIsArray bool        `json:"matchesIsArray"`
+	}
+	if err := json.Unmarshal([]byte(outer.Content), &payload); err != nil {
+		t.Fatalf("parse inner content as JSON: %v; raw=%s", err, outer.Content)
+	}
+	if payload.Usage != nil {
+		t.Errorf("expected usage=null, got %v", payload.Usage)
+	}
+	if !payload.MatchesIsArray {
+		t.Error("expected matches to be an array")
+	}
+	if payload.MatchesLength != 0 {
+		t.Errorf("expected matches length 0, got %d", payload.MatchesLength)
 	}
 }
 

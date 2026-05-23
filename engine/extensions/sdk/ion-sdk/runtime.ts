@@ -9,6 +9,7 @@ import { format as utilFormat } from 'node:util'
 import type {
   AgentSpec,
   CommandDef,
+  ContextUsage,
   DiscoverAgentsOpts,
   DiscoveredAgent,
   DispatchAgentOpts,
@@ -17,6 +18,7 @@ import type {
   ElicitResult,
   EngineEvent,
   ExtensionConfig,
+  HistoryMatch,
   IonContext,
   IonSDK,
   ProcessInfo,
@@ -215,6 +217,28 @@ function buildContext(ctxData: any): IonContext {
         response: result?.response,
         cancelled: !!result?.cancelled,
       }
+    },
+    async getContextUsage(): Promise<ContextUsage | null> {
+      // Engine returns null when no run is active; preserve that signal so
+      // callers can branch on it (`if (!usage) ...`).
+      const result = await request('ext/get_context_usage', {})
+      if (result == null) return null
+      return {
+        percent: typeof result?.percent === 'number' ? result.percent : 0,
+        tokens: typeof result?.tokens === 'number' ? result.tokens : 0,
+        cost: typeof result?.cost === 'number' ? result.cost : 0,
+      }
+    },
+    async searchHistory(query: string, maxResults?: number): Promise<HistoryMatch[]> {
+      // Engine returns [] when no conversation is active or the searcher is
+      // unwired. Defend against any other shape by coercing to [] -- the
+      // typed return promises an array, never undefined.
+      const result = await request('ext/search_history', {
+        query: query || '',
+        maxResults: typeof maxResults === 'number' ? maxResults : 0,
+      })
+      if (!Array.isArray(result)) return []
+      return result as HistoryMatch[]
     },
   }
 }

@@ -424,6 +424,73 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			h.sendResponse(id, json.RawMessage(data), nil)
 		}()
 
+	case "ext/get_context_usage":
+		// Read-only query: return the active run's context usage snapshot,
+		// or null when no run is active / the getter is unwired (extensions
+		// loaded outside a session see null and can branch on it).
+		if ctx == nil || ctx.GetContextUsage == nil {
+			utils.Debug("extension", "ext/get_context_usage: no ctx or no getter, returning null")
+			h.sendResponse(id, json.RawMessage(`null`), nil)
+			return
+		}
+		usage := ctx.GetContextUsage()
+		if usage == nil {
+			utils.Debug("extension", "ext/get_context_usage: getter returned nil, responding null")
+			h.sendResponse(id, json.RawMessage(`null`), nil)
+			return
+		}
+		// Marshal with explicit JSON tags so the wire shape stays stable
+		// independent of the in-package struct layout.
+		data, err := json.Marshal(struct {
+			Percent int     `json:"percent"`
+			Tokens  int     `json:"tokens"`
+			Cost    float64 `json:"cost"`
+		}{Percent: usage.Percent, Tokens: usage.Tokens, Cost: usage.Cost})
+		if err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/get_context_usage: marshal failed: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+			return
+		}
+		utils.Debug("extension", fmt.Sprintf("ext/get_context_usage: returning percent=%d tokens=%d cost=%f", usage.Percent, usage.Tokens, usage.Cost))
+		h.sendResponse(id, json.RawMessage(data), nil)
+
+	case "ext/search_history":
+		var req struct {
+			Params struct {
+				Query      string `json:"query"`
+				MaxResults int    `json:"maxResults,omitempty"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/search_history: parse error: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32602, Message: "parse error: " + err.Error()})
+			return
+		}
+		// Empty array (not null) when no active conversation / unwired -- TS
+		// callers can iterate safely without null-guarding.
+		if ctx == nil || ctx.SearchHistory == nil {
+			utils.Debug("extension", fmt.Sprintf("ext/search_history: no ctx or no searcher (query=%q max=%d), returning []", req.Params.Query, req.Params.MaxResults))
+			h.sendResponse(id, json.RawMessage(`[]`), nil)
+			return
+		}
+		matches, err := ctx.SearchHistory(req.Params.Query, req.Params.MaxResults)
+		if err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/search_history: searcher returned error: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+			return
+		}
+		if matches == nil {
+			matches = []HistoryMatch{}
+		}
+		data, err := json.Marshal(matches)
+		if err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/search_history: marshal failed: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+			return
+		}
+		utils.Debug("extension", fmt.Sprintf("ext/search_history: returning %d matches (query=%q max=%d)", len(matches), req.Params.Query, req.Params.MaxResults))
+		h.sendResponse(id, json.RawMessage(data), nil)
+
 	case "ext/sandbox_wrap":
 		var req struct {
 			Params struct {

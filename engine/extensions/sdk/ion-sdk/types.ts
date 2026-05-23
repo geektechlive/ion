@@ -75,6 +75,50 @@ export interface SandboxPattern {
 }
 
 /**
+ * Context window usage snapshot for the active run, returned by
+ * {@link IonContext.getContextUsage}. Mirrors the Go SDK's `ContextUsage`
+ * struct so TS and Go extensions see identical fields.
+ *
+ * - `percent`: 0-100 fraction of the model's context window consumed.
+ *   Capped at 100 even if the heuristic overshoots.
+ * - `tokens`: best-known token count of the conversation in the window.
+ *   When the most recent API response cached an exact figure, that exact
+ *   figure (plus an estimate for any messages added since) is returned;
+ *   otherwise a heuristic estimate over all messages is used.
+ * - `cost`: cumulative cost in USD for the active run. May be `0` when the
+ *   engine has not yet wired cost-tracking into the per-run accessor --
+ *   treat as "unknown" until non-zero.
+ */
+export interface ContextUsage {
+  percent: number
+  tokens: number
+  cost: number
+}
+
+/**
+ * A single match returned by {@link IonContext.searchHistory}. Mirrors the
+ * Go SDK's `HistoryMatch` struct.
+ *
+ * - `index`: position of the matched message in the conversation's message
+ *   array (0-based).
+ * - `role`: `"user"`, `"assistant"`, `"tool"`, etc.
+ * - `type`: discriminator for the matched content kind -- `"text"` for
+ *   message bodies, `"tool_use"` / `"tool_result"` for tool-call segments.
+ * - `snippet`: a short excerpt of the matched content with the query
+ *   highlighted by context (engine-truncated; do not assume full content).
+ * - `toolName` / `toolUseId`: populated when `type` references a tool
+ *   segment; absent otherwise.
+ */
+export interface HistoryMatch {
+  index: number
+  role: string
+  type: string
+  snippet: string
+  toolName?: string
+  toolUseId?: string
+}
+
+/**
  * Sandbox profile for {@link IonContext.sandboxWrap}. All fields are optional.
  * - `fsAllowWrite` / `fsDenyWrite` / `fsDenyRead`: filesystem path lists.
  * - `netAllowedDomains` (allowlist) wins over `netBlockedDomains` (blocklist).
@@ -277,6 +321,54 @@ export interface IonContext {
    * ```
    */
   elicit(opts: ElicitOptions): Promise<ElicitResult>
+
+  /**
+   * Return a snapshot of the active run's context window usage, or `null`
+   * when no run is active (e.g. the extension is called from a slash
+   * command before the first prompt, or from extension load time).
+   *
+   * Use this to make proactive decisions before the LLM round-trips:
+   *   - Skip expensive memory-recall or context-injection steps when the
+   *     window is already near capacity.
+   *   - Surface a warning event to the user before reactive compaction
+   *     fires (which happens at >80%).
+   *   - Downgrade model selection under heavy context pressure.
+   *
+   * @example
+   * ```ts
+   * ion.on('before_prompt', async (ctx, prompt) => {
+   *   const usage = await ctx.getContextUsage()
+   *   if (usage && usage.percent > 70) {
+   *     ctx.emit({ type: 'engine_notify', message: `Context ${usage.percent}% full`, level: 'warn' })
+   *   }
+   * })
+   * ```
+   */
+  getContextUsage(): Promise<ContextUsage | null>
+
+  /**
+   * Search the active conversation's message history for content matching
+   * `query`. Returns up to `maxResults` matches (engine-capped; pass `0`
+   * or omit for the default cap). Returns an empty array when no
+   * conversation is active.
+   *
+   * Useful for recovering details lost to compaction -- after a
+   * `session_compact`, earlier messages live only in the persisted log;
+   * `searchHistory` searches the full persisted record, not just the
+   * in-context messages.
+   *
+   * @example
+   * ```ts
+   * ion.registerCommand('recall', {
+   *   description: '/recall <query>',
+   *   execute: async (args, ctx) => {
+   *     const matches = await ctx.searchHistory(args, 5)
+   *     ctx.sendMessage(matches.map(m => `[${m.index} ${m.role}] ${m.snippet}`).join('\n'))
+   *   },
+   * })
+   * ```
+   */
+  searchHistory(query: string, maxResults?: number): Promise<HistoryMatch[]>
 }
 
 /** Options for {@link IonContext.sendPrompt}. */
