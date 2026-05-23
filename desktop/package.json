@@ -114,7 +114,11 @@
         "NSDesktopFolderUsageDescription": "Jarvis needs access to your Desktop to read and edit project files.",
         "NSDocumentsFolderUsageDescription": "Jarvis needs access to your Documents to read and edit project files.",
         "NSDownloadsFolderUsageDescription": "Jarvis needs access to your Downloads to read and edit project files.",
-        "NSLocalNetworkUsageDescription": "Jarvis needs access to your local network to connect to the engine running on a nearby Mac."
+        "NSLocalNetworkUsageDescription": "Jarvis needs access to your local network to connect to the engine running on a nearby Mac.",
+        "NSBonjourServices": [
+          "_ion-relay._tcp",
+          "_ion._tcp"
+        ]
       }
     },
     "dmg": {
