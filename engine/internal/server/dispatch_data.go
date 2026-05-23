@@ -165,6 +165,13 @@ func (s *Server) dispatchListModels(conn net.Conn, cmd *protocol.ClientCommand) 
 			entry.HasAuth = true
 			entry.AuthSource = "none"
 		}
+		// CLI-capable backend (cli or hybrid) handles Anthropic auth via the
+		// Claude CLI itself. Surface that to clients so the model picker
+		// doesn't hide Anthropic models when no separate API key is configured.
+		if s.cliCapable && pid == "anthropic" && !entry.HasAuth {
+			entry.HasAuth = true
+			entry.AuthSource = "cli"
+		}
 		// Populate config details (gateway URL, API key reference)
 		if s.config != nil {
 			if pc, ok := s.config.Providers[pid]; ok {
