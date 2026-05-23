@@ -18,6 +18,8 @@ export function GeneralCategory() {
   const setAllowSettingsEdits = usePreferencesStore((s) => s.setAllowSettingsEdits)
   const enableClaudeCompat = usePreferencesStore((s) => s.enableClaudeCompat)
   const setEnableClaudeCompat = usePreferencesStore((s) => s.setEnableClaudeCompat)
+  const enableEarlyStopContinuation = usePreferencesStore((s) => s.enableEarlyStopContinuation)
+  const setEnableEarlyStopContinuation = usePreferencesStore((s) => s.setEnableEarlyStopContinuation)
   const soundEnabled = usePreferencesStore((s) => s.soundEnabled)
   const setSoundEnabled = usePreferencesStore((s) => s.setSoundEnabled)
   const showTodoList = usePreferencesStore((s) => s.showTodoList)
@@ -157,6 +159,13 @@ export function GeneralCategory() {
         description="Load commands and skills from .claude/ directories in the project and home folder."
         checked={enableClaudeCompat}
         onChange={setEnableClaudeCompat}
+      />
+
+      <SettingToggle
+        label="Early-stop continuation nudge"
+        description="When the model stops below the engine's configured output-token target, reply to the engine's continuation hook with a 'keep working' prompt. Disable to never nudge."
+        checked={enableEarlyStopContinuation}
+        onChange={setEnableEarlyStopContinuation}
       />
 
       <SettingToggle

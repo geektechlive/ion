@@ -138,6 +138,13 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			Prompt:      prompt,
 			Model:       childModel,
 			ProjectPath: cwd,
+			// Mark this as a subagent run so the early-stop continuation
+			// gate skips it by default. Sub-agents have tight remits and
+			// should not be poked to keep working. The harness can still
+			// force-on by setting EarlyStopEnabled to &true on the
+			// returned RunOptions before StartRun (not the typical
+			// dispatch path, but supported).
+			IsSubagent: true,
 		}
 		if specMatched {
 			if spec.SystemPrompt != "" {

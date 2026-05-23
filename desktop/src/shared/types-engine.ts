@@ -108,3 +108,32 @@ export type EngineEvent =
   // routing-hint set with this payload. Empty `commands` is the authoritative
   // "no extension commands live for this session" signal.
   | { type: 'engine_command_registry'; commands: EngineCommandListing[] }
+  // engine_early_stop_decision_request is the wire-protocol surface for the
+  // before_early_stop_decision hook. Promotes the hook to the socket so
+  // socket-only harnesses (desktop, custom UIs, headless tooling) can
+  // participate without running a subprocess extension. The engine emits this
+  // event after the model emits end_turn / stop AND after the extension-side
+  // hook returned no opinion. Consumers must respond via the
+  // `early_stop_decision_response` client command, supplying the same
+  // fields the subprocess hook would return (all optional). The engine
+  // waits at most 100ms for a response; a missed deadline is treated as
+  // "no opinion" and the run proceeds with the existing merge logic.
+  //
+  // Field semantics mirror engine/internal/extension/EarlyStopDecisionInfo
+  // verbatim; see docs/hooks/reference.md for the canonical descriptions.
+  | {
+      type: 'engine_early_stop_decision_request'
+      earlyStopRequestId: string
+      earlyStopRunId: string
+      earlyStopModel: string
+      earlyStopTurnNumber: number
+      earlyStopStopReason: string
+      earlyStopCumulativeOutput: number
+      earlyStopBudget: number
+      earlyStopThresholdPct: number
+      earlyStopContinuationCount: number
+      earlyStopMaxContinuations: number
+      earlyStopLastContinuationDelta: number
+      earlyStopWouldContinue: boolean
+      earlyStopIsSubagent?: boolean
+    }

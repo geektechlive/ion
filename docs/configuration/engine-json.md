@@ -72,6 +72,60 @@ These can also be overridden per-session via CLI flags. See [Limits](limits.md) 
 }
 ```
 
+## earlyStopContinue
+
+Engine-wide configuration for the **early-stop continuation** mechanism. When the model emits `end_turn` (or `stop`) before reaching the configured output-token target, the engine can ask a harness-supplied hook whether to nudge the model to keep working and re-run the turn instead of completing the run. This addresses the "stream death / mid-thought stop" problem where some models voluntarily end a turn before the work is done.
+
+The feature is **off by default**. The engine provides the mechanism (cumulative output-token tracking, `before_early_stop_decision` and `early_stop_continued` hooks, the re-run-turn machinery) but ships no opinion about whether to nudge or what text to nudge with. A harness consumer must opt in — either by setting `enabled: true` in this block, by passing `RunOptions.EarlyStopEnabled = &true` per dispatch, or by wiring a `before_early_stop_decision` handler that returns `ForceContinue: &true`. Whichever turns the feature on, the harness must also supply a `ContinueMessage` via the hook — without one, the engine logs the no-op and falls through to normal completion.
+
+Three resolution layers, lowest priority first:
+
+1. This block (`engine.json` — host-level configuration).
+2. Per-run `RunOptions` (a harness dispatching a single run; see the [Hook Reference](../hooks/reference.md)).
+3. The `before_early_stop_decision` hook (programmatic, context-aware policy and the prompt text).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool (nullable) | `false` | Global gate. Set to `true` to enable the feature for every run on this machine. A harness still must supply a `ContinueMessage` through `before_early_stop_decision` for any injection to happen. |
+| `budget` | int | `8000` | Output-token target per run. A run that ends at less than `thresholdPct` of this budget triggers the hook. Tune per typical agent output size. |
+| `thresholdPct` | int | `90` | Completion threshold (percent of `budget`). The engine stops calling the hook once cumulative output tokens reach this percent of the budget. |
+| `maxContinuations` | int | `3` | Cap on the number of continuation nudges per run. Prevents pathological loops with very chatty models. |
+| `diminishingDelta` | int | `500` | Per-continuation token delta below which the engine declares diminishing returns and stops nudging early (after at least 3 continuations). |
+
+```json
+{
+  "earlyStopContinue": {
+    "enabled": true,
+    "budget": 8000,
+    "thresholdPct": 90,
+    "maxContinuations": 3,
+    "diminishingDelta": 500
+  }
+}
+```
+
+To **explicitly disable globally** (the default) — every `end_turn` immediately completes the run with no hook consultation:
+
+```json
+{
+  "earlyStopContinue": {
+    "enabled": false
+  }
+}
+```
+
+### Reference policy implementation
+
+The Ion desktop client ships a reference `before_early_stop_decision` handler in `desktop/src/main/early-stop-policy.ts` that:
+
+- Reads a user-facing `enableEarlyStopContinuation` setting (default `true`).
+- Returns `ForceContinue: &true` plus a Claude-Code-style `ContinueMessage` ("Stopped at X% of token target …") when the setting is on.
+- Returns `nil` (no opinion) when the setting is off or when the engine's tentative `WouldContinue` is already false.
+
+Harness engineers running the engine outside the Ion desktop are encouraged to copy or adapt this implementation. The engine deliberately ships no prompt text so the harness owns the wording (and the user-facing toggle, if any) end-to-end.
+
+**Sub-agents are off by default.** Runs dispatched through the Agent tool have `IsSubagent=true` and the engine skips the feature for them automatically — sub-agents are summoned with a tight remit and should not be poked to keep working. Harness extensions can still force-on per dispatch via `RunOptions.EarlyStopEnabled = &true`.
+
 ## mcpServers
 
 Map of server name to MCP server configuration. Each entry defines a connection to a [Model Context Protocol](https://modelcontextprotocol.io/) server.

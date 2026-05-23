@@ -37,6 +37,12 @@ const (
 	HookBeforeAgentStart      = "before_agent_start"
 	HookBeforeProviderRequest = "before_provider_request"
 
+	// Early-stop continuation hooks. Fire around the engine's decision to
+	// nudge the model to keep working when it emits end_turn / stop below
+	// the configured token budget. See docs/hooks/reference.md.
+	HookBeforeEarlyStopDecision = "before_early_stop_decision" // influence: handler can override the decision
+	HookEarlyStopContinued      = "early_stop_continued"       // observe: handler sees a continuation that just fired
+
 	// Content hooks
 	HookContext       = "context"
 	HookMessageUpdate = "message_update"

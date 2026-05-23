@@ -76,6 +76,10 @@ type EngineRuntimeConfig struct {
 	Relay        *RelayConfig                  `json:"relay,omitempty"`
 	Timeouts     *TimeoutsConfig               `json:"timeouts,omitempty"`
 	WebSearch    *WebSearchConfig              `json:"webSearch,omitempty"`
+	// EarlyStopContinue configures the Claude-Code-style "keep working"
+	// continuation nudge. Pointer so engine.json can fully omit the block
+	// and inherit the built-in defaults. See types.EarlyStopDefaults().
+	EarlyStopContinue *EarlyStopContinueConfig `json:"earlyStopContinue,omitempty"`
 	LogLevel     string                        `json:"logLevel,omitempty"` // "debug", "info", "warn", "error"
 }
 

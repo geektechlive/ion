@@ -1,12 +1,12 @@
 ---
 title: Hook Reference
-description: Complete reference for all 60 Ion Engine hooks with payloads, return types, and behavior.
+description: Complete reference for all 62 Ion Engine hooks with payloads, return types, and behavior.
 sidebar_position: 2
 ---
 
 # Hook Reference
 
-All 60 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
+All 62 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
 
 ## Lifecycle (13)
 
@@ -379,6 +379,7 @@ type SystemInjectInfo struct {
 | `"plan_mode_reminder"` | Turn 2+ during plan mode | `[SYSTEM] Plan mode still active...` |
 | `"turn_limit_warning"` | 2 turns before `maxTurns` | `[SYSTEM] You are approaching your turn limit...` |
 | `"max_token_continue"` | LLM response hits `max_tokens` | `Continue from where you left off.` |
+| `"early_stop_continue"` | Model emits `end_turn` below the configured token budget | `Stopped at X% of token target (Y / Z). Keep working — do not summarize.` |
 
 #### `SystemInjectResult`
 
@@ -387,6 +388,116 @@ type SystemInjectResult struct {
     Text     string `json:"text,omitempty"`     // replacement text; empty = use default
     Suppress bool   `json:"suppress,omitempty"` // true = do not inject
 }
+```
+
+## Early-Stop Continuation (2)
+
+These hooks let harness extensions take **programmatic control** of the early-stop continuation feature — the engine's port of Claude Code's `TOKEN_BUDGET` continuation tracker. See [`earlyStopContinue` in engine.json](../configuration/engine-json.md#earlystopcontinue) for the underlying mechanism.
+
+When the model emits `end_turn` / `stop` below the configured output-token target, the engine fires `before_early_stop_decision` so handlers can:
+
+- **Force a specific verdict** (`ForceContinue: &true | &false`) — e.g. "always continue while a `TodoWrite` is in progress" or "stop now because the user already approved the plan."
+- **Override the budget mid-run** (`OverrideBudget`) — e.g. "user just expanded scope; bump from 8k to 16k."
+- **Override the threshold** (`OverrideThresholdPct`).
+- **Supply a custom continuation prompt** (`ContinueMessage`) — replaces the engine's default "Keep working" text.
+
+After the engine has decided to continue (and the message has been injected), `early_stop_continued` fires as an observation point — useful for metrics, UI breadcrumbs, or coordinating sibling agents.
+
+| Hook | When | Payload | Return | Effect |
+|------|------|---------|--------|--------|
+| `before_early_stop_decision` | After model emits `end_turn` / `stop`, before the engine evaluates continuation criteria | `EarlyStopDecisionInfo` | `*EarlyStopDecisionResult` | Per-field last-non-nil-across-hosts wins. See struct docs below. |
+| `early_stop_continued` | After a continuation has been injected, before the next turn starts | `EarlyStopContinuedInfo` | ignored | Observe only |
+
+**Execution order during an early-stop event:**
+
+1. `before_early_stop_decision` fires; handlers may override the verdict, budget, threshold, or message.
+2. If the (possibly-overridden) verdict is "continue", `system_inject` fires with `kind="early_stop_continue"`; handlers can rewrite or suppress the final text.
+3. The user message is appended to the conversation.
+4. `early_stop_continued` fires (observe-only) with the final injected text.
+
+If `system_inject` suppresses the message (returns `suppress: true`), the engine **does not** loop — it falls through to `TaskCompleteEvent`. The `early_stop_continued` hook still fires with an empty `InjectedText` so observers can record the suppression.
+
+#### `EarlyStopDecisionInfo`
+
+```go
+type EarlyStopDecisionInfo struct {
+    RunID                  string // engine-issued request ID
+    Model                  string // model that just stopped
+    TurnNumber             int    // turn that ended (1-based)
+    StopReason             string // "end_turn" or "stop"
+    CumulativeOutputTokens int    // total across every turn of this run
+    Budget                 int    // effective budget after engine.json + RunOptions
+    ThresholdPct           int    // effective completion threshold percent
+    ContinuationCount      int    // number of nudges already issued (0 before first)
+    MaxContinuations       int    // configured cap
+    LastContinuationDelta  int    // output-token delta from the previous continuation
+    WouldContinue          bool   // the engine's tentative verdict before this hook
+    IsSubagent             bool   // true for runs dispatched by the Agent tool
+}
+```
+
+#### `EarlyStopDecisionResult`
+
+```go
+type EarlyStopDecisionResult struct {
+    ForceContinue        *bool  // &true forces continue; &false forces stop; nil defers
+    OverrideBudget       int    // bump (or shrink) the effective budget for the remainder of the run; 0 = no override
+    OverrideThresholdPct int    // adjust the completion threshold; 0 = no override
+    ContinueMessage      string // replace the default continuation prompt text; "" = use default
+}
+```
+
+Merge semantics across multiple handlers: **last writer wins per field**. A handler that only sets `ContinueMessage` leaves an earlier handler's `ForceContinue` intact. Matches the `before_prompt` resolution pattern.
+
+#### `EarlyStopContinuedInfo`
+
+```go
+type EarlyStopContinuedInfo struct {
+    RunID                  string // engine-issued request ID
+    TurnNumber             int    // turn that just ended
+    ContinuationCount      int    // new count after this nudge (1-based)
+    Pct                    int    // percent of budget the model reached
+    CumulativeOutputTokens int    // running total across the run
+    Budget                 int    // effective budget at injection time (after any OverrideBudget)
+    InjectedText           string // final continuation text (after OnSystemInject rewrites); empty when suppressed
+}
+```
+
+#### Worked examples
+
+**Force-continue while a Todo is in progress:**
+
+```go
+sdk.On(extension.HookBeforeEarlyStopDecision, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
+    info := payload.(extension.EarlyStopDecisionInfo)
+    if hasInProgressTodo(ctx) {
+        cont := true
+        return extension.EarlyStopDecisionResult{ForceContinue: &cont}, nil
+    }
+    return nil, nil // defer to engine default
+})
+```
+
+**Bump the budget when the user expands scope mid-conversation:**
+
+```go
+sdk.On(extension.HookBeforeEarlyStopDecision, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
+    info := payload.(extension.EarlyStopDecisionInfo)
+    if userExpandedScope(ctx) && info.Budget < 16000 {
+        return extension.EarlyStopDecisionResult{OverrideBudget: 16000}, nil
+    }
+    return nil, nil
+})
+```
+
+**Supply a domain-specific continuation prompt:**
+
+```go
+sdk.On(extension.HookBeforeEarlyStopDecision, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
+    return extension.EarlyStopDecisionResult{
+        ContinueMessage: "Continue. Focus on the test plan in plan.md before generating new code.",
+    }, nil
+})
 ```
 
 ## Context Injection (1)

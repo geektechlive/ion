@@ -196,3 +196,82 @@ func (s *SDK) FireBeforeProviderRequest(ctx *Context, payload interface{}) error
 	s.fire(HookBeforeProviderRequest, ctx, payload)
 	return nil
 }
+
+// FireBeforeEarlyStopDecision fires the before_early_stop_decision hook and
+// resolves the combined result from every handler. Per-field "last non-nil
+// wins" merging mirrors FireBeforePrompt: if two handlers both set
+// ForceContinue, the later-registered handler's value is kept.
+//
+// Returns a non-nil result whenever any field was set; nil means no handler
+// expressed an opinion and the engine should use its default decision.
+func (s *SDK) FireBeforeEarlyStopDecision(ctx *Context, info EarlyStopDecisionInfo) *EarlyStopDecisionResult {
+	results := s.fire(HookBeforeEarlyStopDecision, ctx, info)
+	if len(results) == 0 {
+		return nil
+	}
+	var out EarlyStopDecisionResult
+	anySet := false
+	// Iterate forward, then later writers win because we keep overwriting.
+	// Equivalent to "last non-nil wins" per field.
+	for _, r := range results {
+		var v *EarlyStopDecisionResult
+		switch typed := r.(type) {
+		case EarlyStopDecisionResult:
+			v = &typed
+		case *EarlyStopDecisionResult:
+			v = typed
+		case map[string]interface{}:
+			// JSON-RPC subprocess extensions return decoded maps.
+			tmp := EarlyStopDecisionResult{}
+			if fc, ok := typed["forceContinue"].(bool); ok {
+				tmp.ForceContinue = &fc
+			}
+			if ob, ok := typed["overrideBudget"].(float64); ok {
+				tmp.OverrideBudget = int(ob)
+			} else if ob, ok := typed["overrideBudget"].(int); ok {
+				tmp.OverrideBudget = ob
+			}
+			if ot, ok := typed["overrideThresholdPct"].(float64); ok {
+				tmp.OverrideThresholdPct = int(ot)
+			} else if ot, ok := typed["overrideThresholdPct"].(int); ok {
+				tmp.OverrideThresholdPct = ot
+			}
+			if cm, ok := typed["continueMessage"].(string); ok {
+				tmp.ContinueMessage = cm
+			}
+			v = &tmp
+		}
+		if v == nil {
+			continue
+		}
+		if v.ForceContinue != nil {
+			out.ForceContinue = v.ForceContinue
+			anySet = true
+		}
+		if v.OverrideBudget != 0 {
+			out.OverrideBudget = v.OverrideBudget
+			anySet = true
+		}
+		if v.OverrideThresholdPct != 0 {
+			out.OverrideThresholdPct = v.OverrideThresholdPct
+			anySet = true
+		}
+		if v.ContinueMessage != "" {
+			out.ContinueMessage = v.ContinueMessage
+			anySet = true
+		}
+	}
+	if !anySet {
+		return nil
+	}
+	return &out
+}
+
+// FireEarlyStopContinued fires the early_stop_continued hook. Observe-only:
+// handler return values are ignored, errors are logged but not propagated.
+// Fires after the continuation message has been written into the
+// conversation, just before the next turn starts.
+func (s *SDK) FireEarlyStopContinued(ctx *Context, info EarlyStopContinuedInfo) error {
+	s.fire(HookEarlyStopContinued, ctx, info)
+	return nil
+}

@@ -56,6 +56,7 @@ func TestToolStalledEventEmitted(t *testing.T) {
 		Prompt:      "stall test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 10*time.Second) {
@@ -132,6 +133,7 @@ func TestToolStalledEventNotEmittedOnFastTool(t *testing.T) {
 		Prompt:      "fast test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {

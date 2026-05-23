@@ -39,6 +39,13 @@ func (m *Manager) buildRunConfig(
 		runCfg.Timeouts = m.config.Timeouts
 	}
 
+	// Thread the early-stop continuation config so the runloop can resolve
+	// engine.json defaults. Nil here means "use built-in defaults" — the
+	// runloop falls back via types.EarlyStopDefaults().
+	if m.config != nil && m.config.EarlyStopContinue != nil {
+		runCfg.EarlyStopContinue = m.config.EarlyStopContinue
+	}
+
 	if permEng != nil {
 		runCfg.PermEngine = permEng
 	}
@@ -158,6 +165,66 @@ func (m *Manager) wireExtensionHooks(s *engineSession, key string, requestID str
 			DefaultText: defaultText,
 			Turn:        turn,
 			MaxTurns:    maxTurns,
+		})
+	}
+
+	// Early-stop continuation hooks. Two-way translation between the
+	// backend-layer EarlyStopDecisionInfo/Result and the extension-layer
+	// shapes mirrors the BeforeProviderRequestInfo pattern above: the
+	// backend deliberately does not import extension, so structs are
+	// duplicated and translated here. If a field is added on one side and
+	// not the other, the build breaks at this call site.
+	//
+	// Resolution order INSIDE the callback (most specific first):
+	//  1. Subprocess extension hook (extGroup.FireBeforeEarlyStopDecision).
+	//     Used when the consumer ships a TS/Go SDK extension.
+	//  2. Wire-protocol request (Manager.requestEarlyStopDecisionViaWire).
+	//     Emits engine_early_stop_decision_request, blocks briefly on the
+	//     consumer's early_stop_decision_response command. Used by
+	//     socket-only harnesses (e.g. Ion Desktop) that participate in this
+	//     hook without running a subprocess extension.
+	//  3. Nil (no opinion) — engine's existing merge logic proceeds with
+	//     engine.json + RunOptions defaults. Without a ContinueMessage from
+	//     any of these layers, the no-message skip in maybeContinueEarlyStop
+	//     causes the run to complete normally.
+	capturedKey := key
+	runCfg.Hooks.OnBeforeEarlyStopDecision = func(info backend.EarlyStopDecisionInfo) *backend.EarlyStopDecisionResult {
+		extInfo := extension.EarlyStopDecisionInfo{
+			RunID:                  info.RunID,
+			Model:                  info.Model,
+			TurnNumber:             info.TurnNumber,
+			StopReason:             info.StopReason,
+			CumulativeOutputTokens: info.CumulativeOutputTokens,
+			Budget:                 info.Budget,
+			ThresholdPct:           info.ThresholdPct,
+			ContinuationCount:      info.ContinuationCount,
+			MaxContinuations:       info.MaxContinuations,
+			LastContinuationDelta:  info.LastContinuationDelta,
+			WouldContinue:          info.WouldContinue,
+			IsSubagent:             info.IsSubagent,
+		}
+		if res := extGroup.FireBeforeEarlyStopDecision(ctx, extInfo); res != nil {
+			return &backend.EarlyStopDecisionResult{
+				ForceContinue:        res.ForceContinue,
+				OverrideBudget:       res.OverrideBudget,
+				OverrideThresholdPct: res.OverrideThresholdPct,
+				ContinueMessage:      res.ContinueMessage,
+			}
+		}
+		// Extension said nothing decisive — fan out to the wire protocol
+		// so socket-only consumers (the desktop in this product, anyone
+		// else's harness in general) can participate.
+		return m.requestEarlyStopDecisionViaWire(capturedKey, info)
+	}
+	runCfg.Hooks.OnEarlyStopContinued = func(info backend.EarlyStopContinuedInfo) {
+		extGroup.FireEarlyStopContinued(ctx, extension.EarlyStopContinuedInfo{
+			RunID:                  info.RunID,
+			TurnNumber:             info.TurnNumber,
+			ContinuationCount:      info.ContinuationCount,
+			Pct:                    info.Pct,
+			CumulativeOutputTokens: info.CumulativeOutputTokens,
+			Budget:                 info.Budget,
+			InjectedText:           info.InjectedText,
 		})
 	}
 

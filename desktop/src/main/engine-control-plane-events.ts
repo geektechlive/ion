@@ -181,6 +181,19 @@ export function handleEngineEvent(
     case 'engine_agent_state':
       ctx.emit('event', tabId, event as any)
       break
+
+    case 'engine_early_stop_decision_request':
+      // The engine is asking whether to nudge the model to keep working.
+      // Promote this to a Bridge-level event so the policy module
+      // (early-stop-policy.ts, wired in engine-bridge.ts) can build a
+      // response synchronously from the persisted setting. The engine
+      // gives us 100ms to reply; the policy module must respond off the
+      // event loop, not via any async I/O.
+      log(
+        `early_stop_decision_request: tabId=${tabId} requestId=${event.earlyStopRequestId} run=${event.earlyStopRunId} turn=${event.earlyStopTurnNumber} wouldContinue=${event.earlyStopWouldContinue}`,
+      )
+      ctx.emit('engine_early_stop_decision_request', tabId, event)
+      break
   }
 }
 

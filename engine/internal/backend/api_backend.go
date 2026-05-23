@@ -46,6 +46,20 @@ type activeRun struct {
 	// surfaces an error instead of looping.
 	compactionsWithoutProgress int
 
+	// Early-stop continuation bookkeeping. See runloop_early_stop.go for
+	// the decision logic and runloop.go for the integration into the
+	// end_turn / stop branch of the agent loop.
+	//
+	// continuationCount is the number of times the engine has already
+	// nudged the model on this run. Reset on non-stop outcomes (tool_use,
+	// max_tokens) so multi-step tool work doesn't accidentally consume the
+	// cap. cumulativeOutputTokens is the total across every turn, including
+	// the one that just ended. lastContinuationDelta is the delta from the
+	// previous continuation; the diminishing-returns guard reads it.
+	continuationCount      int
+	cumulativeOutputTokens int
+	lastContinuationDelta  int
+
 	cfg *RunConfig // captured per-run config; nil means "no hooks, no per-run state"
 }
 

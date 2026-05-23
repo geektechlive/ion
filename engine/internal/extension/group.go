@@ -386,6 +386,63 @@ func (g *ExtensionGroup) FireTurnEnd(ctx *Context, info TurnInfo) {
 	}
 }
 
+// FireBeforeEarlyStopDecision fans the before_early_stop_decision hook out
+// to every host and folds the per-host results into a single decision. Per-
+// field "last non-nil wins" mirrors the per-host SDK resolution, so the
+// last host in registration order has final say if multiple hosts set the
+// same field.
+//
+// Returns nil when no host expressed an opinion. The runloop treats a nil
+// return as "use the engine's default decision".
+func (g *ExtensionGroup) FireBeforeEarlyStopDecision(ctx *Context, info EarlyStopDecisionInfo) *EarlyStopDecisionResult {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforeEarlyStopDecision: dispatching to %d host(s) runID=%s turn=%d cumOut=%d budget=%d wouldContinue=%v",
+		len(g.hosts), info.RunID, info.TurnNumber, info.CumulativeOutputTokens, info.Budget, info.WouldContinue,
+	))
+	var out EarlyStopDecisionResult
+	anySet := false
+	for _, h := range g.hosts {
+		v := h.SDK().FireBeforeEarlyStopDecision(ctx, info)
+		if v == nil {
+			continue
+		}
+		if v.ForceContinue != nil {
+			out.ForceContinue = v.ForceContinue
+			anySet = true
+		}
+		if v.OverrideBudget != 0 {
+			out.OverrideBudget = v.OverrideBudget
+			anySet = true
+		}
+		if v.OverrideThresholdPct != 0 {
+			out.OverrideThresholdPct = v.OverrideThresholdPct
+			anySet = true
+		}
+		if v.ContinueMessage != "" {
+			out.ContinueMessage = v.ContinueMessage
+			anySet = true
+		}
+	}
+	if !anySet {
+		return nil
+	}
+	return &out
+}
+
+// FireEarlyStopContinued fans the early_stop_continued hook out to every
+// host. Observe-only: errors are logged per host but never propagate.
+func (g *ExtensionGroup) FireEarlyStopContinued(ctx *Context, info EarlyStopContinuedInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireEarlyStopContinued: dispatching to %d host(s) runID=%s turn=%d count=%d pct=%d",
+		len(g.hosts), info.RunID, info.TurnNumber, info.ContinuationCount, info.Pct,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireEarlyStopContinued(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireEarlyStopContinued error: %v", err))
+		}
+	}
+}
+
 // FireAgentStart fans the agent_start hook out to every host. Observe-only:
 // per-host errors are logged but do not propagate. Fired by the parent
 // session's agent-spawner when a child agent begins running, so parent-host

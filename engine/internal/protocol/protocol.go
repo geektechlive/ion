@@ -51,6 +51,18 @@ type ClientCommand struct {
 	ElicitResponse  map[string]interface{} `json:"elicitResponse,omitempty"`
 	ElicitCancelled bool                   `json:"elicitCancelled,omitempty"`
 
+	// early_stop_decision_response: client reply to an
+	// engine_early_stop_decision_request event. All fields are optional; an
+	// empty reply expresses no opinion (engine falls through to its existing
+	// merge logic — typically meaning no continuation when nothing supplied
+	// a ContinueMessage). Mirrors the extension-side EarlyStopDecisionResult
+	// shape; see types.go for the request-event field documentation.
+	EarlyStopRequestID            string `json:"earlyStopRequestId,omitempty"`
+	EarlyStopForceContinue        *bool  `json:"earlyStopForceContinue,omitempty"`
+	EarlyStopOverrideBudget       int    `json:"earlyStopOverrideBudget,omitempty"`
+	EarlyStopOverrideThresholdPct int    `json:"earlyStopOverrideThresholdPct,omitempty"`
+	EarlyStopContinueMessage      string `json:"earlyStopContinueMessage,omitempty"`
+
 	// send_prompt: pre-encoded image attachments to attach to the user
 	// message as native image content blocks. The engine has no opinion on
 	// any client-side marker syntax inside Text — clients pass image bytes
@@ -83,6 +95,7 @@ var validCommands = map[string]bool{
 	"get_conversation":      true,
 	"generate_title":        true,
 	"elicitation_response":  true,
+	"early_stop_decision_response": true,
 	"health":                true,
 	"reconcile_state":       true,
 	"migrate_conversation":  true,
@@ -247,6 +260,10 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasString(raw, "text")
 	case "elicitation_response":
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "elicitRequestId")
+	case "early_stop_decision_response":
+		// Only key + earlyStopRequestId are required. All response fields
+		// are optional; an empty response is a valid "no opinion" reply.
+		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "earlyStopRequestId")
 	case "reconcile_state":
 		return hasNonEmptyString(raw, "key")
 	case "migrate_conversation":

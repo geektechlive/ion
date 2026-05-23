@@ -4,6 +4,7 @@ import type { watch } from 'fs'
 import type { RemoteTransport } from './remote/transport'
 import { EngineBridge } from './engine-bridge'
 import { EngineControlPlane } from './engine-control-plane'
+import { wireEarlyStopPolicy } from './early-stop-policy'
 import { PairingManager } from './remote/pairing'
 import { RelayDiscovery } from './remote/discovery'
 
@@ -18,6 +19,14 @@ export interface FileWatcherEntry {
 
 export const engineBridge = new EngineBridge()
 export const sessionPlane = new EngineControlPlane(engineBridge)
+
+// Wire the reference policy for the engine's wire-protocol early-stop
+// continuation hook. The desktop is one specific consumer of this hook;
+// any harness engineer can implement their own policy in a similar way
+// by subscribing to engine_early_stop_decision_request on their socket
+// connection. See desktop/src/main/early-stop-policy.ts for the
+// architectural rationale.
+wireEarlyStopPolicy(sessionPlane as unknown as Parameters<typeof wireEarlyStopPolicy>[0], engineBridge)
 export const pairingManager = new PairingManager()
 export const relayDiscovery = new RelayDiscovery()
 

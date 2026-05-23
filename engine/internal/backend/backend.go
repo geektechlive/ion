@@ -62,6 +62,48 @@ type BeforeProviderRequestInfo struct {
 	MaxTokens       int
 }
 
+// EarlyStopDecisionInfo mirrors extension.EarlyStopDecisionInfo for the
+// backend layer. Same backend↔extension duplication pattern as
+// BeforeProviderRequestInfo: backend must not import extension, so this
+// shape is kept identical and translated in session/prompt_runconfig.go.
+// See extension.EarlyStopDecisionInfo for full field docs.
+type EarlyStopDecisionInfo struct {
+	RunID                  string
+	Model                  string
+	TurnNumber             int
+	StopReason             string
+	CumulativeOutputTokens int
+	Budget                 int
+	ThresholdPct           int
+	ContinuationCount      int
+	MaxContinuations       int
+	LastContinuationDelta  int
+	WouldContinue          bool
+	IsSubagent             bool
+}
+
+// EarlyStopDecisionResult mirrors extension.EarlyStopDecisionResult for the
+// backend layer. Pointer ForceContinue lets handlers express "force stop"
+// and "force continue" distinctly from "no opinion".
+type EarlyStopDecisionResult struct {
+	ForceContinue        *bool
+	OverrideBudget       int
+	OverrideThresholdPct int
+	ContinueMessage      string
+}
+
+// EarlyStopContinuedInfo mirrors extension.EarlyStopContinuedInfo for the
+// backend layer. Observe-only payload.
+type EarlyStopContinuedInfo struct {
+	RunID                  string
+	TurnNumber             int
+	ContinuationCount      int
+	Pct                    int
+	CumulativeOutputTokens int
+	Budget                 int
+	InjectedText           string
+}
+
 // TelemetryCollector is an optional interface for telemetry injection.
 type TelemetryCollector interface {
 	Event(name string, payload map[string]interface{}, ctx map[string]interface{})
@@ -107,6 +149,19 @@ type RunHooks struct {
 	// If text is non-empty, it replaces the default.
 	OnSystemInject func(kind, defaultText string, turn, maxTurns int) (text string, suppress bool)
 
+	// OnBeforeEarlyStopDecision fires after the model emits end_turn / stop
+	// and the engine has updated cumulative output tokens, but before it
+	// evaluates the continuation criteria. Handlers can return a non-nil
+	// EarlyStopDecisionResult to force the verdict, override the budget /
+	// threshold for the remainder of the run, or supply a custom prompt.
+	// Nil callback means no handler is wired (engine uses its default).
+	OnBeforeEarlyStopDecision func(info EarlyStopDecisionInfo) *EarlyStopDecisionResult
+
+	// OnEarlyStopContinued fires after a continuation has been injected
+	// (or suppressed by OnSystemInject) and the loop is about to start a
+	// new turn. Observe-only.
+	OnEarlyStopContinued func(info EarlyStopContinuedInfo)
+
 	// OnSessionBeforeCompact may cancel a compaction (return true to cancel).
 	OnSessionBeforeCompact func(runID string) bool
 	// OnSessionCompact observes a completed compaction.
@@ -141,4 +196,11 @@ type RunConfig struct {
 	AgentSpawner  tools.AgentSpawner
 	Telemetry     TelemetryCollector
 	Timeouts      *types.TimeoutsConfig
+
+	// EarlyStopContinue carries the engine-wide defaults for the early-stop
+	// continuation feature (from ~/.ion/engine.json or built-in defaults).
+	// Nil means "use built-in defaults" (types.EarlyStopDefaults()). Per-run
+	// RunOptions fields take precedence over this; the
+	// before_early_stop_decision hook overrides both.
+	EarlyStopContinue *types.EarlyStopContinueConfig
 }

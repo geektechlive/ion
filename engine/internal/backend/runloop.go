@@ -26,6 +26,17 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		hooks = run.cfg.Hooks
 	}
 
+	// Resolve the effective early-stop continuation config for this run.
+	// Defaults < engine.json < RunOptions < sub-agent gate. Log the final
+	// snapshot once at INFO so a reader can reconstruct the decision path
+	// from logs alone (per CLAUDE.md logging policy).
+	earlyStop := mergeEarlyStopConfig(opts, run.cfg)
+	utils.Info("ApiBackend", fmt.Sprintf(
+		"earlyStop: runID=%s enabled=%v budget=%d threshold=%d cap=%d diminishingDelta=%d source=%s isSubagent=%v",
+		run.requestID, earlyStop.enabled, earlyStop.budget, earlyStop.thresholdPct,
+		earlyStop.maxContinuations, earlyStop.diminishingDelta, earlyStop.source, opts.IsSubagent,
+	))
+
 	// Resolve provider
 	model := opts.Model
 	if model == "" {
@@ -361,6 +372,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		run.compactionsWithoutProgress = 0
 
 		// Track usage and cost
+		currentTurnOutputTokens := 0
 		if turnUsage != nil {
 			costUsd := computeCost(model, *turnUsage)
 			run.totalCost += costUsd
@@ -380,6 +392,18 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					CacheCreationInputTokens: &cacheCreate,
 				},
 			}})
+
+			// Accumulate output tokens for the early-stop continuation
+			// decision. Done unconditionally — the feature gates itself on
+			// `earlyStop.enabled` inside maybeContinueEarlyStop, but the
+			// counter must stay in sync across turns so it's correct when
+			// a harness hook flips ForceContinue on later in the run.
+			currentTurnOutputTokens = outTok
+			run.cumulativeOutputTokens += outTok
+			utils.Debug("ApiBackend", fmt.Sprintf(
+				"earlyStop: tokens: runID=%s turn=%d turnOut=%d cumOut=%d",
+				run.requestID, turn, outTok, run.cumulativeOutputTokens,
+			))
 		}
 
 		// Add assistant message to conversation
@@ -419,6 +443,23 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				if block.Type == "text" {
 					resultText += block.Text
 				}
+			}
+
+			// Early-stop continuation decision. When the model stops well
+			// below the configured token budget the engine injects a
+			// "keep working" nudge and re-runs the turn instead of
+			// emitting TaskCompleteEvent. Engine-side defaults can be
+			// overridden globally (engine.json), per-run (RunOptions), or
+			// programmatically (before_early_stop_decision hook). See
+			// runloop_early_stop.go for full decision logic.
+			if b.maybeContinueEarlyStop(run, conv, hooks, opts, earlyStop, currentTurnOutputTokens, stopReason, turn, maxTurns) {
+				// Persist before looping so the injected user message
+				// survives a mid-loop crash. Same write semantics as the
+				// existing post-assistant-message Save above.
+				if err := conversation.Save(conv, ""); err != nil {
+					utils.Log("ApiBackend", "failed to save conversation after early-stop continuation: "+err.Error())
+				}
+				continue
 			}
 
 			// Save conversation
@@ -507,6 +548,20 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				utils.Log("ApiBackend", "failed to save conversation after AddToolResults: "+err.Error())
 			}
 
+			// Reset early-stop continuation counters on tool_use: the model
+			// is making forward progress through tools, so the next end_turn
+			// gets a fresh cap. Without this reset a long multi-tool run
+			// (e.g. a 10-step refactor) would consume the continuation
+			// budget on tool turns that produce little output text.
+			if run.continuationCount != 0 || run.lastContinuationDelta != 0 {
+				utils.Debug("ApiBackend", fmt.Sprintf(
+					"earlyStop: reset continuation counters on tool_use: runID=%s turn=%d prevCount=%d",
+					run.requestID, turn, run.continuationCount,
+				))
+				run.continuationCount = 0
+				run.lastContinuationDelta = 0
+			}
+
 		case "max_tokens":
 			// Detect whether a tool_use block was truncated. When the stream
 			// is cut mid-tool-call the input JSON is unparseable and gets
@@ -581,6 +636,14 @@ func (b *ApiBackend) injectSystemMessage(
 		}
 	case "max_token_continue":
 		if opts.DisableMaxTokenContinue {
+			return
+		}
+	case earlyStopContinueKind:
+		if opts.DisableEarlyStopContinue {
+			utils.Debug("ApiBackend", fmt.Sprintf(
+				"earlyStop: injection suppressed by DisableEarlyStopContinue: runID=%s turn=%d",
+				run.requestID, turn,
+			))
 			return
 		}
 	}

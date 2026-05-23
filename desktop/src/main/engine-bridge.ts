@@ -448,6 +448,9 @@ export class EngineBridge extends EventEmitter {
     this._send({ cmd: 'permission_response', key, questionId, optionId })
   }
 
+  // Public escape hatch: forwards a fully-shaped ClientCommand to the engine. Companion modules use this to ship additional command/response helpers without growing the bridge file past its cap.
+  sendRaw(payload: Record<string, unknown>): void { this._send(payload) }
+
   sendSetPlanMode(key: string, enabled: boolean, allowedTools?: string[], source?: string): void {
     log(`sendSetPlanMode: key=${key} enabled=${enabled} source=${source ?? 'unknown'}`)
     this._send({ cmd: 'set_plan_mode', key, enabled, allowedTools, source })

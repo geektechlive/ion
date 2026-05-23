@@ -362,6 +362,35 @@ type EngineEvent struct {
 	ElicitMode      string                 `json:"elicitMode,omitempty"`
 	ElicitResponse  map[string]interface{} `json:"response,omitempty"`
 	ElicitCancelled bool                   `json:"cancelled,omitempty"`
+
+	// engine_early_stop_decision_request — request/response wire protocol for
+	// the before_early_stop_decision hook. Promotes the hook to the socket so
+	// socket-only harnesses (e.g. Ion Desktop) can participate without running
+	// a subprocess extension. Mirrors the permission_request / elicitation_request
+	// patterns: engine emits this event carrying the full decision payload, then
+	// blocks briefly on a channel; consumers reply via the early_stop_decision_response
+	// client command. Extension-side subprocess hooks (registered via the TS/Go
+	// SDK) fire first and take precedence — the wire event only emits when no
+	// extension expressed an opinion. A short timeout (default 100ms) prevents
+	// a missing or slow consumer from stalling the run.
+	//
+	// Field semantics mirror extension.EarlyStopDecisionInfo verbatim; the
+	// wire layer simply translates between EngineEvent (flat) and the typed
+	// extension struct. Adding a field here requires adding it on both sides
+	// of the protocol (types.go + Manager.emit path + ClientCommand response).
+	EarlyStopRequestID            string `json:"earlyStopRequestId,omitempty"`
+	EarlyStopRunID                string `json:"earlyStopRunId,omitempty"`
+	EarlyStopModel                string `json:"earlyStopModel,omitempty"`
+	EarlyStopTurnNumber           int    `json:"earlyStopTurnNumber,omitempty"`
+	EarlyStopStopReason           string `json:"earlyStopStopReason,omitempty"`
+	EarlyStopCumulativeOutput     int    `json:"earlyStopCumulativeOutput,omitempty"`
+	EarlyStopBudget               int    `json:"earlyStopBudget,omitempty"`
+	EarlyStopThresholdPct         int    `json:"earlyStopThresholdPct,omitempty"`
+	EarlyStopContinuationCount    int    `json:"earlyStopContinuationCount,omitempty"`
+	EarlyStopMaxContinuations     int    `json:"earlyStopMaxContinuations,omitempty"`
+	EarlyStopLastContinuationDelta int    `json:"earlyStopLastContinuationDelta,omitempty"`
+	EarlyStopWouldContinue        bool   `json:"earlyStopWouldContinue,omitempty"`
+	EarlyStopIsSubagent           bool   `json:"earlyStopIsSubagent,omitempty"`
 }
 
 // MessageEndUsage reports token usage at the end of a message.
@@ -410,10 +439,115 @@ type RunOptions struct {
 	CapabilityPrompt        string       `json:"-"` // capability prompt content injected by session manager
 	WebSearchMode           string       `json:"-"` // "auto", "client", or "server", propagated from config
 
+	// --- Early-stop continuation (Claude-Code-style "keep working" nudge) ---
+	//
+	// The engine watches output-token usage across the run. When the model
+	// emits end_turn / stop below `EarlyStopThresholdPct` of the configured
+	// budget, the engine injects a continuation user message and re-runs the
+	// turn. Defaults ship on with a sensible budget; harness engineers can
+	// disable, retune, or override per-run via these fields.
+	//
+	// Resolution order (highest priority last): built-in defaults <
+	// engine.json `earlyStopContinue` block < RunOptions fields below <
+	// `before_early_stop_decision` hook return value at runtime.
+	//
+	// Field stability: additive only (per CLAUDE.md contract rules). Zero
+	// values mean "inherit from a lower layer"; pointer fields exist so that
+	// "explicitly false / explicitly zero" can be distinguished from "unset".
+
+	// EarlyStopEnabled is the per-run override. Pointer (not bool) so nil
+	// means "use engine.json default", `&false` disables for this run, and
+	// `&true` forces on (e.g. for a subagent that the harness specifically
+	// wants nudged).
+	EarlyStopEnabled *bool `json:"earlyStopEnabled,omitempty"`
+
+	// EarlyStopBudget is the output-token target for the run. Zero means
+	// "use the engine.json default"; a negative value disables the feature
+	// for this run.
+	EarlyStopBudget int `json:"earlyStopBudget,omitempty"`
+
+	// EarlyStopThresholdPct is the completion threshold (percent of budget).
+	// Zero means "use the default" (90).
+	EarlyStopThresholdPct int `json:"earlyStopThresholdPct,omitempty"`
+
+	// EarlyStopMaxContinuations caps the number of continuation nudges per
+	// run. Zero means "use the default" (3).
+	EarlyStopMaxContinuations int `json:"earlyStopMaxContinuations,omitempty"`
+
+	// EarlyStopDiminishingDelta is the per-continuation output-token delta
+	// below which the engine considers the agent to be making diminishing
+	// progress and stops nudging. Zero means "use the default" (500 tokens).
+	EarlyStopDiminishingDelta int `json:"earlyStopDiminishingDelta,omitempty"`
+
+	// DisableEarlyStopContinue mirrors the existing per-injection disable
+	// flags (DisablePlanModeReminder etc.). When true, the continuation
+	// _message_ is suppressed even if the engine would otherwise decide to
+	// continue. Rarely useful on its own — prefer EarlyStopEnabled = &false
+	// to disable the whole loop. Kept for parity with the existing pattern.
+	DisableEarlyStopContinue bool `json:"disableEarlyStopContinue,omitempty"`
+
+	// IsSubagent marks a child agent run dispatched by the Agent tool. The
+	// early-stop continuation is **off by default for subagents** even when
+	// the global feature is on — a sub-agent is summoned for a tight remit
+	// and should not be poked to keep working. Harness can still force it on
+	// with `EarlyStopEnabled = &true`.
+	IsSubagent bool `json:"isSubagent,omitempty"`
+
 	// Attachments are pre-encoded images supplied by the client alongside the
 	// text prompt. When non-empty the backend appends one image content block
 	// per attachment to the user message, in addition to the text block.
 	Attachments []ImageAttachment `json:"attachments,omitempty"`
+}
+
+// EarlyStopContinueConfig holds the engine-wide defaults for the early-stop
+// continuation feature. Lives under `earlyStopContinue` in ~/.ion/engine.json.
+// All fields are pointers so the merge layer can tell "not set in this file"
+// from "explicitly zero". Resolved against built-in defaults in
+// EarlyStopDefaults() before per-run overrides apply.
+type EarlyStopContinueConfig struct {
+	// Enabled is the global kill switch. When nil, the built-in default
+	// (true) wins. Set to false in engine.json to disable the feature for
+	// every run on this machine.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Budget is the global output-token target. Zero means "use default" (8000).
+	Budget int `json:"budget,omitempty"`
+
+	// ThresholdPct is the global completion threshold percent. Zero means
+	// "use default" (90).
+	ThresholdPct int `json:"thresholdPct,omitempty"`
+
+	// MaxContinuations caps the number of continuation nudges per run. Zero
+	// means "use default" (3).
+	MaxContinuations int `json:"maxContinuations,omitempty"`
+
+	// DiminishingDelta is the per-continuation token delta below which the
+	// engine declares diminishing returns. Zero means "use default" (500).
+	DiminishingDelta int `json:"diminishingDelta,omitempty"`
+}
+
+// EarlyStopDefaults returns the built-in defaults for the early-stop
+// continuation feature. Defaults to OFF: the engine provides the mechanism
+// (cumulative output-token tracking, before_early_stop_decision /
+// early_stop_continued hooks, re-run-turn machinery) but ships no opinion
+// about whether to nudge or what text to nudge with. A harness consumer
+// must opt in — either through engine.json (`earlyStopContinue.enabled =
+// true`) for a config-level toggle, or by wiring a
+// before_early_stop_decision handler that returns ForceContinue and a
+// ContinueMessage. The numeric tuning knobs (budget, thresholdPct,
+// maxContinuations, diminishingDelta) are calibration values that only
+// take effect when something higher up the resolution chain has enabled
+// the feature; the 8000-token budget matches one substantial multi-step
+// turn and harness engineers should retune per agent.
+func EarlyStopDefaults() EarlyStopContinueConfig {
+	enabled := false
+	return EarlyStopContinueConfig{
+		Enabled:          &enabled,
+		Budget:           8000,
+		ThresholdPct:     90,
+		MaxContinuations: 3,
+		DiminishingDelta: 500,
+	}
 }
 
 // StoredSessionInfo is metadata for a saved conversation on disk.

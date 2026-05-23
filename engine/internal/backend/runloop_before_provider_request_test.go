@@ -51,6 +51,7 @@ func TestOnBeforeProviderRequestFiresEachTurn(t *testing.T) {
 		Prompt:      "say hi",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	}, cfg)
 
 	if !waitForExit(c, 5*time.Second) {
@@ -109,6 +110,7 @@ func TestOnBeforeProviderRequestNilCallbackIsNoOp(t *testing.T) {
 		Prompt:      "ok",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	}, cfg)
 
 	if !waitForExit(c, 5*time.Second) {
@@ -141,6 +143,7 @@ func TestOnBeforeProviderRequestSurvivesPanickingHandler(t *testing.T) {
 		Prompt:      "survive",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	}, cfg)
 
 	if !waitForExit(c, 5*time.Second) {

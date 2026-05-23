@@ -12,14 +12,27 @@ type ElicitReply struct {
 	Cancelled bool
 }
 
-// Broker manages pending permission, dialog, and elicitation request maps.
-// Each map type uses a buffered channel so callers can block until the
-// response arrives.
+// EarlyStopReply carries a wire-protocol response to an
+// engine_early_stop_decision_request event. All fields are optional; an
+// empty reply expresses no opinion. The fields mirror
+// backend.EarlyStopDecisionResult so the dispatching layer can convert
+// without an extra type round-trip.
+type EarlyStopReply struct {
+	ForceContinue        *bool
+	OverrideBudget       int
+	OverrideThresholdPct int
+	ContinueMessage      string
+}
+
+// Broker manages pending permission, dialog, elicitation, and early-stop
+// request maps. Each map type uses a buffered channel so callers can block
+// until the response arrives.
 type Broker struct {
 	mu          sync.RWMutex
 	permissions map[string]chan string
 	dialogs     map[string]chan interface{}
 	elicits     map[string]chan ElicitReply
+	earlyStops  map[string]chan EarlyStopReply
 }
 
 // New creates a ready-to-use Broker.
@@ -28,6 +41,7 @@ func New() *Broker {
 		permissions: make(map[string]chan string),
 		dialogs:     make(map[string]chan interface{}),
 		elicits:     make(map[string]chan ElicitReply),
+		earlyStops:  make(map[string]chan EarlyStopReply),
 	}
 }
 
@@ -131,4 +145,42 @@ func (b *Broker) UnregisterElicit(id string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.elicits, id)
+}
+
+// --- EarlyStops ---
+
+// RegisterEarlyStop creates a channel for an in-flight early-stop decision
+// request. Returns the channel the runloop should block on.
+func (b *Broker) RegisterEarlyStop(id string) chan EarlyStopReply {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ch := make(chan EarlyStopReply, 1)
+	b.earlyStops[id] = ch
+	return ch
+}
+
+// ResolveEarlyStop sends the reply to the waiting early-stop channel.
+// Non-blocking: if nobody is listening the send is dropped. Returns true
+// when a pending entry existed (regardless of whether the send succeeded —
+// a timed-out caller may have moved on but the entry has not yet been
+// unregistered).
+func (b *Broker) ResolveEarlyStop(id string, reply EarlyStopReply) bool {
+	b.mu.RLock()
+	ch, ok := b.earlyStops[id]
+	b.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- reply:
+	default:
+	}
+	return true
+}
+
+// UnregisterEarlyStop removes a pending early-stop entry.
+func (b *Broker) UnregisterEarlyStop(id string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.earlyStops, id)
 }

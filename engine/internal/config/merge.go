@@ -245,6 +245,33 @@ func mergeInto(dst, src *types.EngineRuntimeConfig) {
 		dst.LogLevel = src.LogLevel
 	}
 
+	// EarlyStopContinue: merge field-by-field so engine.json can override a
+	// single sub-field (e.g. just `enabled`) without nuking the others.
+	// Built-in defaults are applied later at the run-loop layer; merge here
+	// only carries forward explicit values from JSON layers.
+	if src.EarlyStopContinue != nil {
+		if dst.EarlyStopContinue == nil {
+			cp := *src.EarlyStopContinue
+			dst.EarlyStopContinue = &cp
+		} else {
+			if src.EarlyStopContinue.Enabled != nil {
+				dst.EarlyStopContinue.Enabled = src.EarlyStopContinue.Enabled
+			}
+			if src.EarlyStopContinue.Budget != 0 {
+				dst.EarlyStopContinue.Budget = src.EarlyStopContinue.Budget
+			}
+			if src.EarlyStopContinue.ThresholdPct != 0 {
+				dst.EarlyStopContinue.ThresholdPct = src.EarlyStopContinue.ThresholdPct
+			}
+			if src.EarlyStopContinue.MaxContinuations != 0 {
+				dst.EarlyStopContinue.MaxContinuations = src.EarlyStopContinue.MaxContinuations
+			}
+			if src.EarlyStopContinue.DiminishingDelta != 0 {
+				dst.EarlyStopContinue.DiminishingDelta = src.EarlyStopContinue.DiminishingDelta
+			}
+		}
+	}
+
 	// Timeouts: merge non-zero fields
 	if src.Timeouts != nil {
 		dst.Timeouts = types.MergeTimeouts(dst.Timeouts, src.Timeouts)

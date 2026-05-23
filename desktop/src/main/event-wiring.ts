@@ -58,6 +58,15 @@ export function wireEngineBridgeEvents(): void {
     if (state.remoteTransport) {
       const tabId = key.split(':')[0]
       const instanceId = key.split(':')[1] || null
+      // Every engine event the desktop sees gets forwarded to iOS, with
+      // no per-event filtering. The previous special case that skipped
+      // engine_early_stop_decision_request was removed once iOS gained
+      // a decoder for it (see ios/IonRemote/Models/NormalizedEvent.swift
+      // and the contract test in ContractSyncTests.swift). iOS observes
+      // the event for diagnostic visibility only — the desktop is the
+      // authoritative responder via early-stop-policy.ts — but the wire
+      // protocol is now uniform across consumers.
+      //
       // Trace agent_state forwarding so we can correlate engine→desktop→iOS
       // flow when diagnosing stuck-row or stale-snapshot reports. Pairs
       // with the iOS-side `ENGINE: agent_state` DiagnosticLog line and the

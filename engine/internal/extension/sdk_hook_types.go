@@ -285,3 +285,99 @@ type PeerExtensionInfo struct {
 	Signal        string `json:"signal,omitempty"`
 	AttemptNumber int    `json:"attemptNumber,omitempty"`
 }
+
+// EarlyStopDecisionInfo describes a pending early-stop continuation decision.
+// Fires after the model emits end_turn / stop and after the engine has updated
+// its cumulative output-token counter, but **before** it evaluates the
+// continuation criteria. The hook is the primary extension point for harness
+// engineers writing continuation policy: handlers can force the verdict,
+// override the budget mid-run, or supply a custom continuation prompt.
+//
+// Field stability: this struct is part of the published hook contract. New
+// fields may be added with zero-value defaults; existing fields must not be
+// removed or renamed.
+type EarlyStopDecisionInfo struct {
+	// RunID is the engine-issued request ID for this run.
+	RunID string `json:"runId"`
+	// Model is the model identifier that just stopped.
+	Model string `json:"model"`
+	// TurnNumber is the turn that ended (1-based, matches turn_start).
+	TurnNumber int `json:"turnNumber"`
+	// StopReason is the provider-reported stop reason that triggered this
+	// decision ("end_turn" or "stop"). Always non-empty.
+	StopReason string `json:"stopReason"`
+	// CumulativeOutputTokens is the running total of output tokens across
+	// every turn of this run (including the turn that just ended).
+	CumulativeOutputTokens int `json:"cumulativeOutputTokens"`
+	// Budget is the effective output-token budget for this run after
+	// engine-config + RunOptions merging (before any handler override).
+	Budget int `json:"budget"`
+	// ThresholdPct is the effective completion-threshold percent.
+	ThresholdPct int `json:"thresholdPct"`
+	// ContinuationCount is the number of times the engine has already
+	// nudged the model on this run (0 before the first nudge).
+	ContinuationCount int `json:"continuationCount"`
+	// MaxContinuations is the configured cap.
+	MaxContinuations int `json:"maxContinuations"`
+	// LastContinuationDelta is the output-token delta from the previous
+	// continuation (0 on the first decision). Used by the diminishing-
+	// returns guard.
+	LastContinuationDelta int `json:"lastContinuationDelta"`
+	// WouldContinue is the engine's tentative verdict before this hook
+	// runs. Handlers may flip it via EarlyStopDecisionResult.ForceContinue.
+	WouldContinue bool `json:"wouldContinue"`
+	// IsSubagent is true when this run is a child agent dispatched by the
+	// Agent tool. The engine defaults the feature off for subagents; the
+	// hook still fires so harness can force-on with ForceContinue=&true.
+	IsSubagent bool `json:"isSubagent,omitempty"`
+}
+
+// EarlyStopDecisionResult is the optional return value from a
+// before_early_stop_decision handler. Any combination of fields may be set;
+// nil pointers and zero values mean "defer to the engine's decision".
+// The last non-nil result across hosts wins for each individual field
+// (matches the FireBeforePrompt resolution pattern).
+type EarlyStopDecisionResult struct {
+	// ForceContinue overrides the engine's verdict. &true forces a
+	// continuation (even if WouldContinue=false); &false forces a stop
+	// (even if WouldContinue=true). nil defers to engine logic.
+	ForceContinue *bool `json:"forceContinue,omitempty"`
+	// OverrideBudget bumps (or shrinks) the effective output-token budget
+	// for the remainder of the run. Zero means "no override". Useful when
+	// scope expands mid-run (e.g. user just added requirements).
+	OverrideBudget int `json:"overrideBudget,omitempty"`
+	// OverrideThresholdPct adjusts the completion threshold for the
+	// remainder of the run. Zero means "no override".
+	OverrideThresholdPct int `json:"overrideThresholdPct,omitempty"`
+	// ContinueMessage replaces the default continuation prompt text. Empty
+	// means "use the engine's default phrasing".
+	ContinueMessage string `json:"continueMessage,omitempty"`
+}
+
+// EarlyStopContinuedInfo describes a continuation that was just injected
+// into the conversation. Fires after the engine has decided to continue,
+// the message has been written, and the loop is about to start a new turn.
+// Observe-only — return values are ignored.
+//
+// Field stability: this struct is part of the published hook contract. New
+// fields may be added with zero-value defaults; existing fields must not be
+// removed or renamed.
+type EarlyStopContinuedInfo struct {
+	// RunID is the engine-issued request ID for this run.
+	RunID string `json:"runId"`
+	// TurnNumber is the turn that just ended (the new turn has not started yet).
+	TurnNumber int `json:"turnNumber"`
+	// ContinuationCount is the new count after this nudge (1-based).
+	ContinuationCount int `json:"continuationCount"`
+	// Pct is the percent-of-budget the model reached before stopping.
+	Pct int `json:"pct"`
+	// CumulativeOutputTokens is the running total across the run.
+	CumulativeOutputTokens int `json:"cumulativeOutputTokens"`
+	// Budget is the effective budget at the moment of injection (after
+	// any OverrideBudget from a before_early_stop_decision handler).
+	Budget int `json:"budget"`
+	// InjectedText is the final continuation prompt text that landed in
+	// the conversation (after OnSystemInject rewrites). Empty when the
+	// downstream OnSystemInject hook suppressed the injection.
+	InjectedText string `json:"injectedText"`
+}

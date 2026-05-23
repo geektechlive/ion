@@ -440,6 +440,21 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		// raised by ion.elicit() / ctx.Elicit() so the extension Promise resolves.
 		s.manager.HandleElicitationResponse(cmd.Key, cmd.ElicitRequestID, cmd.ElicitResponse, cmd.ElicitCancelled)
 
+	case "early_stop_decision_response":
+		// Fire-and-forget: no response sent. Resolves a pending early-stop
+		// wire-protocol request so the blocked agent loop proceeds with the
+		// supplied decision. The runloop has its own short timeout, so a
+		// missing response is non-fatal — it just means the engine falls
+		// through to its existing merge logic (typically: no continuation).
+		s.manager.HandleEarlyStopDecisionResponse(
+			cmd.Key,
+			cmd.EarlyStopRequestID,
+			cmd.EarlyStopForceContinue,
+			cmd.EarlyStopOverrideBudget,
+			cmd.EarlyStopOverrideThresholdPct,
+			cmd.EarlyStopContinueMessage,
+		)
+
 	case "list_stored_sessions":
 		limit := cmd.Limit
 		if limit <= 0 {
