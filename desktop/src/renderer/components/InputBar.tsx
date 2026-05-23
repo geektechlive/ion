@@ -410,7 +410,7 @@ export function InputBar() {
               ? 'Transcribing...'
               : isBusy
                 ? 'Type to queue a message...'
-                : 'Ask Ion anything...'
+                : 'Ask Jarvis anything...'
 
   const sendVisible = canSend && voiceState !== 'recording'
 

@@ -157,7 +157,7 @@ export function createWindow(): void {
       buttons: ['Quit', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
-      title: 'Quit Ion?',
+      title: 'Quit Jarvis?',
       message: hasRunning
         ? 'Sessions are still running. Quitting will stop them.'
         : 'Are you sure you want to quit?',
@@ -198,7 +198,7 @@ export function createTray(): void {
   const trayIcon = nativeImage.createFromPath(trayIconPath)
   trayIcon.setTemplateImage(true)
   state.tray = new Tray(trayIcon)
-  state.tray.setToolTip('Ion')
+  state.tray.setToolTip('Jarvis')
   state.tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Toggle Interface', accelerator: 'Alt+Space', click: () => toggleWindow('tray menu') },

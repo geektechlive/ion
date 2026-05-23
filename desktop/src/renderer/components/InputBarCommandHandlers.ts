@@ -58,14 +58,14 @@ export function executeBuiltinCommand(commandName: string, deps: ExecuteCommandD
             lines.push(`    ${active ? '●' : '○'} ${getModelDisplayLabel(m.id)} (${m.id})`)
           }
         }
-        const header = version ? `Ion Engine ${version}` : 'Ion Engine'
+        const header = version ? `Jarvis Engine ${version}` : 'Jarvis Engine'
         addSystemMessage(`${header}\n${lines.join('\n')}\n\nSwitch model: type /model <name>\n  e.g. /model sonnet`)
       } else {
         const lines = AVAILABLE_MODELS.map((m) => {
           const active = m.id === current || (!preferredModel && m.id === model)
           return `  ${active ? '●' : '○'} ${m.label} (${m.id})`
         })
-        const header = version ? `Ion Engine ${version}` : 'Ion Engine'
+        const header = version ? `Jarvis Engine ${version}` : 'Jarvis Engine'
         addSystemMessage(`${header}\n\n${lines.join('\n')}\n\nSwitch model: type /model <name>\n  e.g. /model sonnet`)
       }
       return
