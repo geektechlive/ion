@@ -5,7 +5,7 @@ import { IPC } from '../../shared/types'
 import { state } from '../state'
 import { showWindow } from '../window-manager'
 import { validateExternalUrl } from '../ipc-validation'
-import { engineBridge } from '../state'
+import { engineIsRemote, getEngineHostInfo, listEngineDirectory } from '../engine-bridge-fs'
 
 export function registerFileDialogIpc(): void {
   ipcMain.handle(IPC.SELECT_DIRECTORY, async () => {
@@ -40,20 +40,14 @@ export function registerFileDialogIpc(): void {
   // chdir's into when spawning the Claude CLI) rather than the desktop's
   // local filesystem. Local-engine setups also use these for symmetry.
 
-  ipcMain.handle(IPC.GET_ENGINE_HOST_INFO, async () => {
-    return engineBridge.getHostInfo()
-  })
+  ipcMain.handle(IPC.GET_ENGINE_HOST_INFO, async () => getEngineHostInfo())
 
   ipcMain.handle(
     IPC.LIST_ENGINE_DIRECTORY,
-    async (_event, path: string, showHidden: boolean) => {
-      return engineBridge.listDirectory(path ?? '', !!showHidden)
-    },
+    async (_event, path: string, showHidden: boolean) => listEngineDirectory(path ?? '', !!showHidden),
   )
 
-  ipcMain.handle(IPC.ENGINE_IS_REMOTE, async () => {
-    return engineBridge.isRemote
-  })
+  ipcMain.handle(IPC.ENGINE_IS_REMOTE, async () => engineIsRemote())
 
   ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, url: string) => {
     const validUrl = validateExternalUrl(url)
