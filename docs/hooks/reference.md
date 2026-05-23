@@ -123,7 +123,7 @@ type ForkInfo struct {
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
 | `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt}` | Last non-nil wins. Injects system prompt into the sub-agent. |
-| `before_provider_request` | Before LLM provider request | provider request data | ignored | Observe only |
+| `before_provider_request` | Immediately before each outbound LLM provider call from the agent loop. Fires once per turn (including fallback hops). | `BeforeProviderRequestInfo{Provider, Model, TurnNumber, MessageCount, ToolCount, HasSystemPrompt, MaxTokens}` | ignored | Observe only |
 
 ### Payload Types
 
@@ -131,6 +131,19 @@ type ForkInfo struct {
 ```go
 type BeforeAgentStartResult struct {
     SystemPrompt string
+}
+```
+
+**BeforeProviderRequestInfo**
+```go
+type BeforeProviderRequestInfo struct {
+    Provider        string // provider ID (e.g. "anthropic", "openai")
+    Model           string // model name post-fallback
+    TurnNumber      int    // 1-based, matches turn_start
+    MessageCount    int    // number of messages in the request payload
+    ToolCount       int    // number of tool definitions attached
+    HasSystemPrompt bool   // true when a non-empty system prompt is set
+    MaxTokens       int    // configured response cap; 0 = provider default
 }
 ```
 

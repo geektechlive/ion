@@ -203,6 +203,37 @@ type AgentInfo struct {
 	Task string `json:"task,omitempty"`
 }
 
+// BeforeProviderRequestInfo describes a pending outbound LLM provider request.
+// Fired immediately before the engine dispatches a request to the model
+// provider from the agent loop. Observe-only: handler return values are
+// ignored. Extensions use this hook to log prompts, count tokens, inject
+// telemetry tags, or enforce client-side rate limits.
+//
+// Field stability: this struct is part of the published hook contract. New
+// fields may be added with zero-value defaults; existing fields must not be
+// removed or renamed.
+type BeforeProviderRequestInfo struct {
+	// Provider is the provider ID resolved for this request (e.g. "anthropic",
+	// "openai", "azure_openai"). Empty if the model could not be resolved to a
+	// registered provider (in which case the hook still fires before the loop
+	// errors out, so handlers can observe the failed dispatch attempt).
+	Provider string `json:"provider"`
+	// Model is the model name the request will be sent to. This is the
+	// post-fallback model — if the agent loop is on a fallback hop, Model
+	// reflects the current hop, not the original request model.
+	Model string `json:"model"`
+	// TurnNumber is the agent-loop turn that triggered this request (0-based).
+	TurnNumber int `json:"turnNumber"`
+	// MessageCount is the number of messages in the request payload.
+	MessageCount int `json:"messageCount"`
+	// ToolCount is the number of tool definitions attached to the request.
+	ToolCount int `json:"toolCount"`
+	// HasSystemPrompt is true when the request carries a non-empty system prompt.
+	HasSystemPrompt bool `json:"hasSystemPrompt"`
+	// MaxTokens is the configured response cap (0 = provider default).
+	MaxTokens int `json:"maxTokens,omitempty"`
+}
+
 // BeforeAgentStartResult holds the optional overrides a before_agent_start handler may return.
 type BeforeAgentStartResult struct {
 	SystemPrompt string `json:"systemPrompt,omitempty"`

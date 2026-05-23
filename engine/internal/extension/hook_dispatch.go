@@ -31,6 +31,13 @@ func (h *Host) FireBeforePrompt(ctx *Context, prompt string) (string, string, er
 	return h.sdk.FireBeforePrompt(ctx, prompt)
 }
 
+// FireBeforeProviderRequest fires the before_provider_request hook on this
+// host's SDK. Observe-only: errors from the SDK are logged by the SDK layer
+// and do not propagate (the agent loop must never stall on a telemetry hook).
+func (h *Host) FireBeforeProviderRequest(ctx *Context, info BeforeProviderRequestInfo) error {
+	return h.sdk.FireBeforeProviderRequest(ctx, info)
+}
+
 func (h *Host) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string) {
 	return h.sdk.FirePlanModePrompt(ctx, planFilePath)
 }

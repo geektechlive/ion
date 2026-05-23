@@ -361,6 +361,23 @@ func (g *ExtensionGroup) FireTurnStart(ctx *Context, info TurnInfo) {
 	}
 }
 
+// FireBeforeProviderRequest fans the before_provider_request hook out to every
+// host. Observe-only: per-host errors are logged but do not propagate, since
+// stalling the agent loop on a telemetry hook would be worse than a silent
+// extension failure. The number of hosts notified is logged at INFO so
+// operators can confirm the hook is actually reaching extensions.
+func (g *ExtensionGroup) FireBeforeProviderRequest(ctx *Context, info BeforeProviderRequestInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforeProviderRequest: dispatching to %d host(s) provider=%s model=%s turn=%d messages=%d tools=%d",
+		len(g.hosts), info.Provider, info.Model, info.TurnNumber, info.MessageCount, info.ToolCount,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireBeforeProviderRequest(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireBeforeProviderRequest error: %v", err))
+		}
+	}
+}
+
 func (g *ExtensionGroup) FireTurnEnd(ctx *Context, info TurnInfo) {
 	for _, h := range g.hosts {
 		if err := h.SDK().FireTurnEnd(ctx, info); err != nil {

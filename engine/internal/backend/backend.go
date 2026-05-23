@@ -43,6 +43,25 @@ type ToolCallResult struct {
 	Reason string
 }
 
+// BeforeProviderRequestInfo mirrors extension.BeforeProviderRequestInfo for the
+// backend layer. The backend package deliberately does not import extension
+// (to keep the agent loop independent of hook dispatch concerns), so we
+// duplicate the shape and let the session layer translate between the two.
+//
+// Field semantics are identical to extension.BeforeProviderRequestInfo — see
+// that type for documentation. New fields added here must also be added there
+// (and vice versa); the translation in session/prompt_runconfig.go fails
+// loudly at the call site if shapes drift.
+type BeforeProviderRequestInfo struct {
+	Provider        string
+	Model           string
+	TurnNumber      int
+	MessageCount    int
+	ToolCount       int
+	HasSystemPrompt bool
+	MaxTokens       int
+}
+
 // TelemetryCollector is an optional interface for telemetry injection.
 type TelemetryCollector interface {
 	Event(name string, payload map[string]interface{}, ctx map[string]interface{})
@@ -68,6 +87,13 @@ type RunHooks struct {
 
 	OnTurnStart func(runID string, turnNumber int)
 	OnTurnEnd   func(runID string, turnNumber int)
+
+	// OnBeforeProviderRequest fires immediately before each outbound LLM
+	// provider call from the agent loop. Observe-only: the callback receives
+	// a descriptor of the pending request and any return value is discarded.
+	// Implementations must not block — the agent loop dispatches the request
+	// synchronously after this callback returns.
+	OnBeforeProviderRequest func(runID string, info BeforeProviderRequestInfo)
 
 	// OnBeforePrompt receives the run ID and current user prompt; may return a
 	// rewritten prompt and additional system-prompt content.

@@ -113,6 +113,28 @@ func (m *Manager) wireExtensionHooks(s *engineSession, key string, requestID str
 		extGroup.FireTurnEnd(ctx, extension.TurnInfo{TurnNumber: turnNum})
 	}
 
+	// Translate the backend's BeforeProviderRequestInfo into the extension
+	// layer's identically-shaped struct and fan out to every host. The two
+	// types are intentionally separate so the backend can stay unaware of the
+	// extension package; if a field is added on one side and not the other,
+	// the build breaks here, which is the desired loud-failure mode.
+	runCfg.Hooks.OnBeforeProviderRequest = func(_ string, info backend.BeforeProviderRequestInfo) {
+		utils.Log("Session", fmt.Sprintf(
+			"OnBeforeProviderRequest: provider=%s model=%s turn=%d messages=%d tools=%d sysPrompt=%v maxTokens=%d",
+			info.Provider, info.Model, info.TurnNumber, info.MessageCount,
+			info.ToolCount, info.HasSystemPrompt, info.MaxTokens,
+		))
+		extGroup.FireBeforeProviderRequest(ctx, extension.BeforeProviderRequestInfo{
+			Provider:        info.Provider,
+			Model:           info.Model,
+			TurnNumber:      info.TurnNumber,
+			MessageCount:    info.MessageCount,
+			ToolCount:       info.ToolCount,
+			HasSystemPrompt: info.HasSystemPrompt,
+			MaxTokens:       info.MaxTokens,
+		})
+	}
+
 	runCfg.Hooks.OnBeforePrompt = func(_ string, prompt string) (string, string) {
 		rewritten, sysPrompt, _ := extGroup.FireBeforePrompt(ctx, prompt)
 		return rewritten, sysPrompt

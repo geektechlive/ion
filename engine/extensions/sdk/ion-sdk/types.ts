@@ -404,6 +404,33 @@ export interface AgentInfo {
   task?: string
 }
 
+/**
+ * Payload for `before_provider_request`.
+ *
+ * Fired immediately before each outbound LLM provider request from the agent
+ * loop, describing the wire request the engine is about to dispatch. The hook
+ * is observe-only — handler return values are ignored.
+ *
+ * Contract: new fields may be added with safe defaults; existing fields are
+ * stable. Mirrors `engine/internal/extension/sdk_hook_types.go::BeforeProviderRequestInfo`.
+ */
+export interface BeforeProviderRequestInfo {
+  /** Provider ID resolved for this request (e.g. "anthropic", "openai"). */
+  provider: string
+  /** Model name the request will be sent to (post-fallback). */
+  model: string
+  /** Agent-loop turn number that triggered this request (1-based, matches turn_start). */
+  turnNumber: number
+  /** Number of messages in the request payload. */
+  messageCount: number
+  /** Number of tool definitions attached to the request. */
+  toolCount: number
+  /** True when the request carries a non-empty system prompt. */
+  hasSystemPrompt: boolean
+  /** Configured response cap; absent or 0 means provider default. */
+  maxTokens?: number
+}
+
 /** Optional return from `before_agent_start`. */
 export interface BeforeAgentStartResult {
   systemPrompt?: string
@@ -619,7 +646,7 @@ export interface HookPayloadMap {
 
   // Pre-action (2)
   before_agent_start: AgentInfo
-  before_provider_request: unknown
+  before_provider_request: BeforeProviderRequestInfo
 
   // Content (7)
   context: unknown

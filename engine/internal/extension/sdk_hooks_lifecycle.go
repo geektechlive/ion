@@ -187,7 +187,11 @@ func (s *SDK) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, error)
 	return "", nil
 }
 
-// FireBeforeProviderRequest fires the before_provider_request hook.
+// FireBeforeProviderRequest fires the before_provider_request hook. The
+// payload is typically a BeforeProviderRequestInfo describing the pending
+// outbound LLM request; callers may pass any value (the parameter is
+// interface{} for forward compatibility with future payload shapes).
+// Observe-only: handler return values are ignored.
 func (s *SDK) FireBeforeProviderRequest(ctx *Context, payload interface{}) error {
 	s.fire(HookBeforeProviderRequest, ctx, payload)
 	return nil
