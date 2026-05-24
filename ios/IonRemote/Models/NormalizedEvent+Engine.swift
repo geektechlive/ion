@@ -154,6 +154,51 @@ extension RemoteEvent {
             let planSlug = try container.decodeIfPresent(String.self, forKey: .planSlug)
             return .enginePlanProposal(tabId: tabId, instanceId: instanceId, kind: kind, planFilePath: planFilePath, planSlug: planSlug)
 
+        case .engineEarlyStopDecisionRequest:
+            // Engine ↔ harness wire-protocol request. iOS does not act on
+            // this event — the desktop's early-stop-policy.ts is the
+            // authoritative responder via the early_stop_decision_response
+            // command. Decoding here keeps the wire protocol uniform across
+            // consumers; observing the event is purely diagnostic on iOS.
+            //
+            // Every field is optional on the wire (Go side ships `omitempty`
+            // throughout) so we default missing values to zero/empty rather
+            // than failing the decode. The full payload reaches iOS even
+            // when most fields are zero so future iOS work can read the
+            // complete record without contract changes.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let requestId = try container.decodeIfPresent(String.self, forKey: .earlyStopRequestId) ?? ""
+            let runId = try container.decodeIfPresent(String.self, forKey: .earlyStopRunId) ?? ""
+            let model = try container.decodeIfPresent(String.self, forKey: .earlyStopModel) ?? ""
+            let turnNumber = try container.decodeIfPresent(Int.self, forKey: .earlyStopTurnNumber) ?? 0
+            let stopReason = try container.decodeIfPresent(String.self, forKey: .earlyStopStopReason) ?? ""
+            let cumulativeOutput = try container.decodeIfPresent(Int.self, forKey: .earlyStopCumulativeOutput) ?? 0
+            let budget = try container.decodeIfPresent(Int.self, forKey: .earlyStopBudget) ?? 0
+            let thresholdPct = try container.decodeIfPresent(Int.self, forKey: .earlyStopThresholdPct) ?? 0
+            let continuationCount = try container.decodeIfPresent(Int.self, forKey: .earlyStopContinuationCount) ?? 0
+            let maxContinuations = try container.decodeIfPresent(Int.self, forKey: .earlyStopMaxContinuations) ?? 0
+            let lastContinuationDelta = try container.decodeIfPresent(Int.self, forKey: .earlyStopLastContinuationDelta) ?? 0
+            let wouldContinue = try container.decodeIfPresent(Bool.self, forKey: .earlyStopWouldContinue) ?? false
+            let isSubagent = try container.decodeIfPresent(Bool.self, forKey: .earlyStopIsSubagent) ?? false
+            return .engineEarlyStopDecisionRequest(
+                tabId: tabId,
+                instanceId: instanceId,
+                requestId: requestId,
+                runId: runId,
+                model: model,
+                turnNumber: turnNumber,
+                stopReason: stopReason,
+                cumulativeOutput: cumulativeOutput,
+                budget: budget,
+                thresholdPct: thresholdPct,
+                continuationCount: continuationCount,
+                maxContinuations: maxContinuations,
+                lastContinuationDelta: lastContinuationDelta,
+                wouldContinue: wouldContinue,
+                isSubagent: isSubagent
+            )
+
         default:
             return nil
         }
@@ -320,251 +365,36 @@ extension RemoteEvent {
             try container.encodeIfPresent(planSlug, forKey: .planSlug)
             return true
 
+        case .engineEarlyStopDecisionRequest(let tabId, let instanceId, let requestId, let runId, let model, let turnNumber, let stopReason, let cumulativeOutput, let budget, let thresholdPct, let continuationCount, let maxContinuations, let lastContinuationDelta, let wouldContinue, let isSubagent):
+            // Encoder mirror of the decoder above. iOS never originates
+            // this event in practice (the engine emits it, iOS observes),
+            // but the encoder must round-trip cleanly so that re-encoded
+            // events in tests and diagnostic dumps don't lose fields. We
+            // emit every field unconditionally rather than chasing
+            // omitempty parity with the Go side; the wire shape on
+            // re-encode is a superset of the Go-emitted shape, which is
+            // strictly safer for downstream decoders.
+            try container.encode(TypeKey.engineEarlyStopDecisionRequest, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(requestId, forKey: .earlyStopRequestId)
+            try container.encode(runId, forKey: .earlyStopRunId)
+            try container.encode(model, forKey: .earlyStopModel)
+            try container.encode(turnNumber, forKey: .earlyStopTurnNumber)
+            try container.encode(stopReason, forKey: .earlyStopStopReason)
+            try container.encode(cumulativeOutput, forKey: .earlyStopCumulativeOutput)
+            try container.encode(budget, forKey: .earlyStopBudget)
+            try container.encode(thresholdPct, forKey: .earlyStopThresholdPct)
+            try container.encode(continuationCount, forKey: .earlyStopContinuationCount)
+            try container.encode(maxContinuations, forKey: .earlyStopMaxContinuations)
+            try container.encode(lastContinuationDelta, forKey: .earlyStopLastContinuationDelta)
+            try container.encode(wouldContinue, forKey: .earlyStopWouldContinue)
+            try container.encode(isSubagent, forKey: .earlyStopIsSubagent)
+            return true
+
         default:
             return false
         }
     }
 }
 
-// MARK: - AgentStateUpdate
-
-/// Structured agent state sent from the desktop engine runtime.
-/// The wire format has `name`, `status`, and a `metadata` map containing
-/// all other fields (displayName, type, visibility, invited, etc.).
-struct AgentStateUpdate: Codable, Identifiable, Sendable {
-    var id: String { name }
-    let name: String
-    let displayName: String
-    let type: String          // "chief", "specialist", "staff", "consultant"
-    let visibility: String    // "always", "sticky", "ephemeral"
-    let status: String        // "idle", "running", "done", "error"
-    let invited: Bool
-    let task: String?
-    let lastWork: String?
-    let fullOutput: String?
-    let elapsed: Double?
-    let cost: Double?
-    let color: String?
-    let model: String?
-    let startTime: Double?   // Unix timestamp in seconds
-
-    /// Whether this agent should be shown in the UI based on visibility rules.
-    var isVisible: Bool {
-        switch visibility {
-        case "always": return true
-        case "sticky": return invited
-        case "ephemeral": return status == "running"
-        default: return true
-        }
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name, status, metadata
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        status = try container.decode(String.self, forKey: .status)
-        let meta = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata) ?? [:]
-
-        displayName = (meta["displayName"]?.value as? String) ?? name
-        type = (meta["type"]?.value as? String) ?? "specialist"
-        visibility = (meta["visibility"]?.value as? String) ?? "ephemeral"
-        task = meta["task"]?.value as? String
-        lastWork = meta["lastWork"]?.value as? String
-        fullOutput = meta["fullOutput"]?.value as? String
-        color = meta["color"]?.value as? String
-        model = meta["model"]?.value as? String
-        if let st = meta["startTime"]?.value as? Double {
-            startTime = st
-        } else if let st = meta["startTime"]?.value as? Int {
-            startTime = Double(st)
-        } else {
-            startTime = nil
-        }
-
-        // Bool and numeric values may arrive as various types
-        if let inv = meta["invited"]?.value as? Bool {
-            invited = inv
-        } else if let inv = meta["invited"]?.value as? Int {
-            invited = inv != 0
-        } else {
-            invited = false
-        }
-        if let e = meta["elapsed"]?.value as? Double {
-            elapsed = e
-        } else if let e = meta["elapsed"]?.value as? Int {
-            elapsed = Double(e)
-        } else {
-            elapsed = nil
-        }
-        if let c = meta["cost"]?.value as? Double {
-            cost = c
-        } else if let c = meta["cost"]?.value as? Int {
-            cost = Double(c)
-        } else {
-            cost = nil
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(name, forKey: .name)
-        try container.encode(status, forKey: .status)
-        var meta: [String: AnyCodable] = [
-            "displayName": AnyCodable(displayName),
-            "type": AnyCodable(type),
-            "visibility": AnyCodable(visibility),
-            "invited": AnyCodable(invited),
-        ]
-        if let task { meta["task"] = AnyCodable(task) }
-        if let lastWork { meta["lastWork"] = AnyCodable(lastWork) }
-        if let fullOutput { meta["fullOutput"] = AnyCodable(fullOutput) }
-        if let elapsed { meta["elapsed"] = AnyCodable(elapsed) }
-        if let cost { meta["cost"] = AnyCodable(cost) }
-        if let color { meta["color"] = AnyCodable(color) }
-        if let model { meta["model"] = AnyCodable(model) }
-        if let startTime { meta["startTime"] = AnyCodable(startTime) }
-        try container.encode(meta, forKey: .metadata)
-    }
-}
-
-// MARK: - StatusFields
-
-/// Structured status bar fields from the desktop engine runtime.
-/// Mirrors `StatusFields` in `src/shared/types.ts`.
-struct StatusFields: Codable, Sendable {
-    var label: String
-    let state: String
-    let sessionId: String?       // omitempty in Go — may be absent
-    let team: String?            // omitempty in Go — may be absent
-    let model: String
-    let contextPercent: Double
-    let contextWindow: Int
-    let totalCostUsd: Double?
-    let permissionDenials: [PermissionDenialEntry]?
-    /// Friendly display name broadcast by the extension (e.g. "Chief of Staff").
-    let extensionName: String?
-
-    /// Returns a copy with the label replaced.
-    func withLabel(_ newLabel: String) -> StatusFields {
-        var copy = self
-        copy.label = newLabel
-        return copy
-    }
-}
-
-/// A permission denial record within StatusFields.
-struct PermissionDenialEntry: Codable, Sendable {
-    let toolName: String
-    let toolUseId: String
-    let toolInput: [String: AnyCodable]?
-}
-
-// MARK: - EngineInstancePayload
-
-/// Wire type for engine instance added/removed events.
-struct EngineInstancePayload: Codable, Sendable {
-    let id: String
-    let label: String
-}
-
-// MARK: - EngineMessage
-
-/// A single message in the engine conversation history.
-/// Roles: "user", "assistant", "tool", "harness", "system".
-struct EngineMessage: Identifiable, Sendable {
-    let id: String
-    let role: String
-    var content: String
-    var toolName: String?
-    var toolId: String?
-    var toolStatus: String?
-    var timestamp: Double?
-    var isInternal: Bool?
-    /// View-only: number of consecutive bootstrap messages that were collapsed
-    /// into this one (not encoded/decoded — excluded from CodingKeys). Nil when
-    /// this message is displayed individually. When > 0 the harness row renders
-    /// a count badge showing the total occurrences (collapsed + 1).
-    var bootstrapCollapsedCount: Int?
-}
-
-extension EngineMessage: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case id, role, content, toolName, toolId, toolStatus, timestamp
-        case isInternal = "internal"
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        // id: accept String or Int (coerce to String)
-        if let s = try? container.decode(String.self, forKey: .id) {
-            id = s
-        } else if let n = try? container.decode(Int.self, forKey: .id) {
-            id = String(n)
-        } else {
-            id = UUID().uuidString
-        }
-        role = try container.decodeIfPresent(String.self, forKey: .role) ?? "system"
-        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
-        toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
-        toolId = try container.decodeIfPresent(String.self, forKey: .toolId)
-        toolStatus = try container.decodeIfPresent(String.self, forKey: .toolStatus)
-        timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
-        isInternal = try container.decodeIfPresent(Bool.self, forKey: .isInternal)
-    }
-}
-
-// MARK: - EngineMessageEndUsage
-
-/// Nested usage stats within an engine_message_end event.
-struct EngineMessageEndUsage: Codable, Sendable {
-    let inputTokens: Int
-    let outputTokens: Int
-    let contextPercent: Double
-    let cost: Double
-}
-
-// MARK: - AnyCodable
-
-/// Type-erased Codable wrapper for arbitrary JSON values.
-struct AnyCodable: Codable, Sendable {
-    let value: any Sendable
-
-    init(_ value: any Sendable) { self.value = value }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let str = try? container.decode(String.self) { value = str }
-        else if let int = try? container.decode(Int.self) { value = int }
-        else if let double = try? container.decode(Double.self) { value = double }
-        else if let bool = try? container.decode(Bool.self) { value = bool }
-        else if let dict = try? container.decode([String: AnyCodable].self) { value = dict }
-        else if let arr = try? container.decode([AnyCodable].self) { value = arr }
-        else if container.decodeNil() { value = NSNull() }
-        else {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath, debugDescription: "Unsupported JSON type")
-            )
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch value {
-        case let s as String: try container.encode(s)
-        case let i as Int: try container.encode(i)
-        case let d as Double: try container.encode(d)
-        case let b as Bool: try container.encode(b)
-        case let dict as [String: AnyCodable]: try container.encode(dict)
-        case let arr as [AnyCodable]: try container.encode(arr)
-        case is NSNull: try container.encodeNil()
-        default:
-            throw EncodingError.invalidValue(
-                value,
-                .init(codingPath: encoder.codingPath, debugDescription: "Unsupported type for encoding")
-            )
-        }
-    }
-}

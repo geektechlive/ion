@@ -1,0 +1,259 @@
+import Foundation
+
+// Engine-event supporting types.
+//
+// Extracted from NormalizedEvent+Engine.swift to keep that file under the
+// 600-line cap. The structs and helpers in this file are reused by the
+// engine-event decoder/encoder living next door, but they are not
+// engine-specific: AgentStateUpdate is a wire type, StatusFields is a
+// wire type, AnyCodable is a generic JSON helper, etc. Splitting them
+// out cleans up the codec file (which is the part that grows when the
+// engine adds new event variants) and isolates these long-lived wire
+// types so they can be unit-tested independently if needed.
+//
+// No behavior changed in the move. The types are exposed at the same
+// access level (internal) and live in the same module, so existing
+// callers compile unchanged.
+
+// MARK: - AgentStateUpdate
+
+/// Structured agent state sent from the desktop engine runtime.
+/// The wire format has `name`, `status`, and a `metadata` map containing
+/// all other fields (displayName, type, visibility, invited, etc.).
+struct AgentStateUpdate: Codable, Identifiable, Sendable {
+    var id: String { name }
+    let name: String
+    let displayName: String
+    let type: String          // "chief", "specialist", "staff", "consultant"
+    let visibility: String    // "always", "sticky", "ephemeral"
+    let status: String        // "idle", "running", "done", "error"
+    let invited: Bool
+    let task: String?
+    let lastWork: String?
+    let fullOutput: String?
+    let elapsed: Double?
+    let cost: Double?
+    let color: String?
+    let model: String?
+    let startTime: Double?   // Unix timestamp in seconds
+
+    /// Whether this agent should be shown in the UI based on visibility rules.
+    var isVisible: Bool {
+        switch visibility {
+        case "always": return true
+        case "sticky": return invited
+        case "ephemeral": return status == "running"
+        default: return true
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, status, metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        status = try container.decode(String.self, forKey: .status)
+        let meta = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata) ?? [:]
+
+        displayName = (meta["displayName"]?.value as? String) ?? name
+        type = (meta["type"]?.value as? String) ?? "specialist"
+        visibility = (meta["visibility"]?.value as? String) ?? "ephemeral"
+        task = meta["task"]?.value as? String
+        lastWork = meta["lastWork"]?.value as? String
+        fullOutput = meta["fullOutput"]?.value as? String
+        color = meta["color"]?.value as? String
+        model = meta["model"]?.value as? String
+        if let st = meta["startTime"]?.value as? Double {
+            startTime = st
+        } else if let st = meta["startTime"]?.value as? Int {
+            startTime = Double(st)
+        } else {
+            startTime = nil
+        }
+
+        // Bool and numeric values may arrive as various types
+        if let inv = meta["invited"]?.value as? Bool {
+            invited = inv
+        } else if let inv = meta["invited"]?.value as? Int {
+            invited = inv != 0
+        } else {
+            invited = false
+        }
+        if let e = meta["elapsed"]?.value as? Double {
+            elapsed = e
+        } else if let e = meta["elapsed"]?.value as? Int {
+            elapsed = Double(e)
+        } else {
+            elapsed = nil
+        }
+        if let c = meta["cost"]?.value as? Double {
+            cost = c
+        } else if let c = meta["cost"]?.value as? Int {
+            cost = Double(c)
+        } else {
+            cost = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(status, forKey: .status)
+        var meta: [String: AnyCodable] = [
+            "displayName": AnyCodable(displayName),
+            "type": AnyCodable(type),
+            "visibility": AnyCodable(visibility),
+            "invited": AnyCodable(invited),
+        ]
+        if let task { meta["task"] = AnyCodable(task) }
+        if let lastWork { meta["lastWork"] = AnyCodable(lastWork) }
+        if let fullOutput { meta["fullOutput"] = AnyCodable(fullOutput) }
+        if let elapsed { meta["elapsed"] = AnyCodable(elapsed) }
+        if let cost { meta["cost"] = AnyCodable(cost) }
+        if let color { meta["color"] = AnyCodable(color) }
+        if let model { meta["model"] = AnyCodable(model) }
+        if let startTime { meta["startTime"] = AnyCodable(startTime) }
+        try container.encode(meta, forKey: .metadata)
+    }
+}
+
+// MARK: - StatusFields
+
+/// Structured status bar fields from the desktop engine runtime.
+/// Mirrors `StatusFields` in `src/shared/types.ts`.
+struct StatusFields: Codable, Sendable {
+    var label: String
+    let state: String
+    let sessionId: String?       // omitempty in Go — may be absent
+    let team: String?            // omitempty in Go — may be absent
+    let model: String
+    let contextPercent: Double
+    let contextWindow: Int
+    let totalCostUsd: Double?
+    let permissionDenials: [PermissionDenialEntry]?
+    /// Friendly display name broadcast by the extension (e.g. "Chief of Staff").
+    let extensionName: String?
+
+    /// Returns a copy with the label replaced.
+    func withLabel(_ newLabel: String) -> StatusFields {
+        var copy = self
+        copy.label = newLabel
+        return copy
+    }
+}
+
+/// A permission denial record within StatusFields.
+struct PermissionDenialEntry: Codable, Sendable {
+    let toolName: String
+    let toolUseId: String
+    let toolInput: [String: AnyCodable]?
+}
+
+// MARK: - EngineInstancePayload
+
+/// Wire type for engine instance added/removed events.
+struct EngineInstancePayload: Codable, Sendable {
+    let id: String
+    let label: String
+}
+
+// MARK: - EngineMessage
+
+/// A single message in the engine conversation history.
+/// Roles: "user", "assistant", "tool", "harness", "system".
+struct EngineMessage: Identifiable, Sendable {
+    let id: String
+    let role: String
+    var content: String
+    var toolName: String?
+    var toolId: String?
+    var toolStatus: String?
+    var timestamp: Double?
+    var isInternal: Bool?
+    /// View-only: number of consecutive bootstrap messages that were collapsed
+    /// into this one (not encoded/decoded — excluded from CodingKeys). Nil when
+    /// this message is displayed individually. When > 0 the harness row renders
+    /// a count badge showing the total occurrences (collapsed + 1).
+    var bootstrapCollapsedCount: Int?
+}
+
+extension EngineMessage: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, role, content, toolName, toolId, toolStatus, timestamp
+        case isInternal = "internal"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        // id: accept String or Int (coerce to String)
+        if let s = try? container.decode(String.self, forKey: .id) {
+            id = s
+        } else if let n = try? container.decode(Int.self, forKey: .id) {
+            id = String(n)
+        } else {
+            id = UUID().uuidString
+        }
+        role = try container.decodeIfPresent(String.self, forKey: .role) ?? "system"
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+        toolId = try container.decodeIfPresent(String.self, forKey: .toolId)
+        toolStatus = try container.decodeIfPresent(String.self, forKey: .toolStatus)
+        timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
+        isInternal = try container.decodeIfPresent(Bool.self, forKey: .isInternal)
+    }
+}
+
+// MARK: - EngineMessageEndUsage
+
+/// Nested usage stats within an engine_message_end event.
+struct EngineMessageEndUsage: Codable, Sendable {
+    let inputTokens: Int
+    let outputTokens: Int
+    let contextPercent: Double
+    let cost: Double
+}
+
+// MARK: - AnyCodable
+
+/// Type-erased Codable wrapper for arbitrary JSON values.
+struct AnyCodable: Codable, Sendable {
+    let value: any Sendable
+
+    init(_ value: any Sendable) { self.value = value }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let str = try? container.decode(String.self) { value = str }
+        else if let int = try? container.decode(Int.self) { value = int }
+        else if let double = try? container.decode(Double.self) { value = double }
+        else if let bool = try? container.decode(Bool.self) { value = bool }
+        else if let dict = try? container.decode([String: AnyCodable].self) { value = dict }
+        else if let arr = try? container.decode([AnyCodable].self) { value = arr }
+        else if container.decodeNil() { value = NSNull() }
+        else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "Unsupported JSON type")
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch value {
+        case let s as String: try container.encode(s)
+        case let i as Int: try container.encode(i)
+        case let d as Double: try container.encode(d)
+        case let b as Bool: try container.encode(b)
+        case let dict as [String: AnyCodable]: try container.encode(dict)
+        case let arr as [AnyCodable]: try container.encode(arr)
+        case is NSNull: try container.encodeNil()
+        default:
+            throw EncodingError.invalidValue(
+                value,
+                .init(codingPath: encoder.codingPath, debugDescription: "Unsupported type for encoding")
+            )
+        }
+    }
+}

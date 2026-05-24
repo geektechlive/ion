@@ -78,6 +78,37 @@ enum RemoteEvent: Codable, Sendable {
     /// protocol stays uniform across consumers. See
     /// docs/architecture/adr/003-state-events-vs-workflow-events.md.
     case enginePlanProposal(tabId: String, instanceId: String?, kind: String, planFilePath: String?, planSlug: String?)
+    /// Engine ↔ harness wire-protocol request emitted when the engine wants
+    /// an external opinion on whether to nudge a model that has stopped
+    /// below the configured output-token budget. The desktop is the
+    /// authoritative responder (see desktop/src/main/early-stop-policy.ts)
+    /// and replies via the `early_stop_decision_response` client command
+    /// within a 100ms window. iOS decodes the event cleanly so the wire
+    /// protocol stays uniform but does NOT respond — observing the event
+    /// is purely diagnostic.
+    ///
+    /// Field semantics mirror `extension.EarlyStopDecisionInfo` verbatim;
+    /// see engine/internal/types/types.go for the canonical comments.
+    /// All numeric fields are kept as `Int` (no Double widening) because
+    /// the engine emits whole-number counters; tab/instance/request IDs
+    /// are stable correlators useful for log-line pairing.
+    case engineEarlyStopDecisionRequest(
+        tabId: String,
+        instanceId: String?,
+        requestId: String,
+        runId: String,
+        model: String,
+        turnNumber: Int,
+        stopReason: String,
+        cumulativeOutput: Int,
+        budget: Int,
+        thresholdPct: Int,
+        continuationCount: Int,
+        maxContinuations: Int,
+        lastContinuationDelta: Int,
+        wouldContinue: Bool,
+        isSubagent: Bool
+    )
     // Git events
     case gitChangesResponse(directory: String, response: GitChangesResponse)
     case gitGraphResponse(directory: String, response: GitGraphResponse)
@@ -152,6 +183,7 @@ enum RemoteEvent: Codable, Sendable {
         case engineModelOverride = "engine_model_override"
         case engineProfiles = "engine_profiles"
         case enginePlanProposal = "engine_plan_proposal"
+        case engineEarlyStopDecisionRequest = "engine_early_stop_decision_request"
         case gitChangesResponse = "git_changes_response"
         case gitGraphResponse = "git_graph_response"
         case gitDiffResponse = "git_diff_response"
@@ -198,6 +230,17 @@ enum RemoteEvent: Codable, Sendable {
         // The engine emits these field names (no instanceId; the proposal
         // is always at the tab level, not per-instance).
         case planProposalKind, planFilePath, planSlug
+        // engine_early_stop_decision_request — wire-protocol request the
+        // engine emits when it wants an external opinion on continuation.
+        // The desktop responds; iOS only decodes for diagnostic visibility.
+        // Field names mirror the Go-side json tags on EngineEvent verbatim
+        // so the JSONDecoder picks them up without any custom mapping.
+        case earlyStopRequestId, earlyStopRunId, earlyStopModel
+        case earlyStopTurnNumber, earlyStopStopReason
+        case earlyStopCumulativeOutput, earlyStopBudget, earlyStopThresholdPct
+        case earlyStopContinuationCount, earlyStopMaxContinuations
+        case earlyStopLastContinuationDelta
+        case earlyStopWouldContinue, earlyStopIsSubagent
     }
 
     // MARK: - Decoder

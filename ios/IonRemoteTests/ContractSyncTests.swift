@@ -421,4 +421,125 @@ final class ContractSyncTests: XCTestCase {
             "Go plan_proposal has fields not tracked in Swift test: \(unhandled.sorted())"
         )
     }
+
+    // MARK: - EarlyStopDecisionRequest decode
+
+    /// The engine emits engine_early_stop_decision_request as the wire-
+    /// protocol surface for the `before_early_stop_decision` extension
+    /// hook, promoting it to a request/response cycle a socket-only
+    /// harness can participate in. The desktop's early-stop-policy.ts is
+    /// the authoritative responder via the `early_stop_decision_response`
+    /// client command; iOS observes the event for diagnostic visibility
+    /// only.
+    ///
+    /// This test locks in the full payload decode — every field the
+    /// Go-side EarlyStopDecisionRequestEvent emits must round-trip
+    /// through the iOS Swift decoder without loss so a future iOS
+    /// surface for the event (e.g. a "model nudged" status indicator)
+    /// can read the complete record without contract changes.
+    func testEngineEarlyStopDecisionRequestDecode() throws {
+        let json = """
+        {
+            "type": "engine_early_stop_decision_request",
+            "tabId": "t1",
+            "instanceId": "inst-a",
+            "earlyStopRequestId": "req-42",
+            "earlyStopRunId": "run-abc",
+            "earlyStopModel": "claude-sonnet-4-6",
+            "earlyStopTurnNumber": 3,
+            "earlyStopStopReason": "end_turn",
+            "earlyStopCumulativeOutput": 7200,
+            "earlyStopBudget": 8000,
+            "earlyStopThresholdPct": 90,
+            "earlyStopContinuationCount": 1,
+            "earlyStopMaxContinuations": 3,
+            "earlyStopLastContinuationDelta": 500,
+            "earlyStopWouldContinue": true,
+            "earlyStopIsSubagent": false
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineEarlyStopDecisionRequest(
+            let tabId,
+            let instanceId,
+            let requestId,
+            let runId,
+            let model,
+            let turnNumber,
+            let stopReason,
+            let cumulativeOutput,
+            let budget,
+            let thresholdPct,
+            let continuationCount,
+            let maxContinuations,
+            let lastContinuationDelta,
+            let wouldContinue,
+            let isSubagent
+        ) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "inst-a")
+            XCTAssertEqual(requestId, "req-42")
+            XCTAssertEqual(runId, "run-abc")
+            XCTAssertEqual(model, "claude-sonnet-4-6")
+            XCTAssertEqual(turnNumber, 3)
+            XCTAssertEqual(stopReason, "end_turn")
+            XCTAssertEqual(cumulativeOutput, 7200)
+            XCTAssertEqual(budget, 8000)
+            XCTAssertEqual(thresholdPct, 90)
+            XCTAssertEqual(continuationCount, 1)
+            XCTAssertEqual(maxContinuations, 3)
+            XCTAssertEqual(lastContinuationDelta, 500)
+            XCTAssertTrue(wouldContinue)
+            XCTAssertFalse(isSubagent)
+        } else {
+            XCTFail("Expected engineEarlyStopDecisionRequest, got \(event)")
+        }
+    }
+
+    /// Negative-control test: when the wire payload omits the early-stop
+    /// detail fields (the Go side ships every field as omitempty), the
+    /// Swift decoder must default missing values to zero/empty rather
+    /// than failing the decode. This is the same forward-compatibility
+    /// posture the other engine variants take.
+    func testEngineEarlyStopDecisionRequestDecodeMinimal() throws {
+        let json = """
+        {
+            "type": "engine_early_stop_decision_request",
+            "tabId": "t1"
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineEarlyStopDecisionRequest(
+            let tabId,
+            let instanceId,
+            let requestId,
+            let runId,
+            let model,
+            let turnNumber,
+            _, // stopReason
+            let cumulativeOutput,
+            let budget,
+            _, // thresholdPct
+            _, // continuationCount
+            _, // maxContinuations
+            _, // lastContinuationDelta
+            let wouldContinue,
+            let isSubagent
+        ) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertNil(instanceId)
+            XCTAssertEqual(requestId, "")
+            XCTAssertEqual(runId, "")
+            XCTAssertEqual(model, "")
+            XCTAssertEqual(turnNumber, 0)
+            XCTAssertEqual(cumulativeOutput, 0)
+            XCTAssertEqual(budget, 0)
+            XCTAssertFalse(wouldContinue)
+            XCTAssertFalse(isSubagent)
+        } else {
+            XCTFail("Expected engineEarlyStopDecisionRequest, got \(event)")
+        }
+    }
 }
