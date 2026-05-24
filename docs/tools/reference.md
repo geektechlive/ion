@@ -185,3 +185,32 @@ These tools are not registered by default. Call `RegisterTaskTools()` from harne
 | TaskList | List all active and recently completed tasks |
 | TaskGet | Get status and result of a task by ID |
 | TaskStop | Stop a running task |
+
+## Sentinel Tools
+
+Sentinel tools are injected per-run by the engine. They are **not** in the global tool registry and cannot be registered via `RegisterTool`. Each sentinel is guarded to its own mode: calls that arrive in the wrong mode fall through to an "Unknown tool" error rather than triggering the sentinel logic.
+
+### ExitPlanMode
+
+Injected only when `PlanMode=true`. No parameters.
+
+When the model calls `ExitPlanMode`, the engine:
+
+1. Records a `PermissionDenial` to signal plan completion.
+2. Emits `PlanModeChangedEvent{Enabled: false}`.
+3. **Terminates the run** so the desktop can surface the plan-ready card.
+
+Hallucinated calls in auto mode (`PlanMode=false`) fall through to "Unknown tool" and do not trigger any plan-mode transition.
+
+### EnterPlanMode
+
+Injected only when `PlanMode=false` (auto mode). No parameters.
+
+When the model calls `EnterPlanMode`, the engine:
+
+1. Fires the [`before_plan_mode_enter`](../hooks/reference.md#plan-mode-2) hook. Extensions can veto by returning `Allow: &false` with an optional `Reason`.
+2. If denied, the run continues in auto mode and the `Reason` is returned to the model as the tool result.
+3. If allowed, the session flips into plan mode, allocates or reuses the `planFilePath`, and emits `PlanModeChangedEvent{Enabled: true}`.
+4. **Does not terminate the run.** The full plan-mode prompt is returned as the tool result so the model sees the framing immediately and can begin planning.
+
+Hallucinated calls in plan mode (`PlanMode=true`) fall through to "Unknown tool" and do not trigger any transition.

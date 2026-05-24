@@ -39,6 +39,19 @@ type activeRun struct {
 	permissionDenials []types.PermissionDenial // tools intercepted/denied (e.g. ExitPlanMode sentinel)
 	planMode          bool                     // true when this run is in plan mode
 	planFilePath      string                   // only writable file during plan mode
+	// planModeSparseReminderOverride is the harness-supplied sparse reminder text
+	// resolved once at run setup from RunOptions.PlanModeSparseReminder (highest
+	// priority) or the plan_mode_prompt hook's SparseReminder return field.
+	// Empty means "use buildPlanModeSparseReminder at injection time" (the
+	// engine default). Set in runloop_setup.go alongside planFilePath.
+	planModeSparseReminderOverride string
+	// planModeReminderTurn is the turn number on which the sparse plan-mode
+	// reminder last fired. The reminder is throttled to once per
+	// planModeReminderInterval turns to avoid the ~per-tool-round churn that
+	// previously anchored AskUserQuestion-as-turn-ender behavior in the model.
+	// Reset to 0 whenever a run re-enters plan mode via the EnterPlanMode
+	// sentinel so the throttle does not silence the first post-entry reminder.
+	planModeReminderTurn int
 
 	// compactionsWithoutProgress counts proactive compactions that have fired
 	// without an intervening successful API response. Bounds the cascade if
@@ -158,6 +171,11 @@ func (b *ApiBackend) StartRunWithConfig(requestID string, options types.RunOptio
 		steerCh:      make(chan string, 4),
 		planMode:     options.PlanMode,
 		planFilePath: options.PlanFilePath,
+		// Cache the RunOptions sparse-reminder override (highest precedence).
+		// The plan_mode_prompt hook may also contribute a value later in
+		// buildSystemPrompt; RunOptions wins so we set it unconditionally
+		// and buildSystemPrompt only writes the hook value when this is empty.
+		planModeSparseReminderOverride: options.PlanModeSparseReminder,
 		cfg:          cfg,
 	}
 

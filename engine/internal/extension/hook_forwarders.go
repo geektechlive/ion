@@ -52,6 +52,8 @@ func (h *Host) registerHookForwarders() {
 	// Dedicated forwarders for hooks with structured results.
 	h.registerBeforeAgentStartForwarder()
 	h.registerBeforePromptForwarder()
+	h.registerBeforePlanModeEnterForwarder()
+	h.registerBeforePlanModeExitForwarder()
 
 	// Block-checking hooks: parse result.block and result.reason.
 	h.registerBlockForwarder(HookToolCall)
@@ -383,5 +385,63 @@ func (h *Host) registerContentForwarder(hook string) {
 			return nil, nil
 		}
 		return result, nil
+	})
+}
+
+// registerBeforePlanModeEnterForwarder registers a handler for
+// before_plan_mode_enter that parses {"allow": bool, "reason": "string"}.
+// Nil Allow (field absent or null) means "no opinion; use default (allow)".
+func (h *Host) registerBeforePlanModeEnterForwarder() {
+	h.sdk.On(HookBeforePlanModeEnter, func(ctx *Context, payload interface{}) (interface{}, error) {
+		raw, err := h.callHook("hook/"+HookBeforePlanModeEnter, ctx, payload)
+		if err != nil {
+			logHookErr(HookBeforePlanModeEnter, err)
+			return nil, nil
+		}
+		emitHookEvents(ctx, raw)
+		if len(raw) == 0 || string(raw) == "null" {
+			return nil, nil
+		}
+		var result struct {
+			Allow  *bool  `json:"allow"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			utils.Log("extension", fmt.Sprintf("hook/%s: bad result: %v", HookBeforePlanModeEnter, err))
+			return nil, nil
+		}
+		if result.Allow == nil {
+			return nil, nil
+		}
+		return &BeforePlanModeEnterResult{Allow: result.Allow, Reason: result.Reason}, nil
+	})
+}
+
+// registerBeforePlanModeExitForwarder registers a handler for
+// before_plan_mode_exit that parses {"allow": bool, "reason": "string"}.
+// Nil Allow (field absent or null) means "no opinion; use default (allow)".
+func (h *Host) registerBeforePlanModeExitForwarder() {
+	h.sdk.On(HookBeforePlanModeExit, func(ctx *Context, payload interface{}) (interface{}, error) {
+		raw, err := h.callHook("hook/"+HookBeforePlanModeExit, ctx, payload)
+		if err != nil {
+			logHookErr(HookBeforePlanModeExit, err)
+			return nil, nil
+		}
+		emitHookEvents(ctx, raw)
+		if len(raw) == 0 || string(raw) == "null" {
+			return nil, nil
+		}
+		var result struct {
+			Allow  *bool  `json:"allow"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			utils.Log("extension", fmt.Sprintf("hook/%s: bad result: %v", HookBeforePlanModeExit, err))
+			return nil, nil
+		}
+		if result.Allow == nil {
+			return nil, nil
+		}
+		return &BeforePlanModeExitResult{Allow: result.Allow, Reason: result.Reason}, nil
 	})
 }

@@ -147,10 +147,6 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     set({ preferredOpenWith: app })
     saveSettings(getAllSettings(get))
   },
-  setShowImplementClearContext: (show) => {
-    set({ showImplementClearContext: show })
-    saveSettings(getAllSettings(get))
-  },
   setDefaultPermissionMode: (mode) => {
     set({ defaultPermissionMode: mode })
     saveSettings(getAllSettings(get))

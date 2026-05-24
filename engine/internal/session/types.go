@@ -27,6 +27,13 @@ type pendingPrompt struct {
 	extensions   []string
 	noExtensions bool
 	attachments  []types.ImageAttachment
+	// implementationPhase carries the client's
+	// ClientCommand.ImplementationPhase flag through the queue so the
+	// suppression of EnterPlanMode injection survives queueing on a busy
+	// session. Without this, a queued "implement" prompt would lose the
+	// flag and the engine would inject EnterPlanMode against the user's
+	// already-approved intent.
+	implementationPhase bool
 }
 
 // engineSession holds the state for a single session managed by the Manager.

@@ -46,11 +46,27 @@ func (m *Manager) handleNormalizedEvent(runID string, event types.NormalizedEven
 	}
 	m.emit(key, ee)
 
-	// Track plan mode exit so re-entering plan mode triggers reentry
+	// Track plan mode changes so re-entering plan mode triggers reentry
 	// detection in SendPrompt. We do this here (rather than in the pure
 	// translateToEngineEvent) because we need access to the session manager.
-	if pmc, ok := event.Data.(*types.PlanModeChangedEvent); ok && !pmc.Enabled {
-		m.MarkPlanModeExited(key)
+	if pmc, ok := event.Data.(*types.PlanModeChangedEvent); ok {
+		if !pmc.Enabled {
+			// Model called ExitPlanMode: record the exit so that if the user
+			// re-enters plan mode via the dropdown the reentry prompt fires.
+			m.MarkPlanModeExited(key)
+		} else if pmc.PlanFilePath != "" {
+			// Model called EnterPlanMode: keep the manager's session state in
+			// sync with the run's state so the next SendPrompt sees the correct
+			// planFilePath and planMode flag. Without this the manager's view
+			// diverges from the backend run's view across run boundaries.
+			m.mu.Lock()
+			if s2, ok2 := m.sessions[key]; ok2 {
+				s2.planMode = true
+				s2.planFilePath = pmc.PlanFilePath
+				utils.Info("PlanMode", fmt.Sprintf("event_translation: key=%s model entered plan mode planFile=%s", key, pmc.PlanFilePath))
+			}
+			m.mu.Unlock()
+		}
 	}
 
 	// Track last-known context usage on the session so subsequent
@@ -277,14 +293,15 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 		utils.Debug("Session", fmt.Sprintf("dispatching queued prompt: key=%s", key))
 		go func() {
 			var ov *PromptOverrides
-			if nextPrompt.model != "" || nextPrompt.maxTurns > 0 || nextPrompt.maxBudgetUsd > 0 || len(nextPrompt.extensions) > 0 || nextPrompt.noExtensions || len(nextPrompt.attachments) > 0 {
+			if nextPrompt.model != "" || nextPrompt.maxTurns > 0 || nextPrompt.maxBudgetUsd > 0 || len(nextPrompt.extensions) > 0 || nextPrompt.noExtensions || len(nextPrompt.attachments) > 0 || nextPrompt.implementationPhase {
 				ov = &PromptOverrides{
-					Model:        nextPrompt.model,
-					MaxTurns:     nextPrompt.maxTurns,
-					MaxBudgetUsd: nextPrompt.maxBudgetUsd,
-					Extensions:   nextPrompt.extensions,
-					NoExtensions: nextPrompt.noExtensions,
-					Attachments:  nextPrompt.attachments,
+					Model:               nextPrompt.model,
+					MaxTurns:            nextPrompt.maxTurns,
+					MaxBudgetUsd:        nextPrompt.maxBudgetUsd,
+					Extensions:          nextPrompt.extensions,
+					NoExtensions:        nextPrompt.noExtensions,
+					Attachments:         nextPrompt.attachments,
+					ImplementationPhase: nextPrompt.implementationPhase,
 				}
 			}
 			if err := m.SendPrompt(key, nextPrompt.text, ov); err != nil {
@@ -519,10 +536,22 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 		}
 
 	case *types.PlanModeChangedEvent:
+		// The slug is derived from the path here (rather than threaded
+		// through every emitter) so a single helper owns the
+		// path-basename-stripping logic. Legacy hex-hash filenames
+		// round-trip as their hex string; new word-slug files surface
+		// the human-readable "adj-verb-noun" form. Empty path → empty
+		// slug, by design. Emitters that populate PlanSlug directly win
+		// over the fallback.
+		slug := e.PlanSlug
+		if slug == "" {
+			slug = types.PlanSlugFromPath(e.PlanFilePath)
+		}
 		return types.EngineEvent{
 			Type:             "engine_plan_mode_changed",
 			PlanModeEnabled:  e.Enabled,
 			PlanModeFilePath: e.PlanFilePath,
+			PlanModeSlug:     slug,
 		}
 
 	case *types.StreamResetEvent:

@@ -69,6 +69,35 @@ type ClientCommand struct {
 	// here and the backend forwards them to the provider via its multimodal
 	// content format.
 	Attachments []types.ImageAttachment `json:"attachments,omitempty"`
+
+	// send_prompt: when true, the engine maps this onto
+	// RunOptions.ImplementationPhase for the dispatched run, which
+	// suppresses the EnterPlanMode sentinel-tool injection. Clients set
+	// this on the "implement" half of a plan-then-implement flow so the
+	// model can't re-propose plan-mode entry against the user's already-
+	// approved intent. Optional; defaults to false. See the field comment
+	// in engine/internal/types/types.go for the full rationale.
+	ImplementationPhase bool `json:"implementationPhase,omitempty"`
+
+	// send_prompt: harness-supplied description prose for the
+	// EnterPlanMode sentinel tool that the engine injects during
+	// auto-mode runs. When non-empty, the engine forwards this string
+	// verbatim as the tool's description to the model. When empty (or
+	// omitted), the engine falls back to a one-line neutral default.
+	// Per ADR-004, the prose belongs in the harness — the desktop
+	// supplies its reference prose from
+	// desktop/src/main/prompt-pipeline.ts. Third-party harnesses pick
+	// their own. Mirrors RunOptions.EnterPlanModeDescription one-for-one.
+	EnterPlanModeDescription string `json:"enterPlanModeDescription,omitempty"`
+
+	// send_prompt: harness-supplied text for the per-turn sparse plan-mode
+	// reminder the engine injects every planModeReminderInterval turns.
+	// When non-empty, the engine uses this string verbatim instead of
+	// buildPlanModeSparseReminder. When empty (or omitted), the engine
+	// builds the reminder from the plan file path. Parallel override to
+	// EnterPlanModeDescription / RunOptions.PlanModePrompt — same additive
+	// omitempty contract. Mirrors RunOptions.PlanModeSparseReminder.
+	PlanModeSparseReminder string `json:"planModeSparseReminder,omitempty"`
 }
 
 var validCommands = map[string]bool{

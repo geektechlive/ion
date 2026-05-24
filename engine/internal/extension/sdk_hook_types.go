@@ -271,8 +271,9 @@ type BeforePromptResult struct {
 
 // PlanModePromptResult holds the optional overrides a plan_mode_prompt handler may return.
 type PlanModePromptResult struct {
-	Prompt string   `json:"prompt,omitempty"` // custom plan mode prompt; empty means use default
-	Tools  []string `json:"tools,omitempty"`  // custom allowed tools; nil means use default
+	Prompt        string   `json:"prompt,omitempty"`        // custom plan mode prompt; empty means use default
+	Tools         []string `json:"tools,omitempty"`         // custom allowed tools; nil means use default
+	SparseReminder string  `json:"sparseReminder,omitempty"` // custom sparse reminder text; empty means use default
 }
 
 // SystemInjectInfo is the payload for the system_inject hook.
@@ -376,6 +377,67 @@ type EarlyStopDecisionResult struct {
 	// ContinueMessage replaces the default continuation prompt text. Empty
 	// means "use the engine's default phrasing".
 	ContinueMessage string `json:"continueMessage,omitempty"`
+}
+
+// PlanModeEnterInfo is the payload for the before_plan_mode_enter hook.
+// Fired when the LLM calls the EnterPlanMode tool (or any future mechanism
+// that requests a model-initiated transition into plan mode). Handlers can
+// return BeforePlanModeEnterResult to deny the transition. Default is allow.
+//
+// Field stability: this struct is part of the published hook contract. New
+// fields may be added with zero-value defaults; existing fields must not be
+// removed or renamed.
+type PlanModeEnterInfo struct {
+	// Source identifies what triggered the request. "model_tool" when the LLM
+	// called the EnterPlanMode sentinel tool directly.
+	Source string `json:"source"`
+}
+
+// BeforePlanModeEnterResult is the optional return value from a
+// before_plan_mode_enter handler. A nil Allow (pointer not set) means
+// "no opinion — use the default (allow)". Only an explicit &false denies.
+// The last non-nil Allow across all hosts wins (last-writer semantics).
+//
+// Field stability: this struct is part of the published hook contract. New
+// fields may be added with zero-value defaults; existing fields must not be
+// removed or renamed.
+type BeforePlanModeEnterResult struct {
+	// Allow controls whether plan mode entry is permitted. nil = defer to
+	// engine default (allow). &true = explicitly allow. &false = deny.
+	Allow *bool `json:"allow,omitempty"`
+	// Reason is an optional human-readable explanation returned to the LLM
+	// in the tool result when Allow is &false.
+	Reason string `json:"reason,omitempty"`
+}
+
+// BeforePlanModeExitInfo is the payload for the before_plan_mode_exit hook.
+// Fired when the LLM calls the ExitPlanMode sentinel tool, before the run is
+// terminated and the plan-ready card is surfaced to the user. Handlers may
+// return BeforePlanModeExitResult to veto the exit (e.g. to send the model
+// back for more planning) or to allow it.
+//
+// Field stability: new fields may be added with zero-value defaults; existing
+// fields must not be removed or renamed.
+type BeforePlanModeExitInfo struct {
+	// PlanFilePath is the path of the plan file being submitted for review.
+	PlanFilePath string `json:"planFilePath"`
+	// Source is always "model_tool" for now (future: "extension").
+	Source string `json:"source"`
+}
+
+// BeforePlanModeExitResult is the optional return value from a
+// before_plan_mode_exit handler. nil Allow (pointer not set) means
+// "no opinion — use the default (allow)". Last non-nil Allow wins.
+//
+// Field stability: new fields may be added with zero-value defaults; existing
+// fields must not be removed or renamed.
+type BeforePlanModeExitResult struct {
+	// Allow controls whether the plan mode exit proceeds. nil = defer to
+	// default (allow). &false = deny (keep the model in plan mode).
+	Allow *bool `json:"allow,omitempty"`
+	// Reason is returned to the LLM in the tool result when Allow is &false,
+	// explaining why the exit was denied and what it should do instead.
+	Reason string `json:"reason,omitempty"`
 }
 
 // EarlyStopContinuedInfo describes a continuation that was just injected

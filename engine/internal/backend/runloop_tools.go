@@ -258,6 +258,31 @@ func (b *ApiBackend) executeTools(
 			// history; let it fall through to "Unknown tool" so it self-corrects.
 			if run.planMode && block.Name == tools.ExitPlanModeName {
 				utils.Info("PlanMode", fmt.Sprintf("run=%s exit_tool plan_file=%s", run.requestID, run.planFilePath))
+
+				// Fire before_plan_mode_exit hook so extensions can veto.
+				exitAllowed := true
+				exitReason := ""
+				if hooks.OnPlanModeExit != nil {
+					exitAllowed, exitReason = hooks.OnPlanModeExit(run.planFilePath)
+				}
+				if !exitAllowed {
+					if exitReason == "" {
+						exitReason = "Plan mode exit was declined. Continue planning."
+					}
+					utils.Info("PlanMode", fmt.Sprintf("run=%s exit_tool denied by hook reason=%q", run.requestID, exitReason))
+					results[i] = conversation.ToolResultEntry{
+						ToolUseID: block.ID,
+						Content:   exitReason,
+						IsError:   false,
+					}
+					b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+						ToolID:  block.ID,
+						Content: exitReason,
+						IsError: false,
+					}})
+					return nil
+				}
+
 				run.mu.Lock()
 				run.exitPlanMode = true
 				run.permissionDenials = append(run.permissionDenials, types.PermissionDenial{
@@ -266,8 +291,13 @@ func (b *ApiBackend) executeTools(
 					ToolInput: map[string]any{"planFilePath": run.planFilePath},
 				})
 				run.mu.Unlock()
-				// Signal to the desktop that plan mode is now exiting.
-				b.emit(run, types.NormalizedEvent{Data: &types.PlanModeChangedEvent{Enabled: false, PlanFilePath: run.planFilePath}})
+				// No PlanModeChangedEvent{Enabled:false} emit here. The model
+				// calling ExitPlanMode is a *proposal*, not a confirmed mode
+				// change — the user must still approve. The run-end signal
+				// (task_complete carrying the ExitPlanMode PermissionDenial)
+				// is the canonical card-trigger. Consumers flip their mode to
+				// 'auto' only when the user approves via their UI chokepoint.
+				utils.Info("PlanMode", fmt.Sprintf("run=%s exit_tool no_mode_event_emitted (mode change deferred to user approval)", run.requestID))
 				results[i] = conversation.ToolResultEntry{
 					ToolUseID: block.ID,
 					Content:   "Plan mode exited.",
@@ -276,6 +306,74 @@ func (b *ApiBackend) executeTools(
 				b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
 					ToolID:  block.ID,
 					Content: "Plan mode exited.",
+					IsError: false,
+				}})
+				return nil
+			}
+
+			// Intercept EnterPlanMode sentinel — only during auto-mode runs.
+			// In plan mode the LLM should not call this; fall through to "Unknown
+			// tool" so it self-corrects if it does.
+			if !run.planMode && block.Name == tools.EnterPlanModeName {
+				utils.Info("PlanMode", fmt.Sprintf("run=%s enter_tool requested", run.requestID))
+				var allowed bool
+				var reason string
+				var planFilePath string
+				if hooks.OnPlanModeEnter != nil {
+					allowed, reason, planFilePath = hooks.OnPlanModeEnter()
+				} else {
+					// No hook wired — auto-approve (default behaviour).
+					allowed = true
+				}
+				if !allowed {
+					if reason == "" {
+						reason = "Plan mode entry was declined."
+					}
+					utils.Info("PlanMode", fmt.Sprintf("run=%s enter_tool denied reason=%q", run.requestID, reason))
+					results[i] = conversation.ToolResultEntry{
+						ToolUseID: block.ID,
+						Content:   reason,
+						IsError:   false,
+					}
+					b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+						ToolID:  block.ID,
+						Content: reason,
+						IsError: false,
+					}})
+					return nil
+				}
+				// Allowed: flip the run into plan mode so the write guard and
+				// sparse-reminder logic apply on subsequent turns. The plan-mode
+				// tool list will be rebuilt on the next call to buildToolDefs.
+				// Reset planModeReminderTurn so the first post-entry reminder
+				// is not silenced by stale throttle state from a prior plan
+				// mode session on this same run.
+				run.mu.Lock()
+				run.planMode = true
+				run.planFilePath = planFilePath
+				run.planModeReminderTurn = 0
+				run.mu.Unlock()
+				// Signal UI so the desktop dropdown and iOS status bar update.
+				b.emit(run, types.NormalizedEvent{Data: &types.PlanModeChangedEvent{
+					Enabled:      true,
+					PlanFilePath: planFilePath,
+					PlanSlug:     types.PlanSlugFromPath(planFilePath),
+				}})
+				// Build the plan-mode framing so the model knows what to do next.
+				// We include it inline in the tool result so it lands in context
+				// on this turn, rather than waiting for the next system-prompt rebuild.
+				_, err := os.Stat(planFilePath)
+				planPrompt := buildPlanModePrompt(planFilePath, err == nil)
+				resultContent := fmt.Sprintf("Plan mode entered. Plan file: %s\n\n%s", planFilePath, planPrompt)
+				utils.Info("PlanMode", fmt.Sprintf("run=%s enter_tool allowed planFile=%s", run.requestID, planFilePath))
+				results[i] = conversation.ToolResultEntry{
+					ToolUseID: block.ID,
+					Content:   resultContent,
+					IsError:   false,
+				}
+				b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+					ToolID:  block.ID,
+					Content: resultContent,
 					IsError: false,
 				}})
 				return nil

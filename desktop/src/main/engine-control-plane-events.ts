@@ -155,6 +155,22 @@ export function handleEngineEvent(
 
     case 'engine_plan_mode_changed':
       log(`plan_mode_changed: tabId=${tabId} enabled=${event.planModeEnabled}`)
+      // Only Enabled:true is authoritative — model-initiated EnterPlanMode
+      // confirms the session has entered plan mode and the snapshot must
+      // reflect that. Enabled:false is intentionally NOT synced here: the
+      // engine no longer emits it for ExitPlanMode (model proposal only),
+      // and the user-approval gate in the renderer's onImplement handler
+      // is the single chokepoint for the mode flip back to 'auto'. If a
+      // false event ever arrives (e.g. from a future engine path) we still
+      // forward it to the renderer but do not mutate permissionMode here.
+      if (event.planModeEnabled) {
+        if (tab.permissionMode !== 'plan') {
+          tab.permissionMode = 'plan'
+          log(`plan_mode_changed: tabId=${tabId} engine flipped to plan, syncing tab.permissionMode`)
+        }
+      } else {
+        log(`plan_mode_changed: tabId=${tabId} enabled=false ignored (mode flip deferred to user-approval chokepoint)`)
+      }
       ctx.emit('event', tabId, event as any)
       break
 

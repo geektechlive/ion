@@ -538,6 +538,8 @@ export interface BeforePromptResult {
 export interface PlanModePromptResult {
   prompt?: string
   tools?: string[]
+  /** Custom text for the per-turn sparse reminder; empty/omitted = use engine default. */
+  sparseReminder?: string
 }
 
 /**
@@ -729,6 +731,240 @@ export interface PeerExtensionInfo {
 }
 
 /**
+ * Payload for the `before_plan_mode_enter` hook. Fired when the LLM calls
+ * the EnterPlanMode tool (or any future mechanism that requests a
+ * model-initiated transition into plan mode). Handlers may return a
+ * {@link BeforePlanModeEnterResult} to deny the transition; the default is
+ * allow.
+ *
+ * Mirrors `extension.PlanModeEnterInfo` in the Go SDK.
+ */
+export interface PlanModeEnterInfo {
+  /**
+   * Identifies what triggered the request. `"model_tool"` when the LLM
+   * called the EnterPlanMode sentinel tool directly.
+   */
+  source: string
+}
+
+/**
+ * Optional return value from a `before_plan_mode_enter` handler. A handler
+ * that returns `undefined` (or omits `allow`) defers to the engine default
+ * (allow). The last non-nil `allow` across all hosts wins (last-writer
+ * semantics).
+ */
+export interface BeforePlanModeEnterResult {
+  /**
+   * Controls whether plan mode entry is permitted. `undefined` / `null`
+   * defers to the engine default (allow). `true` explicitly allows.
+   * `false` denies.
+   */
+  allow?: boolean | null
+  /**
+   * Optional human-readable explanation returned to the LLM in the tool
+   * result when `allow` is `false`.
+   */
+  reason?: string
+}
+
+/**
+ * Payload for the `before_plan_mode_exit` hook. Fired when the LLM calls
+ * the ExitPlanMode sentinel tool, before the run is terminated and the
+ * plan-ready card is surfaced to the user. Handlers may return a
+ * {@link BeforePlanModeExitResult} to veto the exit (e.g. send the model
+ * back for more planning) or to allow it.
+ */
+export interface BeforePlanModeExitInfo {
+  /** Path of the plan file being submitted for review. */
+  planFilePath: string
+  /** Always `"model_tool"` today; future kinds may include `"extension"`. */
+  source: string
+}
+
+/**
+ * Optional return value from a `before_plan_mode_exit` handler. A handler
+ * that returns `undefined` (or omits `allow`) defers to the engine default
+ * (allow). The last non-nil `allow` across all hosts wins.
+ */
+export interface BeforePlanModeExitResult {
+  /**
+   * Controls whether the plan-mode exit proceeds. `undefined` / `null`
+   * defers to the default (allow). `false` denies (keeps the model in
+   * plan mode).
+   */
+  allow?: boolean | null
+  /**
+   * Returned to the LLM in the tool result when `allow` is `false`,
+   * explaining why the exit was denied and what the model should do
+   * next.
+   */
+  reason?: string
+}
+
+/**
+ * Payload for the `before_early_stop_decision` hook. Fires after the
+ * model emits `end_turn` / `stop` and after the engine has updated its
+ * cumulative output-token counter, but **before** it evaluates the
+ * continuation criteria.
+ *
+ * Mirrors `extension.EarlyStopDecisionInfo` in the Go SDK. See the
+ * [Early-Stop Continuation](../hooks/reference.md) section and
+ * [ADR-002](../architecture/adr/002-engine-vs-harness-early-stop.md).
+ */
+export interface EarlyStopDecisionInfo {
+  /** Engine-issued request ID for this run. */
+  runId: string
+  /** Model identifier that just stopped. */
+  model: string
+  /** Turn that ended (1-based, matches `turn_start`). */
+  turnNumber: number
+  /**
+   * Provider-reported stop reason that triggered this decision
+   * (`"end_turn"` or `"stop"`). Always non-empty.
+   */
+  stopReason: string
+  /**
+   * Running total of output tokens across every turn of this run
+   * (including the turn that just ended).
+   */
+  cumulativeOutputTokens: number
+  /**
+   * Effective output-token budget for this run after engine-config +
+   * RunOptions merging (before any handler override).
+   */
+  budget: number
+  /** Effective completion-threshold percent. */
+  thresholdPct: number
+  /**
+   * Number of times the engine has already nudged the model on this run
+   * (0 before the first nudge).
+   */
+  continuationCount: number
+  /** Configured cap. */
+  maxContinuations: number
+  /**
+   * Output-token delta from the previous continuation (0 on the first
+   * decision). Used by the diminishing-returns guard.
+   */
+  lastContinuationDelta: number
+  /**
+   * Engine's tentative verdict before this hook runs. Handlers may flip
+   * it via {@link EarlyStopDecisionResult.forceContinue}.
+   */
+  wouldContinue: boolean
+  /**
+   * True when this run is a child agent dispatched by the Agent tool.
+   * The engine defaults the feature off for subagents; the hook still
+   * fires so harness can force-on with `forceContinue: true`.
+   */
+  isSubagent?: boolean
+}
+
+/**
+ * Optional return value from a `before_early_stop_decision` handler. Any
+ * combination of fields may be set; omitted / `undefined` values mean
+ * "defer to the engine's decision." The last non-nil result across hosts
+ * wins for each individual field.
+ */
+export interface EarlyStopDecisionResult {
+  /**
+   * Overrides the engine's verdict. `true` forces a continuation (even
+   * if `wouldContinue=false`); `false` forces a stop (even if
+   * `wouldContinue=true`). `undefined` / `null` defers to engine logic.
+   */
+  forceContinue?: boolean | null
+  /**
+   * Bumps (or shrinks) the effective output-token budget for the
+   * remainder of the run. `0` / omitted means "no override." Useful when
+   * scope expands mid-run.
+   */
+  overrideBudget?: number
+  /**
+   * Adjusts the completion threshold for the remainder of the run.
+   * `0` / omitted means "no override."
+   */
+  overrideThresholdPct?: number
+  /**
+   * Replaces the default continuation prompt text. Empty / omitted means
+   * "use the engine's default phrasing." Per ADR-002 the engine ships
+   * no default text — at least one handler in the chain (or the
+   * wire-protocol responder) must supply one for any injection to fire.
+   */
+  continueMessage?: string
+}
+
+/**
+ * Payload for the `early_stop_continued` hook. Fires after the engine
+ * has decided to continue, the message has been written, and the loop
+ * is about to start a new turn. Observe-only — return values are
+ * ignored.
+ */
+export interface EarlyStopContinuedInfo {
+  /** Engine-issued request ID for this run. */
+  runId: string
+  /**
+   * Turn that just ended (the new turn has not started yet).
+   */
+  turnNumber: number
+  /** New continuation count after this nudge (1-based). */
+  continuationCount: number
+  /** Percent-of-budget the model reached before stopping. */
+  pct: number
+  /** Running total across the run. */
+  cumulativeOutputTokens: number
+  /**
+   * Effective budget at the moment of injection (after any
+   * `overrideBudget` from a `before_early_stop_decision` handler).
+   */
+  budget: number
+  /**
+   * Final continuation prompt text that landed in the conversation
+   * (after `system_inject` rewrites). Empty when the downstream
+   * `system_inject` hook suppressed the injection.
+   */
+  injectedText: string
+}
+
+/**
+ * Payload for the `system_inject` hook. Fired before the engine injects
+ * a system message into the conversation. Handlers can rewrite the text
+ * or suppress the injection entirely by returning a
+ * {@link SystemInjectResult}.
+ *
+ * The `kind` field discriminates the injection reason. Known kinds:
+ * `"plan_mode_reminder"`, `"turn_limit_warning"`, `"max_token_continue"`,
+ * `"early_stop_continue"`. Unknown kinds should be treated as
+ * forward-compatible.
+ */
+export interface SystemInjectInfo {
+  /** Discriminator for the injection reason. */
+  kind: string
+  /** Engine's default injection text. May be empty (e.g. early-stop). */
+  defaultText: string
+  /** Current turn number. */
+  turn: number
+  /** Configured max turns (0 = unlimited). */
+  maxTurns: number
+}
+
+/**
+ * Optional return value from a `system_inject` handler.
+ */
+export interface SystemInjectResult {
+  /**
+   * Replacement text. Empty / omitted means "use the default."
+   */
+  text?: string
+  /**
+   * `true` cancels the injection entirely. The engine logs the
+   * suppression and does not write the message to the conversation. For
+   * `early_stop_continue` specifically, suppression also prevents the
+   * re-run-turn loop.
+   */
+  suppress?: boolean
+}
+
+/**
  * Map of hook name -> payload type. Used by the {@link IonSDK.on} overloads
  * to give handlers strongly-typed `payload` parameters when the hook name is
  * a string literal. Hooks that fire with no payload map to `void`.
@@ -821,6 +1057,23 @@ export interface HookPayloadMap {
   turn_aborted: TurnAbortedInfo
   peer_extension_died: PeerExtensionInfo
   peer_extension_respawned: PeerExtensionInfo
+
+  // Plan mode (3) -- workflow + state transitions on the plan-mode lifecycle.
+  // See docs/architecture/adr/003-state-events-vs-workflow-events.md for the
+  // state-vs-workflow distinction these hooks live alongside.
+  before_plan_mode_enter: PlanModeEnterInfo
+  before_plan_mode_exit: BeforePlanModeExitInfo
+
+  // System inject (1) -- fired before the engine injects any system message.
+  // The `kind` discriminator carries the reason (plan_mode_reminder,
+  // turn_limit_warning, max_token_continue, early_stop_continue).
+  system_inject: SystemInjectInfo
+
+  // Early-stop continuation (2) -- engine provides the mechanism, harness
+  // owns the policy and the prompt text. See
+  // docs/architecture/adr/002-engine-vs-harness-early-stop.md.
+  before_early_stop_decision: EarlyStopDecisionInfo
+  early_stop_continued: EarlyStopContinuedInfo
 }
 
 /** Convenience type: union of all hook names. */

@@ -49,12 +49,15 @@ func (s *SDK) FireBeforePrompt(ctx *Context, prompt string) (string, string, err
 }
 
 // FirePlanModePrompt fires the plan_mode_prompt hook. Handlers may return a
-// PlanModePromptResult with custom prompt and/or tool list. The last non-nil
-// result wins. Returns the custom prompt (empty = use default) and tool list (nil = use default).
-func (s *SDK) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string) {
+// PlanModePromptResult with custom prompt, tool list, and/or sparse reminder
+// text. The last non-nil result wins per field. Returns the custom prompt
+// (empty = use default), tool list (nil = use default), and sparse reminder
+// text (empty = use engine default buildPlanModeSparseReminder).
+func (s *SDK) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string, string) {
 	results := s.fire(HookPlanModePrompt, ctx, planFilePath)
 	var outPrompt string
 	var outTools []string
+	var outSparseReminder string
 	for i := len(results) - 1; i >= 0; i-- {
 		switch v := results[i].(type) {
 		case PlanModePromptResult:
@@ -64,6 +67,9 @@ func (s *SDK) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []s
 			if outTools == nil && v.Tools != nil {
 				outTools = v.Tools
 			}
+			if outSparseReminder == "" && v.SparseReminder != "" {
+				outSparseReminder = v.SparseReminder
+			}
 		case *PlanModePromptResult:
 			if v != nil {
 				if outPrompt == "" && v.Prompt != "" {
@@ -72,6 +78,9 @@ func (s *SDK) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []s
 				if outTools == nil && v.Tools != nil {
 					outTools = v.Tools
 				}
+				if outSparseReminder == "" && v.SparseReminder != "" {
+					outSparseReminder = v.SparseReminder
+				}
 			}
 		case string:
 			if outPrompt == "" && v != "" {
@@ -79,7 +88,7 @@ func (s *SDK) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []s
 			}
 		}
 	}
-	return outPrompt, outTools
+	return outPrompt, outTools, outSparseReminder
 }
 
 // FireSystemInject fires the system_inject hook. Handlers may return a
@@ -265,6 +274,80 @@ func (s *SDK) FireBeforeEarlyStopDecision(ctx *Context, info EarlyStopDecisionIn
 		return nil
 	}
 	return &out
+}
+
+// FireBeforePlanModeEnter fires the before_plan_mode_enter hook and resolves
+// the combined allow/deny decision across all handlers. Per-field last-non-nil
+// wins semantics: if multiple handlers express an opinion on Allow, the last
+// registered handler's value is kept.
+//
+// Returns (allowed=true, reason="") by default when no handler expresses an
+// opinion. Callers should proceed with plan mode entry when allowed=true.
+func (s *SDK) FireBeforePlanModeEnter(ctx *Context, info PlanModeEnterInfo) (allowed bool, reason string) {
+	results := s.fire(HookBeforePlanModeEnter, ctx, info)
+	allowed = true // default: allow
+	for _, r := range results {
+		var v *BeforePlanModeEnterResult
+		switch typed := r.(type) {
+		case BeforePlanModeEnterResult:
+			v = &typed
+		case *BeforePlanModeEnterResult:
+			v = typed
+		case map[string]interface{}:
+			// JSON-RPC subprocess extensions return decoded maps.
+			tmp := BeforePlanModeEnterResult{}
+			if a, ok := typed["allow"].(bool); ok {
+				tmp.Allow = &a
+			}
+			if rs, ok := typed["reason"].(string); ok {
+				tmp.Reason = rs
+			}
+			v = &tmp
+		}
+		if v == nil || v.Allow == nil {
+			continue
+		}
+		// Last explicit decision wins.
+		allowed = *v.Allow
+		if !allowed && v.Reason != "" {
+			reason = v.Reason
+		}
+	}
+	return allowed, reason
+}
+
+// FireBeforePlanModeExit fires the before_plan_mode_exit hook and resolves the
+// combined allow/deny decision across all handlers. Last non-nil Allow wins.
+// Returns (allowed=true, reason="") when no handler expresses an opinion.
+func (s *SDK) FireBeforePlanModeExit(ctx *Context, info BeforePlanModeExitInfo) (allowed bool, reason string) {
+	results := s.fire(HookBeforePlanModeExit, ctx, info)
+	allowed = true // default: allow
+	for _, r := range results {
+		var v *BeforePlanModeExitResult
+		switch typed := r.(type) {
+		case BeforePlanModeExitResult:
+			v = &typed
+		case *BeforePlanModeExitResult:
+			v = typed
+		case map[string]interface{}:
+			tmp := BeforePlanModeExitResult{}
+			if a, ok := typed["allow"].(bool); ok {
+				tmp.Allow = &a
+			}
+			if rs, ok := typed["reason"].(string); ok {
+				tmp.Reason = rs
+			}
+			v = &tmp
+		}
+		if v == nil || v.Allow == nil {
+			continue
+		}
+		allowed = *v.Allow
+		if !allowed && v.Reason != "" {
+			reason = v.Reason
+		}
+	}
+	return allowed, reason
 }
 
 // FireEarlyStopContinued fires the early_stop_continued hook. Observe-only:

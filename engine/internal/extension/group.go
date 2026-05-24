@@ -287,20 +287,76 @@ func (g *ExtensionGroup) FireContextLoad(ctx *Context, info ContextLoadInfo) (st
 }
 
 // ---------------------------------------------------------------------------
-// PlanModePrompt: last non-empty prompt wins, merge allowedTools.
+// PlanModePrompt: last non-empty prompt wins, merge allowedTools, last non-empty sparseReminder wins.
 // ---------------------------------------------------------------------------
 
-func (g *ExtensionGroup) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string) {
+func (g *ExtensionGroup) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string, string) {
 	var prompt string
 	var allTools []string
+	var sparseReminder string
 	for _, h := range g.hosts {
-		p, tools := h.FirePlanModePrompt(ctx, planFilePath)
+		p, tools, sr := h.FirePlanModePrompt(ctx, planFilePath)
 		if p != "" {
 			prompt = p
 		}
 		allTools = append(allTools, tools...)
+		if sr != "" {
+			sparseReminder = sr
+		}
 	}
-	return prompt, allTools
+	return prompt, allTools, sparseReminder
+}
+
+// FireBeforePlanModeExit fans the before_plan_mode_exit hook out to every host
+// and folds per-host results into a single allow/deny decision. Last non-nil
+// Allow across all hosts wins. Returns (true, "") when no handler has an opinion.
+func (g *ExtensionGroup) FireBeforePlanModeExit(ctx *Context, info BeforePlanModeExitInfo) (allowed bool, reason string) {
+	allowed = true
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforePlanModeExit: dispatching to %d host(s) planFile=%s", len(g.hosts), info.PlanFilePath,
+	))
+	for _, h := range g.hosts {
+		a, r := h.FireBeforePlanModeExit(ctx, info)
+		if !a {
+			allowed = false
+			if r != "" {
+				reason = r
+			}
+		} else if !allowed {
+			// Later host re-allows after an earlier denial — last wins.
+			allowed = true
+			reason = ""
+		}
+	}
+	return allowed, reason
+}
+
+// FireBeforePlanModeEnter fans the before_plan_mode_enter hook out to every
+// host and folds per-host results into a single allow/deny decision. Last
+// non-nil Allow across all hosts wins (mirrors FireBeforeEarlyStopDecision
+// field-merge semantics). Returns (true, "") when no handler has an opinion.
+func (g *ExtensionGroup) FireBeforePlanModeEnter(ctx *Context, info PlanModeEnterInfo) (allowed bool, reason string) {
+	allowed = true // default: allow
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforePlanModeEnter: dispatching to %d host(s) source=%s", len(g.hosts), info.Source,
+	))
+	for _, h := range g.hosts {
+		a, r := h.FireBeforePlanModeEnter(ctx, info)
+		// Only override decision if the host explicitly said something.
+		// FireBeforePlanModeEnter always returns (true,"") as default, so we
+		// treat a denial as an override but must still apply last-writer wins.
+		if !a {
+			allowed = false
+			if r != "" {
+				reason = r
+			}
+		} else if !allowed {
+			// A later host re-allows after an earlier one denied — last wins.
+			allowed = true
+			reason = ""
+		}
+	}
+	return allowed, reason
 }
 
 // FireSystemInject fires system_inject across all hosts. Last non-empty text

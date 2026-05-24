@@ -26,8 +26,6 @@ export function GeneralCategory() {
   const setShowTodoList = usePreferencesStore((s) => s.setShowTodoList)
   const aiGeneratedTitles = usePreferencesStore((s) => s.aiGeneratedTitles)
   const setAiGeneratedTitles = usePreferencesStore((s) => s.setAiGeneratedTitles)
-  const showImplementClearContext = usePreferencesStore((s) => s.showImplementClearContext)
-  const setShowImplementClearContext = usePreferencesStore((s) => s.setShowImplementClearContext)
 
   const handleBrowse = async () => {
     const dir = await window.ion.selectDirectory()
@@ -187,14 +185,6 @@ export function GeneralCategory() {
         description="Use AI to generate descriptive tab titles from your first message. Uses the fast model tier."
         checked={aiGeneratedTitles}
         onChange={setAiGeneratedTitles}
-      />
-
-      <SettingToggle
-        label="Clear Context on Implement"
-        description='Show the "Implement, clear context" option when exiting plan mode.'
-        checked={showImplementClearContext}
-        onChange={setShowImplementClearContext}
-        warning="Advanced feature — not recommended for typical use. Clearing context discards the conversation history that helps the agent maintain continuity."
       />
     </>
   )

@@ -72,6 +72,24 @@ func (m *Manager) buildRunConfig(
 		spawnerExtGroup = nil
 	}
 	m.wireAgentSpawner(s, key, currentModel, spawnerExtGroup, runCfg)
+
+	// Wire OnPlanModeEnter unconditionally: it calls RequestPlanModeEnter on
+	// the manager which handles hook dispatch and session-state flipping
+	// internally. This callback is always needed so the runloop interception
+	// can approve/deny the model's EnterPlanMode tool call even when no
+	// extension group is attached (default: auto-approve).
+	capturedKey := key
+	runCfg.Hooks.OnPlanModeEnter = func() (bool, string, string) {
+		return m.RequestPlanModeEnter(capturedKey)
+	}
+
+	// Wire OnPlanModeExit: fires before_plan_mode_exit hook so extensions can
+	// veto the model's ExitPlanMode call (e.g. to require more planning).
+	// Default when no extensions: auto-allow.
+	runCfg.Hooks.OnPlanModeExit = func(planFilePath string) (bool, string) {
+		return m.RequestPlanModeExit(capturedKey, planFilePath)
+	}
+
 	return runCfg
 }
 
@@ -156,7 +174,7 @@ func (m *Manager) wireExtensionHooks(s *engineSession, key string, requestID str
 		return rewritten, sysPrompt
 	}
 
-	runCfg.Hooks.OnPlanModePrompt = func(planFilePath string) (string, []string) {
+	runCfg.Hooks.OnPlanModePrompt = func(planFilePath string) (string, []string, string) {
 		return extGroup.FirePlanModePrompt(ctx, planFilePath)
 	}
 

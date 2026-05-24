@@ -142,7 +142,27 @@ type RunHooks struct {
 	OnBeforePrompt func(runID string, prompt string) (rewrittenPrompt, extraSystemPrompt string)
 
 	// OnPlanModePrompt provides plan-mode prompt customization.
-	OnPlanModePrompt func(planFilePath string) (customPrompt string, customTools []string)
+	// Returns (customPrompt, customTools, customSparseReminder). Empty values
+	// mean "use the engine default" for that field. The sparse reminder
+	// override (third return) is cached on the activeRun and used for all
+	// per-turn reminder injections in place of buildPlanModeSparseReminder.
+	OnPlanModePrompt func(planFilePath string) (customPrompt string, customTools []string, customSparseReminder string)
+
+	// OnPlanModeEnter is called when the LLM invokes the EnterPlanMode sentinel
+	// tool. The callback fires the before_plan_mode_enter hook and — if allowed
+	// — flips the session into plan mode. Returns (allowed, reason, planFilePath).
+	// When allowed=false, reason is returned to the LLM in the tool result.
+	// Nil callback means auto-approve (used in tests and CLI backend).
+	OnPlanModeEnter func() (allowed bool, reason string, planFilePath string)
+
+	// OnPlanModeExit is called when the LLM invokes the ExitPlanMode sentinel
+	// tool, before the run is terminated and the plan-ready card is shown.
+	// The callback fires the before_plan_mode_exit hook so extensions can veto
+	// the exit (e.g. to send the model back for more planning). Returns
+	// (allowed, reason). When allowed=false, the run continues in plan mode and
+	// reason is returned to the LLM in the tool result. Nil callback means
+	// auto-approve (always allow the exit).
+	OnPlanModeExit func(planFilePath string) (allowed bool, reason string)
 
 	// OnSystemInject fires before each engine-injected steering message.
 	// Returns (text, suppress). If suppress is true, the message is not injected.

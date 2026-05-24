@@ -569,17 +569,15 @@ func TestApiBackendPlanModeExitPlanMode(t *testing.T) {
 
 	be.waitForExit(t, 5*time.Second)
 
-	// Should have emitted PlanModeChangedEvent with Enabled=false
+	// The model calling ExitPlanMode is a *proposal*, not a confirmed mode
+	// change. The engine must NOT emit PlanModeChangedEvent{Enabled:false}
+	// from the interception — that would race the user-approval card. The
+	// run-end signal is task_complete carrying the ExitPlanMode denial.
 	events := be.getNormalized()
-	foundPlanExit := false
 	for _, ev := range events {
 		if pm, ok := ev.Data.(*types.PlanModeChangedEvent); ok && !pm.Enabled {
-			foundPlanExit = true
-			break
+			t.Error("unexpected PlanModeChangedEvent{Enabled:false} on ExitPlanMode interception (must be deferred to user approval)")
 		}
-	}
-	if !foundPlanExit {
-		t.Error("expected PlanModeChangedEvent{Enabled: false} after ExitPlanMode")
 	}
 
 	// Should have TaskComplete with ExitPlanMode in permission denials

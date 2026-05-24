@@ -21,6 +21,10 @@ These changes are shipped as `feat(engine)` rather than `feat!(engine)` per the 
 
 - **`EnterPlanMode` re-entry guard now driven by `RunOptions.ImplementationPhase`.** The previous mechanism — the desktop prepending an "implementing a user-approved plan" sentence to the user prompt that the `EnterPlanMode` tool docstring instructed the model to recognize — has been replaced by a structured `RunOptions.ImplementationPhase` bool. The desktop sets the flag when the user clicks Implement; the engine skips injecting the `EnterPlanMode` sentinel tool entirely for that run. No prompt-text substring matching is required. Third-party harnesses doing implement-then-execute flows should set `RunOptions.ImplementationPhase = true` on the implementation run; the model will not see the `EnterPlanMode` tool and cannot re-propose plan mode.
 
+- **`EnterPlanMode` tool description moved to harness.** The 18-line policy prose previously baked into `engine/internal/tools/enter_plan_mode.go` (WHEN to enter plan mode, WHAT is allowed once enabled, WHEN NOT to enter) now lives in the harness. The engine ships only a one-line neutral fallback (`"Switch the current session into plan mode."`) and a new `RunOptions.EnterPlanModeDescription` field on the wire. Harnesses set the field on every `send_prompt` to override the fallback. The desktop ships the previous prose as the `ENTER_PLAN_MODE_DESCRIPTION` constant in `desktop/src/main/prompt-pipeline.ts` and applies it automatically on every engine-tab prompt, so user-facing behavior is unchanged. Third-party harnesses copy the desktop's constant or write their own prose suited to their workflow (TUI, domain-specific framing, etc.).
+
+  See [ADR-004](docs/architecture/adr/004-enter-plan-mode-prose-in-harness.md) for the full rationale.
+
 ### Engine — additive
 
 - New event variant `engine_plan_proposal` (kind-discriminated; `"exit"` initially). See [Server Events](docs/protocol/server-events.md#engine_plan_proposal).
@@ -28,6 +32,7 @@ These changes are shipped as `feat(engine)` rather than `feat!(engine)` per the 
 - New client command `early_stop_decision_response` complementing the request event.
 - New hooks: `before_plan_mode_enter`, `before_plan_mode_exit`, `before_early_stop_decision`, `early_stop_continued`, `system_inject`, `before_provider_request`, `workspace_file_changed`.
 - New shared type `EngineCommandListing` carried inside `engine_command_registry` snapshots.
+- New `RunOptions.EnterPlanModeDescription` field (and its socket-wire mirror `ClientCommand.EnterPlanModeDescription`) for the harness-supplied `EnterPlanMode` tool description per ADR-004. Additive `omitempty` — third-party harnesses that don't set it inherit the engine's one-line neutral fallback.
 
 ### Desktop
 

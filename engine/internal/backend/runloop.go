@@ -73,7 +73,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	}
 
 	// Build system prompt (may rewrite opts.Prompt and opts.PlanModeTools)
-	conv.System = buildSystemPrompt(&opts, conv, hooks, run.requestID)
+	conv.System = buildSystemPrompt(&opts, conv, hooks, run.requestID, run)
 
 	// Add user message (using potentially-rewritten prompt). When the client
 	// supplied pre-encoded image attachments, build a structured content
@@ -153,12 +153,45 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			utils.Log("ApiBackend", fmt.Sprintf("wind-down injected: runID=%s turn=%d/%d", run.requestID, turn, maxTurns))
 		}
 
-		// Plan mode: inject sparse reminder on turn 2+ so the LLM
-		// doesn't drift from plan-mode constraints mid-conversation.
-		if run.planMode && turn > 1 {
-			b.injectSystemMessage(run, conv, hooks, opts, "plan_mode_reminder",
-				"[SYSTEM] "+buildPlanModeSparseReminder(run.planFilePath),
-				turn, maxTurns)
+		// Plan mode: inject sparse reminder so the LLM doesn't drift from
+		// plan-mode constraints mid-conversation. Two cases fire the reminder:
+		//   1. Turn 2+ in any plan-mode run (existing throttle, once per
+		//      planModeReminderInterval turns). Handles multi-turn runs.
+		//   2. Turn 1 of a run where the conversation already has many messages
+		//      (mature single-turn rounds). This is the mid-plan "what's next?"
+		//      case where the full prompt is ~220+ messages back and the model
+		//      needs the rule in recent context.
+		// See shouldInjectPlanModeReminderForRun in plan_mode_prompt.go for
+		// the full gate logic and planModeFirstTurnReminderThreshold rationale.
+		if run.planMode {
+			msgCount := len(conv.Messages)
+			run.mu.Lock()
+			lastReminderTurn := run.planModeReminderTurn
+			shouldInject := shouldInjectPlanModeReminderForRun(turn, lastReminderTurn, msgCount)
+			if shouldInject {
+				run.planModeReminderTurn = turn
+			}
+			run.mu.Unlock()
+			if shouldInject {
+				reminderText := buildPlanModeSparseReminder(run.planFilePath)
+				if run.planModeSparseReminderOverride != "" {
+					reminderText = run.planModeSparseReminderOverride
+				}
+				gate := "turn_gt1"
+				if turn == 1 {
+					gate = "mature_session"
+				}
+				source := "default"
+				if run.planModeSparseReminderOverride != "" {
+					source = "override"
+				}
+				b.injectSystemMessage(run, conv, hooks, opts, "plan_mode_reminder",
+					"[SYSTEM] "+reminderText,
+					turn, maxTurns)
+				utils.Info("PlanMode", fmt.Sprintf("run=%s reminder injected turn=%d lastTurn=%d interval=%d gate=%s msgCount=%d source=%s", run.requestID, turn, lastReminderTurn, planModeReminderInterval, gate, msgCount, source))
+			} else {
+				utils.Debug("PlanMode", fmt.Sprintf("run=%s reminder throttled turn=%d lastTurn=%d nextAt=%d", run.requestID, turn, lastReminderTurn, lastReminderTurn+planModeReminderInterval))
+			}
 		}
 
 		// Fire turn_start hook

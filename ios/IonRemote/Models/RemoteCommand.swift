@@ -6,6 +6,22 @@ enum RemoteCommand: Codable, Sendable {
     case createTab(workingDirectory: String?)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
+    /// User-typed prompt routed to the desktop's prompt pipeline.
+    ///
+    /// iOS does NOT carry the harness-supplied EnterPlanMode tool
+    /// description (ADR-004): that's the desktop's responsibility. When
+    /// iOS sends `prompt`, the desktop's prompt-pipeline.ts constructs an
+    /// `IncomingPrompt` and applies the desktop's
+    /// `ENTER_PLAN_MODE_DESCRIPTION` constant automatically before
+    /// forwarding to the engine. The model sees the same plan-mode
+    /// framing regardless of which client typed the prompt.
+    ///
+    /// This is deliberate: the desktop is the authoritative harness for
+    /// the pairing, and the policy prose (per ADR-004) belongs in the
+    /// harness, not the client. iOS would only need to carry an
+    /// `enterPlanModeDescription` field of its own if it ever became
+    /// an independent harness — at which point it would also need its
+    /// own copy of the prose. Today the wire stays minimal.
     case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil)
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)

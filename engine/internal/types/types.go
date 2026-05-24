@@ -350,6 +350,11 @@ type EngineEvent struct {
 	// engine_plan_mode_changed
 	PlanModeEnabled  bool   `json:"planModeEnabled,omitempty"`
 	PlanModeFilePath string `json:"planFilePath,omitempty"`
+	// PlanModeSlug mirrors PlanModeChangedEvent.PlanSlug: the basename of
+	// the plan file without the ".md" extension, surfaced so clients can
+	// render a human-readable plan identifier. See PlanModeChangedEvent
+	// for the legacy-hex round-trip note.
+	PlanModeSlug string `json:"planSlug,omitempty"`
 
 	// engine_compacting
 	CompactingActive         bool   `json:"active,omitempty"`
@@ -457,7 +462,62 @@ type RunOptions struct {
 	PlanModeTools      []string        `json:"planModeTools,omitempty"`
 	PlanFilePath       string          `json:"planFilePath,omitempty"`
 	PlanModePrompt     string          `json:"planModePrompt,omitempty"`
+	// PlanModeSparseReminder is the harness-supplied text for the sparse
+	// plan-mode reminder injected periodically during plan-mode runs.
+	// Empty (the default) means the engine builds the reminder via
+	// buildPlanModeSparseReminder. When non-empty, the engine forwards this
+	// string verbatim instead. Parallel override path to PlanModePrompt:
+	// both are additive omitempty fields; third-party harnesses that don't
+	// set either inherit the engine defaults unchanged.
+	// See docs/protocol/client-commands.md for the three-layer precedence
+	// (RunOptions field → plan_mode_prompt hook → engine default).
+	PlanModeSparseReminder string          `json:"planModeSparseReminder,omitempty"`
 	PlanModeReentry    bool            `json:"planModeReentry,omitempty"`
+	// ImplementationPhase tells the engine that this run is the "implement"
+	// half of a plan-then-implement flow — the user has already approved a
+	// plan and the model should execute it directly without proposing
+	// another plan-mode entry. When set, the engine skips injecting the
+	// EnterPlanMode sentinel tool entirely, so the model never sees the
+	// option and cannot re-propose plan mode mid-run.
+	//
+	// Replaces the prior mechanism, which was the desktop prepending a
+	// "You are implementing a user-approved plan. Do not re-enter plan
+	// mode..." preamble to the user prompt and the EnterPlanMode tool's
+	// docstring instructing the model to recognize those phrases. That
+	// substring-matching approach was brittle (translation-sensitive,
+	// easy to bypass with paraphrasing) and bled UI/harness policy into
+	// engine-visible prompt text. The boolean is the mechanical
+	// equivalent: harness sets the flag, engine acts on it.
+	//
+	// Third-party harnesses doing implement-then-execute flows should
+	// set this to true on the implementation run. The engine has no
+	// opinion on what counts as "implementation"; that's the harness's
+	// call.
+	ImplementationPhase     bool         `json:"implementationPhase,omitempty"`
+	// EnterPlanModeDescription is the harness-supplied prompt text for the
+	// EnterPlanMode sentinel tool injected during auto-mode runs. When this
+	// field is empty (the default), the engine falls back to a one-line
+	// neutral fallback: "Switch the current session into plan mode."
+	// When the harness supplies a non-empty string, the engine forwards it
+	// verbatim as the tool's description so the model sees the harness's
+	// framing — e.g. the conditions under which plan mode is appropriate,
+	// the rules that apply once enabled, and any policy text the harness
+	// wants the model to follow.
+	//
+	// Per ADR-004 (Move EnterPlanMode prose to harness): the engine ships
+	// only the sentinel mechanism (tool injection + runloop interception);
+	// the policy prose that tells the model *when* to enter plan mode and
+	// *what* the rules are belongs in the harness. The desktop ships its
+	// reference prose as the ENTER_PLAN_MODE_DESCRIPTION constant in
+	// desktop/src/main/prompt-pipeline.ts; third-party harnesses pick
+	// their own. See ADR-001 (parent boundary) and ADR-002 (the same
+	// pattern applied to early-stop continuation).
+	//
+	// Forward-compat: when the harness wants the engine default (a TUI
+	// might prefer minimal framing, for instance), it leaves this empty.
+	// The engine never imposes its own opinionated default beyond the
+	// one-line fallback.
+	EnterPlanModeDescription string       `json:"enterPlanModeDescription,omitempty"`
 	CompactThreshold        float64      `json:"compactThreshold,omitempty"`
 	SuppressSystemMessages  bool         `json:"suppressSystemMessages,omitempty"`
 	DisablePlanModeReminder bool         `json:"disablePlanModeReminder,omitempty"`

@@ -161,6 +161,18 @@ func (a *sessionAccessor) TranslateEvent(ev types.NormalizedEvent, contextWindow
 	return translateToEngineEvent(ev, contextWindow)
 }
 
+// SetPlanMode imperatively flips plan mode for this session. Used by
+// extensions via ctx.SetPlanMode. Delegates to Manager.SetPlanMode so all
+// the planFilePath-preservation and hasExitedPlanMode logic applies.
+func (a *sessionAccessor) SetPlanMode(enabled bool, source string) {
+	a.m.SetPlanMode(a.key, enabled, nil, source)
+}
+
+// GetPlanModeState returns (enabled, planFilePath) for this session.
+func (a *sessionAccessor) GetPlanModeState() (bool, string) {
+	return a.m.GetPlanModeState(a.key)
+}
+
 // newExtContext builds a fully-populated extension Context for the given session.
 // All functional callbacks are wired through the extcontext.SessionAccessor interface.
 func (m *Manager) newExtContext(s *engineSession, key string) *extension.Context {

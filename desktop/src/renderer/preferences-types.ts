@@ -12,7 +12,6 @@ export interface PreferencesState {
   recentBaseDirectories: string[]
   directoryUsageCounts: Record<string, number>
   preferredOpenWith: 'cli' | 'vscode'
-  showImplementClearContext: boolean
   defaultPermissionMode: 'auto' | 'plan'
   expandOnTabSwitch: boolean
   bashCommandEntry: boolean
@@ -139,7 +138,6 @@ export interface PreferencesState {
   removeRecentBaseDirectory: (dir: string) => void
   incrementDirectoryUsage: (dir: string) => void
   setPreferredOpenWith: (app: 'cli' | 'vscode') => void
-  setShowImplementClearContext: (show: boolean) => void
   setDefaultPermissionMode: (mode: 'auto' | 'plan') => void
   setExpandOnTabSwitch: (enabled: boolean) => void
   setBashCommandEntry: (enabled: boolean) => void

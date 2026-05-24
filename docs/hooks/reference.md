@@ -1,12 +1,12 @@
 ---
 title: Hook Reference
-description: Complete reference for all 62 Ion Engine hooks with payloads, return types, and behavior.
+description: Complete reference for all 63 Ion Engine hooks with payloads, return types, and behavior.
 sidebar_position: 2
 ---
 
 # Hook Reference
 
-All 62 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
+All 64 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
 
 ## Lifecycle (13)
 
@@ -348,19 +348,55 @@ type ElicitationResultInfo struct {
 }
 ```
 
-## Plan Mode (1)
+## Plan Mode (3)
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
-| `plan_mode_prompt` | Plan mode session starts | `string` (plan file path) | `PlanModePromptResult{Prompt, Tools}` or `string` | Last non-nil wins. Override plan mode prompt and/or allowed tool list. |
+| `before_plan_mode_enter` | LLM calls `EnterPlanMode` tool requesting mode transition | `PlanModeEnterInfo{Source}` | `*BeforePlanModeEnterResult{Allow, Reason}` | Last non-nil `Allow` across hosts wins. Return `Allow: &false` to deny. Default (nil or no handler): allow. |
+| `before_plan_mode_exit` | LLM calls `ExitPlanMode` tool requesting plan review | `BeforePlanModeExitInfo{PlanFilePath, Source}` | `*BeforePlanModeExitResult{Allow, Reason}` | Last non-nil `Allow` wins. Return `Allow: &false` to send the model back for more planning. Default: allow. |
+| `plan_mode_prompt` | Plan mode session starts | `string` (plan file path) | `PlanModePromptResult{Prompt, Tools, SparseReminder}` or `string` | Last non-nil wins. Override plan mode prompt, allowed tool list, and/or per-turn sparse reminder text. |
 
 ### Payload Types
+
+**PlanModeEnterInfo**
+```go
+type PlanModeEnterInfo struct {
+    Source string // "model_tool" when the LLM called EnterPlanMode
+}
+```
+
+**BeforePlanModeEnterResult**
+```go
+type BeforePlanModeEnterResult struct {
+    Allow  *bool  // nil = no opinion (allow); &false = deny; &true = explicit allow
+    Reason string // returned to the LLM in the tool result when Allow is &false
+}
+```
+
+**BeforePlanModeExitInfo**
+```go
+type BeforePlanModeExitInfo struct {
+    PlanFilePath string // path of the plan file being submitted for review
+    Source       string // "model_tool" when the LLM called ExitPlanMode
+}
+```
+
+**BeforePlanModeExitResult**
+```go
+type BeforePlanModeExitResult struct {
+    Allow  *bool  // nil = no opinion (allow); &false = deny; &true = explicit allow
+    Reason string // returned to the LLM in the tool result when Allow is &false
+}
+```
+
+Merge semantics: last handler that returns a non-nil `Allow` wins, matching `before_early_stop_decision`. A handler that returns `Allow: nil` (or returns `nil` entirely) abstains.
 
 **PlanModePromptResult**
 ```go
 type PlanModePromptResult struct {
-    Prompt string   // custom plan mode prompt; empty = use default
-    Tools  []string // custom allowed tools; nil = use default
+    Prompt         string   // custom plan mode prompt; empty = use default
+    Tools          []string // custom allowed tools; nil = use default
+    SparseReminder string   // custom per-turn sparse reminder; empty = use engine default buildPlanModeSparseReminder
 }
 ```
 

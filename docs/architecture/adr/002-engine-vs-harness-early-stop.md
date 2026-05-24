@@ -112,6 +112,7 @@ For consumers depending on the previous default-on behavior:
 
 - [ADR-001](./001-engine-vs-harness.md) — the parent principle this ADR concretely applies.
 - [ADR-003](./003-state-events-vs-workflow-events.md) — same lesson applied to plan-mode events.
+- [ADR-004](./004-enter-plan-mode-prose-in-harness.md) — same lesson applied to the `EnterPlanMode` tool description.
 - [`docs/hooks/reference.md`](../../hooks/reference.md) — full reference for the `before_early_stop_decision` hook.
 - [`docs/configuration/engine-json.md`](../../configuration/engine-json.md) — `earlyStopContinue` configuration block.
 - [`docs/engine-grounding.md`](../../engine-grounding.md) — house rules including "engine executes, harness decides."

@@ -26,7 +26,8 @@
     ],
     "plan_mode_changed": [
       "enabled",
-      "planFilePath"
+      "planFilePath",
+      "planSlug"
     ],
     "rate_limit": [
       "rateLimitType",
@@ -135,6 +136,7 @@
     "permToolName",
     "planFilePath",
     "planModeEnabled",
+    "planSlug",
     "questionId",
     "requestId",
     "response",

@@ -467,6 +467,7 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 								Data: &types.PlanModeChangedEvent{
 									Enabled:      false,
 									PlanFilePath: run.planFilePath,
+									PlanSlug:     types.PlanSlugFromPath(run.planFilePath),
 								},
 							})
 							break

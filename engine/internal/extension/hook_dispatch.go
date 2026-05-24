@@ -38,8 +38,18 @@ func (h *Host) FireBeforeProviderRequest(ctx *Context, info BeforeProviderReques
 	return h.sdk.FireBeforeProviderRequest(ctx, info)
 }
 
-func (h *Host) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string) {
+func (h *Host) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string, string) {
 	return h.sdk.FirePlanModePrompt(ctx, planFilePath)
+}
+
+// FireBeforePlanModeEnter fires the before_plan_mode_enter hook on this host.
+func (h *Host) FireBeforePlanModeEnter(ctx *Context, info PlanModeEnterInfo) (allowed bool, reason string) {
+	return h.sdk.FireBeforePlanModeEnter(ctx, info)
+}
+
+// FireBeforePlanModeExit fires the before_plan_mode_exit hook on this host.
+func (h *Host) FireBeforePlanModeExit(ctx *Context, info BeforePlanModeExitInfo) (allowed bool, reason string) {
+	return h.sdk.FireBeforePlanModeExit(ctx, info)
 }
 
 func (h *Host) FireSystemInject(ctx *Context, info SystemInjectInfo) (string, bool) {

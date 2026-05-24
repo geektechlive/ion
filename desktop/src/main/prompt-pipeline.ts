@@ -106,6 +106,77 @@ function log(msg: string): void {
 }
 
 /**
+ * Harness-supplied description prose for the engine's EnterPlanMode
+ * sentinel tool.
+ *
+ * Per ADR-004 (Move EnterPlanMode prose to harness), the engine ships
+ * only a one-line policy-neutral fallback for the tool description and
+ * defers the actual prose — when to enter plan mode, what the rules are
+ * once enabled, when NOT to enter — to the harness. This module is the
+ * desktop's harness, and ENTER_PLAN_MODE_DESCRIPTION is the canonical
+ * Ion-on-desktop framing the model sees on every auto-mode prompt the
+ * desktop dispatches.
+ *
+ * Third-party harnesses are NOT expected to copy this constant — they
+ * write their own (TUIs may prefer minimal framing; domain-specific
+ * harnesses may want "test plan" / "design doc" / "RFC" language). The
+ * constant is exported so future override paths (e.g. a power-user
+ * settings.json `desktop.enterPlanModeDescription` key per ADR-004's
+ * Future considerations) can default to it.
+ *
+ * The text was lifted verbatim from the engine's prior in-tree default
+ * (commit 89084038 / engine/internal/tools/enter_plan_mode.go) so the
+ * desktop's user-facing behavior is unchanged from before ADR-004. If
+ * you edit this text, the edit ships to every desktop install on the
+ * next release — be intentional.
+ */
+export const ENTER_PLAN_MODE_DESCRIPTION = `Switch the current session into plan mode.
+
+Call this tool when the task at hand warrants careful planning before execution:
+- The user has asked for a plan ("make a plan for...", "plan how to...", "before you do anything, plan...")
+- The request involves multiple files, architectural changes, or non-trivial scope
+- You need to confirm an approach with the user before making any changes
+- A previous workflow step has completed and a follow-up plan is needed
+
+Once called, the session switches to plan mode where:
+- Only read-only tools (Read, Grep, Glob, WebFetch, WebSearch) are available
+- You may write exclusively to the plan file to build your plan
+- Each turn must end with AskUserQuestion (for clarification) or ExitPlanMode (plan complete)
+- All code modifications are blocked until the user reviews and approves the plan
+
+Do NOT call this tool if:
+- You are already in plan mode.
+- The user's request is simple enough to execute directly without planning.
+- The user has just asked you to implement an existing plan — proceed directly with the work, do not re-plan.`
+
+/**
+ * Desktop sparse plan-mode reminder text, injected by the engine every
+ * planModeReminderInterval turns during plan-mode runs.
+ *
+ * Per Fix 3 / Fix 4 of the plan-mode end-of-turn discipline fix (see
+ * docs/architecture/adr/005-plan-mode-prose-symmetry.md), the engine
+ * exposes RunOptions.PlanModeSparseReminder as a parallel override to
+ * RunOptions.PlanModePrompt. This constant is the desktop's reference
+ * value, forwarded on every plan-mode prompt dispatch.
+ *
+ * The text is intentionally short (it appears every N turns) and includes
+ * the Forbidden Prose Patterns callout that the full prompt also carries.
+ * Power users can override via desktop.planModeSparseReminder in
+ * ~/.ion/settings.json; the desktop reads that key at session start and
+ * passes it here in place of this constant.
+ *
+ * Third-party harnesses supply their own or set RunOptions.PlanModeSparseReminder
+ * directly; this constant is desktop-harness-specific, not a universal default.
+ */
+export const PLAN_MODE_SPARSE_REMINDER =
+  'Plan mode still active (see full instructions from earlier in conversation). ' +
+  'Read-only except plan file. ' +
+  'End turns with AskUserQuestion (for clarifications) or ExitPlanMode (for plan approval). ' +
+  'Never use AskUserQuestion to ask for plan approval -- that is what ExitPlanMode is for. ' +
+  'Forbidden as prose: "Is this plan okay?", "Should I proceed?", "Let me know if you\'d like changes", ' +
+  '"How does this plan look?" -- these must use ExitPlanMode or AskUserQuestion.'
+
+/**
  * Origin of the incoming prompt. Drives which echoes we fire:
  *  - 'desktop' : the renderer already inserted the optimistic message bubble
  *                locally via send-slice/engine-slice. We must echo to the
@@ -142,6 +213,16 @@ export interface IncomingPrompt {
   appendSystemPrompt?: string
   /** Optional engine-tab-only model override. */
   model?: string
+  /**
+   * Suppress EnterPlanMode injection for this run. The desktop sets this
+   * when dispatching the "Implement" half of a plan-then-implement flow
+   * so the model can't re-propose plan mode against the user's already-
+   * approved intent. Forwarded verbatim to engineBridge.sendPrompt; the
+   * engine maps it onto RunOptions.ImplementationPhase. See ADR-003
+   * framing in the plan-mode docs for why a structured flag beats prompt
+   * prose.
+   */
+  implementationPhase?: boolean
   /** When provided, used verbatim as the RunOptions for CLI submission. The
    *  pipeline mutates `prompt` and `appendSystemPrompt` on this object during
    *  `.md` expansion. */
@@ -425,7 +506,13 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
     // (handled in ipc/engine.ts) which delegates here after the unified
     // pipeline has decided the text is not a slash.
     log(`pipeline: submit engine prompt (desktop) key=${key} textLen=${p.text.length}`)
-    await engineBridge.sendPrompt(key, p.text, p.model, p.appendSystemPrompt, p.imageAttachments)
+    // ADR-004: always forward the desktop's harness-supplied EnterPlanMode
+    // description on auto-mode prompts. Harmless when implementationPhase
+    // is true (the engine skips EnterPlanMode injection entirely in that
+    // case and the description value goes unused) so the call site stays
+    // simple — no branching. Also forward the sparse-reminder override so
+    // the per-turn reminder is consistent with the full prompt framing.
+    await engineBridge.sendPrompt(key, p.text, p.model, p.appendSystemPrompt, p.imageAttachments, p.implementationPhase, ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER)
     return
   }
 
@@ -457,6 +544,19 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
   if (!p.runOptions) {
     log(`pipeline: WARNING desktop-source CLI prompt missing runOptions — cannot submit`)
     return
+  }
+  // ADR-004: forward the desktop's harness-supplied EnterPlanMode tool
+  // description on every CLI engine prompt so the model sees the same
+  // framing the desktop-source-engine path uses. The renderer doesn't
+  // need to know about this constant — the harness owns it. Don't
+  // overwrite a pre-existing override (future power-user paths via
+  // settings.json could land an alternate value upstream).
+  if (!p.runOptions.enterPlanModeDescription) {
+    p.runOptions.enterPlanModeDescription = ENTER_PLAN_MODE_DESCRIPTION
+  }
+  // Parallel: forward the sparse-reminder override for CLI prompts.
+  if (!p.runOptions.planModeSparseReminder) {
+    p.runOptions.planModeSparseReminder = PLAN_MODE_SPARSE_REMINDER
   }
   log(`pipeline: submit cli prompt via sessionPlane tab=${p.tabId} req=${p.reqId} promptLen=${p.runOptions.prompt.length}`)
   await sessionPlane.submitPrompt(p.tabId, p.reqId, p.runOptions)
