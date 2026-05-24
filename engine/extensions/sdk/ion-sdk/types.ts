@@ -541,15 +541,35 @@ export interface PlanModePromptResult {
 }
 
 /**
+ * A single structured fact extracted from messages that were about to be
+ * compacted away. Surfaced on `session_compact` so extensions maintaining
+ * external memory (vector store, knowledge graph, SQLite, etc.) can durably
+ * persist them before the source messages are discarded.
+ *
+ * `type` is one of: `decision`, `file_mod`, `error`, `preference`, `discovery`.
+ * `content` is a short human-readable snippet (sentence or path).
+ */
+export interface CompactionFact {
+  type: string
+  content: string
+}
+
+/**
  * Payload passed to `session_before_compact` and `session_compact`.
  * - `strategy`: `auto` (proactive, context > 80%) or `reactive` (API returned prompt_too_long)
  * - `messagesBefore`: message count before compaction
  * - `messagesAfter`: message count after compaction (only set in `session_compact`)
+ * - `facts`: structured facts extracted from the pre-compaction message set
+ *   (only populated on `session_compact`). May be empty or absent when no
+ *   patterns matched. Treat each fact as self-contained — message indices are
+ *   intentionally not exposed because they reference messages that no longer
+ *   exist after the hook fires.
  */
 export interface CompactionInfo {
   strategy: 'auto' | 'reactive'
   messagesBefore: number
   messagesAfter: number
+  facts?: CompactionFact[]
 }
 
 /** Payload for `session_before_fork` and `session_fork`. */

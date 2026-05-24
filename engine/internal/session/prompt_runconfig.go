@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/compaction"
 	ionconfig "github.com/dsswift/ion/engine/internal/config"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
@@ -234,11 +235,33 @@ func (m *Manager) wireExtensionHooks(s *engineSession, key string, requestID str
 	}
 	runCfg.Hooks.OnSessionCompact = func(_ string, info interface{}) {
 		if ci, ok := info.(map[string]interface{}); ok {
-			extGroup.FireSessionCompact(ctx, extension.CompactionInfo{
+			payload := extension.CompactionInfo{
 				Strategy:       fmt.Sprintf("%v", ci["strategy"]),
 				MessagesBefore: toInt(ci["messagesBefore"]),
 				MessagesAfter:  toInt(ci["messagesAfter"]),
-			})
+			}
+			// Decode the typed facts slice. The producer
+			// (backend.compactIfNeeded / compactReactive) embeds
+			// []compaction.Fact directly on the map under "facts" — no
+			// stringly-typed intermediate, so a single type assertion is
+			// enough. Missing key and empty slice are treated identically.
+			if rawFacts, ok := ci["facts"].([]compaction.Fact); ok && len(rawFacts) > 0 {
+				payload.Facts = make([]extension.CompactionFact, 0, len(rawFacts))
+				for _, f := range rawFacts {
+					// Source (message index) is intentionally dropped — the
+					// messages it points into are gone by the time the hook
+					// fires, and index stability across hook boundaries is
+					// not part of the contract.
+					payload.Facts = append(payload.Facts, extension.CompactionFact{
+						Type:    f.Type,
+						Content: f.Content,
+					})
+				}
+				utils.Debug("Session", fmt.Sprintf("session_compact bridge: forwarding %d facts to extensions", len(payload.Facts)))
+			} else {
+				utils.Debug("Session", "session_compact bridge: no facts in payload")
+			}
+			extGroup.FireSessionCompact(ctx, payload)
 		}
 	}
 

@@ -122,7 +122,23 @@ sdk.FireAgentEnd(ctx, AgentInfo{Name: "worker", Task: "test"})
 
 ```go
 sdk.FireSessionBeforeCompact(ctx, CompactionInfo{...}) // returns (cancelled bool, error)
-sdk.FireSessionCompact(ctx, CompactionInfo{...})
+
+// session_compact fires after compaction completes. CompactionInfo.Facts
+// carries structured snippets the engine extracted from the pre-compaction
+// message set ({Type, Content} pairs). Extensions maintaining external memory
+// (vector store, knowledge graph, SQLite) can persist these durably before
+// the source messages are discarded. Facts may be empty when no patterns
+// matched.
+sdk.FireSessionCompact(ctx, CompactionInfo{
+    Strategy:       "auto",
+    MessagesBefore: 50,
+    MessagesAfter:  10,
+    Facts: []CompactionFact{
+        {Type: "decision", Content: "decided to use SQLite"},
+        {Type: "file_mod", Content: "/Users/foo/project/main.go"},
+    },
+})
+
 sdk.FireSessionBeforeFork(ctx, ForkInfo{...})           // returns (cancelled bool, error)
 sdk.FireSessionFork(ctx, ForkInfo{...})
 sdk.FireSessionBeforeSwitch(ctx)

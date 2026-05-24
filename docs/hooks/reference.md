@@ -93,7 +93,7 @@ type BeforePromptResult struct {
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
 | `session_before_compact` | Before context compaction | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter}` | `bool` | Return `true` to cancel compaction. |
-| `session_compact` | After compaction completes | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter}` | ignored | Observe only |
+| `session_compact` | After compaction completes | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter, Facts}` | ignored | Observe only. `Facts` carries structured snippets extracted from the pre-compaction messages — useful for persisting to external memory before they're discarded. May be empty. |
 | `session_before_fork` | Before session fork | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | `bool` | Return `true` to cancel fork. |
 | `session_fork` | After fork completes | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | ignored | Observe only |
 | `session_before_switch` | Before session switch | `nil` | ignored | Observe only |
@@ -106,8 +106,19 @@ type CompactionInfo struct {
     Strategy       string
     MessagesBefore int
     MessagesAfter  int
+    Facts          []CompactionFact // structured facts extracted from compacted messages; may be empty
 }
 ```
+
+**CompactionFact**
+```go
+type CompactionFact struct {
+    Type    string // "decision" | "file_mod" | "error" | "preference" | "discovery"
+    Content string // short snippet (sentence or path)
+}
+```
+
+`Facts` is populated on `session_compact` only (not on `session_before_compact`), and may be empty when step-1 micro-compaction alone is sufficient and no fact patterns matched. Message indices are intentionally not exposed — by the time the hook fires, the source messages have been mutated or truncated.
 
 **ForkInfo**
 ```go

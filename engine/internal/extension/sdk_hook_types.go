@@ -46,11 +46,35 @@ type ErrorInfo struct {
 	HttpStatus   int           `json:"httpStatus,omitempty"`
 }
 
+// CompactionFact is a single structured fact extracted from messages that
+// were about to be compacted away. Surfaced on the session_compact hook so
+// extensions maintaining external memory (vector stores, knowledge graphs,
+// SQLite) can durably persist them before the source messages are discarded.
+//
+// Type is one of: "decision", "file_mod", "error", "preference", "discovery".
+// Content is a short human-readable snippet (sentence or path).
+//
+// Field stability: this struct is part of the published hook contract. New
+// fields may be added with zero-value defaults; existing fields must not be
+// removed or renamed.
+type CompactionFact struct {
+	Type    string `json:"type"`
+	Content string `json:"content"`
+}
+
 // CompactionInfo describes a compaction event.
+//
+// Facts carries the structured facts the engine extracted from the
+// pre-compaction message set. May be empty (nil or zero-length) when the
+// extractor found no matching patterns, or when only step-1 micro-compaction
+// ran. Extensions should treat each CompactionFact as a self-contained
+// string-pair — message indices are intentionally not exposed because they
+// reference messages that no longer exist after the hook fires.
 type CompactionInfo struct {
-	Strategy       string `json:"strategy"`
-	MessagesBefore int    `json:"messagesBefore"`
-	MessagesAfter  int    `json:"messagesAfter"`
+	Strategy       string           `json:"strategy"`
+	MessagesBefore int              `json:"messagesBefore"`
+	MessagesAfter  int              `json:"messagesAfter"`
+	Facts          []CompactionFact `json:"facts,omitempty"`
 }
 
 // ForkInfo describes a session fork event.

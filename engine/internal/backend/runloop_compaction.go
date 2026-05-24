@@ -62,6 +62,14 @@ func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversa
 	b.emit(run, types.NormalizedEvent{Data: &types.CompactingEvent{Active: true}})
 	msgBefore := len(conv.Messages)
 
+	// Extract facts up front so they reflect the pre-compaction state and so
+	// the same slice can serve both the in-context summary (step 2) and the
+	// session_compact hook payload. ExtractFacts is safe on empty/nil inputs.
+	// Hoisting this above MicroCompact ensures facts are always available for
+	// the hook, even when step 1 alone is sufficient and step 2 does not run.
+	facts := compaction.ExtractFacts(conv.Messages)
+	utils.Log("ApiBackend", fmt.Sprintf("proactive compact: extracted %d facts from %d messages", len(facts), msgBefore))
+
 	// Step 1: MicroCompact (tool results, then assistant text)
 	cleared := conversation.MicroCompact(conv, 10)
 	utils.Log("ApiBackend", fmt.Sprintf("proactive compact step 1: tokens=%d limit=%d micro-compact cleared %d", usage.Tokens, tokenLimit, cleared))
@@ -73,13 +81,12 @@ func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversa
 				"Use the SearchHistory tool to find specific details from the compacted conversation, or re-read relevant files.", cleared))
 	}
 
-	// Step 2: if still above the limit, extract facts and hard-truncate.
-	// GetContextUsage falls back to estimation here because MicroCompact
-	// invalidated the cached token count.
+	// Step 2: if still above the limit, format the previously-extracted facts
+	// and hard-truncate. GetContextUsage falls back to estimation here because
+	// MicroCompact invalidated the cached token count.
 	var summary string
 	usageAfterMicro := conversation.GetContextUsage(conv, contextWindow)
 	if usageAfterMicro.Tokens > tokenLimit {
-		facts := compaction.ExtractFacts(conv.Messages)
 		conversation.Compact(conv, 10)
 		if len(facts) > 0 {
 			summary = compaction.FormatFactsSummary(facts)
@@ -94,8 +101,13 @@ func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversa
 				}
 				conv.Messages = append([]types.LlmMessage{factMsg, restoreMsg}, conv.Messages...)
 			}
+			utils.Log("ApiBackend", fmt.Sprintf("proactive compact step 2: hard-truncated and injected fact summary (%d facts)", len(facts)))
+		} else {
+			utils.Debug("ApiBackend", "proactive compact step 2: hard-truncated with no facts to summarize")
 		}
-		utils.Log("ApiBackend", fmt.Sprintf("proactive compact step 2: hard-truncated to %d messages", len(conv.Messages)))
+		utils.Log("ApiBackend", fmt.Sprintf("proactive compact step 2: %d messages remain", len(conv.Messages)))
+	} else {
+		utils.Debug("ApiBackend", fmt.Sprintf("proactive compact: step 1 sufficient, skipping hard truncate (tokens=%d limit=%d)", usageAfterMicro.Tokens, tokenLimit))
 	}
 
 	// Emit enriched completion event so clients can render a compaction marker.
@@ -119,10 +131,15 @@ func (b *ApiBackend) compactIfNeeded(run *activeRun, conv *conversation.Conversa
 	}
 
 	if hooks.OnSessionCompact != nil {
+		// Pass facts as a typed slice value on the map payload. The session
+		// bridge in prompt_runconfig.go downcasts it directly — no
+		// stringly-typed intermediate. nil is fine; the bridge handles
+		// missing/empty facts symmetrically.
 		hooks.OnSessionCompact(run.requestID, map[string]interface{}{
 			"strategy":       "auto",
 			"messagesBefore": msgBefore,
 			"messagesAfter":  msgAfter,
+			"facts":          facts,
 		})
 	}
 }
@@ -144,6 +161,13 @@ func (b *ApiBackend) compactReactive(run *activeRun, conv *conversation.Conversa
 	utils.Log("ApiBackend", fmt.Sprintf("prompt_too_long, compaction attempt %d/%d", attempt, maxPromptTooLongRetries))
 	msgBefore := len(conv.Messages)
 
+	// Extract facts up front (above all message mutation) so they reflect the
+	// pre-compaction state and so the same slice serves both the in-context
+	// summary and the session_compact hook payload. ExtractFacts is safe on
+	// empty/nil inputs.
+	facts := compaction.ExtractFacts(conv.Messages)
+	utils.Log("ApiBackend", fmt.Sprintf("reactive compact: extracted %d facts from %d messages", len(facts), msgBefore))
+
 	// Step 1: micro-compact (tool results, then assistant text)
 	cleared := conversation.MicroCompact(conv, 10)
 	utils.Log("ApiBackend", fmt.Sprintf("prompt_too_long micro-compact cleared %d blocks", cleared))
@@ -155,9 +179,8 @@ func (b *ApiBackend) compactReactive(run *activeRun, conv *conversation.Conversa
 				"Use the SearchHistory tool to find specific details from the compacted conversation, or re-read relevant files.", cleared))
 	}
 
-	// Step 2: fact extraction
+	// Step 2: format the previously-extracted facts into an in-context summary.
 	var summary string
-	facts := compaction.ExtractFacts(conv.Messages)
 	if len(facts) > 0 {
 		summary = compaction.FormatFactsSummary(facts)
 		restoreMsg := compaction.PostCompactRestore(conv, compaction.ExtractRecentFiles(conv.Messages), nil)
@@ -171,6 +194,9 @@ func (b *ApiBackend) compactReactive(run *activeRun, conv *conversation.Conversa
 			}
 			conv.Messages = append([]types.LlmMessage{factMsg, restoreMsg}, conv.Messages...)
 		}
+		utils.Log("ApiBackend", fmt.Sprintf("reactive compact step 2: injected fact summary (%d facts)", len(facts)))
+	} else {
+		utils.Debug("ApiBackend", "reactive compact step 2: no facts extracted, no summary injected")
 	}
 
 	// Step 3: hard truncate -- use progressively smaller keepTurns on each retry
@@ -200,10 +226,13 @@ func (b *ApiBackend) compactReactive(run *activeRun, conv *conversation.Conversa
 
 	// Fire session_compact hook (observe)
 	if hooks.OnSessionCompact != nil {
+		// Pass facts as a typed slice value on the map payload. See
+		// compactIfNeeded for the rationale (no stringly-typed round-trip).
 		hooks.OnSessionCompact(run.requestID, map[string]interface{}{
 			"strategy":       "reactive",
 			"messagesBefore": msgBefore,
 			"messagesAfter":  msgAfter,
+			"facts":          facts,
 		})
 	}
 	return true
