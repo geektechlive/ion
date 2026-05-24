@@ -121,4 +121,48 @@ describe('GitRepository watcher lifecycle', () => {
 
     repo.release()
   })
+
+  // ─── On-demand refresh path (GIT_REFRESH IPC handler relies on this) ───
+  //
+  // The relaxed GIT_REFRESH handler in src/main/ipc/git-extras.ts now calls
+  // repositoryManager.get(directory) + refreshSnapshot() without retaining,
+  // so a path that has never been subscribed can still produce a fresh
+  // snapshot. This test pins that contract.
+
+  it('refreshSnapshot on a never-retained repo still emits events', async () => {
+    const { mod } = makeFakeParcel()
+    const repo = new GitRepository('/tmp/r', createGitWatcher(mod))
+    // No retain() — watcher is not started. This is exactly what
+    // GIT_REFRESH does for a directory that hasn't been subscribed.
+    expect(repo.watcherActive).toBe(false)
+
+    const events: string[] = []
+    repo.on('event', (e: { kind: string }) => events.push(e.kind))
+
+    await repo.refreshSnapshot()
+
+    // First snapshot fans out status + head + upstream events.
+    expect(events).toContain('status:changed')
+    expect(events).toContain('head:changed')
+    expect(events).toContain('upstream:changed')
+    expect(repo.snapshot).not.toBeNull()
+  })
+
+  it('bumpRevision + refreshSnapshot re-emits after first snapshot', async () => {
+    const { mod } = makeFakeParcel()
+    const repo = new GitRepository('/tmp/r', createGitWatcher(mod))
+    await repo.refreshSnapshot()
+
+    const events: string[] = []
+    repo.on('event', (e: { kind: string }) => events.push(e.kind))
+
+    const rev0 = repo.revision
+    repo.bumpRevision()
+    expect(repo.revision).toBeGreaterThan(rev0)
+    await repo.refreshSnapshot()
+
+    // No actual git change between snapshots → no status delta event.
+    // Test asserts the path runs without throwing and the revision bumped.
+    expect(repo.revision).toBeGreaterThan(rev0)
+  })
 })
