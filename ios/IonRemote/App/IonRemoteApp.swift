@@ -25,6 +25,12 @@ struct IonRemoteApp: App {
                         guard !viewModel.pairedDevices.isEmpty else { break }
                         // Resume transport without wiping state.
                         viewModel.resumeTransport()
+                        // Refresh git info for every visible tab dir — the
+                        // desktop watcher may have dropped events while we
+                        // were backgrounded, so we can't trust cached state.
+                        if viewModel.showGitInfoInTabList {
+                            viewModel.requestAllGitChanges()
+                        }
                     case .background:
                         // Stop transport but preserve all state (tabs, messages,
                         // navigation, typed input) so the user returns to the

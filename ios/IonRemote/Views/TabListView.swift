@@ -34,10 +34,14 @@ struct TabListView: View {
             SettingsView()
         }
         .onAppear {
-            if viewModel.showGitInfoInTabList { viewModel.requestMissingGitChanges() }
+            // Always refresh git info for every tab dir on appear — covers
+            // the silent-staleness case where the desktop watcher stopped
+            // delivering events. Cheap (one git status per dir) and only
+            // fires when the list becomes visible.
+            if viewModel.showGitInfoInTabList { viewModel.requestAllGitChanges() }
         }
         .onChange(of: viewModel.showGitInfoInTabList) { _, enabled in
-            if enabled { viewModel.requestMissingGitChanges() }
+            if enabled { viewModel.requestAllGitChanges() }
         }
         .sheet(isPresented: $showPairingSheet) {
             PairingView()

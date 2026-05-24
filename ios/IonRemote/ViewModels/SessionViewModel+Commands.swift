@@ -415,6 +415,19 @@ extension SessionViewModel {
         }
     }
 
+    /// Request git changes for every unique tab working directory — including
+    /// ones that already have cached (potentially stale) data. Called when the
+    /// app foregrounds and when the tab list appears, so the user sees fresh
+    /// branch + ahead/behind info on every appear. The desktop's git watcher
+    /// is best-effort and can silently stop delivering events; this guarantees
+    /// the iOS tab list reflects current state.
+    func requestAllGitChanges() {
+        let dirs = Set(tabs.map(\.workingDirectory).filter { !$0.isEmpty })
+        for dir in dirs {
+            requestGitChanges(directory: dir)
+        }
+    }
+
     func requestGitGraph(directory: String, skip: Int? = nil, limit: Int? = nil) {
         send(.gitGraph(directory: directory, skip: skip, limit: limit))
     }
