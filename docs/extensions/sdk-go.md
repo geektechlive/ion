@@ -176,6 +176,75 @@ sdk.FireCapabilityMatch(ctx, CapabilityMatchInfo{...}) // returns *CapabilityMat
 sdk.FireCapabilityInvoke(ctx, capID, input)            // returns (blocked, reason)
 ```
 
+**Plan-mode hooks:**
+
+```go
+// Fired when the model calls the EnterPlanMode sentinel tool. Handlers may
+// veto the entry by returning Allow=&false with a Reason returned to the
+// model. Default is auto-approve. Last non-nil Allow wins.
+sdk.FireBeforePlanModeEnter(ctx, PlanModeEnterInfo{Source: "model_tool"})
+// returns (allowed bool, reason string)
+
+// Fired when the model calls the ExitPlanMode sentinel tool. Handlers may
+// veto the exit by returning Allow=&false with a Reason returned to the
+// model (e.g. "plan is too short, add verification steps"). Default is
+// auto-approve. Last non-nil Allow wins.
+sdk.FireBeforePlanModeExit(ctx, planFilePath)
+// returns (allowed bool, reason string)
+```
+
+See [ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md) for the
+distinction between the plan-mode *state* event (`engine_plan_mode_changed`,
+fires only on confirmed transitions) and the *workflow* event
+(`engine_plan_proposal`, fires when the model proposes an exit).
+
+**Early-stop continuation hooks:**
+
+```go
+// Fired after the model emits end_turn / stop, when the engine has
+// detected the run is below the configured token budget and is
+// considering whether to nudge the model to keep working. Per-field
+// last-non-nil-across-hosts wins. Returning ContinueMessage="" lets the
+// engine fall through to the wire-protocol round trip (see below).
+sdk.FireBeforeEarlyStopDecision(ctx, EarlyStopDecisionInfo{
+    RunID:                  "...",
+    Model:                  "...",
+    TurnNumber:             1,
+    CumulativeOutputTokens: 7200,
+    Budget:                 8000,
+    ThresholdPct:           90,
+    WouldContinue:          true,
+})
+// returns *EarlyStopDecisionResult (or nil for "no opinion")
+
+// Fired after a continuation has been injected, before the next turn
+// starts. Observe-only — return value ignored. Useful for metrics, UI
+// breadcrumbs, or coordinating sibling agents.
+sdk.FireEarlyStopContinued(ctx, EarlyStopContinuedInfo{
+    RunID:        "...",
+    InjectedText: "Keep working — do not summarize.",
+})
+```
+
+If no extension responds with a decisive `ForceContinue` or `ContinueMessage`,
+the engine emits `engine_early_stop_decision_request` on the wire and blocks
+briefly for a `early_stop_decision_response` from a socket-only harness. See
+[ADR-002](../architecture/adr/002-engine-vs-harness-early-stop.md).
+
+**System inject hooks:**
+
+```go
+// Fired before the engine injects a system message (plan_mode_reminder,
+// turn_limit_warning, max_token_continue, early_stop_continue). Handlers
+// can rewrite the text or suppress the injection entirely.
+sdk.FireSystemInject(ctx, SystemInjectInfo{
+    Kind: "early_stop_continue",
+    DefaultText: "...",
+    // Hook-specific fields per Kind
+})
+// returns *SystemInjectResult (Text replaces, Suppress=true cancels)
+```
+
 ## Context
 
 The execution context passed to all hook handlers, tool execute functions, and command execute functions.
@@ -230,9 +299,9 @@ type ExtensionConfig struct {
 
 ### Context methods
 
-**`Emit(event)`** -- emit an engine event to socket clients.
+**`Emit(event)`** -- emit an engine event to socket clients. During hook execution events are buffered and returned with the hook response; outside hooks they fire immediately as `ext/emit` notifications.
 
-**`GetContextUsage()`** -- returns current context window utilization.
+**`GetContextUsage()`** -- returns current context window utilization for the active conversation, or `nil` when no conversation is active. Reads live counters maintained by the session manager — repeated calls within a single hook are cheap.
 
 ```go
 type ContextUsage struct {
@@ -241,6 +310,38 @@ type ContextUsage struct {
     Cost    float64
 }
 ```
+
+Useful for: warning the user before compaction kicks in; downgrading model selection under heavy context pressure.
+
+**`SearchHistory(query, maxResults)`** -- search the active conversation's persisted message history for content matching `query`. Returns up to `maxResults` matches (engine-capped; pass `0` for the default). Returns an empty slice when no conversation is active.
+
+```go
+type HistoryMatch struct {
+    Index   int
+    Role    string
+    Snippet string
+}
+```
+
+Searches the full persisted record (including pre-compaction messages), not just the currently-loaded context. Useful for recall commands and harness-side memory features.
+
+**`SetPlanMode(enabled, source)`** -- imperatively flip the session's plan mode on or off. `source` is a free-form audit string (`"slash_command"`, `"hook"`, `"user_approval"`, etc.) that is logged with the transition. Fires `engine_plan_mode_changed` as a state event — this is a confirmed transition, not a proposal. See [ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md) for the state-vs-workflow distinction.
+
+**`GetPlanMode()`** -- returns the current plan-mode state and (if active) the path to the plan file. Reads the session manager's authoritative state, not any cached value.
+
+```go
+enabled, planFilePath := ctx.GetPlanMode()
+```
+
+**`Elicit(info)`** -- ask the user a structured question via the connected client. Blocks the calling hook until the client replies or times out. The wire protocol promotes this to `engine_elicitation_request` / `elicitation_response` so socket-only consumers can present the prompt.
+
+**`SuppressTool(name)`** -- hide a built-in tool from the model on the current turn. Use sparingly.
+
+**`CallTool(name, input)`** -- dispatch a tool call from extension code through the same registry the LLM uses. Returns `(content, isError, error)`. Subject to the session's permission policy. Does **not** fire per-tool hooks or `permission_request` (prevents re-entrant recursion into the calling extension).
+
+**`SendPrompt(text, model)`** -- queue a fresh prompt on this session's agent loop. Resolves once the engine has accepted the prompt; does not wait for the LLM to finish. Pass `model=""` to use the session default.
+
+**Recursion hazard**: calling `SendPrompt` from inside `before_prompt` or any pre-prompt hook triggers a new run that fires the same hook again. Guard with a per-session in-flight flag.
 
 **`Abort()`** -- abort the current session run.
 
@@ -251,6 +352,8 @@ type ContextUsage struct {
 **`RegisterProcess`**, **`DeregisterProcess`**, **`ListProcesses`**, **`TerminateProcess`**, **`CleanStaleProcesses`** -- process lifecycle management (see TypeScript SDK for semantics).
 
 **`DispatchAgent(opts)`** -- dispatch an engine-native child agent.
+
+**`DiscoverAgents(opts)`** -- list agents discoverable via the harness's configured search paths (extension agents, project agents, user agents). Returns a structured result the harness can filter and register via `RegisterAgent`.
 
 ## Type definitions
 

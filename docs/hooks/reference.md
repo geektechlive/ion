@@ -440,7 +440,7 @@ type SystemInjectInfo struct {
 | `"plan_mode_reminder"` | Turn 2+ during plan mode | `[SYSTEM] Plan mode still active...` |
 | `"turn_limit_warning"` | 2 turns before `maxTurns` | `[SYSTEM] You are approaching your turn limit...` |
 | `"max_token_continue"` | LLM response hits `max_tokens` | `Continue from where you left off.` |
-| `"early_stop_continue"` | Model emits `end_turn` below the configured token budget | `Stopped at X% of token target (Y / Z). Keep working — do not summarize.` |
+| `"early_stop_continue"` | Model emits `end_turn` below the configured token budget | harness-supplied (none by default) — see [ADR-002](../architecture/adr/002-engine-vs-harness-early-stop.md) |
 
 #### `SystemInjectResult`
 
@@ -453,16 +453,20 @@ type SystemInjectResult struct {
 
 ## Early-Stop Continuation (2)
 
-These hooks let harness extensions take **programmatic control** of the early-stop continuation feature — the engine's port of Claude Code's `TOKEN_BUDGET` continuation tracker. See [`earlyStopContinue` in engine.json](../configuration/engine-json.md#earlystopcontinue) for the underlying mechanism.
+These hooks let harness extensions take **programmatic control** of the early-stop continuation feature. The engine provides the mechanism — cumulative output-token tracking, threshold comparison, the decision hook, and the re-run-turn machinery — but does **not** ship an opinion about whether to nudge or what text to nudge with. Both are policy decisions that belong to the harness consumer. See [ADR-002: Engine vs Harness for Early-Stop Continuation](../architecture/adr/002-engine-vs-harness-early-stop.md) for the full rationale and [`earlyStopContinue` in engine.json](../configuration/engine-json.md#earlystopcontinue) for the configuration block.
+
+The feature ships **off by default**. To enable it, a harness must either flip `earlyStopContinue.enabled = true` in `engine.json`, pass `RunOptions.EarlyStopEnabled = &true` per dispatch, or wire a `before_early_stop_decision` handler that returns `ForceContinue: &true`. The desktop ships [`desktop/src/main/early-stop-policy.ts`](https://github.com/dsswift/ion/blob/main/desktop/src/main/early-stop-policy.ts) as a reference policy implementation — third-party harnesses can copy it verbatim or build their own.
 
 When the model emits `end_turn` / `stop` below the configured output-token target, the engine fires `before_early_stop_decision` so handlers can:
 
 - **Force a specific verdict** (`ForceContinue: &true | &false`) — e.g. "always continue while a `TodoWrite` is in progress" or "stop now because the user already approved the plan."
 - **Override the budget mid-run** (`OverrideBudget`) — e.g. "user just expanded scope; bump from 8k to 16k."
 - **Override the threshold** (`OverrideThresholdPct`).
-- **Supply a custom continuation prompt** (`ContinueMessage`) — replaces the engine's default "Keep working" text.
+- **Supply the continuation prompt** (`ContinueMessage`) — required for any nudge to fire. The engine has no default text; if no handler supplies a message, the engine logs `earlyStop: enabled but no ContinueMessage supplied; skipping injection` and falls through to normal completion.
 
 After the engine has decided to continue (and the message has been injected), `early_stop_continued` fires as an observation point — useful for metrics, UI breadcrumbs, or coordinating sibling agents.
+
+If no extension expressed an opinion via `before_early_stop_decision`, the engine emits a `engine_early_stop_decision_request` event on the wire and blocks briefly (100ms timeout) for a `early_stop_decision_response` client command. This lets socket-only harnesses (the desktop, custom UIs, headless tooling) participate in the decision without running a subprocess extension.
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|

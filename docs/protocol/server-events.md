@@ -480,10 +480,61 @@ A permission request from the engine (engine-level, separate from the LLM provid
 
 #### engine_plan_mode_changed
 
-Signals a change in plan mode status.
+Signals a confirmed change in plan mode status. **State transitions only** —
+the model calling `ExitPlanMode` does **not** fire this event, because the
+mode change is deferred to the user-approval chokepoint. See
+[ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md) for
+the state-vs-workflow split and [`engine_plan_proposal`](#engine_plan_proposal)
+for the workflow signal that fires when the model proposes an exit.
+
+Triggers:
+
+- The harness calls `SetPlanMode(true)` or `SetPlanMode(false)`.
+- A run starts with `PlanMode: true` in `RunOptions`.
+- Plan mode is aborted (engine-internal failure path).
+- The user-approval chokepoint approves the exit and calls `SetPlanMode(false)`.
 
 | Field              | Type    | Description                       |
 |--------------------|---------|-----------------------------------|
 | `type`             | `"engine_plan_mode_changed"` | Event type       |
 | `planModeEnabled`  | boolean | Whether plan mode is now active   |
-| `planFilePath`     | string  | Path to the plan file             |
+| `planFilePath`     | string  | Path to the plan file (omitempty) |
+| `planSlug`         | string  | Human-readable basename of the plan file with `.md` stripped (omitempty) |
+
+#### engine_plan_proposal
+
+Workflow event emitted when the model proposes a plan-mode transition. The
+proposal is a *request* — the actual state change is deferred to the
+consumer's user-approval chokepoint. Distinct from
+[`engine_plan_mode_changed`](#engine_plan_mode_changed), which fires only on
+confirmed state transitions. See
+[ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md) for
+the rationale.
+
+The `planProposalKind` field discriminates the proposal type. Consumers must
+switch on the kind and treat unknown kinds as forward-compatible no-ops.
+
+| Kind     | Trigger                              |
+|----------|--------------------------------------|
+| `"exit"` | The model called the `ExitPlanMode` tool. The consumer should present an approval UI (e.g. a card with "Implement" and "Keep planning" actions). If the user approves, the consumer calls `SetPlanMode(false)`, which fires the corresponding `engine_plan_mode_changed{Enabled: false}` event. If the user dismisses, no state change occurs. |
+
+Future kinds may include `"enter"` (proposed entry) and `"amend"` (proposed
+amendment to an in-progress plan).
+
+| Field              | Type    | Description                       |
+|--------------------|---------|-----------------------------------|
+| `type`             | `"engine_plan_proposal"` | Event type       |
+| `planProposalKind` | string  | Discriminator: `"exit"` initially. Unknown kinds must be ignored. |
+| `planFilePath`     | string  | Path to the plan file (omitempty) |
+| `planSlug`         | string  | Human-readable basename of the plan file with `.md` stripped (omitempty) |
+
+**Relationship to the permission denial.** When the model calls
+`ExitPlanMode`, the engine also records a permission denial that flows
+through `engine_status.permissionDenials` and (at run end)
+`task_complete.permissionDenials`. The denial is a *tool-permission record*
+and was the only signal available before this event existed. Consumers that
+still derive approval-card rendering from `permissionDenied.tools[]` keep
+working unchanged; new consumers should prefer the typed
+`engine_plan_proposal` event because it arrives as soon as the model calls
+the tool (not at run end) and carries `planFilePath` / `planSlug` directly
+without scraping `toolInput`.

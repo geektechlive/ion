@@ -149,7 +149,17 @@ When the model calls `ExitPlanMode` to signal the plan is ready for review:
 
 1. The engine fires the [`before_plan_mode_exit`](../hooks/reference.md#plan-mode-3) hook with the plan file path. Extensions can veto by returning `Allow: &false` with a `Reason` that is returned to the model (e.g. "plan is too short, add verification steps"). Default is auto-approve.
 2. If denied, the run **continues** in plan mode. The model receives the denial reason and can continue planning.
-3. If allowed, the run terminates, a `PermissionDenial` is recorded, and `engine_plan_mode_changed{enabled: false}` is emitted so the desktop surfaces the plan-ready card.
+3. If allowed, the engine records a `PermissionDenial` (so the run-end signal carries the exit context on `task_complete.permissionDenials`) and emits the typed `engine_plan_proposal{kind: "exit", planFilePath, planSlug}` workflow event. The run then terminates.
+4. The engine does **not** emit `engine_plan_mode_changed{enabled: false}` at this point. The model's `ExitPlanMode` call is a *proposal*, not a confirmed state transition — the mode does not actually change until the consumer's user-approval chokepoint (e.g. the desktop's Implement button) approves the exit and calls `SetPlanMode(false)`, which then fires `engine_plan_mode_changed{enabled: false}` as a state event.
+
+### State events vs workflow events
+
+The plan-mode lifecycle is the canonical example of [ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md)'s split between state-machine notifications and workflow proposals:
+
+- **`engine_plan_mode_changed`** — fires only on confirmed state transitions (harness `SetPlanMode`, run start with `PlanMode: true`, plan-mode abort, user-approval chokepoint). Carries `planModeEnabled` so consumers can mirror the engine's current mode.
+- **`engine_plan_proposal{kind: "exit"}`** — fires when the model proposes an exit by calling `ExitPlanMode`. Does **not** change the engine's mode; the consumer is responsible for deciding whether to call `SetPlanMode(false)` based on user input.
+
+Consumers should listen for both events with distinct handlers: one updates cached mode state, the other surfaces the approval UI. The two events never produce conflicting state transitions because only `engine_plan_mode_changed` is authoritative about the engine's actual mode.
 
 ### Extension-initiated plan-mode control
 
