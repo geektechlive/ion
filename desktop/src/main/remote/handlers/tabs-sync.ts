@@ -14,6 +14,7 @@
 import { log as _log } from '../../logger'
 import { state, terminalScrollback, modelCache } from '../../state'
 import { readSettings } from '../../settings-store'
+import { projectCurrentSettings, projectableSchema, projectableGroups } from '../../projectable-settings'
 import { getRemoteTabStates } from '../snapshot'
 import { readRemoteDisplay } from './display'
 
@@ -55,6 +56,20 @@ export async function sendSync(send: (event: any) => void): Promise<void> {
   })
   const engineProfiles = Array.isArray(syncSettings.engineProfiles) ? syncSettings.engineProfiles : []
   send({ type: 'engine_profiles', profiles: engineProfiles })
+  // Desktop projectable settings snapshot. Carried alongside the main
+  // `snapshot` payload so iOS sees the desktop's user preferences from
+  // the moment of pairing. Snapshot semantics — consumers replace their
+  // cached view with the payload, never merge. See
+  // `desktop/src/main/projectable-settings.ts` for the canonical
+  // allowlist and the rationale for which settings are projected. The
+  // schema + groups ride alongside the values so iOS auto-renders the
+  // Settings detail view without hardcoding the projection metadata.
+  send({
+    type: 'desktop_settings_snapshot',
+    settings: projectCurrentSettings(),
+    schema: projectableSchema(),
+    groups: projectableGroups(),
+  })
   for (const tab of tabs) {
     if (tab.isTerminalOnly && tab.terminalInstances && tab.terminalInstances.length > 0) {
       try {

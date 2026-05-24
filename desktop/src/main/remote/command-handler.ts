@@ -74,6 +74,7 @@ import {
 } from './handlers/diagnostics'
 import { handleLoadAttachments } from './handlers/attachments'
 import { handleSetRemoteDisplay } from './handlers/display'
+import { handleSetDesktopSetting } from './handlers/desktop-settings'
 import type { RemoteCommand } from './protocol'
 
 function log(msg: string): void {
@@ -144,5 +145,6 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'diagnostic_logs_response': handleDiagnosticLogsResponse(cmd, deviceId); break
     case 'load_attachments': await handleLoadAttachments(cmd, deviceId); break
     case 'set_remote_display': await handleSetRemoteDisplay(cmd, deviceId); break
+    case 'set_desktop_setting': await handleSetDesktopSetting(cmd, deviceId); break
   }
 }
