@@ -74,6 +74,12 @@ vi.mock('../session-store-helpers', () => ({
 }))
 
 // Preferences store: supply enough to satisfy the auto-move guard.
+// `createTabInDirectory` also calls `addRecentBaseDirectory` and
+// `incrementDirectoryUsage` on the prefs store; both are no-ops here. The
+// `tabGroups` list is needed by the new `pinToGroupId` describe block so
+// the default-group lookup resolves to a concrete id when the caller does
+// NOT supply pinToGroupId — that's the negative-control case in the test
+// for default-group placement.
 vi.mock('../../preferences', () => ({
   usePreferencesStore: {
     getState: vi.fn(() => ({
@@ -86,6 +92,13 @@ vi.mock('../../preferences', () => ({
       defaultPermissionMode: 'auto' as const,
       planModelSplitEnabled: false,
       planModeModel: null,
+      addRecentBaseDirectory: vi.fn(),
+      incrementDirectoryUsage: vi.fn(),
+      defaultTallConversation: false,
+      tabGroups: [
+        { id: 'group-default', label: 'Default', isDefault: true, order: 0 },
+        { id: 'group-planning', label: 'Planning', isDefault: false, order: 1 },
+      ],
     })),
   },
 }))
@@ -364,5 +377,135 @@ describe('toggleTabGroupPin', () => {
 
     expect(state.tabs[0].groupPinned).toBe(true)
     expect(state.tabs[1].groupPinned).toBe(true) // unchanged
+  })
+})
+
+// ── moveTabToGroupAndPin ─────────────────────────────────────────────────────
+//
+// The combined action must both:
+//   1. Move the tab into the target group (same reordering as moveTabToGroup).
+//   2. Set groupPinned=true in the same store update so that any subsequent
+//      sendMessage's auto-movement guard (gated on !groupPinned in
+//      send-slice.ts) skips this tab.
+//
+// We deliberately do NOT re-spy moveTabToGroup here — buildHarness does that
+// for the auto-move tests above. Instead we exercise the real implementation
+// on a fresh harness, then verify a follow-up sendMessage is suppressed.
+
+describe('moveTabToGroupAndPin', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPrompt.mockResolvedValue(undefined)
+  })
+
+  it('sets groupId and groupPinned=true atomically', () => {
+    const tab = makeTab({ groupId: INTERMEDIATE_GROUP, groupPinned: false })
+    const { state } = buildHarness(tab)
+
+    state.moveTabToGroupAndPin('tab-1', PLANNING_GROUP)
+
+    expect(state.tabs[0].groupId).toBe(PLANNING_GROUP)
+    expect(state.tabs[0].groupPinned).toBe(true)
+  })
+
+  it('suppresses subsequent auto-movement in plan mode', () => {
+    // Use a tab in plan mode but in a non-planning group, so that without
+    // pinning, sendMessage would normally move it. After moveTabToGroupAndPin,
+    // it should already be pinned and the send-slice should skip the move.
+    const tab = makeTab({
+      permissionMode: 'plan',
+      groupId: INTERMEDIATE_GROUP,
+      groupPinned: false,
+    })
+    const { state, moveTabToGroup } = buildHarness(tab)
+
+    // Pin it into the planning group.
+    state.moveTabToGroupAndPin('tab-1', PLANNING_GROUP)
+    // Reset the spy: buildHarness overrides moveTabToGroup with a spy, but
+    // the pin-aware action does not go through that spy (it sets fields
+    // directly). Clear the spy so we observe only the sendMessage's
+    // behaviour from this point onward.
+    moveTabToGroup.mockClear()
+
+    state.sendMessage('hello', '/home/test')
+
+    expect(moveTabToGroup).not.toHaveBeenCalled()
+    expect(state.tabs[0].groupId).toBe(PLANNING_GROUP)
+    expect(state.tabs[0].groupPinned).toBe(true)
+  })
+
+  it('is a no-op for an unknown tabId', () => {
+    const tab = makeTab({ groupId: INTERMEDIATE_GROUP, groupPinned: false })
+    const { state } = buildHarness(tab)
+
+    state.moveTabToGroupAndPin('nonexistent', PLANNING_GROUP)
+
+    expect(state.tabs[0].groupId).toBe(INTERMEDIATE_GROUP)
+    expect(state.tabs[0].groupPinned).toBe(false)
+  })
+})
+
+// ── createTabInDirectory with pinToGroupId ───────────────────────────────────
+//
+// The 4th-positional pinToGroupId argument is the renderer-side foundation for
+// the iOS per-group "+" button: when set in manual mode, the new tab is born
+// inside that group with groupPinned=true so the very first sendMessage's
+// auto-movement skips it. When omitted (or in non-manual mode), behavior is
+// unchanged — the tab lands in the configured default group, unpinned.
+
+describe('createTabInDirectory with pinToGroupId', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPrompt.mockResolvedValue(undefined)
+    // Round out the window stub with the APIs createTabInDirectory touches.
+    // window.ion.createTab returns a tabId; gitIsRepo is called only when
+    // useWorktree is true (we set it false), but mock it defensively.
+    ;(globalThis as any).window.ion.createTab = vi.fn(async () => ({ tabId: 'new-tab-id' }))
+    ;(globalThis as any).window.ion.gitIsRepo = vi.fn(async () => ({ isRepo: false }))
+  })
+
+  it('places the new tab into pinToGroupId with groupPinned=true', async () => {
+    const tab = makeTab({ groupId: INTERMEDIATE_GROUP })
+    const { state } = buildHarness(tab)
+
+    const newId = await state.createTabInDirectory('/home/test/proj', false, true, PLANNING_GROUP)
+
+    const created = state.tabs.find((t: TabState) => t.id === newId)
+    expect(created).toBeDefined()
+    expect(created!.groupId).toBe(PLANNING_GROUP)
+    expect(created!.groupPinned).toBe(true)
+  })
+
+  it('uses default group when pinToGroupId is omitted', async () => {
+    const tab = makeTab({ groupId: INTERMEDIATE_GROUP })
+    const { state } = buildHarness(tab)
+
+    const newId = await state.createTabInDirectory('/home/test/proj', false, true)
+
+    const created = state.tabs.find((t: TabState) => t.id === newId)
+    expect(created).toBeDefined()
+    expect(created!.groupId).toBe('group-default')
+    expect(created!.groupPinned).toBe(false)
+  })
+
+  it('suppresses subsequent auto-movement in plan mode when pinned at creation', async () => {
+    const tab = makeTab({ groupId: INTERMEDIATE_GROUP })
+    const { state, moveTabToGroup } = buildHarness(tab)
+
+    const newId = await state.createTabInDirectory('/home/test/proj', false, true, PLANNING_GROUP)
+    // Switch the new tab to plan mode (matches the default for fresh tabs in
+    // production but our mock makeLocalTab sets it to 'auto').
+    state.tabs = state.tabs.map((t: TabState) =>
+      t.id === newId ? { ...t, permissionMode: 'plan' as const } : t
+    )
+    state.activeTabId = newId
+    moveTabToGroup.mockClear()
+
+    state.sendMessage('hello', '/home/test/proj')
+
+    expect(moveTabToGroup).not.toHaveBeenCalled()
+    const created = state.tabs.find((t: TabState) => t.id === newId)
+    expect(created!.groupId).toBe(PLANNING_GROUP)
+    expect(created!.groupPinned).toBe(true)
   })
 })

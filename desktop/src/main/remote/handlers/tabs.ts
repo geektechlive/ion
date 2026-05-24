@@ -64,7 +64,22 @@ function notifyTabCreated(tabId: string): void {
 }
 
 export async function handleCreateTab(cmd: Extract<RemoteCommand, { type: 'create_tab' }>): Promise<void> {
-  const tabId = await createTabFromCommand(cmd, 'createTabInDirectory', ['false', 'true'])
+  // When the iOS client requests pinning into a specific group (e.g. the
+  // per-group "+" button next to a group header), forward the group id as
+  // the 4th positional argument to createTabInDirectory. The renderer-side
+  // store action treats this as an explicit pin and sets groupPinned=true
+  // from the start so the first sendMessage's auto-movement skips this tab.
+  // We single-quote the group id (matching how `dir` is escaped above) so
+  // the value flows safely through executeJavaScript.
+  const defaultArgs: string[] = ['false', 'true']
+  if (cmd.pinToGroupId) {
+    const escaped = cmd.pinToGroupId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    defaultArgs.push("'" + escaped + "'")
+    log(`handleCreateTab: pinToGroupId=${cmd.pinToGroupId} (forwarding to createTabInDirectory as explicit-pin)`)
+  } else {
+    log('handleCreateTab: no pinToGroupId (default-group placement)')
+  }
+  const tabId = await createTabFromCommand(cmd, 'createTabInDirectory', defaultArgs)
   if (tabId) notifyTabCreated(tabId)
 }
 

@@ -73,7 +73,12 @@ export interface RemoteAttachment {
 
 export type RemoteCommand =
   | { type: 'sync' }
-  | { type: 'create_tab'; workingDirectory?: string }
+  // `pinToGroupId` is an additive optional extension (non-breaking per
+  // CLAUDE.md contract rules). When set, the desktop creates the new tab
+  // inside that manual group with groupPinned=true so the first prompt's
+  // auto-movement doesn't yank it back into the default group. Older
+  // iOS builds that omit the field continue to get the legacy behavior.
+  | { type: 'create_tab'; workingDirectory?: string; pinToGroupId?: string }
   | { type: 'create_terminal_tab'; workingDirectory?: string }
   | { type: 'close_tab'; tabId: string }
   | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }

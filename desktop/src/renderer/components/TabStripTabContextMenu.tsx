@@ -48,6 +48,13 @@ export function TabContextMenu({
   const [moveSubmenu, setMoveSubmenu] = useState<{ x: number; y: number } | null>(null)
   const moveItemRef = useRef<HTMLButtonElement>(null)
   const submenuRef = useRef<HTMLDivElement>(null)
+  // Parallel state for the "Move to group and pin" submenu. We keep it
+  // separate from `moveSubmenu` so the hover/click positioning logic for
+  // each row is independent — both rows live in the same context menu and
+  // either can be opened without disturbing the other.
+  const [movePinSubmenu, setMovePinSubmenu] = useState<{ x: number; y: number } | null>(null)
+  const movePinItemRef = useRef<HTMLButtonElement>(null)
+  const movePinSubmenuRef = useRef<HTMLDivElement>(null)
   const [moveAllSubmenu, setMoveAllSubmenu] = useState<{ x: number; y: number } | null>(null)
   const moveAllItemRef = useRef<HTMLButtonElement>(null)
   const moveAllSubmenuRef = useRef<HTMLDivElement>(null)
@@ -73,10 +80,11 @@ export function TabContextMenu({
     const handleClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node) &&
           (!submenuRef.current || !submenuRef.current.contains(e.target as Node)) &&
-          (!moveAllSubmenuRef.current || !moveAllSubmenuRef.current.contains(e.target as Node))) { setMoveSubmenu(null); setMoveAllSubmenu(null); onClose() }
+          (!movePinSubmenuRef.current || !movePinSubmenuRef.current.contains(e.target as Node)) &&
+          (!moveAllSubmenuRef.current || !moveAllSubmenuRef.current.contains(e.target as Node))) { setMoveSubmenu(null); setMovePinSubmenu(null); setMoveAllSubmenu(null); onClose() }
     }
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setMoveSubmenu(null); setMoveAllSubmenu(null); onClose() }
+      if (e.key === 'Escape') { setMoveSubmenu(null); setMovePinSubmenu(null); setMoveAllSubmenu(null); onClose() }
     }
     window.addEventListener('mousedown', handleClick)
     window.addEventListener('keydown', handleKey)
@@ -207,6 +215,7 @@ export function TabContextMenu({
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLElement).style.background = colors.tabActive
               setMoveAllSubmenu(null)
+              setMovePinSubmenu(null)
               if (moveItemRef.current) {
                 const rect = zoomRect(moveItemRef.current.getBoundingClientRect())
                 setMoveSubmenu({ x: rect.right, y: rect.top })
@@ -224,6 +233,39 @@ export function TabContextMenu({
             <span>Move to group</span>
             <CaretDown size={10} color={colors.textTertiary} style={{ marginLeft: 'auto', transform: 'rotate(-90deg)' }} />
           </button>
+          {/*
+            "Move to group and pin" — combined action. Identical layout to the
+            "Move to group" row above but uses a distinct submenu (different
+            anchor/state) so the pin-aware target picker can render with its
+            own header and click handler (see MoveToGroupSubmenu's `pinAfter`).
+            Shown alongside the plain "Move" so the user can pick either
+            semantic without having to perform two separate steps.
+          */}
+          <button
+            ref={movePinItemRef}
+            className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-left"
+            style={menuItemStyle}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = colors.tabActive
+              setMoveAllSubmenu(null)
+              setMoveSubmenu(null)
+              if (movePinItemRef.current) {
+                const rect = zoomRect(movePinItemRef.current.getBoundingClientRect())
+                setMovePinSubmenu({ x: rect.right, y: rect.top })
+              }
+            }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            onClick={() => {
+              if (movePinItemRef.current) {
+                const rect = zoomRect(movePinItemRef.current.getBoundingClientRect())
+                setMovePinSubmenu((prev) => prev ? null : { x: rect.right, y: rect.top })
+              }
+            }}
+          >
+            <PushPin size={14} color={colors.textSecondary} />
+            <span>Move to group and pin</span>
+            <CaretDown size={10} color={colors.textTertiary} style={{ marginLeft: 'auto', transform: 'rotate(-90deg)' }} />
+          </button>
         </>
       )}
       {showMoveAll && tabGroupMode === 'manual' && (
@@ -234,6 +276,7 @@ export function TabContextMenu({
           onMouseEnter={(e) => {
             (e.currentTarget as HTMLElement).style.background = colors.tabActive
             setMoveSubmenu(null)
+            setMovePinSubmenu(null)
             if (moveAllItemRef.current) {
               const rect = zoomRect(moveAllItemRef.current.getBoundingClientRect())
               setMoveAllSubmenu({ x: rect.right, y: rect.top })
@@ -259,6 +302,22 @@ export function TabContextMenu({
           currentGroupId={tab.groupId || ''}
           containerRef={submenuRef}
           onClose={() => { setMoveSubmenu(null); onClose() }}
+        />
+      )}
+      {/*
+        Pin-aware variant: same component, same target list, but
+        `pinAfter` flips the title and the click handler to use
+        moveTabToGroupAndPin so the destination tab ends up with
+        groupPinned=true in the same store update.
+      */}
+      {movePinSubmenu && (
+        <MoveToGroupSubmenu
+          anchor={movePinSubmenu}
+          tabId={tab.id}
+          currentGroupId={tab.groupId || ''}
+          containerRef={movePinSubmenuRef}
+          pinAfter
+          onClose={() => { setMovePinSubmenu(null); onClose() }}
         />
       )}
       {moveAllSubmenu && showMoveAll && popoverLayer && (() => {

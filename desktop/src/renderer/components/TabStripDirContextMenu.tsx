@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { FolderPlus, GitFork, CheckCircle, CaretDown, Rows } from '@phosphor-icons/react'
+import { FolderPlus, GitFork, CheckCircle, CaretDown, Rows, PushPin } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { usePreferencesStore } from '../preferences'
@@ -39,17 +39,25 @@ export function DirContextMenu({
   const [moveSubmenu, setMoveSubmenu] = useState<{ x: number; y: number } | null>(null)
   const moveItemRef = useRef<HTMLButtonElement>(null)
   const submenuRef = useRef<HTMLDivElement>(null)
+  // Parallel "Move to group and pin" submenu state — same pattern as
+  // TabStripTabContextMenu so the dir-label right-click menu also offers
+  // the combined move+pin shortcut.
+  const [movePinSubmenu, setMovePinSubmenu] = useState<{ x: number; y: number } | null>(null)
+  const movePinItemRef = useRef<HTMLButtonElement>(null)
+  const movePinSubmenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node) &&
-          (!submenuRef.current || !submenuRef.current.contains(e.target as Node))) {
+          (!submenuRef.current || !submenuRef.current.contains(e.target as Node)) &&
+          (!movePinSubmenuRef.current || !movePinSubmenuRef.current.contains(e.target as Node))) {
         setMoveSubmenu(null)
+        setMovePinSubmenu(null)
         onClose()
       }
     }
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setMoveSubmenu(null); onClose() }
+      if (e.key === 'Escape') { setMoveSubmenu(null); setMovePinSubmenu(null); onClose() }
     }
     window.addEventListener('mousedown', handleClick)
     window.addEventListener('keydown', handleKey)
@@ -144,6 +152,7 @@ export function DirContextMenu({
             style={{ fontSize: 12, color: colors.textPrimary, background: 'transparent', border: 'none', cursor: 'pointer' }}
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLElement).style.background = colors.tabActive
+              setMovePinSubmenu(null)
               if (moveItemRef.current) {
                 const rect = zoomRect(moveItemRef.current.getBoundingClientRect())
                 setMoveSubmenu({ x: rect.right, y: rect.top })
@@ -161,6 +170,37 @@ export function DirContextMenu({
             <span>Move to group</span>
             <CaretDown size={10} color={colors.textTertiary} style={{ marginLeft: 'auto', transform: 'rotate(-90deg)' }} />
           </button>
+          {/*
+            Sibling row — same pattern as the TabContextMenu's pin variant.
+            Uses the shared MoveToGroupSubmenu with `pinAfter`, so the user
+            gets a single click that both moves the tab into the chosen
+            group and sets groupPinned=true, protecting it from any
+            subsequent auto-group-movement.
+          */}
+          <button
+            ref={movePinItemRef}
+            className="flex items-center gap-2 w-full rounded px-2 py-1.5 text-left"
+            style={{ fontSize: 12, color: colors.textPrimary, background: 'transparent', border: 'none', cursor: 'pointer' }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = colors.tabActive
+              setMoveSubmenu(null)
+              if (movePinItemRef.current) {
+                const rect = zoomRect(movePinItemRef.current.getBoundingClientRect())
+                setMovePinSubmenu({ x: rect.right, y: rect.top })
+              }
+            }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            onClick={() => {
+              if (movePinItemRef.current) {
+                const rect = zoomRect(movePinItemRef.current.getBoundingClientRect())
+                setMovePinSubmenu((prev) => prev ? null : { x: rect.right, y: rect.top })
+              }
+            }}
+          >
+            <PushPin size={14} color={colors.textSecondary} />
+            <span>Move to group and pin</span>
+            <CaretDown size={10} color={colors.textTertiary} style={{ marginLeft: 'auto', transform: 'rotate(-90deg)' }} />
+          </button>
         </>
       )}
       {moveSubmenu && tabId && (
@@ -170,6 +210,16 @@ export function DirContextMenu({
           currentGroupId={tabGroupId || ''}
           containerRef={submenuRef}
           onClose={() => { setMoveSubmenu(null); onClose() }}
+        />
+      )}
+      {movePinSubmenu && tabId && (
+        <MoveToGroupSubmenu
+          anchor={movePinSubmenu}
+          tabId={tabId}
+          currentGroupId={tabGroupId || ''}
+          containerRef={movePinSubmenuRef}
+          pinAfter
+          onClose={() => { setMovePinSubmenu(null); onClose() }}
         />
       )}
     </motion.div>,

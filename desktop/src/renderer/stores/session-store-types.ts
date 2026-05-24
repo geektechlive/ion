@@ -67,7 +67,7 @@ export interface State {
   initStaticInfo: () => Promise<void>
   setPermissionMode: (mode: 'auto' | 'plan', source?: string) => void
   createTab: (useWorktree?: boolean) => Promise<string>
-  createTabInDirectory: (dir: string, useWorktree?: boolean, skipDuplicateCheck?: boolean) => Promise<string>
+  createTabInDirectory: (dir: string, useWorktree?: boolean, skipDuplicateCheck?: boolean, pinToGroupId?: string) => Promise<string>
   selectTab: (tabId: string) => void
   closeTab: (tabId: string) => void
   reorderTabs: (reorderedTabs: TabState[]) => void
@@ -143,6 +143,7 @@ export interface State {
   handleError: (tabId: string, error: EnrichedError) => void
   forceRecoverTab: (tabId: string, reason: string) => void
   moveTabToGroup: (tabId: string, groupId: string) => void
+  moveTabToGroupAndPin: (tabId: string, groupId: string) => void
   setTabGroupId: (tabId: string, groupId: string | null) => void
   toggleTabGroupPin: (tabId: string) => void
   setWorktreeUncommitted: (tabId: string, hasChanges: boolean) => void
