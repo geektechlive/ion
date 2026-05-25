@@ -36,7 +36,7 @@ If a session with the same key already exists, `StartSession` returns an error.
 5. Fire `context_inject` hook for extension-provided context.
 6. Inject git context from the working directory.
 7. Fire `before_agent_start` for system prompt injection.
-8. Wire extension hooks (tool_call, turn, compaction, permission, file_changed).
+8. Wire extension hooks (tool_call, turn, compaction, permission, file_changed, workspace_file_changed).
 9. Wire MCP tools and agent spawner.
 10. Emit `engine_status` with state `running`.
 11. Call `backend.StartRun()`.
@@ -97,6 +97,91 @@ When a backend run exits:
 8. Flush telemetry.
 9. Close the session recorder.
 10. Emit `engine_dead`.
+
+## Plan Mode
+
+### Plan ID lifetime
+
+When plan mode is enabled and a prompt is sent, the engine allocates a `planFilePath` for the session:
+
+- **CLI / hybrid backends:** `<project>/.ion/plans/<hash>.md`
+- **API backend:** `~/.ion/plans/<hash>.md`
+
+The plan ID is **preserved** across plan-mode toggles. Toggling plan mode off — via the dropdown, keyboard shortcut, or any client command — does not retire the ID. When plan mode is re-enabled on the same session, the engine reuses the same plan file.
+
+The plan ID is only retired when the engine **session itself is replaced**. On the desktop this happens when the user clicks Implement, which calls `resetTabSession()` and creates a fresh engine session. The next plan-mode enable then allocates a new hash.
+
+On re-entry (plan mode re-enabled after a prior exit within the same session), `SendPrompt` sets `PlanModeReentry=true` on the run options. The plan-mode system prompt is prepended with reentry guidance that instructs the LLM to read the existing plan before making changes.
+
+### Plan mode prose overrides
+
+The engine's plan-mode framing — both the full system prompt injected at run start and the sparse reminder injected periodically during the run — can be overridden at three levels, in decreasing priority:
+
+1. **`RunOptions.PlanModePrompt` / `RunOptions.PlanModeSparseReminder`** (per-prompt, highest priority)
+   Set on each `send_prompt` dispatch via the `planModePrompt` and `planModeSparseReminder` fields in the [client command](../protocol/client-commands.md#send_prompt). When non-empty, the engine uses these strings verbatim. When empty, the engine falls through to the next layer.
+
+2. **`plan_mode_prompt` SDK hook** (per-extension)
+   Extensions can return a `PlanModePromptResult{Prompt, Tools, SparseReminder}` from the `plan_mode_prompt` hook. `Prompt` replaces the full prompt; `Tools` overrides the allowed tool list; `SparseReminder` overrides the per-turn reminder text. Empty fields inherit the engine default. See [`plan_mode_prompt`](../hooks/reference.md#plan-mode-3) for the hook reference. The hook only fires when `RunOptions.PlanModePrompt` is empty (i.e. the RunOptions layer did not override).
+
+3. **Engine defaults** (lowest priority)
+   `buildPlanModePrompt(planFilePath, planFileExists)` builds the full prompt; `buildPlanModeSparseReminder(planFilePath)` builds the per-turn reminder. Both include the end-of-turn discipline text (`AskUserQuestion` or `ExitPlanMode`) and the Forbidden Prose Patterns callout. These are the values used when no override is set at any layer.
+
+The desktop ships its reference prose as `ENTER_PLAN_MODE_DESCRIPTION` (full prompt framing for `EnterPlanMode` tool), and forwards `PLAN_MODE_SPARSE_REMINDER` as the sparse-reminder override on every engine-tab and CLI prompt dispatch (see `desktop/src/main/prompt-pipeline.ts`). Third-party harnesses set their own values or omit these fields to inherit the engine defaults.
+
+Power users can customize the desktop's defaults via `~/.ion/settings.json` `desktop.*` keys — see the [desktop power-user overrides](../configuration/settings-json.md) section.
+
+Per [ADR-004](../architecture/adr/004-enter-plan-mode-prose-in-harness.md): the engine provides the mechanism (prompt builder, sparse-reminder injection, hook firing), the harness provides the policy (what the prose says). The three-layer precedence is symmetric between `PlanModePrompt` and `PlanModeSparseReminder` by design.
+
+### Model-initiated plan-mode entry
+
+In auto mode the engine injects the [`EnterPlanMode`](../tools/reference.md#enterplanmode) sentinel tool so the model can request a plan-mode transition mid-conversation.
+
+When the model calls `EnterPlanMode`:
+
+1. The engine fires the [`before_plan_mode_enter`](../hooks/reference.md#plan-mode-3) hook. Extensions can veto by returning `Allow: &false`. Default is auto-approve.
+2. If denied, the run continues in auto mode and the denial reason is returned to the model as the tool result.
+3. If allowed, the session flips to plan mode and the run **continues** (unlike `ExitPlanMode`, which terminates the run). The plan-mode framing is returned as the tool result so the model sees it immediately.
+4. The desktop and iOS UI reflect the transition via `engine_plan_mode_changed{enabled: true}`.
+
+### Model-initiated plan-mode exit
+
+When the model calls `ExitPlanMode` to signal the plan is ready for review:
+
+1. The engine fires the [`before_plan_mode_exit`](../hooks/reference.md#plan-mode-3) hook with the plan file path. Extensions can veto by returning `Allow: &false` with a `Reason` that is returned to the model (e.g. "plan is too short, add verification steps"). Default is auto-approve.
+2. If denied, the run **continues** in plan mode. The model receives the denial reason and can continue planning.
+3. If allowed, the engine records a `PermissionDenial` (so the run-end signal carries the exit context on `task_complete.permissionDenials`) and emits the typed `engine_plan_proposal{kind: "exit", planFilePath, planSlug}` workflow event. The run then terminates.
+4. The engine does **not** emit `engine_plan_mode_changed{enabled: false}` at this point. The model's `ExitPlanMode` call is a *proposal*, not a confirmed state transition — the mode does not actually change until the consumer's user-approval chokepoint (e.g. the desktop's Implement button) approves the exit and calls `SetPlanMode(false)`, which then fires `engine_plan_mode_changed{enabled: false}` as a state event.
+
+### State events vs workflow events
+
+The plan-mode lifecycle is the canonical example of [ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md)'s split between state-machine notifications and workflow proposals:
+
+- **`engine_plan_mode_changed`** — fires only on confirmed state transitions (harness `SetPlanMode`, run start with `PlanMode: true`, plan-mode abort, user-approval chokepoint). Carries `planModeEnabled` so consumers can mirror the engine's current mode.
+- **`engine_plan_proposal{kind: "exit"}`** — fires when the model proposes an exit by calling `ExitPlanMode`. Does **not** change the engine's mode; the consumer is responsible for deciding whether to call `SetPlanMode(false)` based on user input.
+
+Consumers should listen for both events with distinct handlers: one updates cached mode state, the other surfaces the approval UI. The two events never produce conflicting state transitions because only `engine_plan_mode_changed` is authoritative about the engine's actual mode.
+
+### Extension-initiated plan-mode control
+
+Extensions have full imperative control over plan mode via the `Context` object passed to every hook handler:
+
+```typescript
+// Enter plan mode from a slash command or hook handler
+ctx.setSessionPlanMode(true, "slash_command")
+
+// Exit plan mode programmatically
+ctx.setSessionPlanMode(false, "extension")
+
+// Read current state — useful for conditional logic
+const { enabled, planFilePath } = ctx.getPlanMode()
+if (enabled) {
+  // currently in plan mode; planFilePath is the active plan file
+}
+```
+
+`setSessionPlanMode` applies the same plan-ID-preservation semantics as a manual toggle: disabling keeps the `planFilePath` alive so a subsequent re-enable reuses it. The plan ID is only retired when the session is reset.
+
+`getPlanMode` returns the current `(enabled, planFilePath)` state at the time of the call. The path is non-empty whenever a plan file has been allocated for the session, even if plan mode is currently off.
 
 ## Event flow diagram
 

@@ -55,6 +55,16 @@ export function GitPanel() {
     if (directory && directory !== '~') window.ion.gitRefresh(directory).catch(() => {})
   }, [directory])
 
+  // Force a fresh snapshot whenever the panel opens. The git watcher is
+  // best-effort — if it dropped events while the panel was closed, the
+  // displayed state could be stale. This guarantees the user sees fresh
+  // data the moment the panel becomes visible.
+  useEffect(() => {
+    if (directory && directory !== '~') {
+      window.ion.gitRefresh(directory).catch(() => {})
+    }
+  }, [directory])
+
   // Track uncommitted changes for worktree tabs (used by context menus + finish button)
   useEffect(() => {
     if (worktree) {

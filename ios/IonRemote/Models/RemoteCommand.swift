@@ -3,9 +3,31 @@ import Foundation
 /// Commands sent from iOS to Ion. Mirrors `RemoteCommand` in `src/main/remote/protocol.ts`.
 enum RemoteCommand: Codable, Sendable {
     case sync
-    case createTab(workingDirectory: String?)
+    /// Additive optional `pinToGroupId` extension. When non-nil and the
+    /// desktop is in manual tab-group mode, the new tab lands inside that
+    /// group with `groupPinned=true` so the very first prompt's auto-group
+    /// movement skips it. Older Ion desktops that don't know the field
+    /// simply ignore it; behavior degrades to the legacy default-group
+    /// placement.
+    case createTab(workingDirectory: String?, pinToGroupId: String? = nil)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
+    /// User-typed prompt routed to the desktop's prompt pipeline.
+    ///
+    /// iOS does NOT carry the harness-supplied EnterPlanMode tool
+    /// description (ADR-004): that's the desktop's responsibility. When
+    /// iOS sends `prompt`, the desktop's prompt-pipeline.ts constructs an
+    /// `IncomingPrompt` and applies the desktop's
+    /// `ENTER_PLAN_MODE_DESCRIPTION` constant automatically before
+    /// forwarding to the engine. The model sees the same plan-mode
+    /// framing regardless of which client typed the prompt.
+    ///
+    /// This is deliberate: the desktop is the authoritative harness for
+    /// the pairing, and the policy prose (per ADR-004) belongs in the
+    /// harness, not the client. iOS would only need to carry an
+    /// `enterPlanModeDescription` field of its own if it ever became
+    /// an independent harness — at which point it would also need its
+    /// own copy of the prose. Today the wire stays minimal.
     case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil)
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)
@@ -65,6 +87,23 @@ enum RemoteCommand: Codable, Sendable {
     /// (`Date().timeIntervalSince1970 * 1000`). The desktop applies LWW and
     /// broadcasts the canonical value back via `.remoteDisplay`.
     case setRemoteDisplay(customName: String?, customIcon: String?, updatedAt: Date)
+    /// Write-back for a single projectable desktop setting. The desktop
+    /// validates `key` against its allowlist (see
+    /// `desktop/src/main/projectable-settings.ts`) and validates
+    /// `value`'s runtime type matches the declared type before
+    /// persisting. Unknown keys and wrong-type values are silently
+    /// rejected on the desktop. After a successful write the desktop
+    /// broadcasts a fresh `desktopSettingsSnapshot` event so every
+    /// paired iOS device (including this one) sees the new value.
+    ///
+    /// `value` is type-erased on the wire — the supported runtime
+    /// types are Bool, String, and Double (Swift's `Int`/`Double`
+    /// distinction collapses to Double on JSON round-trip; the
+    /// desktop's validator coerces back to its declared type). The
+    /// iOS UI today only emits Bool, but the wire shape is
+    /// shape-agnostic so future string/number projections need no
+    /// protocol change.
+    case setDesktopSetting(key: String, value: AnyCodable)
 
     // MARK: - Codable
 
@@ -129,6 +168,7 @@ enum RemoteCommand: Codable, Sendable {
         case voiceConfig = "voice_config"
         case diagnosticLogsResponse = "diagnostic_logs_response"
         case setRemoteDisplay = "set_remote_display"
+        case setDesktopSetting = "set_desktop_setting"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -136,12 +176,25 @@ enum RemoteCommand: Codable, Sendable {
         case workingDirectory, tabId, text, questionId, optionId, mode, before, origin
         case instanceId, data, cols, rows, customTitle, label, messageId, clientMsgId
         case dialogId, value, profileId, model, groupId
+        // `pinToGroupId` is the distinct wire-level key for the optional
+        // create_tab extension. We deliberately do NOT reuse `groupId` here
+        // — `groupId` already names the destination on move_tab_to_group,
+        // and conflating the two would invite type confusion if a future
+        // command needs both (e.g. a hypothetical "create_tab_in_group_and_send"
+        // that names a target group AND a separate pin source).
+        case pinToGroupId
         case directory, path, staged, paths, skip, limit, message, filePath, content, includeHidden, hash
         case attachments, dataUrl, name, correlationId, orderedIds
         case enabled, systemPrompt
         case logs, deviceId, deviceName
         case sourceTabId, targetTabId
         case customName, customIcon, updatedAt
+        // setDesktopSetting payload. `key` is unique to this command;
+        // `value` is shared with engineDialogResponse (both carry a
+        // type-erased payload, both use the same wire field name) so
+        // we declare only `key` here and reuse the existing `value`
+        // CodingKey above.
+        case key
     }
 
     init(from decoder: Decoder) throws {
@@ -154,7 +207,13 @@ enum RemoteCommand: Codable, Sendable {
 
         case .createTab:
             let workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
-            self = .createTab(workingDirectory: workingDirectory)
+            // Decode the optional `pinToGroupId` extension. Older desktops
+            // do not emit this field on iOS-bound replays, but the decoder
+            // path is reused for round-trip tests where iOS encodes a
+            // createTab and decodes it back — having the field flow through
+            // both directions keeps the wire model symmetrical.
+            let pinToGroupId = try container.decodeIfPresent(String.self, forKey: .pinToGroupId)
+            self = .createTab(workingDirectory: workingDirectory, pinToGroupId: pinToGroupId)
 
         case .closeTab:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -452,6 +511,15 @@ enum RemoteCommand: Codable, Sendable {
                 customIcon: customIcon,
                 updatedAt: Date(timeIntervalSince1970: updatedAtMs / 1000.0),
             )
+
+        case .setDesktopSetting:
+            // Round-trip decode for tests + diagnostic dumps. iOS
+            // typically only encodes this command (never decodes it
+            // from the wire), but the Codable conformance requires
+            // the path to exist.
+            let key = try container.decode(String.self, forKey: .key)
+            let value = try container.decode(AnyCodable.self, forKey: .value)
+            self = .setDesktopSetting(key: key, value: value)
         }
     }
 

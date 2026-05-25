@@ -10,9 +10,14 @@ extension RemoteCommand {
         switch self {
         case .sync:
             try container.encode(TypeKey.sync, forKey: .type)
-        case .createTab(let workingDirectory):
+        case .createTab(let workingDirectory, let pinToGroupId):
             try container.encode(TypeKey.createTab, forKey: .type)
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
+            // Only emit `pinToGroupId` when caller actually requested a pin,
+            // so the wire payload for the unmodified "Add tab" flow stays
+            // identical to the pre-feature version (helps when bisecting
+            // any future protocol-level diffs).
+            try container.encodeIfPresent(pinToGroupId, forKey: .pinToGroupId)
         case .closeTab(let tabId):
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -312,6 +317,14 @@ extension RemoteCommand {
             }
             let updatedAtMs = updatedAt.timeIntervalSince1970 * 1000.0
             try container.encode(updatedAtMs, forKey: .updatedAt)
+
+        case .setDesktopSetting(let key, let value):
+            // Write-back for a single projectable desktop setting.
+            // `value` is type-erased via AnyCodable so the encoder
+            // emits the underlying Bool/String/Number verbatim.
+            try container.encode(TypeKey.setDesktopSetting, forKey: .type)
+            try container.encode(key, forKey: .key)
+            try container.encode(value, forKey: .value)
         }
     }
 }

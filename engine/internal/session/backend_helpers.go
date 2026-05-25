@@ -39,7 +39,14 @@ func (m *Manager) resolvedBackend(model string) backend.RunBackend {
 // backend: "cli" sessions produce CLI children and backend: "hybrid"
 // sessions produce hybrid children whose inner *ApiBackend inherits the
 // parent's auth resolver.
+//
+// When m.childBackendOverride is set (test-only), the override factory
+// runs instead. This is the only injection point unit tests have to
+// substitute a stubbed child backend for the spawner closure.
 func (m *Manager) newChildBackend() backend.RunBackend {
+	if m.childBackendOverride != nil {
+		return m.childBackendOverride()
+	}
 	switch b := m.backend.(type) {
 	case *backend.CliBackend:
 		return backend.NewCliBackend()

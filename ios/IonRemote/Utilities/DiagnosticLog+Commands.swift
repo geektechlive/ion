@@ -11,8 +11,8 @@ extension DiagnosticLog {
         case .sync:
             log("CMD: sync")
 
-        case .createTab(let dir):
-            log("CMD: createTab dir=\(dir?.suffix(30) ?? "nil")")
+        case .createTab(let dir, let pinToGroupId):
+            log("CMD: createTab dir=\(dir?.suffix(30) ?? "nil") pinToGroup=\(pinToGroupId?.prefix(8) ?? "nil")")
 
         case .createTerminalTab(let dir):
             log("CMD: createTerminalTab dir=\(dir?.suffix(30) ?? "nil")")
@@ -188,6 +188,13 @@ extension DiagnosticLog {
         case .setRemoteDisplay(let customName, let customIcon, let updatedAt):
             let ms = Int(updatedAt.timeIntervalSince1970 * 1000)
             log("CMD: setRemoteDisplay name=\(customName == nil ? "cleared" : "set") icon=\(customIcon ?? "cleared") ts=\(ms)")
+
+        case .setDesktopSetting(let key, _):
+            // Log the key only — value type is loggable but the actual
+            // user setting could be sensitive on future string projections.
+            // Pairs with the SETTINGS-CMD line on the desktop side for
+            // round-trip correlation.
+            log("CMD: setDesktopSetting key=\(key)")
         }
     }
 }

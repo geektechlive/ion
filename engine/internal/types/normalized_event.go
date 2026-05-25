@@ -21,6 +21,7 @@ const (
 	EventUsage             = "usage"
 	EventPermissionRequest = "permission_request"
 	EventPlanModeChanged   = "plan_mode_changed"
+	EventPlanProposal      = "plan_proposal"
 	EventStreamReset       = "stream_reset"
 	EventCompacting        = "compacting"
 	EventToolStalled       = "tool_stalled"
@@ -96,6 +97,8 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &PermissionRequestEvent{}
 	case EventPlanModeChanged:
 		target = &PlanModeChangedEvent{}
+	case EventPlanProposal:
+		target = &PlanProposalEvent{}
 	case EventStreamReset:
 		target = &StreamResetEvent{}
 	case EventCompacting:
@@ -254,11 +257,105 @@ func (WebSearchResultEvent) eventType() string { return "web_search_result" }
 // PlanModeChangedEvent signals that the run has entered or exited plan mode.
 type PlanModeChangedEvent struct {
 	// Enabled is true when the run has entered plan mode, false when it has exited.
-	Enabled      bool   `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// PlanFilePath is the absolute filesystem path of the plan markdown file
+	// for this session. Empty when no plan file is associated with the run
+	// (e.g. some early enter-emits that fire before allocation, or runs
+	// restored without a path).
 	PlanFilePath string `json:"planFilePath,omitempty"`
+	// PlanSlug is the human-readable identifier portion of the plan file
+	// path — the basename minus the ".md" extension. Provided so clients
+	// can display "Plan: happy-jumping-rabbit" without parsing the
+	// filesystem path themselves. Legacy hex-hash plan files (from before
+	// the word-slug generator shipped) round-trip through this field as
+	// the raw hex string, so consumers should treat it as opaque.
+	// Empty whenever PlanFilePath is empty.
+	PlanSlug string `json:"planSlug,omitempty"`
 }
 
 func (PlanModeChangedEvent) eventType() string { return EventPlanModeChanged }
+
+// PlanProposalEvent is a workflow-level signal emitted when the model proposes
+// a plan-mode transition that requires user approval. It is distinct from
+// PlanModeChangedEvent, which fires only on confirmed *state* transitions
+// (SetPlanMode by the harness, run start with PlanMode=true, plan-mode abort,
+// or the user-approval chokepoint).
+//
+// The Kind field discriminates the proposal:
+//
+//   - "exit" — emitted when the model calls the ExitPlanMode tool. The mode
+//     itself does NOT change at this point; the engine merely surfaces the
+//     proposal so consumers can present an approval UI. The PlanModeChangedEvent
+//     with Enabled=false only fires later, after the consumer's user-approval
+//     gate calls SetPlanMode(false).
+//
+// Future kinds ("enter", "amend", …) follow the same shape: a discriminator
+// plus the proposal-specific fields. Consumers must switch on Kind and treat
+// unknown kinds as forward-compatible no-ops.
+//
+// This event was introduced to un-conflate state-machine notifications from
+// workflow signals — see docs/architecture/adr/003-state-events-vs-workflow-events.md
+// for the full rationale. Carries PlanFilePath and PlanSlug directly so
+// consumers don't have to scrape `permissionDenials.toolInput` to recover
+// them.
+type PlanProposalEvent struct {
+	// Kind discriminates the proposal type. "exit" is the only kind emitted
+	// today. Consumers must treat unknown kinds as forward-compatible.
+	Kind string `json:"kind"`
+	// PlanFilePath is the absolute filesystem path of the plan markdown file
+	// associated with this proposal. Empty only in pathological cases where
+	// the run somehow reached the proposal without a plan path allocated.
+	PlanFilePath string `json:"planFilePath,omitempty"`
+	// PlanSlug is the human-readable identifier portion of the plan file
+	// path — the basename minus the ".md" extension. See PlanModeChangedEvent
+	// for the legacy-hex round-trip note.
+	PlanSlug string `json:"planSlug,omitempty"`
+}
+
+func (PlanProposalEvent) eventType() string { return EventPlanProposal }
+
+// PlanSlugFromPath extracts the human-readable slug portion of a plan
+// file path: the basename minus the ".md" extension. Empty path → "".
+//
+// Examples:
+//
+//	"/home/u/.ion/plans/happy-jumping-rabbit.md" → "happy-jumping-rabbit"
+//	"/repo/.ion/plans/ef072eb2660d099….md"      → "ef072eb2660d099…"  (legacy hex)
+//	""                                          → ""
+//
+// Lives in the types package alongside PlanModeChangedEvent so that
+// every emitter — and every consumer that wants to render the slug
+// from a path it received via the wire — uses the same definition. The
+// translation layer (session/event_translation.go) calls this as a
+// fallback when an emitter forgot to populate PlanSlug, so populating
+// it explicitly is good hygiene but not load-bearing.
+func PlanSlugFromPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	// Strip directory.
+	base := path
+	for i := len(base) - 1; i >= 0; i-- {
+		if base[i] == '/' || base[i] == '\\' {
+			base = base[i+1:]
+			break
+		}
+	}
+	// Defensive: a path consisting only of separators yields "" above
+	// (we'd loop without ever finding a non-separator basename). The
+	// loop above doesn't actually clear base in that case — it just
+	// re-slices it to the same string when i==len-1 is a separator.
+	// Handle the degenerate cases explicitly.
+	if base == "." || base == "/" || base == "\\" || base == "" {
+		return ""
+	}
+	// Strip a single trailing ".md" extension if present.
+	const ext = ".md"
+	if len(base) > len(ext) && base[len(base)-len(ext):] == ext {
+		return base[:len(base)-len(ext)]
+	}
+	return base
+}
 
 // StreamResetEvent signals that a retry is about to occur and the client
 // should discard any partial assistant text from the previous attempt.
@@ -267,7 +364,7 @@ type StreamResetEvent struct{}
 func (StreamResetEvent) eventType() string { return EventStreamReset }
 
 // CompactingEvent signals that context compaction is starting or finishing.
-// The desktop uses this to update the activity indicator ("Compacting...").
+// Consumers can use this to surface activity state ("Compacting...").
 // When Active is false the optional fields carry a summary of what was compacted
 // so clients can render an inline compaction marker in the conversation.
 type CompactingEvent struct {

@@ -71,6 +71,33 @@ func TestSDK_FireFileChanged(t *testing.T) {
 	}
 }
 
+func TestSDK_FireWorkspaceFileChanged(t *testing.T) {
+	sdk := NewSDK()
+
+	var received WorkspaceFileChangedInfo
+	sdk.On(HookWorkspaceFileChanged, func(ctx *Context, payload interface{}) (interface{}, error) {
+		received = payload.(WorkspaceFileChangedInfo)
+		return nil, nil
+	})
+
+	info := WorkspaceFileChangedInfo{
+		Path:    "/repo/src/main.go",
+		RelPath: "src/main.go",
+		Action:  "modify",
+	}
+	sdk.FireWorkspaceFileChanged(testCtx(), info)
+
+	if received.Path != "/repo/src/main.go" {
+		t.Fatalf("expected /repo/src/main.go, got %q", received.Path)
+	}
+	if received.RelPath != "src/main.go" {
+		t.Fatalf("expected src/main.go, got %q", received.RelPath)
+	}
+	if received.Action != "modify" {
+		t.Fatalf("expected modify, got %q", received.Action)
+	}
+}
+
 func TestSDK_FireTaskCreated(t *testing.T) {
 	sdk := NewSDK()
 
@@ -356,9 +383,26 @@ func TestSDK_FireSessionCompact(t *testing.T) {
 		return nil, nil
 	})
 
-	sdk.FireSessionCompact(testCtx(), CompactionInfo{Strategy: "summary", MessagesBefore: 30, MessagesAfter: 10})
+	sdk.FireSessionCompact(testCtx(), CompactionInfo{
+		Strategy:       "summary",
+		MessagesBefore: 30,
+		MessagesAfter:  10,
+		Facts: []CompactionFact{
+			{Type: "decision", Content: "decided to use SQLite"},
+			{Type: "error", Content: "build failed on darwin"},
+		},
+	})
 	if received.Strategy != "summary" {
 		t.Fatalf("expected summary, got %q", received.Strategy)
+	}
+	if len(received.Facts) != 2 {
+		t.Fatalf("expected 2 facts, got %d", len(received.Facts))
+	}
+	if received.Facts[0].Type != "decision" || received.Facts[0].Content != "decided to use SQLite" {
+		t.Fatalf("fact[0] mismatch: %+v", received.Facts[0])
+	}
+	if received.Facts[1].Type != "error" || received.Facts[1].Content != "build failed on darwin" {
+		t.Fatalf("fact[1] mismatch: %+v", received.Facts[1])
 	}
 }
 

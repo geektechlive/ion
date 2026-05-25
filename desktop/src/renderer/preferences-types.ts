@@ -12,7 +12,6 @@ export interface PreferencesState {
   recentBaseDirectories: string[]
   directoryUsageCounts: Record<string, number>
   preferredOpenWith: 'cli' | 'vscode'
-  showImplementClearContext: boolean
   defaultPermissionMode: 'auto' | 'plan'
   expandOnTabSwitch: boolean
   bashCommandEntry: boolean
@@ -39,6 +38,15 @@ export interface PreferencesState {
   allowSettingsEdits: boolean
   /** Load commands and skills from .claude/ directories */
   enableClaudeCompat: boolean
+  /**
+   * Reply to the engine's wire-protocol before_early_stop_decision request
+   * with a Claude-Code-style "Stopped at X% of token target… Keep working"
+   * continuation prompt when the engine's tentative WouldContinue verdict
+   * is true. Disable to never nudge the model regardless of the engine's
+   * verdict. Read by desktop/src/main/early-stop-policy.ts on every event,
+   * so a flip takes effect on the next decision. Default true.
+   */
+  enableEarlyStopContinuation: boolean
   /** Show the todo/task list panel at the bottom of the conversation */
   showTodoList: boolean
   /** Use AI to generate descriptive tab titles from the first message */
@@ -130,7 +138,6 @@ export interface PreferencesState {
   removeRecentBaseDirectory: (dir: string) => void
   incrementDirectoryUsage: (dir: string) => void
   setPreferredOpenWith: (app: 'cli' | 'vscode') => void
-  setShowImplementClearContext: (show: boolean) => void
   setDefaultPermissionMode: (mode: 'auto' | 'plan') => void
   setExpandOnTabSwitch: (enabled: boolean) => void
   setBashCommandEntry: (enabled: boolean) => void
@@ -151,6 +158,7 @@ export interface PreferencesState {
   setWorktreeSkipPrTitle: (skip: boolean) => void
   setAllowSettingsEdits: (enabled: boolean) => void
   setEnableClaudeCompat: (enabled: boolean) => void
+  setEnableEarlyStopContinuation: (enabled: boolean) => void
   setShowTodoList: (enabled: boolean) => void
   setAiGeneratedTitles: (enabled: boolean) => void
   setHideOnExternalLaunch: (enabled: boolean) => void
@@ -207,4 +215,4 @@ export interface PreferencesState {
   applyPreset: (preset: Record<string, unknown>) => void
 }
 
-export const SETTINGS_DEFAULTS = { themeMode: 'dark' as ThemeMode, soundEnabled: true, expandedUI: false, ultraWide: false, defaultBaseDirectory: '', recentBaseDirectories: [] as string[], directoryUsageCounts: {} as Record<string, number>, preferredOpenWith: 'cli' as 'cli' | 'vscode', showImplementClearContext: false, defaultPermissionMode: 'plan' as 'auto' | 'plan', expandOnTabSwitch: true, bashCommandEntry: false, gitPanelSplitRatio: 0.4, gitPanelChangesOpen: true, gitPanelGraphOpen: true, expandToolResults: false, terminalFontFamily: 'Menlo, Monaco, monospace', terminalFontSize: 13, closeExplorerOnFileOpen: true, openMarkdownInPreview: true, editorWordWrap: true, editorFontSize: 12, gitOpsMode: 'manual' as GitOpsMode, worktreeCompletionStrategy: 'merge-ff' as WorktreeCompletionStrategy, worktreeBranchDefaults: {} as Record<string, string>, worktreeSkipPrTitle: false, allowSettingsEdits: false, enableClaudeCompat: true, showTodoList: true, aiGeneratedTitles: true, hideOnExternalLaunch: true, keepExplorerOnCollapse: false, keepTerminalOnCollapse: false, keepGitPanelOnCollapse: false, tabGroupMode: 'off' as TabGroupMode, tabGroups: [] as TabGroup[], autoGroupOrder: [] as string[], stashedManualGroups: [] as TabGroup[], stashedManualTabAssignments: {} as Record<string, string>, inProgressGroupId: null as string | null, doneGroupId: null as string | null, planningGroupId: null as string | null, autoGroupMovement: false, commitCommand: '', gitChangesTreeView: false, quickTools: [] as QuickTool[], uiZoom: 1, remoteEnabled: false, relayUrl: '', relayApiKey: '', lanServerPort: 19837, pairedDevices: [] as RemotePairedDevice[], remoteDisplay: null as { customName: string | null; customIcon: string | null; updatedAt: number } | null, engineDefaultModel: '', engineProfiles: [] as EngineProfile[], preferredModel: 'claude-opus-4-6', defaultTallConversation: false, defaultTallTerminal: false, defaultTallEngine: false, tabRecoveryEnabled: true, tabRecoveryTimeoutSec: 120, planModelSplitEnabled: false, planModeModel: '', implementModeModel: '' }
+export const SETTINGS_DEFAULTS = { themeMode: 'dark' as ThemeMode, soundEnabled: true, expandedUI: false, ultraWide: false, defaultBaseDirectory: '', recentBaseDirectories: [] as string[], directoryUsageCounts: {} as Record<string, number>, preferredOpenWith: 'cli' as 'cli' | 'vscode', defaultPermissionMode: 'plan' as 'auto' | 'plan', expandOnTabSwitch: true, bashCommandEntry: false, gitPanelSplitRatio: 0.4, gitPanelChangesOpen: true, gitPanelGraphOpen: true, expandToolResults: false, terminalFontFamily: 'Menlo, Monaco, monospace', terminalFontSize: 13, closeExplorerOnFileOpen: true, openMarkdownInPreview: true, editorWordWrap: true, editorFontSize: 12, gitOpsMode: 'manual' as GitOpsMode, worktreeCompletionStrategy: 'merge-ff' as WorktreeCompletionStrategy, worktreeBranchDefaults: {} as Record<string, string>, worktreeSkipPrTitle: false, allowSettingsEdits: false, enableClaudeCompat: true, enableEarlyStopContinuation: false, showTodoList: true, aiGeneratedTitles: true, hideOnExternalLaunch: true, keepExplorerOnCollapse: false, keepTerminalOnCollapse: false, keepGitPanelOnCollapse: false, tabGroupMode: 'off' as TabGroupMode, tabGroups: [] as TabGroup[], autoGroupOrder: [] as string[], stashedManualGroups: [] as TabGroup[], stashedManualTabAssignments: {} as Record<string, string>, inProgressGroupId: null as string | null, doneGroupId: null as string | null, planningGroupId: null as string | null, autoGroupMovement: false, commitCommand: '', gitChangesTreeView: false, quickTools: [] as QuickTool[], uiZoom: 1, remoteEnabled: false, relayUrl: '', relayApiKey: '', lanServerPort: 19837, pairedDevices: [] as RemotePairedDevice[], remoteDisplay: null as { customName: string | null; customIcon: string | null; updatedAt: number } | null, engineDefaultModel: '', engineProfiles: [] as EngineProfile[], preferredModel: 'claude-opus-4-6', defaultTallConversation: false, defaultTallTerminal: false, defaultTallEngine: false, tabRecoveryEnabled: true, tabRecoveryTimeoutSec: 120, planModelSplitEnabled: false, planModeModel: '', implementModeModel: '' }

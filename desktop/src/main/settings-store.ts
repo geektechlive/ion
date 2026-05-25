@@ -21,13 +21,19 @@ export const SETTINGS_DEFAULTS = {
   defaultBaseDirectory: '',
   showDirLabel: true,
   preferredOpenWith: 'cli',
-  showImplementClearContext: false,
   expandToolResults: false,
   terminalFontFamily: 'Menlo, Monaco, monospace',
   terminalFontSize: 13,
   allowSettingsEdits: false,
   enableClaudeCompat: true,
   preferredModel: 'claude-opus-4-6',
+  // Early-stop continuation nudge: when the model emits end_turn below the
+  // configured output-token target, ask it to keep working. Default OFF per
+  // ADR-002 2026-05-25 amendment (the feature is opt-in; users who want the
+  // nudge enable it in General settings or via the Remote settings row).
+  // See desktop/src/main/early-stop-policy.ts for the policy that consumes
+  // this setting.
+  enableEarlyStopContinuation: false,
 }
 
 export function readSettings(): Record<string, any> {

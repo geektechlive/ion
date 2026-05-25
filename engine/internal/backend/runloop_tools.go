@@ -258,6 +258,31 @@ func (b *ApiBackend) executeTools(
 			// history; let it fall through to "Unknown tool" so it self-corrects.
 			if run.planMode && block.Name == tools.ExitPlanModeName {
 				utils.Info("PlanMode", fmt.Sprintf("run=%s exit_tool plan_file=%s", run.requestID, run.planFilePath))
+
+				// Fire before_plan_mode_exit hook so extensions can veto.
+				exitAllowed := true
+				exitReason := ""
+				if hooks.OnPlanModeExit != nil {
+					exitAllowed, exitReason = hooks.OnPlanModeExit(run.planFilePath)
+				}
+				if !exitAllowed {
+					if exitReason == "" {
+						exitReason = "Plan mode exit was declined. Continue planning."
+					}
+					utils.Info("PlanMode", fmt.Sprintf("run=%s exit_tool denied by hook reason=%q", run.requestID, exitReason))
+					results[i] = conversation.ToolResultEntry{
+						ToolUseID: block.ID,
+						Content:   exitReason,
+						IsError:   false,
+					}
+					b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+						ToolID:  block.ID,
+						Content: exitReason,
+						IsError: false,
+					}})
+					return nil
+				}
+
 				run.mu.Lock()
 				run.exitPlanMode = true
 				run.permissionDenials = append(run.permissionDenials, types.PermissionDenial{
@@ -266,8 +291,28 @@ func (b *ApiBackend) executeTools(
 					ToolInput: map[string]any{"planFilePath": run.planFilePath},
 				})
 				run.mu.Unlock()
-				// Signal to the desktop that plan mode is now exiting.
-				b.emit(run, types.NormalizedEvent{Data: &types.PlanModeChangedEvent{Enabled: false, PlanFilePath: run.planFilePath}})
+				// No PlanModeChangedEvent{Enabled:false} emit here. The model
+				// calling ExitPlanMode is a *proposal*, not a confirmed mode
+				// change — the user must still approve. The run-end signal
+				// (task_complete carrying the ExitPlanMode PermissionDenial)
+				// is the canonical card-trigger. Consumers flip their mode to
+				// 'auto' only when the user approves via their UI chokepoint.
+				//
+				// Emit the new PlanProposalEvent{Kind:"exit"} as the primary,
+				// first-class workflow signal so consumers can listen for a
+				// purpose-built event instead of inferring proposal-state from
+				// task_complete + permissionDenials. The permission denial
+				// path keeps flowing through engine_status for back-compat
+				// (the existing approval-card render path keys off it), and
+				// task_complete keeps carrying the denial too. The proposal
+				// event is additive — consumers can migrate at their own
+				// pace. See docs/architecture/adr/003-state-events-vs-workflow-events.md.
+				b.emit(run, types.NormalizedEvent{Data: &types.PlanProposalEvent{
+					Kind:         "exit",
+					PlanFilePath: run.planFilePath,
+					PlanSlug:     types.PlanSlugFromPath(run.planFilePath),
+				}})
+				utils.Info("PlanMode", fmt.Sprintf("run=%s exit_tool emit plan_proposal kind=exit planFile=%s (mode change deferred to user approval)", run.requestID, run.planFilePath))
 				results[i] = conversation.ToolResultEntry{
 					ToolUseID: block.ID,
 					Content:   "Plan mode exited.",
@@ -281,8 +326,77 @@ func (b *ApiBackend) executeTools(
 				return nil
 			}
 
+			// Intercept EnterPlanMode sentinel — only during auto-mode runs.
+			// In plan mode the LLM should not call this; fall through to "Unknown
+			// tool" so it self-corrects if it does.
+			if !run.planMode && block.Name == tools.EnterPlanModeName {
+				utils.Info("PlanMode", fmt.Sprintf("run=%s enter_tool requested", run.requestID))
+				var allowed bool
+				var reason string
+				var planFilePath string
+				if hooks.OnPlanModeEnter != nil {
+					allowed, reason, planFilePath = hooks.OnPlanModeEnter()
+				} else {
+					// No hook wired — auto-approve (default behaviour).
+					allowed = true
+				}
+				if !allowed {
+					if reason == "" {
+						reason = "Plan mode entry was declined."
+					}
+					utils.Info("PlanMode", fmt.Sprintf("run=%s enter_tool denied reason=%q", run.requestID, reason))
+					results[i] = conversation.ToolResultEntry{
+						ToolUseID: block.ID,
+						Content:   reason,
+						IsError:   false,
+					}
+					b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+						ToolID:  block.ID,
+						Content: reason,
+						IsError: false,
+					}})
+					return nil
+				}
+				// Allowed: flip the run into plan mode so the write guard and
+				// sparse-reminder logic apply on subsequent turns. The plan-mode
+				// tool list will be rebuilt on the next call to buildToolDefs.
+				// Reset planModeReminderTurn so the first post-entry reminder
+				// is not silenced by stale throttle state from a prior plan
+				// mode session on this same run.
+				run.mu.Lock()
+				run.planMode = true
+				run.planFilePath = planFilePath
+				run.planModeReminderTurn = 0
+				run.mu.Unlock()
+				// Emit the state-transition event so consumers can mirror the
+				// new plan-mode-enabled state.
+				b.emit(run, types.NormalizedEvent{Data: &types.PlanModeChangedEvent{
+					Enabled:      true,
+					PlanFilePath: planFilePath,
+					PlanSlug:     types.PlanSlugFromPath(planFilePath),
+				}})
+				// Build the plan-mode framing so the model knows what to do next.
+				// We include it inline in the tool result so it lands in context
+				// on this turn, rather than waiting for the next system-prompt rebuild.
+				_, err := os.Stat(planFilePath)
+				planPrompt := buildPlanModePrompt(planFilePath, err == nil)
+				resultContent := fmt.Sprintf("Plan mode entered. Plan file: %s\n\n%s", planFilePath, planPrompt)
+				utils.Info("PlanMode", fmt.Sprintf("run=%s enter_tool allowed planFile=%s", run.requestID, planFilePath))
+				results[i] = conversation.ToolResultEntry{
+					ToolUseID: block.ID,
+					Content:   resultContent,
+					IsError:   false,
+				}
+				b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+					ToolID:  block.ID,
+					Content: resultContent,
+					IsError: false,
+				}})
+				return nil
+			}
+
 			// Intercept AskUserQuestion sentinel — available in all runs, not
-			// just plan mode. Record a PermissionDenial so the desktop surfaces
+			// just plan mode. Record a PermissionDenial so consumers can surface
 			// the question, then terminate the run. The user's answer arrives
 			// as the next prompt in the same session.
 			if block.Name == tools.AskUserQuestionName {
@@ -311,8 +425,9 @@ func (b *ApiBackend) executeTools(
 			// Stall detection: emit ToolStalledEvent periodically while the
 			// tool runs longer than the stall threshold. The first event fires
 			// at stallThreshold, then repeats every stallThreshold until the
-			// tool completes. This keeps the desktop watchdog alive so it
-			// does not kill tabs that are legitimately running long tools.
+			// tool completes. Consumers that run liveness watchdogs use these
+			// events to distinguish "still working" from "dead" for tabs that
+			// are legitimately running long tools.
 			// Capture the threshold locally so the goroutine doesn't race
 			// with tests that reassign the package-level var.
 			stallThreshold := toolStallThreshold

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ShieldWarning, ShieldCheck, Terminal, RocketLaunch, ListChecks, Eye, Question, PushPinSlash } from '@phosphor-icons/react'
+import { ShieldWarning, ShieldCheck, Terminal, ListChecks, Eye, Question, PushPinSlash } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { PlanViewer } from './PlanViewer'
@@ -18,16 +18,15 @@ interface Props {
   /** When true, shows the "Implement and unpin" button on the Plan Ready card. */
   tabGroupPinned?: boolean
   onDismiss: () => void
-  onImplement?: (clearContext: boolean) => void
+  onImplement?: () => void
   /** Called when the user clicks "Implement and unpin" — unpins the tab then implements. */
-  onImplementAndUnpin?: (clearContext: boolean) => void
+  onImplementAndUnpin?: () => void
   onAnswer?: (answer: string) => void
   onApprove?: (toolNames: string[]) => void
 }
 
 export function PermissionDeniedCard({ tools, tabId, sessionId, projectPath, messages, tabPlanFilePath, tabGroupPinned, onDismiss, onImplement, onImplementAndUnpin, onAnswer, onApprove }: Props) {
   const colors = useColors()
-  const showClearContext = usePreferencesStore((s) => s.showImplementClearContext)
   const allowSettingsEdits = usePreferencesStore((s) => s.allowSettingsEdits)
   const [planData, setPlanData] = useState<{ content: string; fileName: string; filePath: string } | null>(null)
 
@@ -166,7 +165,7 @@ export function PermissionDeniedCard({ tools, tabId, sessionId, projectPath, mes
             <div className="flex gap-1.5 flex-wrap">
               {tabGroupPinned && onImplementAndUnpin && (
                 <button
-                  onClick={() => onImplementAndUnpin(false)}
+                  onClick={() => onImplementAndUnpin()}
                   className="text-[11px] font-medium px-3 py-1.5 rounded-full transition-colors cursor-pointer flex items-center gap-1.5"
                   style={{
                     background: colors.permissionAllowBg,
@@ -181,7 +180,7 @@ export function PermissionDeniedCard({ tools, tabId, sessionId, projectPath, mes
                 </button>
               )}
               <button
-                onClick={() => onImplement(false)}
+                onClick={() => onImplement()}
                 className="text-[11px] font-medium px-3 py-1.5 rounded-full transition-colors cursor-pointer flex items-center gap-1.5"
                 style={{
                   background: colors.permissionAllowBg,
@@ -193,22 +192,6 @@ export function PermissionDeniedCard({ tools, tabId, sessionId, projectPath, mes
               >
                 Implement
               </button>
-              {showClearContext && (
-                <button
-                  onClick={() => onImplement(true)}
-                  className="text-[11px] font-medium px-3 py-1.5 rounded-full transition-colors cursor-pointer flex items-center gap-1.5"
-                  style={{
-                    background: colors.permissionAllowBg,
-                    color: 'rgba(34, 197, 94, 0.85)',
-                    border: `1px solid ${colors.permissionAllowBorder}`,
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = colors.permissionAllowHoverBg }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = colors.permissionAllowBg }}
-                >
-                  <RocketLaunch size={12} />
-                  Implement, clear context
-                </button>
-              )}
               {planFilePath && <button
                 onClick={handleViewPlan}
                 className="text-[11px] font-medium px-3 py-1.5 rounded-full transition-colors cursor-pointer flex items-center gap-1.5"

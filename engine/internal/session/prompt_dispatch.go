@@ -2,8 +2,6 @@ package session
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
@@ -25,6 +23,26 @@ type PromptOverrides struct {
 	// Attachments are pre-encoded images supplied by the client to be sent
 	// to the LLM as native image content blocks alongside the text prompt.
 	Attachments []types.ImageAttachment
+	// ImplementationPhase forwards the client's
+	// ClientCommand.ImplementationPhase flag onto the run's RunOptions so
+	// the engine suppresses EnterPlanMode injection. Optional; defaults
+	// to false. See the field comment on types.RunOptions for the full
+	// rationale.
+	ImplementationPhase bool
+	// EnterPlanModeDescription forwards the client's harness-supplied
+	// description prose for the EnterPlanMode sentinel tool. When
+	// non-empty, the engine uses this string verbatim as the tool's
+	// description. When empty (the default), the engine falls back to a
+	// one-line neutral default. Per ADR-004, the policy prose lives in
+	// the harness; the engine ships only the mechanism.
+	EnterPlanModeDescription string
+	// PlanModeSparseReminder forwards the client's harness-supplied text
+	// for the per-turn plan-mode sparse reminder. When non-empty, the
+	// engine injects this string instead of buildPlanModeSparseReminder.
+	// When empty (the default), the engine builds the reminder from the
+	// plan file path. Parallel override to EnterPlanModeDescription;
+	// same additive omitempty contract.
+	PlanModeSparseReminder string
 }
 
 // SendPrompt dispatches a prompt to the session's backend run.
@@ -72,28 +90,12 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	s.cliTurnActive = false
 
 	if s.planMode && s.planFilePath == "" {
-		// CLI backend: place the plan file inside the project working directory
-		// because the Claude CLI's native plan mode restricts writes to paths
-		// within or under the project root. API backend: use ~/.ion/plans/ since
-		// it controls its own tool execution and can write anywhere.
-		//
-		// Hybrid backend is treated like CLI here. The model isn't finalized
-		// at this point (buildRunOptions runs below), so we can't pick the
-		// inner backend by model. The common case for plan mode under hybrid
-		// is Claude, so the CLI-style project-dir path is the right default.
-		// See specs/feat-hybrid-backend-routing.md §"Edge Cases".
-		_, isCli := m.backend.(*backend.CliBackend)
-		_, isHybrid := m.backend.(*backend.HybridBackend)
-		if (isCli || isHybrid) && s.config.WorkingDirectory != "" {
-			plansDir := filepath.Join(s.config.WorkingDirectory, ".ion", "plans")
-			_ = os.MkdirAll(plansDir, 0755)
-			s.planFilePath = filepath.Join(plansDir, generatePlanID()+".md")
-		} else {
-			home, _ := os.UserHomeDir()
-			plansDir := filepath.Join(home, ".ion", "plans")
-			_ = os.MkdirAll(plansDir, 0755)
-			s.planFilePath = filepath.Join(plansDir, generatePlanID()+".md")
-		}
+		// Plan file allocation is centralised in allocateNewPlanFilePath
+		// (plan_slug.go). That helper handles the CLI/Hybrid-vs-API
+		// directory choice and produces a fresh non-colliding word slug.
+		// See its doc comment for the directory selection rules.
+		s.planFilePath = allocateNewPlanFilePath(m.backend, s.config.WorkingDirectory)
+		utils.Info("PlanMode", fmt.Sprintf("SendPrompt: key=%s allocated new planFile=%s", key, s.planFilePath))
 	}
 
 	// Detect plan mode reentry: plan mode is active, we already have a plan
@@ -150,8 +152,8 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	// Storing hooks/perm engine/external tools/agent spawner on each run --
 	// rather than mutating shared state on the singleton ApiBackend --
 	// guarantees that concurrent sessions cannot trample each other's
-	// closures. Without this, two desktop tabs running in parallel would
-	// see each other's extension context, MCP tools, and agent spawn rules.
+	// closures. Without this, two parallel sessions would see each other's
+	// extension context, MCP tools, and agent spawn rules.
 	//
 	// resolvedBackend(opts.Model) collapses the hybrid case: for plain
 	// CliBackend/ApiBackend it returns m.backend as-is; for HybridBackend
@@ -231,6 +233,7 @@ func (m *Manager) enqueueIfBusy(s *engineSession, key, text string, overrides *P
 		pp.extensions = overrides.Extensions
 		pp.noExtensions = overrides.NoExtensions
 		pp.attachments = overrides.Attachments
+		pp.implementationPhase = overrides.ImplementationPhase
 	}
 	s.promptQueue = append(s.promptQueue, pp)
 	utils.Log("Session", fmt.Sprintf("prompt queued for %s (%d in queue)", key, len(s.promptQueue)))

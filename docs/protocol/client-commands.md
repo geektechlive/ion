@@ -47,17 +47,25 @@ Start a new engine session.
 
 Send a user message to an active session.
 
-| Field          | Type     | Required | Description                          |
-|----------------|----------|----------|--------------------------------------|
-| `cmd`          | `"send_prompt"` | yes | Command discriminator               |
-| `key`          | string   | yes      | Session key                          |
-| `text`         | string   | yes      | The user's prompt text               |
-| `model`        | string   | no       | Model override for this prompt       |
-| `maxTurns`     | number   | no       | Max LLM turns for this run           |
-| `maxBudgetUsd` | number   | no       | Spending cap in USD                  |
-| `extensionDir` | string   | no       | Override extension directory         |
-| `noExtensions` | boolean  | no       | Disable extensions for this run      |
-| `requestId`    | string   | no       | Correlates with ServerResult         |
+| Field                       | Type     | Required | Description                          |
+|-----------------------------|----------|----------|--------------------------------------|
+| `cmd`                       | `"send_prompt"` | yes | Command discriminator               |
+| `key`                       | string   | yes      | Session key                          |
+| `text`                      | string   | yes      | The user's prompt text               |
+| `model`                     | string   | no       | Model override for this prompt       |
+| `maxTurns`                  | number   | no       | Max LLM turns for this run           |
+| `maxBudgetUsd`              | number   | no       | Spending cap in USD                  |
+| `extensionDir`              | string   | no       | Override extension directory         |
+| `noExtensions`              | boolean  | no       | Disable extensions for this run      |
+| `requestId`                 | string   | no       | Correlates with ServerResult         |
+| `planMode`                  | boolean  | no       | Start this run in plan mode. See [Plan Mode](../sessions/lifecycle.md#plan-mode). |
+| `planModeTools`             | string[] | no       | Override the tool allowlist for this plan-mode run. Defaults to `["Read","Grep","Glob","Agent","WebFetch","WebSearch"]`. |
+| `planFilePath`              | string   | no       | Path of the plan file for this plan-mode run. The engine enforces write-only access to this file while plan mode is active. |
+| `planModePrompt`            | string   | no       | Custom system prompt for plan mode. When non-empty, the engine uses this string verbatim instead of building the default from `buildPlanModePrompt`. See [Plan mode prose overrides](../sessions/lifecycle.md#plan-mode-prose-overrides). |
+| `planModeReentry`           | boolean  | no       | When `true`, prepends re-entry guidance (read the existing plan before making changes). Set by the session manager when plan mode is re-enabled on a session that has a prior plan file. |
+| `implementationPhase`       | boolean  | no       | Suppresses the `EnterPlanMode` sentinel-tool injection. Set on the "implement" half of a plan-then-implement flow so the model cannot re-propose plan-mode entry. See ADR-004. |
+| `enterPlanModeDescription`  | string   | no       | Harness-supplied description prose for the `EnterPlanMode` sentinel tool. When non-empty, the engine forwards it verbatim as the tool description. Empty falls back to the engine's one-line neutral default. Per [ADR-004](../architecture/adr/004-enter-plan-mode-prose-in-harness.md). |
+| `planModeSparseReminder`    | string   | no       | Harness-supplied text for the per-turn plan-mode sparse reminder. When non-empty, the engine injects this verbatim instead of building the reminder from the plan file. Empty inherits the engine default (`buildPlanModeSparseReminder`). See [Plan mode prose overrides](../sessions/lifecycle.md#plan-mode-prose-overrides). |
 
 ```json
 {"cmd":"send_prompt","key":"abc-123","text":"List all files in the current directory","requestId":"r2"}

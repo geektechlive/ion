@@ -159,8 +159,10 @@ func TestTransientMessageNotInSavedFile(t *testing.T) {
 		t.Errorf("msg[1] = %q, want 'World'", msgs[1].Content)
 	}
 
-	// Verify the file on disk doesn't contain the transient message
-	data, err := os.ReadFile(filepath.Join(dir, "test-transient-save.jsonl"))
+	// Verify the .llm.jsonl file on disk doesn't contain the transient message.
+	// Transient messages are only in conv.Messages (not in Entries), so they
+	// are never written to the LLM file's message lines.
+	data, err := os.ReadFile(filepath.Join(dir, "test-transient-save.llm.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

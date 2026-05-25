@@ -58,7 +58,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
       playNotificationIfHidden()
     },
 
-    sendMessage: (prompt, projectPath, extraAttachments, appendSystemPrompt) => {
+    sendMessage: (prompt, projectPath, extraAttachments, appendSystemPrompt, implementationPhase) => {
       const { activeTabId, tabs, staticInfo } = get()
       const tab = tabs.find((t) => t.id === activeTabId)
       const resolvedPath = projectPath || (tab?.hasChosenDirectory ? tab.workingDirectory : (staticInfo?.homePath || tab?.workingDirectory || '~'))
@@ -206,6 +206,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         addDirs: tab.additionalDirs.length > 0 ? tab.additionalDirs : undefined,
         appendSystemPrompt: effectiveSystemPrompt,
         extensions,
+        implementationPhase,
       }).catch((err: Error) => {
         get().handleError(activeTabId, {
           message: err.message,

@@ -39,12 +39,39 @@ type activeRun struct {
 	permissionDenials []types.PermissionDenial // tools intercepted/denied (e.g. ExitPlanMode sentinel)
 	planMode          bool                     // true when this run is in plan mode
 	planFilePath      string                   // only writable file during plan mode
+	// planModeSparseReminderOverride is the harness-supplied sparse reminder text
+	// resolved once at run setup from RunOptions.PlanModeSparseReminder (highest
+	// priority) or the plan_mode_prompt hook's SparseReminder return field.
+	// Empty means "use buildPlanModeSparseReminder at injection time" (the
+	// engine default). Set in runloop_setup.go alongside planFilePath.
+	planModeSparseReminderOverride string
+	// planModeReminderTurn is the turn number on which the sparse plan-mode
+	// reminder last fired. The reminder is throttled to once per
+	// planModeReminderInterval turns to avoid the ~per-tool-round churn that
+	// previously anchored AskUserQuestion-as-turn-ender behavior in the model.
+	// Reset to 0 whenever a run re-enters plan mode via the EnterPlanMode
+	// sentinel so the throttle does not silence the first post-entry reminder.
+	planModeReminderTurn int
 
 	// compactionsWithoutProgress counts proactive compactions that have fired
 	// without an intervening successful API response. Bounds the cascade if
 	// the conversation cannot be shrunk below the trigger limit so the run
 	// surfaces an error instead of looping.
 	compactionsWithoutProgress int
+
+	// Early-stop continuation bookkeeping. See runloop_early_stop.go for
+	// the decision logic and runloop.go for the integration into the
+	// end_turn / stop branch of the agent loop.
+	//
+	// continuationCount is the number of times the engine has already
+	// nudged the model on this run. Reset on non-stop outcomes (tool_use,
+	// max_tokens) so multi-step tool work doesn't accidentally consume the
+	// cap. cumulativeOutputTokens is the total across every turn, including
+	// the one that just ended. lastContinuationDelta is the delta from the
+	// previous continuation; the diminishing-returns guard reads it.
+	continuationCount      int
+	cumulativeOutputTokens int
+	lastContinuationDelta  int
 
 	cfg *RunConfig // captured per-run config; nil means "no hooks, no per-run state"
 }
@@ -144,6 +171,11 @@ func (b *ApiBackend) StartRunWithConfig(requestID string, options types.RunOptio
 		steerCh:      make(chan string, 4),
 		planMode:     options.PlanMode,
 		planFilePath: options.PlanFilePath,
+		// Cache the RunOptions sparse-reminder override (highest precedence).
+		// The plan_mode_prompt hook may also contribute a value later in
+		// buildSystemPrompt; RunOptions wins so we set it unconditionally
+		// and buildSystemPrompt only writes the hook value when this is empty.
+		planModeSparseReminderOverride: options.PlanModeSparseReminder,
 		cfg:          cfg,
 	}
 
@@ -182,7 +214,7 @@ const cancelWatchdogGrace = 5 * time.Second
 
 // Cancel stops a running agent loop. Returns true if a run was found and
 // cancelled. Cancel is a contract: within cancelWatchdogGrace of this call
-// the desktop sees a terminal engine_status idle event regardless of whether
+// consumers see a terminal engine_status idle event regardless of whether
 // the run goroutine has actually returned. If the goroutine is wedged in a
 // blocking call that ignores ctx, the run state is force-cleared anyway and
 // the wedged goroutine is leaked until process exit.

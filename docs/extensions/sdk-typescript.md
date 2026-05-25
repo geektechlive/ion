@@ -264,6 +264,62 @@ const result = await ctx.dispatchAgent({
 // { output: '...', exitCode: 0, elapsed: 8.3 }
 ```
 
+**`getContextUsage()`** -- query the active conversation's current token usage and percent of the model's context window. Returns `null` when no conversation is active (e.g. called from `session_start` before the first prompt). Reads the live counters maintained by the engine's session manager — no socket round-trip is needed for repeated calls within a single hook.
+
+```typescript
+ion.on('before_prompt', async (ctx, prompt) => {
+  const usage = await ctx.getContextUsage()
+  if (usage && usage.percent > 70) {
+    ctx.emit({ type: 'engine_notify', message: `Context ${usage.percent}% full`, level: 'warning' })
+  }
+})
+```
+
+Useful for: warning the user before compaction kicks in; downgrading model selection under heavy context pressure; deciding whether to load expensive tools.
+
+**`searchHistory(query, maxResults?)`** -- search the active conversation's persisted message history for content matching `query`. Returns up to `maxResults` matches (engine-capped; pass `0` or omit for the default cap). Returns `[]` when no conversation is active.
+
+```typescript
+ion.registerCommand('recall', {
+  description: '/recall <query>',
+  execute: async (args, ctx) => {
+    const matches = await ctx.searchHistory(args, 5)
+    ctx.sendMessage(matches.map(m => `[${m.index} ${m.role}] ${m.snippet}`).join('\n'))
+  },
+})
+```
+
+Useful for: recovering details lost to compaction (the persisted log survives compaction; the in-context messages do not), implementing custom recall commands, and building harness-side memory features. Searches the full persisted record, not just the currently-loaded context.
+
+**`elicit(opts)`** -- ask the user a structured question via the connected client. Resolves with the user's response (or a cancellation signal). The engine blocks the calling extension's hook until the user replies or the client times out.
+
+```typescript
+ion.registerCommand('rename', {
+  description: '/rename <new-title>',
+  execute: async (args, ctx) => {
+    const reply = await ctx.elicit({
+      method: 'input',
+      title: 'Confirm tab rename',
+      message: `Rename this tab to "${args}"?`,
+      schema: { type: 'object', properties: { confirm: { type: 'boolean' } } },
+    })
+    if (reply.cancelled || !reply.response?.confirm) return
+    // proceed
+  },
+})
+```
+
+The wire protocol promotes this to `engine_elicitation_request` / `elicitation_response` so socket-only consumers (desktop, iOS) can present the prompt. See [Server Events](../protocol/server-events.md).
+
+**`suppressTool(name)`** -- hide a built-in tool from the model on the current turn. Resolves when the suppression has been applied. Use sparingly — repeated suppression across turns becomes confusing for the model.
+
+```typescript
+// Suppress Bash for a one-off "read-only" turn
+await ctx.suppressTool('Bash')
+```
+
+**`sandboxWrap(command, profile?)`** -- wrap a shell command in the engine's sandbox runner (per the configured profile). Returns the wrapped command and the sandbox metadata. Useful when an extension needs to spawn a subprocess with the same isolation guarantees that the engine applies to `Bash` calls.
+
 ## ToolDef
 
 ```typescript

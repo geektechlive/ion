@@ -38,6 +38,27 @@ func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) 
 		if len(overrides.Attachments) > 0 {
 			opts.Attachments = overrides.Attachments
 		}
+		// Forward the structured implementation-phase flag onto RunOptions
+		// so runloop_setup can suppress the EnterPlanMode sentinel-tool
+		// injection. The flag is strictly subtractive — if the run is
+		// already in plan mode the engine never injects EnterPlanMode
+		// regardless, so the flag has no effect there.
+		if overrides.ImplementationPhase {
+			opts.ImplementationPhase = true
+		}
+		// Forward the harness-supplied EnterPlanMode tool description.
+		// Empty string means "fall back to engine default" — runloop_setup
+		// resolves the actual prose via tools.EnterPlanModeToolWithDescription.
+		// Per ADR-004, the engine does not impose a policy default beyond
+		// the one-line neutral fallback.
+		if overrides.EnterPlanModeDescription != "" {
+			opts.EnterPlanModeDescription = overrides.EnterPlanModeDescription
+		}
+		// Forward the harness-supplied sparse-reminder override.
+		// Empty string means "use buildPlanModeSparseReminder default".
+		if overrides.PlanModeSparseReminder != "" {
+			opts.PlanModeSparseReminder = overrides.PlanModeSparseReminder
+		}
 	}
 
 	if s.config.SystemHint != "" {

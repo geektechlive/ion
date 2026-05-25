@@ -24,10 +24,14 @@ func TestSaveLoadJSONLRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify JSONL file was created
-	jsonlPath := filepath.Join(dir, "roundtrip-1.jsonl")
-	if _, err := os.Stat(jsonlPath); err != nil {
-		t.Fatalf("JSONL file not created: %v", err)
+	// Verify split sidecar files were created.
+	llmPath := filepath.Join(dir, "roundtrip-1.llm.jsonl")
+	treePath := filepath.Join(dir, "roundtrip-1.tree.jsonl")
+	if _, err := os.Stat(llmPath); err != nil {
+		t.Fatalf(".llm.jsonl file not created: %v", err)
+	}
+	if _, err := os.Stat(treePath); err != nil {
+		t.Fatalf(".tree.jsonl file not created: %v", err)
 	}
 
 	loaded, err := Load("roundtrip-1", dir)

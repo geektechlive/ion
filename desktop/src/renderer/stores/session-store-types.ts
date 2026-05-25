@@ -67,7 +67,7 @@ export interface State {
   initStaticInfo: () => Promise<void>
   setPermissionMode: (mode: 'auto' | 'plan', source?: string) => void
   createTab: (useWorktree?: boolean) => Promise<string>
-  createTabInDirectory: (dir: string, useWorktree?: boolean, skipDuplicateCheck?: boolean) => Promise<string>
+  createTabInDirectory: (dir: string, useWorktree?: boolean, skipDuplicateCheck?: boolean, pinToGroupId?: string) => Promise<string>
   selectTab: (tabId: string) => void
   closeTab: (tabId: string) => void
   reorderTabs: (reorderedTabs: TabState[]) => void
@@ -121,7 +121,7 @@ export interface State {
   addSystemMessage: (content: string) => void
   startBashCommand: (command: string, execId: string) => { toolMsgId: string; tabId: string }
   completeBashCommand: (tabId: string, toolMsgId: string, command: string, stdout: string, stderr: string, exitCode: number | null) => void
-  sendMessage: (prompt: string, projectPath?: string, extraAttachments?: Attachment[], appendSystemPrompt?: string) => void
+  sendMessage: (prompt: string, projectPath?: string, extraAttachments?: Attachment[], appendSystemPrompt?: string, implementationPhase?: boolean) => void
   submitRemotePrompt: (tabId: string, prompt: string, imageAttachments?: ImageAttachmentPayload[]) => void
   submitRemoteBash: (tabId: string, command: string) => void
   respondPermission: (tabId: string, questionId: string, optionId: string) => void
@@ -143,6 +143,7 @@ export interface State {
   handleError: (tabId: string, error: EnrichedError) => void
   forceRecoverTab: (tabId: string, reason: string) => void
   moveTabToGroup: (tabId: string, groupId: string) => void
+  moveTabToGroupAndPin: (tabId: string, groupId: string) => void
   setTabGroupId: (tabId: string, groupId: string | null) => void
   toggleTabGroupPin: (tabId: string) => void
   setWorktreeUncommitted: (tabId: string, hasChanges: boolean) => void

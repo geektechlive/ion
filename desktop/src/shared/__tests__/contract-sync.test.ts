@@ -80,7 +80,8 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
     'toolInput',
     'toolName',
   ],
-  plan_mode_changed: ['enabled', 'planFilePath'],
+  plan_mode_changed: ['enabled', 'planFilePath', 'planSlug'],
+  plan_proposal: ['kind', 'planFilePath', 'planSlug'],
   stream_reset: [],
   compacting: ['active', 'clearedBlocks', 'messagesAfter', 'messagesBefore', 'strategy', 'summary'],
   tool_stalled: ['elapsed', 'toolId', 'toolName'],
@@ -112,6 +113,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'systemHint',
     'thinking',
     'workingDirectory',
+    'workspaceWatchIgnore',
   ],
   MessageEndUsage: ['contextPercent', 'cost', 'inputTokens', 'outputTokens'],
   PermissionOpt: ['id', 'kind', 'label'],
@@ -142,6 +144,10 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'hasAuth',
     'id',
   ],
+  // Slash-command listing carried inside engine_command_registry snapshots.
+  // The desktop's prompt pipeline reads this off the wire to populate a
+  // routing-hint cache keyed by session — see desktop/src/main/prompt-pipeline.ts.
+  EngineCommandListing: ['description', 'name'],
 }
 
 // ─── Tests ───

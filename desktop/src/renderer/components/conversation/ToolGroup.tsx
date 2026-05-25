@@ -118,7 +118,10 @@ export function ToolGroup({ tools, skipMotion }: ToolGroupProps) {
 
   // Collapsed — show a spinner badge when any tool inside is still running so
   // the user knows something is happening even though the group is collapsed.
+  // Lead with a `(N)` count badge when there are 2+ tools so the magnitude of
+  // the collapsed group is obvious at a glance without having to expand it.
   const summary = toolSummary(tools)
+  const showCount = tools.length > 1
 
   const inner = (
     <div
@@ -130,6 +133,14 @@ export function ToolGroup({ tools, skipMotion }: ToolGroupProps) {
         ? <SpinnerGap size={10} className="animate-spin flex-shrink-0 mt-[2px]" style={{ color: colors.statusRunning }} />
         : <CaretRight size={10} className="flex-shrink-0 mt-[2px]" style={{ color: colors.textTertiary }} />
       }
+      {showCount && (
+        <span
+          className="text-[11px] leading-[1.4] tabular-nums flex-shrink-0"
+          style={{ color: colors.textMuted }}
+        >
+          ({tools.length})
+        </span>
+      )}
       <span className="text-[11px] leading-[1.4]" style={{ color: hasRunning ? colors.textSecondary : colors.textTertiary }}>
         {summary}
       </span>

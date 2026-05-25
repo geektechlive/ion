@@ -101,6 +101,21 @@ export function groupMessages(messages: Message[], opts?: GroupOptions): Grouped
   return result
 }
 
+// ─── stripCdPrefix ───
+
+// Strip a single leading `cd <path> && ` (or `cd <path>; `) from a bash command
+// for display purposes only. The underlying toolInput is never mutated — this
+// is purely a cosmetic transform so tool rows show the meaningful command
+// instead of being dominated by an absolute-path prefix. Matches Claude Code's
+// behavior (see public/claude-code/src/utils/api.ts:586 which strips
+// `cd ${cwd} && ` before display). Only strips one leading hop, so chained
+// `cd a && cd b && cmd` becomes `cd b && cmd` rather than vanishing entirely.
+const CD_PREFIX_RE = /^\s*cd\s+(?:"[^"]+"|'[^']+'|\S+)\s*(?:&&|;)\s*/
+
+export function stripCdPrefix(cmd: string): string {
+  return cmd.replace(CD_PREFIX_RE, '')
+}
+
 // ─── getToolDescription ───
 
 export function getToolDescription(name: string, input?: string): string {
@@ -115,7 +130,9 @@ export function getToolDescription(name: string, input?: string): string {
       case 'Glob': return `Search files: ${parsed.pattern || ''}`
       case 'Grep': return `Search: ${parsed.pattern || ''}`
       case 'Bash': {
-        const cmd = parsed.command || ''
+        const raw = parsed.command || ''
+        // Strip leading `cd <path> && ` so the row shows the real command.
+        const cmd = stripCdPrefix(raw)
         return cmd.length > 60 ? `${cmd.substring(0, 57)}...` : cmd || 'Bash'
       }
       case 'WebSearch': return `Search: ${parsed.query || parsed.search_query || ''}`
@@ -136,7 +153,13 @@ export function getToolDescription(name: string, input?: string): string {
       }
       case 'Glob': { const v = str('pattern'); return v ? `Search files: ${v}` : name }
       case 'Grep': { const v = str('pattern'); return v ? `Search: ${v}` : name }
-      case 'Bash': { const v = str('command'); return v ? (v.length > 60 ? v.substring(0, 57) + '...' : v) : name }
+      case 'Bash': {
+        // Same cd-prefix strip for the streaming-partial branch.
+        const raw = str('command')
+        if (!raw) return name
+        const v = stripCdPrefix(raw)
+        return v.length > 60 ? v.substring(0, 57) + '...' : v
+      }
       case 'WebSearch': { const v = str('query') || str('search_query'); return v ? `Search: ${v}` : name }
       case 'WebFetch': { const v = str('url'); return v ? `Fetch: ${v}` : name }
       case 'Agent': { const v = str('description') || str('prompt'); return v ? `Agent: ${v.substring(0, 50)}` : name }

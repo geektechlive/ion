@@ -178,6 +178,55 @@ export interface RunOptions {
   /** Extension entry points for engine tabs (resolved from engine profile) */
   extensions?: string[]
   /**
+   * Tells the engine that this run is the "implement" half of a
+   * plan-then-implement flow. The desktop sets this on the run dispatched
+   * by the Implement button on the plan-approval card. The engine
+   * responds by suppressing the EnterPlanMode sentinel tool injection so
+   * the model cannot re-propose a plan-mode entry against the user's
+   * already-approved intent.
+   *
+   * Replaces the prior mechanism, which was the desktop prepending a
+   * "You are implementing a user-approved plan. Do not re-enter plan
+   * mode..." preamble to the user prompt and the EnterPlanMode tool's
+   * docstring telling the model to recognize those phrases. The boolean
+   * is the mechanical equivalent and lives on the structured wire
+   * contract instead of in prompt prose.
+   */
+  implementationPhase?: boolean
+  /**
+   * Harness-supplied description prose for the EnterPlanMode sentinel
+   * tool that the engine injects during auto-mode runs. The desktop
+   * supplies this from the ENTER_PLAN_MODE_DESCRIPTION constant in
+   * prompt-pipeline.ts on every prompt that wants the full plan-mode
+   * framing; the engine forwards it verbatim to the LLM as the tool's
+   * description.
+   *
+   * Per ADR-004 (Move EnterPlanMode prose to harness): the policy
+   * prose that tells the model WHEN to enter plan mode and WHAT the
+   * rules are once enabled belongs in the harness, not the engine.
+   * The engine ships only a one-line neutral fallback used when this
+   * field is empty / omitted; third-party harnesses pick their own
+   * (TUIs, domain-specific harnesses, etc.).
+   *
+   * Skipping this field on the "implement" half of a plan-then-
+   * implement flow is harmless — the engine already suppresses
+   * EnterPlanMode injection when implementationPhase=true, so any
+   * description value would be unused.
+   */
+  enterPlanModeDescription?: string
+  /**
+   * Harness-supplied text for the per-turn sparse plan-mode reminder the
+   * engine injects every planModeReminderInterval turns (default: every 5).
+   * When non-empty, the engine uses this string verbatim instead of building
+   * the reminder from the plan file path.
+   *
+   * Parallel override to enterPlanModeDescription: same additive optional
+   * contract. Omit or leave empty to inherit the engine's default reminder.
+   * The desktop ships its reference prose as PLAN_MODE_SPARSE_REMINDER in
+   * prompt-pipeline.ts; third-party harnesses pick their own or omit.
+   */
+  planModeSparseReminder?: string
+  /**
    * Pre-encoded image attachments for the user message. The engine forwards
    * each as a native multimodal content block. Desktop is responsible for
    * reading the file, base64-encoding the bytes, and dropping unreadable

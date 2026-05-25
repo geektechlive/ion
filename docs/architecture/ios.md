@@ -116,3 +116,46 @@ protocol TransportProtocol {
 4. Incoming engine events are decrypted and rendered
 5. User prompts are encrypted and sent to the engine
 6. On disconnect, the app enters reconnection loop with exponential backoff
+
+## Settings tab
+
+The Settings tab is a single `NavigationStack` containing an Apple-style
+grouped `List`. Sections (top to bottom): Connection, Desktop Settings,
+Voice, Diagnostics, New Tab, Tab List, Models, Tab Groups, Paired
+Desktops, About.
+
+**Desktop Settings (per-desktop projection).** A single
+`NavigationLink` row labeled with the active desktop's display name,
+gated on `connectionState == .connected && desktopSettings != nil` so
+the row only appears when a meaningful destination exists. Tapping
+pushes a `DesktopSettingsView` detail screen titled with the desktop
+name (matches Apple's pattern: Settings → Wi-Fi → [network] → titled
+with the network).
+
+The detail screen renders the projection schema received over the
+wire, one `Section` per group descriptor with a header label and
+`Toggle` rows. Each row shows the setting's `label` as the title and
+its `description` as caption text below — so the user can read what a
+toggle does without leaving the row.
+
+**Per-desktop scoping.** The view shows settings for the
+currently-connected desktop only. Other paired desktops keep their own
+preferences; switching transports (via the Paired Desktops section)
+clears the cached projection and the new desktop's initial snapshot
+repopulates the screen.
+
+**Schema-on-the-wire.** The desktop ships both values and metadata
+(label, description, group, type, defaultValue) on every snapshot. The
+iOS UI auto-renders new settings the moment they land on the wire —
+adding a setting to the desktop's allowlist requires zero Swift
+changes. Unknown group identifiers from newer desktops render under a
+generic "Other" section.
+
+**Edit round-trip.** A toggle flip calls
+`viewModel.setDesktopSetting(key:value:)` which sends
+`set_desktop_setting` over the transport. The desktop validates the
+key + type, persists via `writeSettings`, and broadcasts a fresh
+`desktop_settings_snapshot` to every paired device. The iOS view
+re-renders on the snapshot — a rejected write (unknown key, wrong
+type) simply leaves the UI showing the prior cached state. No
+optimistic state is held locally; the desktop is the source of truth.

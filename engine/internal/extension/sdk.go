@@ -9,7 +9,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
-// Hook event names. 60 hooks across 15 categories.
+// Hook event names. 66 hooks across 15 categories.
 const (
 	// Lifecycle hooks
 	HookSessionStart = "session_start"
@@ -36,6 +36,12 @@ const (
 	// Pre-action hooks
 	HookBeforeAgentStart      = "before_agent_start"
 	HookBeforeProviderRequest = "before_provider_request"
+
+	// Early-stop continuation hooks. Fire around the engine's decision to
+	// nudge the model to keep working when it emits end_turn / stop below
+	// the configured token budget. See docs/hooks/reference.md.
+	HookBeforeEarlyStopDecision = "before_early_stop_decision" // influence: handler can override the decision
+	HookEarlyStopContinued      = "early_stop_continued"       // observe: handler sees a continuation that just fired
 
 	// Content hooks
 	HookContext       = "context"
@@ -74,7 +80,22 @@ const (
 	HookPermissionClassify = "permission_classify"
 
 	// File change hooks
+	//
+	// HookFileChanged fires only after the LLM's Write or Edit tool has
+	// successfully written a file. It is NOT a filesystem watcher -- external
+	// edits (user saving a file in their editor, a shell script writing to
+	// disk, an MCP server modifying state) do not fire it. For external-edit
+	// notifications subscribe to HookWorkspaceFileChanged instead.
 	HookFileChanged = "file_changed"
+
+	// HookWorkspaceFileChanged fires when any non-ignored file or directory
+	// inside the session's working directory is created, modified, or deleted
+	// by anything (including the LLM's tools, the user's editor, shell
+	// commands, etc.). Backed by an engine-owned recursive fsnotify watcher
+	// rooted at EngineConfig.WorkingDirectory. Paths outside the working
+	// directory are NOT covered -- extensions interested in those install
+	// their own watchers via node:fs.watch in their subprocess.
+	HookWorkspaceFileChanged = "workspace_file_changed"
 
 	// Task lifecycle hooks
 	HookTaskCreated   = "task_created"
@@ -85,8 +106,10 @@ const (
 	HookElicitationResult  = "elicitation_result"
 
 	// Plan mode hooks
-	HookPlanModePrompt = "plan_mode_prompt"
-	HookSystemInject   = "system_inject"
+	HookPlanModePrompt      = "plan_mode_prompt"
+	HookBeforePlanModeEnter = "before_plan_mode_enter"
+	HookBeforePlanModeExit  = "before_plan_mode_exit"
+	HookSystemInject        = "system_inject"
 
 	// Context injection hooks
 	HookContextInject = "context_inject"
@@ -114,6 +137,12 @@ type SDK struct {
 	commands      map[string]CommandDefinition
 	capabilities  map[string]Capability
 	appendEntryFn func(entryType string, data interface{}) error
+	// onCommandsChange is invoked (outside the lock) after any successful
+	// RegisterCommand so the owning session can emit an engine_command_registry
+	// snapshot to its clients. The SDK itself does not know about session keys
+	// or event types — the callback indirection keeps that policy in the
+	// session manager where it belongs. Nil is valid (no observer wired).
+	onCommandsChange func()
 }
 
 // NewSDK creates a new extension SDK with empty registries.
@@ -147,11 +176,50 @@ func (s *SDK) RegisterTool(def ToolDefinition) {
 	s.tools = append(s.tools, def)
 }
 
-// RegisterCommand adds a slash command to the registry.
+// RegisterCommand adds a slash command to the registry. After the map is
+// updated, the optional onCommandsChange observer is invoked (outside the
+// lock) so the owning session can broadcast a fresh registry snapshot to its
+// clients. Callable from any goroutine, including from inside a hook handler
+// while a session is already running -- the snapshot semantics on the wire
+// (always full set, never a diff) make late registrations safe.
 func (s *SDK) RegisterCommand(name string, def CommandDefinition) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	_, replaced := s.commands[name]
 	s.commands[name] = def
+	cb := s.onCommandsChange
+	s.mu.Unlock()
+	if replaced {
+		utils.Log("extension", fmt.Sprintf("RegisterCommand: replaced existing entry name=%s", name))
+	} else {
+		utils.Log("extension", fmt.Sprintf("RegisterCommand: added name=%s desc=%q", name, def.Description))
+	}
+	if cb != nil {
+		cb()
+	} else {
+		utils.Debug("extension", fmt.Sprintf("RegisterCommand: no onCommandsChange observer wired for name=%s", name))
+	}
+}
+
+// SetOnCommandsChange wires an observer that will be invoked (outside the
+// SDK's internal lock) after every RegisterCommand call. The session manager
+// uses this to emit an engine_command_registry snapshot whenever the command
+// table mutates. Pass nil to clear. Safe to call concurrently with
+// RegisterCommand -- the swap itself is under the lock; the observer set when
+// a particular RegisterCommand returns is the one that fires for that call.
+func (s *SDK) SetOnCommandsChange(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onCommandsChange = fn
+	utils.Debug("extension", fmt.Sprintf("SetOnCommandsChange: observer %s", boolStr(fn != nil, "wired", "cleared")))
+}
+
+// boolStr is a tiny helper used by logging to render a boolean as one of two
+// strings. Lives here to avoid importing strconv just for log text.
+func boolStr(b bool, t, f string) string {
+	if b {
+		return t
+	}
+	return f
 }
 
 // Tools returns all registered tool definitions.

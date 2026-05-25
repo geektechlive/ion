@@ -508,25 +508,45 @@ func TestSetPlanMode_PreservesPlanFilePathAfterExit(t *testing.T) {
 	}
 }
 
-func TestSetPlanMode_ClearsPlanFilePathWithoutExit(t *testing.T) {
+// TestSetPlanMode_PreservesPlanFilePathOnManualDisable verifies that disabling
+// plan mode via a manual toggle (no MarkPlanModeExited call) preserves the
+// planFilePath and sets hasExitedPlanMode=true. This is the key regression
+// test for the bug where toggling plan mode off via the dropdown would orphan
+// the plan file and cause a new hash to be allocated on re-entry.
+func TestSetPlanMode_PreservesPlanFilePathOnManualDisable(t *testing.T) {
 	mb := newMockBackend()
 	mgr := NewManager(mb)
-	_, _ = mgr.StartSession("clear", defaultConfig())
+	_, _ = mgr.StartSession("manual-disable", defaultConfig())
 
 	// Enable plan mode and send a prompt to generate a plan file path
-	mgr.SetPlanMode("clear", true, []string{"Read"}, "test")
-	_ = mgr.SendPrompt("clear", "plan it", nil)
+	mgr.SetPlanMode("manual-disable", true, []string{"Read"}, "test")
+	_ = mgr.SendPrompt("manual-disable", "plan it", nil)
 
-	// Disable plan mode WITHOUT marking as exited — planFilePath should clear
-	mgr.SetPlanMode("clear", false, nil, "test")
-
+	// Capture the plan file path
 	mgr.mu.RLock()
-	s := mgr.sessions["clear"]
-	after := s.planFilePath
+	s := mgr.sessions["manual-disable"]
+	planFile := s.planFilePath
 	mgr.mu.RUnlock()
 
-	if after != "" {
-		t.Errorf("expected planFilePath to be cleared when hasExitedPlanMode is false, got %q", after)
+	if planFile == "" {
+		t.Fatal("expected planFilePath to be set after SendPrompt in plan mode")
+	}
+
+	// Disable plan mode WITHOUT calling MarkPlanModeExited (simulates dropdown toggle).
+	// planFilePath MUST be preserved, and hasExitedPlanMode MUST be set true.
+	mgr.SetPlanMode("manual-disable", false, nil, "ui_dropdown")
+
+	mgr.mu.RLock()
+	s = mgr.sessions["manual-disable"]
+	afterPath := s.planFilePath
+	afterExited := s.hasExitedPlanMode
+	mgr.mu.RUnlock()
+
+	if afterPath != planFile {
+		t.Errorf("expected planFilePath to be preserved after manual disable, got %q (was %q)", afterPath, planFile)
+	}
+	if !afterExited {
+		t.Error("expected hasExitedPlanMode=true after manual disable with existing plan file")
 	}
 }
 
@@ -559,5 +579,54 @@ func TestPlanModeReentry_SetOnRunOptions(t *testing.T) {
 	opts, _ := mb.getStarted(allOrdered[1])
 	if !opts.PlanModeReentry {
 		t.Error("expected PlanModeReentry=true on second plan mode run")
+	}
+}
+
+// TestSetPlanMode_ReentryAfterManualToggle is the direct regression test for the
+// original bug: the user toggles plan mode off via the dropdown (no ExitPlanMode
+// call) and then re-enters. The engine must reuse the same planFilePath and flag
+// the run as a reentry so the LLM gets the reentry guidance prompt.
+func TestSetPlanMode_ReentryAfterManualToggle(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	_, _ = mgr.StartSession("manual-reentry", defaultConfig())
+
+	// Enter plan mode, send a prompt to allocate a plan hash.
+	mgr.SetPlanMode("manual-reentry", true, []string{"Read"}, "test")
+	_ = mgr.SendPrompt("manual-reentry", "plan it", nil)
+
+	mgr.mu.RLock()
+	s := mgr.sessions["manual-reentry"]
+	firstPlanFile := s.planFilePath
+	mgr.mu.RUnlock()
+
+	if firstPlanFile == "" {
+		t.Fatal("expected planFilePath to be set after first SendPrompt")
+	}
+
+	// Simulate run exit so requestID is cleared.
+	ordered := mb.startedInOrder()
+	code := 0
+	mb.emitExit(ordered[0], &code, nil, "sess-1")
+
+	// User toggles plan mode OFF via dropdown — no MarkPlanModeExited call.
+	mgr.SetPlanMode("manual-reentry", false, nil, "ui_dropdown")
+
+	// User toggles plan mode ON again via dropdown.
+	mgr.SetPlanMode("manual-reentry", true, []string{"Read"}, "ui_dropdown")
+	_ = mgr.SendPrompt("manual-reentry", "amend the plan", nil)
+
+	// The second run must see the same planFilePath and PlanModeReentry=true.
+	allOrdered := mb.startedInOrder()
+	if len(allOrdered) < 2 {
+		t.Fatal("expected 2 started runs")
+	}
+	opts, _ := mb.getStarted(allOrdered[1])
+
+	if opts.PlanFilePath != firstPlanFile {
+		t.Errorf("expected reused planFilePath=%q on re-entry, got %q", firstPlanFile, opts.PlanFilePath)
+	}
+	if !opts.PlanModeReentry {
+		t.Error("expected PlanModeReentry=true on second plan mode run after manual toggle")
 	}
 }

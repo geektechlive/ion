@@ -30,16 +30,27 @@ export function registerGitExtrasIpc(): void {
   })
 
   ipcMain.handle(IPC.GIT_REFRESH, async (_event, { directory }: { directory: string }) => {
-    if (!repositoryManager.has(directory)) {
-      logError(`GIT_REFRESH: no retained repo for ${directory}`)
+    // Per plan: never refuse a refresh. If no repo exists for this path,
+    // create one on demand via repositoryManager.get() — it does NOT retain,
+    // so no watcher is started, but refreshSnapshot() still computes a fresh
+    // snapshot, emits events to any current subscribers, and caches the
+    // snapshot for the next subscribe() call.
+    if (!directory) {
+      logError('GIT_REFRESH: empty directory, refusing')
       return { ok: false }
     }
+    const wasRetained = repositoryManager.has(directory)
     const repo = repositoryManager.get(directory)
-    log(`GIT_REFRESH: bumping revision and refreshing snapshot for ${directory} (revision was ${repo.revision})`)
+    log(`GIT_REFRESH: refreshing snapshot for ${directory} (wasRetained=${wasRetained} revision was ${repo.revision} refCount=${repo.refCount})`)
     repo.bumpRevision()
-    await repo.refreshSnapshot()
-    log(`GIT_REFRESH: done for ${directory} (revision now ${repo.revision})`)
-    return { ok: true }
+    try {
+      await repo.refreshSnapshot()
+      log(`GIT_REFRESH: done for ${directory} (revision now ${repo.revision} refCount=${repo.refCount})`)
+      return { ok: true }
+    } catch (err) {
+      logError(`GIT_REFRESH: refreshSnapshot failed for ${directory}: ${(err as Error).message}`)
+      return { ok: false, error: (err as Error).message }
+    }
   })
 
   ipcMain.handle(IPC.GIT_APPLY_PATCH, async (_event, { directory, patch, reverse, cached }: { directory: string; patch: string; reverse?: boolean; cached?: boolean }) => {

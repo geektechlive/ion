@@ -80,15 +80,40 @@ func filterEvents(events []types.EngineEvent, eventType string) []types.EngineEv
 	return out
 }
 
-// findPlanFilePath extracts the planFilePath from the first
-// engine_plan_mode_changed event where planModeEnabled=false.
+// findPlanFilePath extracts the planFilePath from the ExitPlanMode
+// permission denial carried on engine_status. The engine no longer emits
+// PlanModeChangedEvent{Enabled:false} on the model's ExitPlanMode call —
+// that call is a *proposal*, not a confirmed mode change. The run-end
+// signal is engine_status (task_complete) with the ExitPlanMode denial
+// carrying planFilePath in toolInput.
 func findPlanFilePath(events []types.EngineEvent) string {
 	for _, ev := range events {
-		if ev.Type == "engine_plan_mode_changed" && !ev.PlanModeEnabled && ev.PlanModeFilePath != "" {
-			return ev.PlanModeFilePath
+		if ev.Type != "engine_status" || ev.Fields == nil {
+			continue
+		}
+		for _, d := range ev.Fields.PermissionDenials {
+			if d.ToolName == "ExitPlanMode" && d.ToolInput != nil {
+				if p, ok := d.ToolInput["planFilePath"].(string); ok && p != "" {
+					return p
+				}
+			}
 		}
 	}
 	return ""
+}
+
+// findPlanProposal returns the first engine_plan_proposal event with the
+// given kind, or nil if none was observed. The plan_proposal event is the
+// first-class workflow signal that the model has proposed a plan-mode
+// transition; see docs/architecture/adr/003-state-events-vs-workflow-events.md
+// for the state-vs-workflow distinction.
+func findPlanProposal(events []types.EngineEvent, kind string) *types.EngineEvent {
+	for i, ev := range events {
+		if ev.Type == "engine_plan_proposal" && ev.PlanProposalKind == kind {
+			return &events[i]
+		}
+	}
+	return nil
 }
 
 func hasErrors(events []types.EngineEvent) bool {
@@ -147,10 +172,36 @@ func TestLiveCliPlanModeEnterAndExit(t *testing.T) {
 		t.Error("expected engine_plan_mode_changed with planModeEnabled=true")
 	}
 
-	// Should have PlanModeChanged enabled=false with planFilePath
+	// Should expose planFilePath via the ExitPlanMode denial on engine_status.
+	// The engine no longer emits PlanModeChangedEvent{Enabled:false} on the
+	// model's ExitPlanMode call (deferred to user approval).
 	planPath := findPlanFilePath(events)
 	if planPath == "" {
-		t.Error("expected engine_plan_mode_changed with planModeEnabled=false and planFilePath")
+		t.Error("expected ExitPlanMode denial on engine_status to carry planFilePath")
+	}
+	for _, ev := range planEnter {
+		if !ev.PlanModeEnabled {
+			t.Error("unexpected engine_plan_mode_changed{planModeEnabled=false} (must be deferred to user approval)")
+		}
+	}
+
+	// Should expose the model's ExitPlanMode call as a first-class
+	// plan_proposal{kind:"exit"} workflow event with the planFilePath
+	// and planSlug carried directly (no permissionDenials scraping needed).
+	proposal := findPlanProposal(events, "exit")
+	if proposal == nil {
+		t.Error("expected engine_plan_proposal{kind:\"exit\"} after model ExitPlanMode tool call")
+	} else {
+		if proposal.PlanModeFilePath == "" {
+			t.Error("engine_plan_proposal should carry a non-empty planFilePath")
+		}
+		if proposal.PlanModeFilePath != planPath {
+			t.Errorf("plan_proposal planFilePath=%q does not match denial planFilePath=%q",
+				proposal.PlanModeFilePath, planPath)
+		}
+		if proposal.PlanModeSlug == "" && proposal.PlanModeFilePath != "" {
+			t.Error("engine_plan_proposal should carry a non-empty planSlug when planFilePath is non-empty")
+		}
 	}
 
 	// Should have permission denials with ExitPlanMode
@@ -475,22 +526,21 @@ func TestLiveCliPlanModeViaManagerSendPrompt(t *testing.T) {
 		t.Error("expected engine_text_delta events")
 	}
 
-	// Should have engine_plan_mode_changed with enabled=true
+	// Should have engine_plan_mode_changed with enabled=true. The engine
+	// must NOT emit enabled=false on the model's ExitPlanMode call — that
+	// is a *proposal* awaiting user approval; the run-end signal is the
+	// ExitPlanMode denial on engine_status.
 	planChanged := filterEvents(events, "engine_plan_mode_changed")
 	foundEnabled := false
-	foundDisabled := false
 	for _, ev := range planChanged {
 		if ev.PlanModeEnabled {
 			foundEnabled = true
 		} else {
-			foundDisabled = true
+			t.Error("unexpected engine_plan_mode_changed{planModeEnabled=false} (must be deferred to user approval)")
 		}
 	}
 	if !foundEnabled {
 		t.Error("expected engine_plan_mode_changed with planModeEnabled=true")
-	}
-	if !foundDisabled {
-		t.Error("expected engine_plan_mode_changed with planModeEnabled=false")
 	}
 
 	// Should have engine_status (task complete)

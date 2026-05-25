@@ -259,34 +259,15 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
                 updated.hasUnread = true
               }
               if (event.permissionDenials && event.permissionDenials.length > 0) {
-                const hadPlanExit = event.permissionDenials.some((d) => d.toolName === 'ExitPlanMode')
-                console.log(`[task_complete] tab=${tabId.slice(0, 8)} branch: hasDenials=true hadPlanExit=${hadPlanExit} permMode=${updated.permissionMode}`)
-                if (hadPlanExit) {
-                  let exitPlanIsStale = false
-                  if (updated.permissionMode === 'plan') {
-                    for (let i = updated.messages.length - 1; i >= 0; i--) {
-                      const m = updated.messages[i]
-                      if (m.toolName === 'ExitPlanMode') break
-                      if (m.role === 'user') { exitPlanIsStale = true; break }
-                    }
-                  }
-                  if (updated.permissionMode !== 'plan' || exitPlanIsStale) {
-                    const nonPlanDenials = event.permissionDenials.filter((d) => d.toolName !== 'ExitPlanMode')
-                    updated.permissionDenied = nonPlanDenials.length > 0 ? { tools: nonPlanDenials } : null
-                    console.log(`[task_complete] tab=${tabId.slice(0, 8)} branch=planExit-stale-or-nonplan permDenied=${updated.permissionDenied ? JSON.stringify(updated.permissionDenied.tools.map((t) => t.toolName)) : 'null'}`)
-                    if (updated.permissionMode !== 'plan' && s.backend !== 'cli') {
-                      setTimeout(() => {
-                        get().sendMessage('Plan mode is not active. Do not create plans or call ExitPlanMode. Implement the requested changes directly using Edit, Write, and Bash tools.')
-                      }, 100)
-                    }
-                  } else {
-                    updated.permissionDenied = { tools: event.permissionDenials }
-                    console.log(`[task_complete] tab=${tabId.slice(0, 8)} branch=planExit-fresh permDenied set to ${JSON.stringify(updated.permissionDenied.tools.map((t) => t.toolName))}`)
-                  }
-                } else {
-                  updated.permissionDenied = { tools: event.permissionDenials }
-                  console.log(`[task_complete] tab=${tabId.slice(0, 8)} branch=noPlanExit permDenied set to ${JSON.stringify(updated.permissionDenied.tools.map((t) => t.toolName))} firstToolInputKeys=${updated.permissionDenied.tools[0]?.toolInput ? Object.keys(updated.permissionDenied.tools[0].toolInput).join(',') : 'no-input'}`)
-                }
+                // The engine no longer emits PlanModeChangedEvent{Enabled:false}
+                // on the ExitPlanMode tool call, so the previous race that
+                // forced this branch to filter out "stale" ExitPlanMode
+                // denials (and to inject the synthetic "Plan mode is not
+                // active" user message) is gone. task_complete now arrives
+                // while permissionMode is still 'plan', and the approval
+                // card renders cleanly from the unfiltered denials.
+                updated.permissionDenied = { tools: event.permissionDenials }
+                console.log(`[task_complete] tab=${tabId.slice(0, 8)} branch=denials permDenied set to ${JSON.stringify(updated.permissionDenied.tools.map((t) => t.toolName))} permMode=${updated.permissionMode}`)
               } else {
                 console.log(`[task_complete] tab=${tabId.slice(0, 8)} branch=noDenials permDenied=null`)
                 updated.permissionDenied = null
@@ -358,10 +339,44 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               break
 
             case 'engine_plan_mode_changed' as any:
+              // Only Enabled:true is authoritative — model-initiated
+              // EnterPlanMode confirms the session has entered plan mode.
+              // Enabled:false from a model-initiated ExitPlanMode is a
+              // *proposal* awaiting user approval, so we do NOT flip the
+              // dropdown to auto here. The user-approval chokepoint in
+              // usePermissionDeniedHandlers.onImplement is responsible for
+              // the mode flip back to 'auto'. The engine no longer emits
+              // false for the ExitPlanMode case, but this branch still
+              // guards against any future emitter.
+              if ((event as any).planModeEnabled) {
+                updated.permissionMode = 'plan'
+              }
               if ((event as any).planFilePath) {
                 updated.planFilePath = (event as any).planFilePath
               }
               break
+
+            case 'engine_plan_proposal' as any: {
+              // Workflow event from the engine: the model has proposed a
+              // plan-mode transition (currently only kind="exit"). This is
+              // NOT a state change — the engine has NOT flipped plan mode
+              // off. The approval-card render still flows through
+              // task_complete.permissionDenials below (for back-compat),
+              // but this event lets the renderer learn about the proposal
+              // *as soon as the model calls the tool*, before task_complete
+              // arrives. We record the proposed plan path on the tab so
+              // downstream UI (e.g. the implement button) has it without
+              // having to scrape it from permissionDenied entries. See
+              // docs/architecture/adr/003-state-events-vs-workflow-events.md.
+              const proposal = event as any
+              const kind = proposal.planProposalKind ?? proposal.kind
+              const path = proposal.planFilePath
+              console.log(`[plan_proposal] tab=${tabId.slice(0, 8)} kind=${kind} planFilePath=${path ?? ''} planSlug=${proposal.planSlug ?? ''}`)
+              if (path && updated.planFilePath !== path) {
+                updated.planFilePath = path
+              }
+              break
+            }
 
             case 'permission_request': {
               const newReq: import('../../../shared/types').PermissionRequest = {

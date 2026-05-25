@@ -142,7 +142,7 @@ export type NormalizedEvent =
   | { type: 'rate_limit'; status: string; resetsAt: number; rateLimitType: string }
   | { type: 'usage'; usage: UsageData }
   | { type: 'permission_request'; questionId: string; toolName: string; toolDescription?: string; toolInput?: Record<string, unknown>; options: Array<{ id: string; label: string; kind?: string }> }
-  | { type: 'plan_mode_changed'; enabled: boolean; planFilePath?: string }
+  | { type: 'plan_mode_changed'; enabled: boolean; planFilePath?: string; planSlug?: string }
   | { type: 'stream_reset' }
   | { type: 'compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
   | { type: 'tool_stalled'; toolId: string; toolName: string; elapsed: number }

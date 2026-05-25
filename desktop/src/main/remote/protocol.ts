@@ -73,7 +73,12 @@ export interface RemoteAttachment {
 
 export type RemoteCommand =
   | { type: 'sync' }
-  | { type: 'create_tab'; workingDirectory?: string }
+  // `pinToGroupId` is an additive optional extension (non-breaking per
+  // CLAUDE.md contract rules). When set, the desktop creates the new tab
+  // inside that manual group with groupPinned=true so the first prompt's
+  // auto-movement doesn't yank it back into the default group. Older
+  // iOS builds that omit the field continue to get the legacy behavior.
+  | { type: 'create_tab'; workingDirectory?: string; pinToGroupId?: string }
   | { type: 'create_terminal_tab'; workingDirectory?: string }
   | { type: 'close_tab'; tabId: string }
   | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }
@@ -131,6 +136,23 @@ export type RemoteCommand =
   | { type: 'voice_config'; enabled: boolean; mode: 'client' | 'desktop'; systemPrompt?: string }
   | { type: 'diagnostic_logs_response'; logs: string; deviceId: string; deviceName: string }
   | { type: 'set_remote_display'; customName: string | null; customIcon: string | null; updatedAt: number }
+  // ─── Desktop settings projection (Part 7) ───────────────────────────
+  // Write-back path for the per-desktop settings the iOS Settings tab
+  // surfaces. The desktop validates `key` against the allowlist in
+  // `desktop/src/main/projectable-settings.ts` and validates `value`
+  // matches the declared type before persisting via `writeSettings`.
+  // Unknown keys and wrong-type values are silently rejected (logged
+  // but not applied). After a successful write, the desktop broadcasts
+  // a fresh `desktop_settings_snapshot` to every connected pairing so
+  // every iOS instance sees the new value.
+  //
+  // The `value` carries arbitrary JSON shapes today (booleans only in
+  // the initial allowlist, but the wire is shape-agnostic so future
+  // string/number projections need no protocol change). Consumers must
+  // tolerate types they don't recognize by ignoring the entry rather
+  // than erroring — same forward-compat posture as the rest of the
+  // RemoteCommand union.
+  | { type: 'set_desktop_setting'; key: string; value: unknown }
 
 // ─── Ion → iOS events ───
 
@@ -176,6 +198,47 @@ export type RemoteEvent =
   | { type: 'engine_conversation_history'; tabId: string; instanceId?: string | null; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number }> }
   | { type: 'input_prefill'; tabId: string; text: string; switchTo?: boolean }
   | { type: 'engine_profiles'; profiles: Array<{ id: string; name: string; extensions: string[] }> }
+  // ─── Desktop settings projection (Part 7) ───────────────────────────
+  // Snapshot of the desktop's projectable user preferences. Emitted once
+  // on initial pairing (alongside `snapshot`) and on every subsequent
+  // local change to a projectable key. The payload carries three things:
+  //
+  //   - `settings`: the current value of every entry in the allowlist
+  //     (`Record<key, unknown>`). Consumers REPLACE their cached view
+  //     with this payload (snapshot semantics — never merge). Missing
+  //     keys would indicate the projection is broken; clients should
+  //     treat them defensively.
+  //
+  //   - `schema`: the per-key metadata (type, group, label, description,
+  //     defaultValue) iOS uses to render the Settings detail view. Sent
+  //     on every snapshot so iOS auto-renders new settings without a
+  //     Swift code change — adding a setting on the desktop requires
+  //     only an entry in `projectable-settings.ts`. The iOS UI tolerates
+  //     unknown `group` values by falling back to a generic "Other"
+  //     section.
+  //
+  //   - `groups`: ordered group descriptors. iOS renders one List
+  //     section per group in this order. Same forward-compat: re-
+  //     ordering or adding a group requires no iOS code change.
+  //
+  // Per-desktop scoping: iOS shows settings for the currently-connected
+  // desktop only. Each desktop emits its own snapshot; an iOS device
+  // paired with multiple desktops sees a different payload from each.
+  // The desktop's display name (carried by `snapshot.customName` or the
+  // pairing record) labels which desktop the values belong to.
+  | {
+      type: 'desktop_settings_snapshot'
+      settings: Record<string, unknown>
+      schema: Array<{
+        key: string
+        type: 'boolean' | 'string' | 'number'
+        group: string
+        label: string
+        description: string
+        defaultValue: unknown
+      }>
+      groups: Array<{ id: string; label: string }>
+    }
   | { type: 'heartbeat'; seq: number; ts: number; buffered: number }
   | { type: 'unpair' }
   | { type: 'relay_config'; relayUrl: string; relayApiKey: string }

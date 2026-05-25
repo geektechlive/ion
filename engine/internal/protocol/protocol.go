@@ -51,12 +51,53 @@ type ClientCommand struct {
 	ElicitResponse  map[string]interface{} `json:"elicitResponse,omitempty"`
 	ElicitCancelled bool                   `json:"elicitCancelled,omitempty"`
 
+	// early_stop_decision_response: client reply to an
+	// engine_early_stop_decision_request event. All fields are optional; an
+	// empty reply expresses no opinion (engine falls through to its existing
+	// merge logic — typically meaning no continuation when nothing supplied
+	// a ContinueMessage). Mirrors the extension-side EarlyStopDecisionResult
+	// shape; see types.go for the request-event field documentation.
+	EarlyStopRequestID            string `json:"earlyStopRequestId,omitempty"`
+	EarlyStopForceContinue        *bool  `json:"earlyStopForceContinue,omitempty"`
+	EarlyStopOverrideBudget       int    `json:"earlyStopOverrideBudget,omitempty"`
+	EarlyStopOverrideThresholdPct int    `json:"earlyStopOverrideThresholdPct,omitempty"`
+	EarlyStopContinueMessage      string `json:"earlyStopContinueMessage,omitempty"`
+
 	// send_prompt: pre-encoded image attachments to attach to the user
 	// message as native image content blocks. The engine has no opinion on
 	// any client-side marker syntax inside Text — clients pass image bytes
 	// here and the backend forwards them to the provider via its multimodal
 	// content format.
 	Attachments []types.ImageAttachment `json:"attachments,omitempty"`
+
+	// send_prompt: when true, the engine maps this onto
+	// RunOptions.ImplementationPhase for the dispatched run, which
+	// suppresses the EnterPlanMode sentinel-tool injection. Clients set
+	// this on the "implement" half of a plan-then-implement flow so the
+	// model can't re-propose plan-mode entry against the user's already-
+	// approved intent. Optional; defaults to false. See the field comment
+	// in engine/internal/types/types.go for the full rationale.
+	ImplementationPhase bool `json:"implementationPhase,omitempty"`
+
+	// send_prompt: harness-supplied description prose for the
+	// EnterPlanMode sentinel tool that the engine injects during
+	// auto-mode runs. When non-empty, the engine forwards this string
+	// verbatim as the tool's description to the model. When empty (or
+	// omitted), the engine falls back to a one-line neutral default.
+	// Per ADR-004, the prose belongs in the harness — the Ion desktop
+	// client is the reference implementation and supplies its prose
+	// from desktop/src/main/prompt-pipeline.ts; any harness supplies
+	// its own. Mirrors RunOptions.EnterPlanModeDescription one-for-one.
+	EnterPlanModeDescription string `json:"enterPlanModeDescription,omitempty"`
+
+	// send_prompt: harness-supplied text for the per-turn sparse plan-mode
+	// reminder the engine injects every planModeReminderInterval turns.
+	// When non-empty, the engine uses this string verbatim instead of
+	// buildPlanModeSparseReminder. When empty (or omitted), the engine
+	// builds the reminder from the plan file path. Parallel override to
+	// EnterPlanModeDescription / RunOptions.PlanModePrompt — same additive
+	// omitempty contract. Mirrors RunOptions.PlanModeSparseReminder.
+	PlanModeSparseReminder string `json:"planModeSparseReminder,omitempty"`
 }
 
 var validCommands = map[string]bool{
@@ -83,12 +124,20 @@ var validCommands = map[string]bool{
 	"get_conversation":      true,
 	"generate_title":        true,
 	"elicitation_response":  true,
+	"early_stop_decision_response": true,
 	"health":                true,
 	"reconcile_state":       true,
 	"migrate_conversation":  true,
 	"list_models":           true,
 	"store_credential":      true,
 	"refresh_models":        true,
+	// clear_conversation_file: wipes the LLM-visible Messages (and resets
+	// LastInputTokens / LastInputTokensMsgCount) on a stored conversation
+	// file by sessionId, without requiring a live engine session. Used by
+	// consumers that need to reset a conversation file when no in-memory
+	// session is running against it (so dispatchClear cannot be used).
+	// Non-breaking additive command. Requires key (sessionId).
+	"clear_conversation_file": true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -247,6 +296,10 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasString(raw, "text")
 	case "elicitation_response":
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "elicitRequestId")
+	case "early_stop_decision_response":
+		// Only key + earlyStopRequestId are required. All response fields
+		// are optional; an empty response is a valid "no opinion" reply.
+		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "earlyStopRequestId")
 	case "reconcile_state":
 		return hasNonEmptyString(raw, "key")
 	case "migrate_conversation":
@@ -257,6 +310,9 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasNonEmptyString(raw, "provider") && hasString(raw, "credential")
 	case "refresh_models":
 		return true // optional: provider field to refresh a single provider
+	case "clear_conversation_file":
+		// key carries the sessionId (conversationId) to wipe. Required and non-empty.
+		return hasNonEmptyString(raw, "key")
 	}
 	return false
 }

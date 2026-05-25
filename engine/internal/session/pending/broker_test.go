@@ -161,3 +161,93 @@ func TestBroker_ElicitResolveUnknownReturnsFalse(t *testing.T) {
 		t.Error("expected false for unknown elicit")
 	}
 }
+
+// TestBroker_EarlyStopRoundTrip exercises the happy path: register a
+// pending early-stop wire request, resolve it from another goroutine,
+// confirm the reply reaches the waiter. Mirrors the elicit round-trip
+// pattern.
+func TestBroker_EarlyStopRoundTrip(t *testing.T) {
+	b := New()
+	ch := b.RegisterEarlyStop("es-1")
+
+	cont := true
+	go func() {
+		time.Sleep(time.Millisecond)
+		b.ResolveEarlyStop("es-1", EarlyStopReply{
+			ForceContinue:   &cont,
+			ContinueMessage: "test msg",
+		})
+	}()
+
+	select {
+	case v := <-ch:
+		if v.ForceContinue == nil || !*v.ForceContinue {
+			t.Errorf("expected ForceContinue=&true, got %v", v.ForceContinue)
+		}
+		if v.ContinueMessage != "test msg" {
+			t.Errorf("expected ContinueMessage='test msg', got %q", v.ContinueMessage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+// TestBroker_EarlyStopEmptyReply confirms a wholly-empty reply still
+// reaches the waiter. The runloop treats an empty reply as "no opinion"
+// but the broker must deliver it so the caller's select unblocks rather
+// than timing out — distinguishing "consumer expressed no opinion" from
+// "consumer never responded" matters for the engine's fall-through logic.
+func TestBroker_EarlyStopEmptyReply(t *testing.T) {
+	b := New()
+	ch := b.RegisterEarlyStop("es-empty")
+
+	go func() {
+		time.Sleep(time.Millisecond)
+		b.ResolveEarlyStop("es-empty", EarlyStopReply{})
+	}()
+
+	select {
+	case v := <-ch:
+		if v.ForceContinue != nil {
+			t.Errorf("expected nil ForceContinue, got %v", v.ForceContinue)
+		}
+		if v.ContinueMessage != "" {
+			t.Errorf("expected empty ContinueMessage, got %q", v.ContinueMessage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+// TestBroker_EarlyStopResolveUnknownReturnsFalse covers the missing-entry
+// path. ResolveEarlyStop returns false when no pending request matches,
+// matching the elicitation broker's semantics. The runloop calls
+// UnregisterEarlyStop on timeout, so a late response after timeout will
+// hit this path.
+func TestBroker_EarlyStopResolveUnknownReturnsFalse(t *testing.T) {
+	b := New()
+	if b.ResolveEarlyStop("missing", EarlyStopReply{}) {
+		t.Error("expected false for unknown early-stop request")
+	}
+}
+
+// TestBroker_EarlyStopUnregisterStopsDelivery confirms that after
+// UnregisterEarlyStop the channel-send path no longer hits. Defends
+// against a race where the runloop times out and unregisters before the
+// consumer's late response arrives — the late response should be
+// silently dropped.
+func TestBroker_EarlyStopUnregisterStopsDelivery(t *testing.T) {
+	b := New()
+	ch := b.RegisterEarlyStop("es-unreg")
+	b.UnregisterEarlyStop("es-unreg")
+
+	// Resolving after unregister is a no-op.
+	b.ResolveEarlyStop("es-unreg", EarlyStopReply{ContinueMessage: "late"})
+
+	select {
+	case v := <-ch:
+		t.Errorf("expected no delivery after unregister, got %+v", v)
+	case <-time.After(20 * time.Millisecond):
+		// Expected path.
+	}
+}

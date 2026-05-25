@@ -26,7 +26,16 @@ extension SessionViewModel {
                 id: clientMsgId,
                 role: .user,
                 content: text,
-                timestamp: Date().timeIntervalSince1970,
+                // Milliseconds since epoch — matches every other timestamp
+                // insertion in iOS (SessionViewModel+EngineEvents.swift,
+                // +EventHandlers.swift, NormalizedEvent+Lifecycle.swift,
+                // RemoteCommand+Encode.swift) and the ms shape used by
+                // MessageBubble.relativeTimestamp which divides by 1000 to
+                // reconstruct seconds for Date(timeIntervalSince1970:).
+                // Without the * 1000 the optimistic bubble briefly shows
+                // "56 years ago" before the desktop echoes the canonical
+                // message_added back and id-replacement fixes it.
+                timestamp: Date().timeIntervalSince1970 * 1000,
                 source: .remote
             )
             if var existing = messages[tabId] {
@@ -142,10 +151,17 @@ extension SessionViewModel {
         conversationLoadRetryCount.removeValue(forKey: tabId)
     }
 
-    func createTab(workingDirectory: String? = nil) {
+    func createTab(workingDirectory: String? = nil, pinToGroupId: String? = nil) {
         let dir = workingDirectory ?? defaultBaseDirectory
         awaitingLocalTabCreation = true
-        send(.createTab(workingDirectory: dir))
+        // When `pinToGroupId` is supplied (e.g. via the per-group `+` button
+        // in TabListView's group header), include it on the wire so the
+        // desktop can create the tab inside that manual group with
+        // groupPinned=true from the start — preventing the first prompt's
+        // auto-group movement from yanking the tab away from the user's
+        // explicit choice. When nil, the desktop falls back to its default
+        // group placement (legacy behavior).
+        send(.createTab(workingDirectory: dir, pinToGroupId: pinToGroupId))
     }
 
     func closeTab(_ tabId: String) {
@@ -196,39 +212,10 @@ extension SessionViewModel {
         }
     }
 
-    /// Request the desktop to change the tab group mode.
-    func setTabGroupMode(_ mode: String) {
-        send(.setTabGroupMode(mode: mode))
-    }
-
-    /// Move a tab to a different manual group on the desktop.
-    func moveTabToGroup(tabId: String, groupId: String) {
-        // Optimistic local update for responsive UI
-        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-            tabs[idx].groupId = groupId
-        }
-        send(.moveTabToGroup(tabId: tabId, groupId: groupId))
-    }
-
-    /// Toggle the group-pin state for a tab on the desktop.
-    func toggleTabGroupPin(tabId: String) {
-        // Optimistic local update for responsive UI
-        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-            tabs[idx].groupPinned = !(tabs[idx].groupPinned ?? false)
-        }
-        send(.toggleTabGroupPin(tabId: tabId))
-    }
-
-    /// Reorder tab groups. Sends the new ordering to the desktop.
-    func reorderTabGroups(orderedIds: [String]) {
-        // Optimistic local update: reorder tabGroups to match orderedIds
-        let idOrder = Dictionary(uniqueKeysWithValues: orderedIds.enumerated().map { ($1, $0) })
-        tabGroups.sort { (idOrder[$0.id] ?? Int.max) < (idOrder[$1.id] ?? Int.max) }
-        for i in tabGroups.indices {
-            tabGroups[i].order = i
-        }
-        send(.reorderTabGroups(orderedIds: orderedIds))
-    }
+    // Tab-group commands (setTabGroupMode, moveTabToGroup,
+    // moveTabToGroupAndPin, toggleTabGroupPin, reorderTabGroups) live in
+    // SessionViewModel+TabGroupCommands.swift to keep this file under the
+    // Swift size cap. See CLAUDE.md → "When a file exceeds the cap".
 
     // MARK: - Terminal Commands
 
@@ -406,6 +393,19 @@ extension SessionViewModel {
         }
     }
 
+    /// Request git changes for every unique tab working directory — including
+    /// ones that already have cached (potentially stale) data. Called when the
+    /// app foregrounds and when the tab list appears, so the user sees fresh
+    /// branch + ahead/behind info on every appear. The desktop's git watcher
+    /// is best-effort and can silently stop delivering events; this guarantees
+    /// the iOS tab list reflects current state.
+    func requestAllGitChanges() {
+        let dirs = Set(tabs.map(\.workingDirectory).filter { !$0.isEmpty })
+        for dir in dirs {
+            requestGitChanges(directory: dir)
+        }
+    }
+
     func requestGitGraph(directory: String, skip: Int? = nil, limit: Int? = nil) {
         send(.gitGraph(directory: directory, skip: skip, limit: limit))
     }
@@ -495,6 +495,24 @@ extension SessionViewModel {
             mode: voiceService.voiceMode.rawValue,
             systemPrompt: prompt
         ))
+    }
+
+    /// Write a single projectable desktop setting on the currently-paired
+    /// desktop. The desktop validates the key against its allowlist and
+    /// the value's type against the declared schema, persists the
+    /// change, and broadcasts a fresh `desktopSettingsSnapshot` back to
+    /// every paired iOS device — including this one — which is how
+    /// `desktopSettings` is updated.
+    ///
+    /// Optimistic UI: SwiftUI Toggle bindings call this on every flip;
+    /// the round-trip is short enough on LAN that we don't bother
+    /// pre-updating local state. The next snapshot wins. If the desktop
+    /// rejects the write (unknown key, wrong type), no snapshot fires
+    /// and the SwiftUI control re-renders with the cached prior value
+    /// on the next state read.
+    @MainActor
+    func setDesktopSetting(key: String, value: AnyCodable) {
+        send(.setDesktopSetting(key: key, value: value))
     }
 
     // MARK: - Send

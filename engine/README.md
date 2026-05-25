@@ -123,7 +123,7 @@ Client --[Unix socket, NDJSON]--> Server
 | `internal/backend` | RunBackend interface, ApiBackend (agent loop) |
 | `internal/providers` | LlmProvider interface, 16 provider implementations |
 | `internal/tools` | Tool registry, 15 built-in tools |
-| `internal/extension` | SDK (59 hooks), Host (subprocess JSON-RPC) |
+| `internal/extension` | SDK (66 hooks), Host (subprocess JSON-RPC) |
 | `internal/conversation` | Tree sessions, JSONL persistence, branching |
 | `internal/config` | 4-layer config, enterprise MDM, merge |
 | `internal/compaction` | Fact extraction, summary, cascade |
@@ -240,7 +240,7 @@ func main() {
 }
 ```
 
-### Extension hooks (59 total)
+### Extension hooks (66 total)
 
 | Category | Hooks |
 |----------|-------|
@@ -253,11 +253,14 @@ func main() {
 | **Error** | `on_error` |
 | **Per-tool** | `{bash,read,write,edit,grep,glob,agent}_tool_{call,result}` (14 hooks) |
 | **Context** | `context_discover`, `context_load`, `instruction_load`, `context_inject` |
-| **Permission** | `permission_request`, `permission_denied` |
-| **File** | `file_changed` |
+| **Permission** | `permission_request`, `permission_denied`, `permission_classify` |
+| **File** | `file_changed`, `workspace_file_changed` |
 | **Task** | `task_created`, `task_completed` |
 | **Elicitation** | `elicitation_request`, `elicitation_result` |
+| **Plan mode** | `plan_mode_prompt`, `before_plan_mode_enter`, `before_plan_mode_exit`, `system_inject` |
+| **Early-stop** | `before_early_stop_decision`, `early_stop_continued` |
 | **Capability** | `capability_discover`, `capability_match`, `capability_invoke` |
+| **Extension lifecycle** | `extension_respawned`, `turn_aborted`, `peer_extension_died`, `peer_extension_respawned` |
 
 ## Capability Framework
 

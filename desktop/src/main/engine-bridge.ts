@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events'
 import { createConnection, Socket } from 'net'
-import { spawn, execSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { log as _log, debug as _debug, warn as _warn, error as _error } from './logger'
+import { spawnEngineServer } from './engine-bridge-spawn'
 import type { EngineConfig, EngineEvent, ImageAttachmentPayload } from '../shared/types'
 
 const TAG = 'EngineBridge'
@@ -162,53 +162,10 @@ export class EngineBridge extends EventEmitter {
   }
 
   private async _startServer(): Promise<void> {
-    log('Starting engine server...')
-
-    // Find ion engine binary
-    const bundled = process.resourcesPath
-      ? join(process.resourcesPath, 'engine', 'ion')
-      : null
-    const candidates = [
-      ...(bundled ? [bundled] : []),                              // packaged .app
-      join(__dirname, '..', '..', '..', 'engine', 'bin', 'ion'), // dev monorepo
-      join(homedir(), '.ion', 'bin', 'ion'),                      // installed CLI
-    ]
-
-    let binary: string | null = null
-    for (const c of candidates) {
-      if (existsSync(c)) {
-        binary = c
-        break
-      }
-    }
-
-    if (!binary) {
-      // Try finding via which
-      try {
-        binary = execSync('which ion', { encoding: 'utf-8' }).trim()
-      } catch {}
-    }
-
-    if (!binary) {
-      throw new Error('Cannot find ion executable')
-    }
-
-    // Spawn as child of Ion.app — keep parent process group/session intact so
-    // macOS TCC attributes file-system access to Ion.app rather than recording
-    // a separate identity for the engine binary.
-    const isJs = binary.endsWith('.js')
-    const cmd = isJs ? 'node' : binary
-    const args = isJs ? [binary, 'serve'] : ['serve']
-
-    const child = spawn(cmd, args, {
-      stdio: 'ignore',
-      env: {
-        ...process.env,
-        ION_SOCKET_PATH: SOCKET_PATH,
-        ION_PID_PATH: PID_PATH,
-      },
-    })
-    log(`Spawned engine server: PID ${child.pid}`)
+    // Binary discovery + child-spawn logic lives in engine-bridge-spawn.ts
+    // so this file stays under the 600-line cap. The split is purely
+    // mechanical; nothing about the contract changes.
+    spawnEngineServer(SOCKET_PATH, PID_PATH)
   }
 
   private _scheduleReconnect(): void {
@@ -386,9 +343,11 @@ export class EngineBridge extends EventEmitter {
     }
   }
 
-  async sendPrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]): Promise<{ ok: boolean; error?: string }> {
+  async sendPrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[], implementationPhase?: boolean, enterPlanModeDescription?: string, planModeSparseReminder?: string): Promise<{ ok: boolean; error?: string }> {
     const attCount = imageAttachments?.length ?? 0
-    log(`sendPrompt: key=${key} len=${text.length} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${attCount}`)
+    const descLen = enterPlanModeDescription?.length ?? 0
+    const reminderLen = planModeSparseReminder?.length ?? 0
+    log(`sendPrompt: key=${key} len=${text.length} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${attCount} implementationPhase=${implementationPhase ?? false} enterPlanModeDescLen=${descLen} planModeSparseReminderLen=${reminderLen}`)
     await this.connect()
     const msg: Record<string, unknown> = { cmd: 'send_prompt', key, text }
     if (model) msg.model = model
@@ -400,6 +359,25 @@ export class EngineBridge extends EventEmitter {
         path: a.path,
       }))
     }
+    // Tells the engine to suppress EnterPlanMode injection for this run.
+    // Only sent when truthy so the wire format stays minimal for the
+    // common case. The engine's ClientCommand.ImplementationPhase field
+    // is omitempty, so this round-trips cleanly. See ADR-003 framing in
+    // the plan-mode docs for why structured flags beat prompt prose.
+    if (implementationPhase) msg.implementationPhase = true
+    // Harness-supplied EnterPlanMode tool description (ADR-004). The
+    // engine's RunOptions.EnterPlanModeDescription field is omitempty —
+    // only send when non-empty so the wire format stays minimal. The
+    // engine forwards the string verbatim to the model as the tool
+    // description; empty / missing falls back to the engine's one-line
+    // neutral default (which the desktop deliberately avoids by always
+    // sending its full prose on auto-mode prompts).
+    if (enterPlanModeDescription) msg.enterPlanModeDescription = enterPlanModeDescription
+    // Harness-supplied sparse plan-mode reminder text. Only sent when
+    // non-empty so the wire format stays minimal for the common case.
+    // Mirrors enterPlanModeDescription: the engine uses this verbatim
+    // instead of buildPlanModeSparseReminder when present.
+    if (planModeSparseReminder) msg.planModeSparseReminder = planModeSparseReminder
     return this._sendWithResult(msg)
   }
 
@@ -448,6 +426,9 @@ export class EngineBridge extends EventEmitter {
     this._send({ cmd: 'permission_response', key, questionId, optionId })
   }
 
+  // Public escape hatch: forwards a fully-shaped ClientCommand to the engine. Companion modules use this to ship additional command/response helpers without growing the bridge file past its cap.
+  sendRaw(payload: Record<string, unknown>): void { this._send(payload) }
+
   sendSetPlanMode(key: string, enabled: boolean, allowedTools?: string[], source?: string): void {
     log(`sendSetPlanMode: key=${key} enabled=${enabled} source=${source ?? 'unknown'}`)
     this._send({ cmd: 'set_plan_mode', key, enabled, allowedTools, source })
@@ -475,6 +456,23 @@ export class EngineBridge extends EventEmitter {
     await this.connect()
     const result = await this._sendWithData<any>({ cmd: 'get_conversation', key: conversationId, offset, limit })
     return result.data || { messages: [], total: 0, hasMore: false }
+  }
+
+  /**
+   * Wipes the LLM-visible message history for a stored conversation without
+   * requiring a live engine session. Called when /clear is issued on a tab
+   * that was loaded from disk but has never sent a prompt (so no engine
+   * session exists yet to receive dispatchClear). The conversationId is the
+   * session/conversation ID stored on the tab (tab.conversationId).
+   *
+   * Fields wiped (matches engine dispatchClear): Messages, LastInputTokens,
+   * LastInputTokensMsgCount. Entries, cost totals, and identity fields are
+   * preserved — /clear is a checkpoint, not a delete.
+   */
+  async clearConversationFile(conversationId: string): Promise<void> {
+    await this.connect()
+    log(`clearConversationFile: conversationId=${conversationId}`)
+    await this._sendWithResult({ cmd: 'clear_conversation_file', key: conversationId })
   }
 
   async saveSessionLabel(sessionId: string, label: string): Promise<{ ok: boolean; error?: string }> {

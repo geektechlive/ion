@@ -216,13 +216,46 @@ Requests user approval for a tool call.
 
 ### plan_mode_changed
 
-The session entered or exited plan mode.
+The session entered or exited plan mode. **State transitions only** — the
+model calling `ExitPlanMode` does **not** fire this event, because the
+actual mode change is deferred to the user-approval chokepoint. See
+[ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md) for
+the state-vs-workflow split and `plan_proposal` below for the workflow
+signal.
 
 | Field          | Type                  | Description                   |
 |----------------|-----------------------|-------------------------------|
 | `type`         | `"plan_mode_changed"` | Event type                    |
 | `enabled`      | boolean               | Whether plan mode is active   |
-| `planFilePath` | string                | Path to the plan file         |
+| `planFilePath` | string                | Path to the plan file (omitempty) |
+| `planSlug`     | string                | Basename of the plan file with `.md` stripped (omitempty) |
+
+---
+
+### plan_proposal
+
+Workflow event emitted when the model proposes a plan-mode transition. The
+proposal is a *request*; the actual state change is deferred to the
+consumer's user-approval chokepoint. Distinct from `plan_mode_changed`,
+which fires only on confirmed state transitions. See
+[ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md).
+
+The `kind` discriminator is open for extension. Consumers must switch on it
+and treat unknown kinds as forward-compatible no-ops.
+
+| Kind     | Trigger |
+|----------|---------|
+| `"exit"` | The model called the `ExitPlanMode` tool. The consumer should present an approval UI. |
+
+| Field          | Type             | Description |
+|----------------|------------------|-------------|
+| `type`         | `"plan_proposal"` | Event type |
+| `kind`         | string           | Discriminator: `"exit"` initially. |
+| `planFilePath` | string           | Path to the plan file (omitempty) |
+| `planSlug`     | string           | Basename of the plan file with `.md` stripped (omitempty) |
+
+**Produced from:** `PlanProposalEvent` in
+[`engine/internal/types/normalized_event.go`](https://github.com/dsswift/ion/blob/main/engine/internal/types/normalized_event.go).
 
 ---
 

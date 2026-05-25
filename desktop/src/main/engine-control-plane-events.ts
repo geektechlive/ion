@@ -155,6 +155,38 @@ export function handleEngineEvent(
 
     case 'engine_plan_mode_changed':
       log(`plan_mode_changed: tabId=${tabId} enabled=${event.planModeEnabled}`)
+      // Only Enabled:true is authoritative — model-initiated EnterPlanMode
+      // confirms the session has entered plan mode and the snapshot must
+      // reflect that. Enabled:false is intentionally NOT synced here: the
+      // engine no longer emits it for ExitPlanMode (model proposal only),
+      // and the user-approval gate in the renderer's onImplement handler
+      // is the single chokepoint for the mode flip back to 'auto'. If a
+      // false event ever arrives (e.g. from a future engine path) we still
+      // forward it to the renderer but do not mutate permissionMode here.
+      if (event.planModeEnabled) {
+        if (tab.permissionMode !== 'plan') {
+          tab.permissionMode = 'plan'
+          log(`plan_mode_changed: tabId=${tabId} engine flipped to plan, syncing tab.permissionMode`)
+        }
+      } else {
+        log(`plan_mode_changed: tabId=${tabId} enabled=false ignored (mode flip deferred to user-approval chokepoint)`)
+      }
+      ctx.emit('event', tabId, event as any)
+      break
+
+    case 'engine_plan_proposal':
+      // The model has proposed a plan-mode transition (currently only
+      // kind="exit" — the model called ExitPlanMode). This is a workflow
+      // event, NOT a state transition: the actual mode change is deferred
+      // to the user-approval chokepoint in usePermissionDeniedHandlers.
+      // The desktop forwards the event to the renderer as the authoritative
+      // signal that an approval card should render; the permission_denial
+      // path on engine_status remains the fallback card-render trigger so
+      // existing logic keeps working during the migration. See
+      // docs/architecture/adr/003-state-events-vs-workflow-events.md.
+      log(
+        `plan_proposal: tabId=${tabId} kind=${event.planProposalKind} planFilePath=${event.planFilePath ?? ''} planSlug=${event.planSlug ?? ''}`,
+      )
       ctx.emit('event', tabId, event as any)
       break
 
@@ -180,6 +212,19 @@ export function handleEngineEvent(
 
     case 'engine_agent_state':
       ctx.emit('event', tabId, event as any)
+      break
+
+    case 'engine_early_stop_decision_request':
+      // The engine is asking whether to nudge the model to keep working.
+      // Promote this to a Bridge-level event so the policy module
+      // (early-stop-policy.ts, wired in engine-bridge.ts) can build a
+      // response synchronously from the persisted setting. The engine
+      // gives us 100ms to reply; the policy module must respond off the
+      // event loop, not via any async I/O.
+      log(
+        `early_stop_decision_request: tabId=${tabId} requestId=${event.earlyStopRequestId} run=${event.earlyStopRunId} turn=${event.earlyStopTurnNumber} wouldContinue=${event.earlyStopWouldContinue}`,
+      )
+      ctx.emit('engine_early_stop_decision_request', tabId, event)
       break
   }
 }
