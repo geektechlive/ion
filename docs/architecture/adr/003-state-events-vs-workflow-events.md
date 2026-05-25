@@ -71,7 +71,7 @@ The `ExitPlanMode` permission denial continues to flow through `engine_status.pe
 
 ### Negative
 
-- Soft-breaking change for consumers that listened to `engine_plan_mode_changed{Enabled: false}` to detect the model's `ExitPlanMode` call. The plan-mode work was already shipped as `feat(engine)` rather than `feat!(engine)` per the user's accepted breaking-change scope; this ADR codifies why.
+- Breaking change for consumers that listened to `engine_plan_mode_changed{Enabled: false}` to detect the model's `ExitPlanMode` call. The engine removed the `ExitPlanMode` trigger in commit `7a955793`; the `engine_plan_proposal` event is the replacement. Shipped as `feat(engine)` rather than `feat!(engine)` per the user's accepted breaking-change scope; this ADR is the authoritative record of what changed and why.
 - Two events to listen for instead of one. Consumers that genuinely care about both must subscribe to both. Acceptable: that's the cost of unconflated semantics.
 
 ### Future considerations
