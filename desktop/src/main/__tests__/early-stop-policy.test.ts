@@ -16,6 +16,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
 
+// Mock Electron's `app` and `safeStorage` before the import chain reaches
+// settings-store → utils/secretStore (which imports from 'electron' at
+// module-load). CI runs `npm ci --ignore-scripts`, so Electron's binary
+// download postinstall is skipped — without this stub, the real
+// node_modules/electron/index.js throws "Electron failed to install
+// correctly" the moment the module graph is loaded and the test suite
+// fails before any test body runs. Same idiom as secret-store.test.ts and
+// ipc-session-prompt.test.ts.
+vi.mock('electron', () => ({
+  app: { get isPackaged() { return false } },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (s: string) => Buffer.from(s),
+    decryptString: (b: Buffer) => b.toString(),
+  },
+}))
+
 import {
   decideEarlyStopResponse,
   buildContinueMessage,
