@@ -256,3 +256,74 @@ func TestClearConversationFile_MissingConv(t *testing.T) {
 	}
 }
 
+// TestClearConversationFile_MessagesDurableAfterReload is the end-to-end
+// regression guard for issue #146. The root cause was that the legacy
+// loadFromJSONL path called BuildContextPath(conv) after loading, which
+// reconstructed Messages from Entries — making /clear invisible after a
+// process restart (the tree always had N entries → N messages rebuilt).
+//
+// With the split format (.llm.jsonl + .tree.jsonl), Messages is read verbatim
+// from .llm.jsonl. After /clear writes an empty body to .llm.jsonl, a fresh
+// Load must return Messages == nil regardless of how many Entries exist in
+// .tree.jsonl.
+func TestClearConversationFile_MessagesDurableAfterReload(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+
+	const convID = "clear-durability-146"
+	convDir := filepath.Join(tempHome, ".ion", "conversations")
+
+	// Seed a conversation with 5 messages (and corresponding Entries).
+	conv := conversation.CreateConversation(convID, "system", "test-model")
+	for i := 0; i < 5; i++ {
+		conversation.AddUserMessage(conv, "user message")
+		conversation.AddAssistantMessage(conv,
+			[]types.LlmContentBlock{{Type: "text", Text: "assistant reply"}},
+			types.LlmUsage{InputTokens: 100, OutputTokens: 50})
+	}
+	if err := conversation.Save(conv, ""); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	// Verify seed: 10 messages in the split format.
+	seeded, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("seed Load: %v", err)
+	}
+	if len(seeded.Messages) != 10 {
+		t.Fatalf("seed: expected 10 messages, got %d", len(seeded.Messages))
+	}
+	seedEntryCount := len(seeded.Entries)
+	if seedEntryCount != 10 {
+		t.Fatalf("seed: expected 10 entries, got %d", seedEntryCount)
+	}
+
+	// Apply /clear via ClearConversationFile.
+	if err := mgr.ClearConversationFile(convID); err != nil {
+		t.Fatalf("ClearConversationFile: %v", err)
+	}
+
+	// Reload — this is the critical assertion: Messages must be empty even
+	// though Entries still has 10 items. In the buggy code, BuildContextPath
+	// would reconstruct 10 messages from the tree.
+	cleared, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("post-clear Load: %v", err)
+	}
+	if len(cleared.Messages) != 0 {
+		t.Errorf("BUG #146: Messages not cleared after reload — got %d message(s): %+v",
+			len(cleared.Messages), cleared.Messages)
+	}
+	// Entries must be preserved — /clear is a checkpoint, not a delete.
+	if len(cleared.Entries) != seedEntryCount {
+		t.Errorf("Entries count changed after clear: got %d, want %d",
+			len(cleared.Entries), seedEntryCount)
+	}
+	if cleared.LastInputTokens != 0 {
+		t.Errorf("LastInputTokens = %d after clear, want 0", cleared.LastInputTokens)
+	}
+}
+

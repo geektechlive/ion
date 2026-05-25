@@ -16,6 +16,11 @@ import (
 // ListStored returns metadata for saved conversations on disk, sorted by
 // file modification time descending. If dir is empty, defaults to
 // ~/.ion/conversations/. If limit <= 0, defaults to 50.
+//
+// Supports both the new split format (.llm.jsonl + .tree.jsonl) and the legacy
+// .jsonl format. When both exist for the same conversation ID (mid-migration),
+// the new format takes precedence and the legacy file is ignored for listing
+// purposes. The legacy file will be removed on the next Save.
 func ListStored(dir string, limit int) ([]types.StoredSessionInfo, error) {
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -28,7 +33,7 @@ func ListStored(dir string, limit int) ([]types.StoredSessionInfo, error) {
 		limit = 50
 	}
 
-	entries, err := os.ReadDir(dir)
+	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []types.StoredSessionInfo{}, nil
@@ -36,42 +41,187 @@ func ListStored(dir string, limit int) ([]types.StoredSessionInfo, error) {
 		return nil, err
 	}
 
-	type fileEntry struct {
-		path  string
-		mtime int64
+	// Collect conversation IDs from all relevant files, deduplicated. Track
+	// the mtime of the "authoritative" file per ID:
+	//   - For new-format IDs: mtime of the .llm.jsonl file.
+	//   - For legacy-format IDs: mtime of the .jsonl file.
+	// New format takes precedence when both exist for the same ID.
+	type idEntry struct {
+		id        string
+		mtime     int64
+		isNewFmt  bool // true → use .llm.jsonl + .tree.jsonl; false → use .jsonl
 	}
-	var files []fileEntry
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+	byID := make(map[string]*idEntry)
+
+	for _, e := range dirEntries {
+		if e.IsDir() {
 			continue
 		}
+		name := e.Name()
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		files = append(files, fileEntry{
-			path:  filepath.Join(dir, e.Name()),
-			mtime: info.ModTime().UnixMilli(),
-		})
+		mtime := info.ModTime().UnixMilli()
+
+		switch {
+		case strings.HasSuffix(name, ".llm.jsonl"):
+			id := strings.TrimSuffix(name, ".llm.jsonl")
+			if existing, ok := byID[id]; !ok || !existing.isNewFmt {
+				byID[id] = &idEntry{id: id, mtime: mtime, isNewFmt: true}
+			}
+
+		case strings.HasSuffix(name, ".jsonl") &&
+			!strings.HasSuffix(name, ".llm.jsonl") &&
+			!strings.HasSuffix(name, ".tree.jsonl"):
+			// Plain legacy .jsonl — only add if no new-format entry exists yet.
+			id := strings.TrimSuffix(name, ".jsonl")
+			if _, ok := byID[id]; !ok {
+				byID[id] = &idEntry{id: id, mtime: mtime, isNewFmt: false}
+			}
+		}
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].mtime > files[j].mtime
+	ranked := make([]*idEntry, 0, len(byID))
+	for _, e := range byID {
+		ranked = append(ranked, e)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].mtime > ranked[j].mtime
 	})
 
-	if len(files) > limit {
-		files = files[:limit]
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
 	}
 
 	var results []types.StoredSessionInfo
-	for _, f := range files {
-		info, err := scanSessionFile(f.path)
-		if err != nil {
+	for _, e := range ranked {
+		var info types.StoredSessionInfo
+		var scanErr error
+		if e.isNewFmt {
+			// New format: scan .tree.jsonl for entries (first user msg, label,
+			// message count), and .llm.jsonl for header metadata (model, cost).
+			treePath := filepath.Join(dir, e.id+".tree.jsonl")
+			llmPath := filepath.Join(dir, e.id+".llm.jsonl")
+			info, scanErr = scanSplitSessionFiles(llmPath, treePath)
+		} else {
+			info, scanErr = scanSessionFile(filepath.Join(dir, e.id+".jsonl"))
+		}
+		if scanErr != nil {
 			continue
 		}
 		results = append(results, info)
 	}
 	return results, nil
+}
+
+// scanSplitSessionFiles reads metadata for a conversation stored in the new
+// split format. Header fields (model, cost, createdAt, ID) come from the
+// .llm.jsonl header line. Content fields (firstMessage, lastAssistantText,
+// messageCount, customTitle) come from walking the .tree.jsonl entries.
+func scanSplitSessionFiles(llmPath, treePath string) (types.StoredSessionInfo, error) {
+	// Read LLM header for metadata.
+	llmFile, err := os.Open(llmPath)
+	if err != nil {
+		return types.StoredSessionInfo{}, err
+	}
+	defer func() {
+		if closeErr := llmFile.Close(); closeErr != nil {
+			utils.Log("conv-list", fmt.Sprintf("scanSplitSessionFiles: close %s failed: %v", llmPath, closeErr))
+		}
+	}()
+
+	llmScanner := bufio.NewScanner(llmFile)
+	llmScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var info types.StoredSessionInfo
+	if llmScanner.Scan() {
+		line := strings.TrimSpace(llmScanner.Text())
+		var header map[string]any
+		if err := json.Unmarshal([]byte(line), &header); err != nil {
+			return types.StoredSessionInfo{}, fmt.Errorf("invalid llm header: %w", err)
+		}
+		if _, ok := header["meta"]; !ok {
+			return types.StoredSessionInfo{}, fmt.Errorf("missing meta in llm header")
+		}
+		info.SessionID = jsonString(header, "id")
+		info.Model = jsonString(header, "model")
+		info.CreatedAt = int64(jsonFloat(header, "createdAt", 0))
+		info.TotalCost = jsonFloat(header, "totalCost", 0)
+	}
+
+	// Read tree entries for content fields.
+	treeFile, err := os.Open(treePath)
+	if err != nil {
+		return types.StoredSessionInfo{}, err
+	}
+	defer func() {
+		if closeErr := treeFile.Close(); closeErr != nil {
+			utils.Log("conv-list", fmt.Sprintf("scanSplitSessionFiles: close %s failed: %v", treePath, closeErr))
+		}
+	}()
+
+	treeScanner := bufio.NewScanner(treeFile)
+	treeScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	headerParsed := false
+	firstUserFound := false
+	lastAssistantText := ""
+	messageCount := 0
+	customTitle := ""
+
+	for treeScanner.Scan() {
+		line := strings.TrimSpace(treeScanner.Text())
+		if line == "" {
+			continue
+		}
+		if !headerParsed {
+			// Skip the tree header line.
+			headerParsed = true
+			continue
+		}
+
+		var entry struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+
+		switch SessionEntryType(entry.Type) {
+		case EntryMessage:
+			messageCount++
+			text := extractContentText(entry.Data)
+			var md struct {
+				Role string `json:"role"`
+			}
+			if err := json.Unmarshal(entry.Data, &md); err != nil {
+				continue
+			}
+			if md.Role == "user" && !firstUserFound && text != "" {
+				info.FirstMessage = truncate(text, 200)
+				firstUserFound = true
+			}
+			if md.Role == "assistant" && text != "" {
+				lastAssistantText = text
+			}
+
+		case EntryLabel:
+			var ld struct {
+				Label *string `json:"label"`
+			}
+			if err := json.Unmarshal(entry.Data, &ld); err == nil && ld.Label != nil {
+				customTitle = *ld.Label
+			}
+		}
+	}
+
+	info.MessageCount = messageCount
+	info.LastMessage = truncate(lastAssistantText, 100)
+	info.CustomTitle = customTitle
+
+	return info, nil
 }
 
 // scanSessionFile reads a .jsonl conversation file and extracts metadata.

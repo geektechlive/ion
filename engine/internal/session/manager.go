@@ -315,7 +315,7 @@ func (m *Manager) ClearConversationFile(sessionID string) error {
 		return fmt.Errorf("save conversation %q: %w", sessionID, err)
 	}
 
-	utils.Log("Session", fmt.Sprintf("ClearConversationFile: wiped messages sessionId=%s", sessionID))
+	utils.Log("Session", fmt.Sprintf("ClearConversationFile: id=%s cleared Messages (was %d entries) — .tree.jsonl preserved", sessionID, len(conv.Entries)))
 	return nil
 }
 

@@ -138,7 +138,7 @@ func (m *Manager) dispatchClear(s *engineSession, key string) {
 	conv.LastInputTokensMsgCount = 0
 	_ = conversation.Save(conv, "")
 	s.lastContextPct = 0
-	utils.Log("Session", fmt.Sprintf("cleared conversation for session %s", key))
+	utils.Log("Session", fmt.Sprintf("cleared conversation id=%s for session %s — .tree.jsonl preserved", s.conversationID, key))
 	// Emit the engine_status snapshot first so consumers can mirror the
 	// reset context-percent before they see the command_result event. The
 	// order matters: consumers that update their status bar on every
