@@ -289,6 +289,12 @@ func (p *anthropicProvider) formatMessages(messages []types.LlmMessage) []map[st
 			continue
 		}
 		last := content[len(content)-1]
+		// Guard: Anthropic rejects cache_control on a text block with empty text.
+		if blockType, _ := last["type"].(string); blockType == "text" {
+			if text, _ := last["text"].(string); text == "" {
+				continue
+			}
+		}
 		if _, hasCacheCtrl := last["cache_control"]; !hasCacheCtrl {
 			last["cache_control"] = map[string]string{"type": "ephemeral"}
 		}
