@@ -156,6 +156,15 @@ If you skip a step, CI fails with a clear message identifying the drift (e.g. `"
 
 Logging is a **first-class citizen** of the architecture. Every code path must be observable through logs alone.
 
+### Check Logs First
+
+Check the logs before assuming anything when investigating issues.
+Caution: These files are large >20KB. Use intelligent searching when looking through the logs, don't just try to read the whole file.
+
+- Engine Logs: ~/.ion/engine.log
+- Desktop Client Logs: ~/.ion/desktop.log
+- iOS Diagnostic Logs: ~/.ion/ios-diagnostic-logs.txt
+
 ### Rules
 
 1. **Every operation must log.** Before execution, after success, and inside every failure branch. A developer reading logs must be able to reconstruct the exact code path from start to finish without attaching a debugger.
