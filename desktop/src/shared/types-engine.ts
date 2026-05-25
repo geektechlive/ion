@@ -114,6 +114,37 @@ export type EngineEvent =
   | { type: 'engine_extension_respawned'; extensionName: string; attemptNumber: number }
   | { type: 'engine_events_dropped'; count: number }
   | { type: 'engine_extension_dead_permanent'; extensionName: string; attemptNumber: number }
+  // ─── Async-trigger events (D-010 / D-011) ───
+  //
+  // The engine emits these for every webhook and schedule fire plus
+  // every registration/deregistration so the desktop / iOS can render
+  // an audit-log panel of "what's declared" and "what just fired".
+  // The desktop does NOT act on these (they're observation-only);
+  // they're typed here so future UI work has the shape ready.
+  //
+  // Shared fields across the variants:
+  //   asyncKind:        "webhook" | "schedule"
+  //   asyncId:          route path (webhook) or job id (schedule)
+  //   asyncOrigin:      "init" | "runtime" — set on lifecycle events
+  //   asyncReason:      negative-path discriminator
+  //   asyncDecl:        the original declaration JSON, redacted of secrets
+  //   asyncRequestId:   webhook correlation id (received → responded)
+  //   asyncMethod:      HTTP method (webhook)
+  //   asyncPath:        HTTP path (mirrors asyncId for webhooks)
+  //   asyncStatus:      HTTP response status (webhook)
+  //   asyncDurationMs:  elapsed time of the fire
+  | { type: 'engine_webhook_received'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string }
+  | { type: 'engine_webhook_authenticated'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string }
+  | { type: 'engine_webhook_handler_error'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string; asyncStatus: number; asyncReason: string; asyncDurationMs: number }
+  | { type: 'engine_webhook_responded'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string; asyncStatus: number; asyncDurationMs: number }
+  | { type: 'engine_webhook_registered'; asyncKind: 'webhook'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_webhook_deregistered'; asyncKind: 'webhook'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_schedule_fired'; asyncKind: 'schedule'; asyncId: string; asyncDurationMs: number }
+  | { type: 'engine_schedule_skipped'; asyncKind: 'schedule'; asyncId: string; asyncReason: string }
+  | { type: 'engine_schedule_failed'; asyncKind: 'schedule'; asyncId: string; asyncReason: string; asyncDurationMs: number }
+  | { type: 'engine_schedule_registered'; asyncKind: 'schedule'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_schedule_deregistered'; asyncKind: 'schedule'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_async_fire_dropped'; asyncKind: 'webhook' | 'schedule'; asyncId: string; asyncReason: string }
   // engine_command_result is emitted at the end of every Manager.SendCommand
   // dispatch — success (CommandError empty), extension-command failure
   // (CommandError = the error message), and unknown command (CommandError =
