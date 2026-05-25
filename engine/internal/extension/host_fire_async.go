@@ -128,3 +128,24 @@ func (h *Host) ResolveToken(name string) (string, error) {
 	}
 	return resp.Value, nil
 }
+
+// ResolvePredicate asks the subprocess to evaluate the named
+// `() => bool` predicate (used by schedule jobs' EnabledRefName).
+// Returns the raw JSON-RPC response so the caller can decode either
+// {enabled: bool} or a bare boolean. 5-second timeout.
+func (h *Host) ResolvePredicate(name string) (json.RawMessage, error) {
+	if name == "" {
+		return nil, fmt.Errorf("ResolvePredicate: empty name")
+	}
+	if h.dead.Load() {
+		return nil, fmt.Errorf("ResolvePredicate: subprocess dead")
+	}
+	type req struct {
+		Name string `json:"name"`
+	}
+	raw, err := h.callWithTimeout("engine/resolve_predicate", req{Name: name}, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
