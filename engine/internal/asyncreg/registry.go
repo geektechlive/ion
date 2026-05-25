@@ -395,3 +395,46 @@ func (r *Registry) Origin(kind Kind, id string) (Origin, bool) {
 	}
 	return e.origin, true
 }
+
+// Reset removes every entry of the given kind and emits a
+// ChangeRemoved event for each one through any subscribed channels.
+// Used by the host on subprocess respawn: the prior process's
+// declarations are gone with it, but the in-memory registry survives
+// the respawn (it lives on Host, not on the subprocess). Reset wipes
+// the slate so the new subprocess's init payload can re-register
+// without colliding with stale entries.
+//
+// The notify callback fires once per removed entry (informational —
+// matches the Deregister contract). Passing nil skips notifications.
+func (r *Registry) Reset(kind Kind, notify NotifyFunc) int {
+	r.mu.Lock()
+	bucket := r.entries[kind]
+	type drop struct {
+		decl   Declaration
+		origin Origin
+	}
+	dropped := make([]drop, 0, len(bucket))
+	for id, e := range bucket {
+		dropped = append(dropped, drop{decl: e.decl, origin: e.origin})
+		_ = id
+	}
+	r.entries[kind] = make(map[string]entry)
+	channels := append([]chan ChangeEvent(nil), r.subs[kind]...)
+	r.mu.Unlock()
+
+	for _, d := range dropped {
+		if notify != nil {
+			notify(kind, d.decl, d.origin)
+		}
+		publishChange(channels, ChangeEvent{
+			Kind:   kind,
+			Op:     ChangeRemoved,
+			ID:     d.decl.ID(),
+			Origin: d.origin,
+		})
+	}
+	if len(dropped) > 0 {
+		utils.Log("asyncreg", fmt.Sprintf("Reset: kind=%s removed=%d", kind, len(dropped)))
+	}
+	return len(dropped)
+}

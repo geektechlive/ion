@@ -80,6 +80,16 @@ type EngineRuntimeConfig struct {
 	// continuation nudge. Pointer so engine.json can fully omit the block
 	// and inherit the built-in defaults. See types.EarlyStopDefaults().
 	EarlyStopContinue *EarlyStopContinueConfig `json:"earlyStopContinue,omitempty"`
+	// Webhooks configures the inbound HTTP webhook listener that
+	// extensions register routes against. Pointer so engine.json can
+	// omit the block; the listener is OFF by default and auto-enables
+	// when any extension declares a webhook route (decision 4).
+	Webhooks *WebhooksConfig `json:"webhooks,omitempty"`
+	// Scheduling configures the scheduler that fires extension-
+	// registered daily/weekly/interval jobs. Pointer so engine.json can
+	// omit the block; the scheduler is OFF by default and auto-starts
+	// when any extension declares a job.
+	Scheduling *SchedulingConfig `json:"scheduling,omitempty"`
 	LogLevel     string                        `json:"logLevel,omitempty"` // "debug", "info", "warn", "error"
 }
 
@@ -301,4 +311,44 @@ type OtelConfig struct {
 // WebSearchConfig controls web search tool behavior.
 type WebSearchConfig struct {
 	Mode string `json:"mode,omitempty"` // "auto", "client", or "server"; default "auto"
+}
+
+// --- Async-trigger configuration (D-010 / D-011) ---
+
+// WebhooksConfig controls the engine's inbound HTTP webhook listener.
+// All fields zero-valued to inherit engine defaults; an engine.json
+// without a `webhooks` block produces a sensible listener once any
+// extension registers a route.
+type WebhooksConfig struct {
+	// Port is the TCP port the listener binds. Zero defaults to the
+	// engine's built-in 7421.
+	Port int `json:"port,omitempty"`
+	// BindInterface is the listen address. Empty defaults to
+	// 127.0.0.1. A non-loopback bind logs a Warn so accidental
+	// network exposure is visible.
+	BindInterface string `json:"bindInterface,omitempty"`
+	// DefaultMaxBodyBytes caps per-request bodies when the route's
+	// own MaxBodyBytes is zero. Zero defaults to 1 MiB.
+	DefaultMaxBodyBytes int64 `json:"defaultMaxBodyBytes,omitempty"`
+	// FireTimeoutMs caps a single fire's handler invocation. Zero
+	// defaults to 30000 (30s).
+	FireTimeoutMs int64 `json:"fireTimeoutMs,omitempty"`
+	// Enabled is a tri-state override: nil = auto (start when any
+	// route registers, stop when last route unregisters); &true =
+	// force on; &false = force off (no listener even with routes).
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// SchedulingConfig controls the engine's schedule tick loop.
+type SchedulingConfig struct {
+	// DefaultTz is the IANA timezone applied to daily/weekly jobs
+	// whose ScheduleJob.Tz is empty. Empty inherits the system local
+	// timezone.
+	DefaultTz string `json:"defaultTz,omitempty"`
+	// FireTimeoutMs is the default handler timeout. Zero defaults to
+	// 60000 (60s). Per-job override is the job's TimeoutMs.
+	FireTimeoutMs int64 `json:"fireTimeoutMs,omitempty"`
+	// CatchUpEnabled controls whether missed daily/weekly fires fire
+	// on engine startup. Nil treats as default-on.
+	CatchUpEnabled *bool `json:"catchUpEnabled,omitempty"`
 }

@@ -257,6 +257,42 @@ func (h *Host) Schedules() []ScheduleJob {
 	return out
 }
 
+// ResetAsyncRegistrations wipes every webhook and schedule entry on
+// the host's registry, firing the *_deregistered hooks for each one
+// (informationally — operators see the cleared state in the log).
+// Called by the session manager before re-committing a respawned
+// subprocess's init payload.
+//
+// Returns the total count of removed entries across both kinds.
+func (h *Host) ResetAsyncRegistrations() int {
+	if h.async == nil {
+		return 0
+	}
+	reg := h.asyncRegistry()
+	notifyWebhook := func(_ asyncreg.Kind, decl asyncreg.Declaration, o asyncreg.Origin) {
+		info := AsyncRegistrationInfo{
+			Kind:   string(asyncreg.KindWebhook),
+			ID:     decl.ID(),
+			Origin: string(o),
+			Decl:   decl,
+		}
+		_ = h.fireLifecycleHook(HookWebhookDeregistered, info)
+	}
+	notifySchedule := func(_ asyncreg.Kind, decl asyncreg.Declaration, o asyncreg.Origin) {
+		info := AsyncRegistrationInfo{
+			Kind:   string(asyncreg.KindSchedule),
+			ID:     decl.ID(),
+			Origin: string(o),
+			Decl:   decl,
+		}
+		_ = h.fireLifecycleHook(HookScheduleDeregistered, info)
+	}
+	w := reg.Reset(asyncreg.KindWebhook, notifyWebhook)
+	s := reg.Reset(asyncreg.KindSchedule, notifySchedule)
+	utils.Log("extension", fmt.Sprintf("ResetAsyncRegistrations: ext=%s webhooks=%d schedules=%d", h.name, w, s))
+	return w + s
+}
+
 // CommitPendingAsyncDecls walks the declarations stashed during the
 // last init handshake (parseInitResult) and routes them through the
 // registry so the lifecycle hooks fire and the entries appear in

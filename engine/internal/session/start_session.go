@@ -373,6 +373,12 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 		host.SetOnDeath(func(h *extension.Host) {
 			m.handleHostDeath(capturedKey, h)
 		})
+		// Wire async-trigger lifecycle (D-010 / D-011) BEFORE
+		// committing any init-time webhook/schedule declarations so
+		// the registry's veto pipeline fires through the SDK with a
+		// real session context.
+		m.wireHostAsync(key, host)
+		m.commitHostInitAsyncDecls(key, host)
 		group.Add(host)
 	}
 	if group.IsEmpty() {

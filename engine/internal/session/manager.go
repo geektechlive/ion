@@ -6,8 +6,10 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/conversation"
+	"github.com/dsswift/ion/engine/internal/scheduling"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
+	"github.com/dsswift/ion/engine/internal/webhooks"
 )
 
 // SessionInfo describes a session in the list response.
@@ -36,6 +38,15 @@ type Manager struct {
 	// Production callers must never set this -- it has no setter on the
 	// public API.
 	childBackendOverride func() backend.RunBackend
+
+	// Async-trigger subsystems. Lazily allocated on first
+	// ensureAsyncSubsystems call. Shared across every session managed
+	// by this Manager so the engine never binds two webhook listeners
+	// on the same port. asyncMu guards just these fields to keep the
+	// main m.mu uncontended for the most-frequent reads.
+	asyncMu       sync.Mutex
+	webhookServer *webhooks.Server
+	scheduler     *scheduling.Scheduler
 }
 
 // SetConfig stores the engine runtime config for applying defaults.
@@ -216,6 +227,12 @@ func (m *Manager) StopSession(key string) error {
 	if extGroup != nil && !extGroup.IsEmpty() {
 		ctx := m.newExtContext(s, key)
 		_ = extGroup.FireSessionEnd(ctx)
+		// Remove every host from the async-trigger subsystems before
+		// Close() takes them down. Avoids the scheduler tick loop
+		// holding a stale host pointer.
+		for _, h := range extGroup.Hosts() {
+			m.unwireHostAsync(h)
+		}
 		extGroup.Close()
 	}
 	for _, conn := range mcpConns {
