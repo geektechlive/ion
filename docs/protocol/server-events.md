@@ -643,3 +643,39 @@ The matching response client command shape:
 An empty response (only `key` + `earlyStopRequestId`, no other fields)
 is a valid "no opinion" reply. The engine treats it the same as a
 missed-deadline fallback.
+
+#### Async-trigger events
+
+Observation-only advisory events emitted by the webhook server, scheduler, and async-registration lifecycle. Consumers render audit logs and "what's registered" panels from these events. They are **incremental** (not snapshots) and **advisory** — consumers must not build state machines on them.
+
+**Shared fields** (all `omitempty`; each event type carries the subset relevant to it):
+
+| Field           | Type              | Description                                                                 |
+|-----------------|-------------------|-----------------------------------------------------------------------------|
+| `asyncKind`     | string            | `"webhook"` or `"schedule"` — discriminates the trigger kind.               |
+| `asyncId`       | string            | Declaration's stable id (webhook path or schedule job id).                  |
+| `asyncOrigin`   | string            | `"init"` or `"runtime"` — lifecycle events only.                            |
+| `asyncReason`   | string            | Cause for negative-path events (see per-type notes below).                  |
+| `asyncDecl`     | json.RawMessage   | Declaration JSON — lifecycle events only. Auth secrets are never included.  |
+| `asyncRequestId`| string            | Correlates a single webhook request across received → responded.            |
+| `asyncMethod`   | string            | HTTP method — webhook fire events only.                                     |
+| `asyncPath`     | string            | HTTP path — webhook fire events only.                                       |
+| `asyncStatus`   | int               | HTTP response status — `engine_webhook_responded` and `engine_webhook_handler_error`. |
+| `asyncDurationMs`| int64            | Elapsed time from receipt to response (webhook) or fire to handler-return (schedule). |
+
+**Event types:**
+
+| Type                              | Category            | Key fields                                                    | Notes |
+|-----------------------------------|----------------------|---------------------------------------------------------------|-------|
+| `engine_webhook_registered`       | Webhook lifecycle    | `asyncKind`, `asyncId`, `asyncOrigin`, `asyncDecl`            | Route accepted by the registry. |
+| `engine_webhook_deregistered`     | Webhook lifecycle    | `asyncKind`, `asyncId`, `asyncOrigin`, `asyncDecl`            | Route removed (runtime or teardown). |
+| `engine_webhook_received`         | Webhook fire         | `asyncKind`, `asyncId`, `asyncRequestId`, `asyncMethod`, `asyncPath` | Inbound request matched a route. |
+| `engine_webhook_authenticated`    | Webhook fire         | `asyncKind`, `asyncId`, `asyncRequestId`, `asyncMethod`, `asyncPath` | Auth passed. |
+| `engine_webhook_responded`        | Webhook fire         | `asyncKind`, `asyncId`, `asyncRequestId`, `asyncMethod`, `asyncPath`, `asyncStatus`, `asyncDurationMs` | Handler completed; response written. |
+| `engine_webhook_handler_error`    | Webhook fire (error) | `asyncKind`, `asyncId`, `asyncRequestId`, `asyncMethod`, `asyncPath`, `asyncStatus`, `asyncReason`, `asyncDurationMs` | `asyncReason`: `"auth"`, `"body_size"`, `"handler_failed"`, `"method_not_allowed"`, `"not_found"`, `"timeout"`. |
+| `engine_schedule_registered`      | Schedule lifecycle   | `asyncKind`, `asyncId`, `asyncOrigin`, `asyncDecl`            | Job accepted by the registry. |
+| `engine_schedule_deregistered`    | Schedule lifecycle   | `asyncKind`, `asyncId`, `asyncOrigin`, `asyncDecl`            | Job removed (runtime or teardown). |
+| `engine_schedule_fired`           | Schedule fire        | `asyncKind`, `asyncId`, `asyncDurationMs`                     | Handler completed successfully. |
+| `engine_schedule_skipped`         | Schedule fire (skip) | `asyncKind`, `asyncId`, `asyncReason`                         | `asyncReason`: `"disabled"`, `"no_resolver"`, `"no_session"`, `"predicate_error"`. |
+| `engine_schedule_failed`          | Schedule fire (error)| `asyncKind`, `asyncId`, `asyncReason`, `asyncDurationMs`      | Handler threw; `asyncReason` carries the error message. |
+| `engine_async_fire_dropped`       | Shared error         | `asyncKind`, `asyncId`, `asyncReason`                         | Fire could not proceed. `asyncReason`: `"no_session"`, `"cap_exceeded"`, `"subprocess_dead"`, `"unregistered"`, `"no_resolver"`. |
