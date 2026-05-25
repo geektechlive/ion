@@ -124,21 +124,12 @@ func TestSchedulerStartStop(t *testing.T) {
 	s.Stop()
 }
 
-func TestPersistRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	s := New(Config{PersistDir: dir})
-	// We don't have a real Host here without spinning up a subprocess,
-	// so instead we exercise the marker path logic via a small shim.
-	// Use a nil host pointer — markerPath only reads h.Name(), and Name
-	// is called only when a marker is being written, but we can craft
-	// the path with safeName helpers below.
-	safe := safeName("test-ext") + "_" + safeName("job-1") + ".json"
-	if safe != "test-ext_job-1.json" {
-		t.Fatalf("safe name was %q", safe)
-	}
-	// Sanity: nil-host write/read should not crash but won't write — we
-	// just verify the helper compiles and the persist dir is honored.
-	_ = s
+// TestPersistence_FullCoverage_SeeOtherFile is a marker pointing
+// readers at persistence_test.go for the on-disk round-trip,
+// sanitisation, and bad-file behaviors. Kept here so a search for
+// "persist" in this file finds the cross-reference.
+func TestPersistence_FullCoverage_SeeOtherFile(t *testing.T) {
+	t.Skip("see persistence_test.go for full coverage")
 }
 
 func TestSafeName(t *testing.T) {
