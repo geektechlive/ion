@@ -84,3 +84,47 @@ func (h *Host) FireAsync(kind asyncreg.Kind, id string, ctx *Context, payload in
 	utils.Debug("extension", fmt.Sprintf("FireAsync: ext=%s kind=%s id=%q returned %d bytes", h.name, kind, id, len(resp)))
 	return resp, nil
 }
+
+// ResolveToken asks the subprocess to resolve the named token
+// reference (the symbolic name an extension registered with the SDK
+// at declaration time for a webhook auth or schedule enabled
+// predicate). Sends an engine/resolve_token RPC and returns the
+// resulting string.
+//
+// The subprocess looks the name up in its TokenRef registry and
+// invokes the user's `() => string` callback. Errors propagate
+// verbatim so the caller can log the resolution failure.
+//
+// Uses a short timeout (5s) since token resolution should be
+// near-instant — extensions that need to fetch from a remote secret
+// store should cache externally and return the cached value.
+func (h *Host) ResolveToken(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("ResolveToken: empty name")
+	}
+	if h.dead.Load() {
+		return "", fmt.Errorf("ResolveToken: subprocess dead")
+	}
+	type req struct {
+		Name string `json:"name"`
+	}
+	raw, err := h.callWithTimeout("engine/resolve_token", req{Name: name}, 5*time.Second)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var resp struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		// Plain string return — tolerate either shape.
+		var s string
+		if jerr := json.Unmarshal(raw, &s); jerr == nil {
+			return s, nil
+		}
+		return "", fmt.Errorf("ResolveToken: parse: %w", err)
+	}
+	return resp.Value, nil
+}
