@@ -6,8 +6,10 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/conversation"
+	"github.com/dsswift/ion/engine/internal/scheduling"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
+	"github.com/dsswift/ion/engine/internal/webhooks"
 )
 
 // SessionInfo describes a session in the list response.
@@ -36,6 +38,15 @@ type Manager struct {
 	// Production callers must never set this -- it has no setter on the
 	// public API.
 	childBackendOverride func() backend.RunBackend
+
+	// Async-trigger subsystems. Lazily allocated on first
+	// ensureAsyncSubsystems call. Shared across every session managed
+	// by this Manager so the engine never binds two webhook listeners
+	// on the same port. asyncMu guards just these fields to keep the
+	// main m.mu uncontended for the most-frequent reads.
+	asyncMu       sync.Mutex
+	webhookServer *webhooks.Server
+	scheduler     *scheduling.Scheduler
 }
 
 // SetConfig stores the engine runtime config for applying defaults.
@@ -216,6 +227,12 @@ func (m *Manager) StopSession(key string) error {
 	if extGroup != nil && !extGroup.IsEmpty() {
 		ctx := m.newExtContext(s, key)
 		_ = extGroup.FireSessionEnd(ctx)
+		// Remove every host from the async-trigger subsystems before
+		// Close() takes them down. Avoids the scheduler tick loop
+		// holding a stale host pointer.
+		for _, h := range extGroup.Hosts() {
+			m.unwireHostAsync(h)
+		}
 		extGroup.Close()
 	}
 	for _, conn := range mcpConns {
@@ -261,6 +278,28 @@ func (m *Manager) StopAll() error {
 		_ = m.StopSession(k)
 	}
 	return nil
+}
+
+// Shutdown stops every active session and tears down the manager-level
+// async subsystems (webhook listener, scheduler tick loop). Safe to
+// call multiple times; safe to call when no subsystems have been
+// started. Tests that load extensions via StartSession should
+// register this with t.Cleanup so a leaked listener cannot bleed
+// the default port across subsequent tests.
+func (m *Manager) Shutdown() {
+	_ = m.StopAll()
+	m.asyncMu.Lock()
+	srv := m.webhookServer
+	sch := m.scheduler
+	m.webhookServer = nil
+	m.scheduler = nil
+	m.asyncMu.Unlock()
+	if srv != nil {
+		srv.Stop()
+	}
+	if sch != nil {
+		sch.Stop()
+	}
 }
 
 // IsRunning reports whether the named session has an active run.

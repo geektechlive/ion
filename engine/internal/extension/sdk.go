@@ -126,6 +126,20 @@ const (
 	HookTurnAborted            = "turn_aborted"             // payload: {reason: "extension_died"}
 	HookPeerExtensionDied      = "peer_extension_died"      // payload: {name, exitCode, signal}
 	HookPeerExtensionRespawned = "peer_extension_respawned" // payload: {name, attemptNumber}
+
+	// Async-trigger registration lifecycle hooks (D-010 / D-011). Fire
+	// every time a webhook route or scheduled job is registered or
+	// deregistered, with payload AsyncRegistrationInfo describing the
+	// declaration. The *_registered variants are veto-capable: handler
+	// returns {block: true, reason: string} (or the typed
+	// AsyncRegistrationVeto result) to refuse the registration. The
+	// *_deregistered variants are informational only — deregistration
+	// cannot be vetoed because letting one extension trap another
+	// extension's resources would be a footgun.
+	HookWebhookRegistered    = "webhook_registered"
+	HookWebhookDeregistered  = "webhook_deregistered"
+	HookScheduleRegistered   = "schedule_registered"
+	HookScheduleDeregistered = "schedule_deregistered"
 )
 
 // SDK is the extension hook registry. It manages hook handlers, tools,
