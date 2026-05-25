@@ -26,7 +26,7 @@ struct TabListView: View {
     // iPhone: path-based navigation
     @State private var navigationPath = NavigationPath()
 
-    private let agentHarnessDir = "/Users/cfavero/AgentHarness"
+    private let jarvisDir = "/Users/cfavero/Jarvis"
 
     var body: some View {
         Group {
