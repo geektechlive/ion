@@ -1,290 +1,312 @@
-// ion-meta -- extension authoring assistant.
-// SDK-first extension that demonstrates the createIon() pattern: hook
-// registration, tool registration. The engine auto-bundles ../sdk/ion-sdk.ts
-// at transpile time.
+// ion-meta -- extension authoring harness.
+//
+// This is the orchestrator extension for building Ion Engine extensions,
+// agents, skills, and hooks. It registers nine tools (catalog/hook/SDK
+// introspection, scaffolding, validation, inspection, typechecking),
+// exposes seven specialist sub-agents (orchestrator + six specialists),
+// and ships a system-prompt persona generated from the live SDK source.
+//
+// Architecture sketch:
+//   index.ts        -- this file. Hook wiring + tool registration only.
+//   catalog.ts      -- introspect SDK types.ts for HookPayloadMap + IonContext.
+//   persona.ts      -- compose the system-prompt addition for before_prompt.
+//   agent-state.ts  -- emit engine_agent_state snapshots (complete-snapshot contract).
+//   tools/*.ts      -- one file per registered tool.
+//   agents/*.md     -- specialist sub-agent definitions discovered by engine.
+//   docs/canonical/ -- Ion docs bundled at install time (ion_read_doc serves).
+//
+// The orchestrator spine wires:
+//   session_start    -> log + emit initial agent panel snapshot
+//   before_prompt    -> inject the persona as systemPrompt
+//   agent_start/end  -> update active-specialist tracker, re-emit panel
+//   capability_*     -> advertise extension-authoring capabilities
+//   on_error         -> surface caught errors via engine_notify
+//   session_end      -> wipe the panel (agents: [])
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { createIon, log } from '../sdk/ion-sdk'
+import { loadPersona } from './persona'
+import {
+  emitInitialSnapshot,
+  emitAgentRunning,
+  emitAgentDone,
+  emitTerminalSnapshot,
+} from './agent-state'
+import { isFreshConversation } from './fresh-session'
+import { WELCOME_MARKDOWN } from './greeting'
+import { gateWriteToolCall } from './git-gate'
+import {
+  scaffoldTool,
+  validateAgentTool,
+  listHooksTool,
+  listExtensionsTool,
+  inspectExtensionTool,
+  listSDKMethodsTool,
+  readDocTool,
+  validateManifestTool,
+  typecheckExtensionTool,
+} from './tools'
 
 const ion = createIon()
 
-// --- Hook catalog ---
+// ─── Hook wiring ──────────────────────────────────────────────────────────
 
-const hookCatalog: Record<string, string[]> = {
-  lifecycle: [
-    'session_start', 'session_end', 'before_prompt', 'turn_start', 'turn_end',
-    'message_start', 'message_end', 'tool_start', 'tool_end', 'tool_call',
-    'on_error', 'agent_start', 'agent_end',
-  ],
-  session: [
-    'session_before_compact', 'session_compact', 'session_before_fork',
-    'session_fork', 'session_before_switch',
-  ],
-  'pre-action': [
-    'before_agent_start', 'before_provider_request',
-  ],
-  content: [
-    'context', 'message_update', 'tool_result', 'input', 'model_select',
-    'user_bash', 'plan_mode_prompt',
-  ],
-  'per-tool-call': [
-    'bash_tool_call', 'read_tool_call', 'write_tool_call', 'edit_tool_call',
-    'grep_tool_call', 'glob_tool_call', 'agent_tool_call',
-  ],
-  'per-tool-result': [
-    'bash_tool_result', 'read_tool_result', 'write_tool_result', 'edit_tool_result',
-    'grep_tool_result', 'glob_tool_result', 'agent_tool_result',
-  ],
-  'context-discovery': [
-    'context_discover', 'context_load', 'instruction_load',
-  ],
-  permission: [
-    'permission_request', 'permission_denied', 'permission_classify',
-  ],
-  file: [
-    'file_changed', 'workspace_file_changed',
-  ],
-  task: [
-    'task_created', 'task_completed',
-  ],
-  elicitation: [
-    'elicitation_request', 'elicitation_result',
-  ],
-  'context-injection': [
-    'context_inject',
-  ],
-  capability: [
-    'capability_discover', 'capability_match', 'capability_invoke',
-  ],
-  'extension-lifecycle': [
-    'extension_respawned', 'turn_aborted', 'peer_extension_died',
-    'peer_extension_respawned',
-  ],
-}
-
-// --- Tool handlers ---
-
-function handleScaffold(params: { name: string; type: 'extension' | 'agent' | 'skill' }) {
-  const { name, type } = params
-
-  switch (type) {
-    case 'extension':
-      return {
-        files: ['index.ts', 'README.md', 'agents/orchestrator.md'],
-        description: 'Extension directory with entry point, README, and root agent',
-      }
-    case 'agent':
-      return {
-        files: [`${name}.md`],
-        template: [
-          '---',
-          `name: ${name}`,
-          'description: <description>',
-          'model: claude-sonnet-4-6',
-          'tools: [Read, Write]',
-          '---',
-          '',
-          'You are...',
-        ].join('\n'),
-      }
-    case 'skill':
-      return {
-        files: [`${name}.md`],
-        template: [
-          '---',
-          `name: ${name}`,
-          'description: <description>',
-          '---',
-          '',
-          'Skill body...',
-        ].join('\n'),
-      }
-    default:
-      return { error: `Unknown scaffold type: ${type}` }
-  }
-}
-
-function handleValidateAgent(params: { content: string }) {
-  const { content } = params
-  const errors: string[] = []
-  const warnings: string[] = []
-
-  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/)
-  if (!fmMatch) {
-    return { valid: false, errors: ['No frontmatter found (expected --- fenced block)'], warnings }
-  }
-
-  const frontmatter = fmMatch[1]
-  const fields: Record<string, string> = {}
-
-  for (const line of frontmatter.split('\n')) {
-    const colonIdx = line.indexOf(':')
-    if (colonIdx === -1) continue
-    fields[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim()
-  }
-
-  if (!fields['name']) errors.push('Missing required field: name')
-  if (!fields['description']) errors.push('Missing required field: description')
-  if (!fields['model']) warnings.push('No model specified (will use session default)')
-  if (!fields['tools']) warnings.push('No tools specified (agent will have no tool access)')
-
-  return { valid: errors.length === 0, errors, warnings }
-}
-
-function handleListHooks(params: { category?: string }) {
-  if (params.category) {
-    const key = params.category.toLowerCase()
-    if (hookCatalog[key]) return { [key]: hookCatalog[key] }
-    return {
-      error: `Unknown category: ${params.category}. Valid categories: ${Object.keys(hookCatalog).join(', ')}`,
-    }
-  }
-  return hookCatalog
-}
-
-// --- Orchestrator persona ---
-
-// Strip leading YAML frontmatter (--- ... ---) from an agent .md file.
-function stripFrontmatter(text: string): string {
-  const match = text.match(/^---\s*\n[\s\S]*?\n---\s*\n?/)
-  return match ? text.slice(match[0].length) : text
-}
-
-let personaCache: string | null = null
-
-function loadPersona(extensionDir: string): string {
-  if (personaCache !== null) return personaCache
+ion.on('session_start', (ctx) => {
+  log.info('ion-meta extension active', { sessionKey: ctx.sessionKey })
+  // Emit an initial agent-state snapshot so the desktop's Agents panel
+  // reflects ion-meta the moment the session begins. Complete-snapshot
+  // contract: this snapshot lists every specialist ion-meta exposes,
+  // each marked idle except the orchestrator (running).
   try {
-    const raw = readFileSync(join(extensionDir, 'agents', 'orchestrator.md'), 'utf8')
-    personaCache = buildPersona(stripFrontmatter(raw).trim())
+    emitInitialSnapshot(ctx)
   } catch (err) {
-    log.warn(`ion-meta: failed to load orchestrator.md: ${(err as Error).message}`)
-    personaCache = buildPersona('')
+    log.error('ion-meta: initial agent snapshot failed', { err: (err as Error).message })
   }
-  return personaCache
+  // First-touch greeting. Emit the canonical welcome markdown as an
+  // engine_harness_message exactly once per logically-new conversation.
+  // Freshness is detected by the absence of any on-disk conversation
+  // file under ~/.ion/conversations/<sessionKey>.* — see
+  // fresh-session.ts for the rationale (sessionKey is client-supplied
+  // and not reliable on its own). Ordering: snapshot first so the
+  // Agents panel populates before the welcome message renders.
+  try {
+    const fresh = isFreshConversation(ctx.sessionKey)
+    if (fresh) {
+      log.info('ion-meta: emitting first-session welcome', {
+        sessionKey: ctx.sessionKey,
+        messageLength: WELCOME_MARKDOWN.length,
+      })
+      ctx.emit({
+        type: 'engine_harness_message',
+        message: WELCOME_MARKDOWN,
+        source: 'ion-meta',
+        // Renderer-honored dedup hint. The desktop suppresses repeated
+        // harness messages carrying the same `metadata.dedupKey` within
+        // a single engine-instance scrollback, so the welcome is shown
+        // at most once per tab even if `session_start` fires several
+        // times before any user turn (e.g. app restart with no message
+        // typed). The filesystem-based isFreshConversation check above
+        // is the pre-emit optimization; this metadata is the safety
+        // net. Namespace convention: `<extensionName>:<messageKey>`.
+        // See engine-event-slice.ts (desktop) for the consumer side and
+        // docs/protocol/server-events.md for the well-known-keys table.
+        metadata: { dedupKey: 'ion-meta:welcome' },
+      })
+      log.info('ion-meta: welcome emit returned', { sessionKey: ctx.sessionKey })
+    } else {
+      log.info('ion-meta: continued conversation, suppressing welcome', {
+        sessionKey: ctx.sessionKey,
+      })
+    }
+  } catch (err) {
+    log.error('ion-meta: welcome emission failed', {
+      sessionKey: ctx.sessionKey,
+      err: (err as Error).message,
+      stack: (err as Error).stack,
+    })
+  }
+})
+
+ion.on('before_prompt', (ctx, _prompt) => {
+  // Inject the persona on every prompt. The persona is cached per
+  // extensionDir so this is cheap after the first call.
+  return { systemPrompt: loadPersona(ctx.config.extensionDir) }
+})
+
+ion.on('agent_start', (ctx, info) => {
+  // info.name is the agent name being dispatched (see AgentInfo in
+  // types.ts). We re-emit the panel snapshot with this specialist
+  // flipped to running. Unknown agent names (e.g. plain Agent-tool
+  // dispatches outside our roster) are silently ignored inside
+  // emitAgentRunning.
+  try {
+    const name = info?.name ?? ''
+    const task = info?.task
+    emitAgentRunning(ctx, name, task)
+    if (name) {
+      ctx.emit({ type: 'engine_working_message', message: `→ ${name}` })
+    }
+  } catch (err) {
+    log.error('ion-meta: agent_start snapshot failed', { err: (err as Error).message })
+  }
+})
+
+ion.on('agent_end', (ctx, info) => {
+  try {
+    // AgentInfo carries `name` and optional `task`; there is no result
+    // field. We preserve the most recent task as the panel's lastWork.
+    emitAgentDone(ctx, info?.name ?? '', info?.task)
+  } catch (err) {
+    log.error('ion-meta: agent_end snapshot failed', { err: (err as Error).message })
+  }
+})
+
+// capability_discover and capability_match are observation-only from a TS
+// extension: the engine's TS hook forwarders treat both hooks as
+// string-returning, but the Go-side dispatcher expects [Capability] /
+// CapabilityMatchResult structured returns. A TS string return is
+// effectively dropped. We still wire the hooks so the panel and logs
+// reflect that ion-meta participated in the discovery turn, and we use
+// `capability_match` to surface a routing telemetry event for the
+// desktop. Real runtime capability registration belongs in a Go
+// extension or in `registerAgentSpec` side effects.
+
+ion.on('capability_discover', (ctx) => {
+  // Fire-and-forget telemetry: announce that ion-meta is present and
+  // would advertise these capabilities if the TS surface supported
+  // structured returns. The string-forwarder discards the return below.
+  ctx.emit({
+    type: 'ion_meta_capability_advertise',
+    capabilities: [
+      'extension.scaffold', 'extension.inspect', 'extension.test',
+      'extension.validate', 'hook.explain', 'agent.author',
+      'skill.author', 'orchestration.design',
+    ],
+  })
+})
+
+ion.on('capability_match', (ctx, payload) => {
+  // payload.input is the user's raw input; payload.capabilities is the
+  // engine's currently-registered capability id list. We perform a
+  // coarse keyword classification and emit a custom event so the
+  // desktop / log can show what ion-meta would route to. Returning
+  // structured data is not useful from TS (see comment block above).
+  const text = (payload?.input ?? '').toLowerCase()
+  if (!text) return undefined
+
+  const route = classifyIntent(text)
+  if (route) {
+    ctx.emit({
+      type: 'ion_meta_intent_routed',
+      input: payload.input,
+      capability: route,
+    })
+  }
+  return undefined
+})
+
+ion.on('on_error', (ctx, info) => {
+  // Surface caught errors via engine_notify so the desktop user sees
+  // them rather than having to tail engine.log. Severity defaults to
+  // warn; the engine reserves error level for actionable engine
+  // failures.
+  const summary = info?.message ?? 'unknown error'
+  const category = info?.category ?? 'unknown'
+  ctx.emit({
+    type: 'engine_notify',
+    level: 'warn',
+    message: `ion-meta caught ${category}: ${summary}`,
+  })
+  log.warn('ion-meta: on_error observed', {
+    message: summary,
+    category,
+    retryable: info?.retryable,
+  })
+})
+
+// ─── Deterministic write-gate ─────────────────────────────────────────────
+//
+// Refuse write-class tool calls (Write / Edit / Bash / ion_scaffold) when
+// the target isn't inside a git working tree. Engine-level enforcement;
+// the LLM cannot override. See git-gate.ts for the design rationale and
+// docs/architecture/adr/006-deterministic-seams-and-probabilistic-judgment.md
+// for the framing.
+//
+// Returning `{ block: true, reason }` blocks the tool call; the engine
+// surfaces the reason back to the LLM as the tool result. Returning
+// `undefined` allows the call. Per the logging policy every decision
+// (block AND pass) is observable through logs alone — this hook is on
+// the critical path of every write-class operation, so we log both
+// branches.
+ion.on('tool_call', (ctx, info) => {
+  try {
+    const decision = gateWriteToolCall(
+      { toolName: info?.toolName ?? '', toolId: info?.toolId ?? '', input: info?.input ?? {} },
+      ctx.cwd,
+    )
+    if (decision.block) {
+      log.info('ion-meta: git-gate blocked write-class tool', {
+        tool: info?.toolName,
+        toolId: info?.toolId,
+        path: decision.path,
+        sessionKey: ctx.sessionKey,
+        reason: decision.reason,
+      })
+      return { block: true, reason: decision.reason ?? 'blocked by ion-meta git-gate' }
+    }
+    // Pass-case log at debug level: every tool call goes through this
+    // hook, so logging every pass at info would be noisy. The block
+    // case is the load-bearing audit signal.
+    log.debug('ion-meta: git-gate passed tool call', {
+      tool: info?.toolName,
+      toolId: info?.toolId,
+      sessionKey: ctx.sessionKey,
+    })
+    return undefined
+  } catch (err) {
+    // The gate is best-effort; if it crashes (e.g. permission error on
+    // a stat call) we fail OPEN — the engine continues with the tool
+    // call. Failing closed would make a buggy gate take the whole
+    // harness down, which is worse than allowing a write through.
+    log.error('ion-meta: git-gate threw, failing open', {
+      tool: info?.toolName,
+      err: (err as Error).message,
+    })
+    return undefined
+  }
+})
+
+ion.on('session_end', (ctx) => {
+  // Wipe the panel. The engine_agent_state contract requires us to emit
+  // `agents: []` (or transition every agent to a terminal status); the
+  // empty form is the canonical "session reset" signal per
+  // docs/architecture/agent-state.md.
+  try {
+    emitTerminalSnapshot(ctx)
+  } catch (err) {
+    log.error('ion-meta: terminal snapshot failed', { err: (err as Error).message })
+  }
+  log.info('ion-meta extension inactive', { sessionKey: ctx.sessionKey })
+})
+
+// ─── Tool registration ────────────────────────────────────────────────────
+
+ion.registerTool(scaffoldTool)
+ion.registerTool(validateAgentTool)
+ion.registerTool(listHooksTool)
+ion.registerTool(listExtensionsTool)
+ion.registerTool(inspectExtensionTool)
+ion.registerTool(listSDKMethodsTool)
+ion.registerTool(readDocTool)
+ion.registerTool(validateManifestTool)
+ion.registerTool(typecheckExtensionTool)
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+function classifyIntent(text: string): string | undefined {
+  const match = (...keywords: string[]) => keywords.some(k => text.includes(k))
+  if (match('scaffold', 'create extension', 'new extension', 'bootstrap extension')) {
+    return 'extension.scaffold'
+  }
+  if (match('inspect extension', 'what hooks does', 'list tools in', 'parse extension')) {
+    return 'extension.inspect'
+  }
+  if (match('typecheck', 'esbuild', 'compile extension')) {
+    return 'extension.test'
+  }
+  if (match('validate manifest', 'extension.json', 'validate agent')) {
+    return 'extension.validate'
+  }
+  if (match('hook', 'payload', 'fires when', 'before_prompt', 'session_start')) {
+    return 'hook.explain'
+  }
+  if (match('agent file', 'agent markdown', '.md file', 'agent hierarchy', 'parent agent')) {
+    return 'agent.author'
+  }
+  if (match('skill ', 'skill file', 'skill prompt')) {
+    return 'skill.author'
+  }
+  if (match('dispatch', 'engine_agent_state', 'agent panel', 'capability_match', 'multi-agent')) {
+    return 'orchestration.design'
+  }
+  return undefined
 }
-
-function buildPersona(orchestratorBody: string): string {
-  const header =
-    'This session is dedicated to building Ion Engine extensions, agents, skills, and hooks.\n' +
-    'Treat the SDK shape, hook catalog, and CLI verbs below as ground truth. Do not invent symbols, package names, methods, or commands. If something is not listed here, say so rather than guess.'
-  const sdk =
-    'SDK shape (canonical — use this exact form for all extension code samples):\n' +
-    '```ts\n' +
-    "import { createIon, log } from '../sdk/ion-sdk'\n" +
-    '\n' +
-    'const ion = createIon()\n' +
-    '\n' +
-    "ion.on('session_start', () => log.info('extension active'))\n" +
-    "ion.on('tool_end', (ctx, info) => { /* info shape depends on the hook */ })\n" +
-    '\n' +
-    "ion.registerTool({ name: 'my_tool', description: '...', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: 'ok' }) })\n" +
-    '```\n' +
-    'There is no `Extension` class, no `@ion/sdk` package, no `registerHook` method, no `ext.start()`. The engine auto-bundles the SDK at transpile time — extensions never `npm install` it.\n' +
-    '\n' +
-    'IonContext fields available in every hook/tool/command handler:\n' +
-    '- `ctx.sessionKey: string` — engine session id; use as a Map key for per-session state.\n' +
-    '- `ctx.cwd: string` — working directory.\n' +
-    '- `ctx.model: { id, contextWindow } | null` — active model.\n' +
-    '- `ctx.config: ExtensionConfig` — passed during init.\n' +
-    '- Methods: `emit`, `sendMessage`, `callTool(name, input)`, `sendPrompt(text, opts?)`, `dispatchAgent`, `discoverAgents`, `registerAgentSpec`, `elicit`, `sandboxWrap`, process lifecycle helpers.\n' +
-    '\n' +
-    '`ctx.callTool` dispatches a registered tool (built-in, MCP, or extension-registered) without an LLM round trip — useful for slash commands like `/recall <q>` calling a `memory_recall` tool. Subject to the session permission policy. Per-tool hooks (`bash_tool_call`, etc.) and `permission_request` do NOT fire on these calls.\n' +
-    '\n' +
-    '`ctx.sendPrompt(text, opts?)` queues a fresh prompt on the session. Use from a slash command to drive an LLM turn (e.g. `/cloud <msg>` forcing a remote model), or from `session_start` to prime the agent. Recursion hazard: calling from `before_prompt` triggers `before_prompt` again — guard with a per-session in-flight flag keyed on `ctx.sessionKey`.\n' +
-    '\n' +
-    '`ctx.emit(event)` accepts the five engine-recognised types (`engine_agent_state`, `engine_status`, `engine_working_message`, `engine_notify`, `engine_harness_message`) plus any custom `{ type: string, ...fields }` shape. Custom types pass through the engine and desktop bridge verbatim; pick a unique prefix (e.g. `myharness_*`) to avoid collisions.\n' +
-    '\n' +
-    '`engine_agent_state` is always a complete snapshot — include every agent you want visible in every emission. The engine does not merge across events; consumers replace their view. To wipe the panel, emit `agents: []`. See docs/architecture/agent-state.md.'
-  const catalog =
-    'Canonical hook catalog (do not rename or invent):\n' +
-    Object.entries(hookCatalog)
-      .map(([cat, names]) => `- ${cat}: ${names.join(', ')}`)
-      .join('\n')
-  const cli =
-    'Engine CLI verbs (the only ones that exist): serve, start, prompt, attach, status, stop, shutdown, record, rpc, version.\n' +
-    'Loading an extension: place it at `~/.ion/extensions/<name>/index.ts` and reference it via `--extension ~/.ion/extensions/<name>/index.ts` on `ion prompt` or `ion start`. There is no `ion ext load` command.\n' +
-    '\n' +
-    'Extension directory layout:\n' +
-    '- `index.ts` (or extension.ts / index.js / main) — entry point.\n' +
-    '- `extension.json` (optional) — manifest. Fields: `name`, `external` (string[] for native deps the bundler should leave external), `engineVersion`. Unknown top-level keys are rejected.\n' +
-    '- `package.json` (optional) — npm deps. Engine auto-runs `npm install --omit=dev` before transpile (idempotent).\n' +
-    '- `agents/*.md` (optional) — bundled agent definitions.\n' +
-    '- `.ion-build/` — engine-generated build artifacts; gitignored automatically.\n' +
-    'TypeScript output: ESM (.mjs), Node 20 target. Top-level `await` works. Native modules go in `extension.json` `external` and are required at runtime via `NODE_PATH=<extDir>/node_modules`.'
-  const tools =
-    'Available tools:\n' +
-    '- ion_scaffold: generate scaffold structure for an extension, agent, or skill.\n' +
-    '- ion_validate_agent: validate agent markdown frontmatter.\n' +
-    '- ion_list_hooks: list engine hooks, optionally filtered by category. Call only when the user wants the catalog itself returned; otherwise reuse the embedded catalog above.\n' +
-    '- Agent: dispatch a specialist sub-agent for detailed work.\n' +
-    'Delegate detailed work to the specialist sub-agents named in the orchestrator role below.'
-  return [header, orchestratorBody, sdk, catalog, cli, tools].filter(Boolean).join('\n\n')
-}
-
-// --- Hook registration ---
-
-ion.on('session_start', () => {
-  log.info('ion-meta extension active')
-})
-
-ion.on('before_prompt', (ctx, _prompt) => ({
-  systemPrompt: loadPersona(ctx.config.extensionDir),
-}))
-
-// --- Tool registration ---
-
-ion.registerTool({
-  name: 'ion_scaffold',
-  description: 'Generate scaffold structure for an Ion extension, agent, or skill',
-  parameters: {
-    type: 'object',
-    properties: {
-      name: { type: 'string', description: 'Name of the extension, agent, or skill' },
-      type: {
-        type: 'string',
-        enum: ['extension', 'agent', 'skill'],
-        description: 'Type of scaffold to generate',
-      },
-    },
-    required: ['name', 'type'],
-  },
-  execute: async (params) => ({
-    content: JSON.stringify(handleScaffold(params), null, 2),
-  }),
-})
-
-ion.registerTool({
-  name: 'ion_validate_agent',
-  description: 'Validate agent markdown frontmatter for required and optional fields',
-  parameters: {
-    type: 'object',
-    properties: {
-      content: { type: 'string', description: 'Full markdown content of the agent file' },
-    },
-    required: ['content'],
-  },
-  execute: async (params) => ({
-    content: JSON.stringify(handleValidateAgent(params), null, 2),
-  }),
-})
-
-ion.registerTool({
-  name: 'ion_list_hooks',
-  description: 'List available Ion engine hooks, optionally filtered by category',
-  parameters: {
-    type: 'object',
-    properties: {
-      category: {
-        type: 'string',
-        description:
-          'Filter by category (lifecycle, session, pre-action, content, per-tool-call, per-tool-result, context-discovery, permission, file, task, elicitation, context-injection, capability, extension-lifecycle)',
-      },
-    },
-  },
-  execute: async (params) => ({
-    content: JSON.stringify(handleListHooks(params), null, 2),
-  }),
-})
-
