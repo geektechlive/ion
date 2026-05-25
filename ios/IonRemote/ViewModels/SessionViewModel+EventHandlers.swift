@@ -312,6 +312,12 @@ extension SessionViewModel {
         case .engineEarlyStopDecisionRequest:
             handleEngineEarlyStopDecisionRequest()
 
+        case .engineCommandRegistry:
+            handleEngineCommandRegistry()
+
+        case .engineCommandResult:
+            handleEngineCommandResult()
+
         case .desktopSettingsSnapshot(let settings, let schema, let groups):
             // Per-desktop user-preferences projection. Snapshot semantics
             // — replace the cached state wholesale. The view layer binds

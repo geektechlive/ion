@@ -103,6 +103,7 @@
 		A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */; };
 		A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */; };
 		A1B2C3D4E5F60001E80006AA /* DesktopSettingsContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */; };
+		A1B2C3D4E5F60001F00006AA /* ContractSyncEngineEventsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001F00007AA /* ContractSyncEngineEventsTests.swift */; };
 		A1B2C3D4E5F60001000600AA /* DiscoveredSlashCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000601AA /* DiscoveredSlashCommand.swift */; };
 		A1B2C3D4E5F60001000602AA /* SlashCommandMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000603AA /* SlashCommandMenu.swift */; };
 		A1B2C3D4E5F60001000700AA /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000701AA /* MessageBubble.swift */; };
@@ -254,6 +255,7 @@
 		A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventTerminalTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractSyncTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopSettingsContractTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001F00007AA /* ContractSyncEngineEventsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractSyncEngineEventsTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000601AA /* DiscoveredSlashCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveredSlashCommand.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001001101AA /* RemoteModelEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteModelEntry.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000603AA /* SlashCommandMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashCommandMenu.swift; sourceTree = "<group>"; };
@@ -497,6 +499,7 @@
 				A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */,
 				A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */,
 				A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */,
+				A1B2C3D4E5F60001F00007AA /* ContractSyncEngineEventsTests.swift */,
 				A1B2C3D4E5F60001000028AA /* E2ECryptoTests.swift */,
 				A1B2C3D4E5F6000100002AAA /* TransportManagerTests.swift */,
 				A1B2C3D4E5F6000100002CAA /* RelayClientTests.swift */,
@@ -811,6 +814,7 @@
 				A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */,
 				A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */,
 				A1B2C3D4E5F60001E80006AA /* DesktopSettingsContractTests.swift in Sources */,
+				A1B2C3D4E5F60001F00006AA /* ContractSyncEngineEventsTests.swift in Sources */,
 				A1B2C3D4E5F60001000027AA /* E2ECryptoTests.swift in Sources */,
 				A1B2C3D4E5F60001000029AA /* TransportManagerTests.swift in Sources */,
 				A1B2C3D4E5F6000100002BAA /* RelayClientTests.swift in Sources */,

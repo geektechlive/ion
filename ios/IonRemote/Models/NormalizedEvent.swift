@@ -109,6 +109,55 @@ enum RemoteEvent: Codable, Sendable {
         wouldContinue: Bool,
         isSubagent: Bool
     )
+    /// Complete snapshot of extension-registered slash commands for a
+    /// session. Emitted at session start and on every subsequent mutation
+    /// (RegisterCommand inside a hook, extension hot reload, etc.).
+    ///
+    /// Snapshot semantics: REPLACE the cached set with the payload; never
+    /// merge. Empty `commands: []` is the authoritative "no extension
+    /// commands live" signal. See docs/architecture/agent-state.md for
+    /// the canonical snapshot-replace pattern; the field comment on
+    /// types.EngineEvent.Commands and the file-level comment on
+    /// engine/internal/session/command_registry.go are the source of
+    /// truth on the engine side.
+    ///
+    /// The desktop's prompt pipeline consumes this for routing-hint
+    /// caching (engine-command names take precedence over local .md
+    /// template lookups). iOS does not yet act on the snapshot — the
+    /// unified slash-pipeline plan intentionally left the iOS UI out
+    /// of scope — but iOS decodes the variant cleanly so the wire stays
+    /// uniform across consumers.
+    case engineCommandRegistry(
+        tabId: String,
+        instanceId: String?,
+        commands: [EngineCommandListing]
+    )
+    /// Result of an engine SendCommand dispatch — success, extension
+    /// command failure, or unknown command. `message` carries any
+    /// human-readable note the engine emits; `command` is the bare
+    /// command name the engine resolved (e.g. "clear",
+    /// "ion--review-changes") so consumers can switch on it without
+    /// reparsing message prose; `commandError` is set when the dispatch
+    /// failed (extension threw, or "unknown_command" when the engine
+    /// disclaims the name).
+    ///
+    /// The desktop's prompt pipeline awaits this event to decide between
+    /// "dispatch landed, draw the divider" and "engine disclaims, fall
+    /// through to .md expansion". The desktop also uses the specific
+    /// success case (command == "clear" && commandError == nil) to relay
+    /// an iOS-renderable divider via engine_harness_message /
+    /// message_added — iOS receives the divider via those existing
+    /// event types and does not need to interpret engine_command_result
+    /// directly. Decoding the event here keeps the wire uniform; future
+    /// iOS features that want to react to command results have a clean
+    /// place to do so.
+    case engineCommandResult(
+        tabId: String,
+        instanceId: String?,
+        message: String?,
+        command: String?,
+        commandError: String?
+    )
     /// Desktop user-preferences projection. Emitted on initial pairing
     /// and on every subsequent change to a projectable setting (either
     /// from iOS via `setDesktopSetting` or from the desktop UI). Snapshot
@@ -202,6 +251,8 @@ enum RemoteEvent: Codable, Sendable {
         case engineProfiles = "engine_profiles"
         case enginePlanProposal = "engine_plan_proposal"
         case engineEarlyStopDecisionRequest = "engine_early_stop_decision_request"
+        case engineCommandRegistry = "engine_command_registry"
+        case engineCommandResult = "engine_command_result"
         case desktopSettingsSnapshot = "desktop_settings_snapshot"
         case gitChangesResponse = "git_changes_response"
         case gitGraphResponse = "git_graph_response"
@@ -260,6 +311,15 @@ enum RemoteEvent: Codable, Sendable {
         case earlyStopContinuationCount, earlyStopMaxContinuations
         case earlyStopLastContinuationDelta
         case earlyStopWouldContinue, earlyStopIsSubagent
+        // engine_command_registry / engine_command_result — slash-pipeline
+        // wire events. `commands` already declared above (used by the
+        // RegistryView and other generic listings); `message` already
+        // declared above (shared with engine_working_message,
+        // engine_notify, engine_error, engine_harness_message). `command`
+        // is the bare resolved name (e.g. "clear"), and `commandError`
+        // is the failure reason or "unknown_command" when the engine
+        // disclaims the name.
+        case command, commandError
         // desktop_settings_snapshot — Part 7 wire event.
         // `settings` is the value map; `schema` carries per-key
         // metadata (type, group, label, description, defaultValue);

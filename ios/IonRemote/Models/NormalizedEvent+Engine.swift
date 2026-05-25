@@ -199,6 +199,49 @@ extension RemoteEvent {
                 isSubagent: isSubagent
             )
 
+        case .engineCommandRegistry:
+            // Slash-command registry snapshot. Snapshot semantics —
+            // REPLACE the cached set wholesale; never merge. Empty
+            // `commands` is the authoritative "no extension commands"
+            // signal, not a no-op. iOS does not yet act on this — the
+            // desktop's prompt pipeline owns the routing-hint cache —
+            // but we decode cleanly so the wire stays uniform.
+            // Field correlation: tabId/instanceId are session
+            // correlators; `commands` is the full snapshot payload.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let commands = try container.decodeIfPresent([EngineCommandListing].self, forKey: .commands) ?? []
+            return .engineCommandRegistry(
+                tabId: tabId,
+                instanceId: instanceId,
+                commands: commands
+            )
+
+        case .engineCommandResult:
+            // Result of an engine SendCommand dispatch. The three
+            // payload fields are independently optional:
+            //   - `message` may be empty when the dispatch produced no
+            //     human-readable note (most success cases).
+            //   - `command` may be empty for the catch-all unknown-
+            //     command emit before the engine resolved the name.
+            //   - `commandError` is set only on failure (extension
+            //     error or "unknown_command").
+            // The desktop's prompt pipeline awaits this event to decide
+            // dispatch success vs fallback; iOS does not act on it
+            // today.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let message = try container.decodeIfPresent(String.self, forKey: .message)
+            let command = try container.decodeIfPresent(String.self, forKey: .command)
+            let commandError = try container.decodeIfPresent(String.self, forKey: .commandError)
+            return .engineCommandResult(
+                tabId: tabId,
+                instanceId: instanceId,
+                message: message,
+                command: command,
+                commandError: commandError
+            )
+
         case .desktopSettingsSnapshot:
             // Per-desktop user-preferences projection. The whole payload
             // is wholesale-replace: SessionViewModel discards its
@@ -402,6 +445,34 @@ extension RemoteEvent {
             try container.encode(lastContinuationDelta, forKey: .earlyStopLastContinuationDelta)
             try container.encode(wouldContinue, forKey: .earlyStopWouldContinue)
             try container.encode(isSubagent, forKey: .earlyStopIsSubagent)
+            return true
+
+        case .engineCommandRegistry(let tabId, let instanceId, let commands):
+            // Encoder mirror of the decoder above. iOS never originates
+            // this event — the engine emits, iOS observes — but the
+            // encoder ships so round-trip tests pass and diagnostic
+            // dumps lose no information. Always emit the `commands`
+            // array even when empty: an empty list is the AUTHORITATIVE
+            // "no extension commands" signal per snapshot semantics
+            // (see EngineCommandListing struct doc); omitting it would
+            // be observationally different.
+            try container.encode(TypeKey.engineCommandRegistry, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(commands, forKey: .commands)
+            return true
+
+        case .engineCommandResult(let tabId, let instanceId, let message, let command, let commandError):
+            // Encoder mirror of the decoder above. Each of the three
+            // payload fields is independently optional on the wire, so
+            // we use encodeIfPresent so an absent field stays absent
+            // on round-trip (rather than appearing as JSON null).
+            try container.encode(TypeKey.engineCommandResult, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encodeIfPresent(message, forKey: .message)
+            try container.encodeIfPresent(command, forKey: .command)
+            try container.encodeIfPresent(commandError, forKey: .commandError)
             return true
 
         case .desktopSettingsSnapshot(let settings, let schema, let groups):

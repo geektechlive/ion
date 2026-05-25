@@ -215,6 +215,31 @@ struct EngineMessageEndUsage: Codable, Sendable {
     let cost: Double
 }
 
+// MARK: - EngineCommandListing
+
+/// One entry in an engine_command_registry snapshot. Mirrors the Go
+/// `types.EngineCommandListing` shape exactly: a bare slash-command
+/// name (e.g. "clear", "ion--review-changes") plus an optional human-
+/// readable description the autocomplete UI can surface.
+///
+/// Snapshot semantics: every `engine_command_registry` event carries a
+/// COMPLETE list of the session's extension-registered slash commands.
+/// Consumers REPLACE their cached set with the payload; never merge.
+/// An empty `commands: []` array is the authoritative "no extension
+/// commands" signal — drop every entry. See
+/// docs/architecture/agent-state.md for the canonical snapshot-replace
+/// pattern.
+///
+/// iOS does not yet consume the registry for autocomplete; this type
+/// exists so the wire stays uniform with the desktop (every engine
+/// event the desktop sees, iOS sees) and so future iOS work can adopt
+/// it without a Swift contract change. The desktop's prompt pipeline
+/// is the only consumer that acts on the listing today.
+struct EngineCommandListing: Codable, Equatable, Sendable {
+    let name: String
+    let description: String?
+}
+
 // MARK: - AnyCodable
 
 /// Type-erased Codable wrapper for arbitrary JSON values.
