@@ -1,4 +1,3 @@
-// @file-size-exception: unified decision tree must remain a single file (see file-size posture section below)
 /**
  * Unified prompt pipeline — the single decision tree for what to do with a
  * user-typed string, regardless of which client (desktop renderer, iOS remote)
@@ -76,9 +75,11 @@
  *
  * File-size posture
  * ─────────────────
- * Target ≤ 600 lines. The module is intentionally a single file because
- * the decision tree is the contract — splitting it across files would
- * obscure the ordering invariants that make the precedence rules work.
+ * This file owns the decision tree. The renderer-mutation helpers live in
+ * `prompt-pipeline-renderer.ts`. The harness-supplied prose constants live
+ * in `prompt-pipeline-prose.ts`. Three files, one feature folder cluster,
+ * cohesion preserved: the decision tree stays whole here; only
+ * policy-data constants and pure side-effect callees have moved out.
  */
 
 import type { RunOptions } from '../shared/types'
@@ -98,81 +99,14 @@ import { parseSlash, type ParsedSlash } from './slash-parse'
 import { dispatchExtensionCommand, tryExpandMarkdownSlash } from './slash-classify'
 import { encodeImageAttachments } from './remote/attachment-encoder'
 import type { ImageAttachmentPayload } from '../shared/types'
+import { ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER } from './prompt-pipeline-prose'
+import { emitRemoteMessageAdded, insertRendererSystemMessage, clearConnectingStatus } from './prompt-pipeline-renderer'
+
+export { ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER } from './prompt-pipeline-prose'
 
 function log(msg: string): void {
   _log('main', msg)
 }
-
-/**
- * Harness-supplied description prose for the engine's EnterPlanMode
- * sentinel tool.
- *
- * Per ADR-004 (Move EnterPlanMode prose to harness), the engine ships
- * only a one-line policy-neutral fallback for the tool description and
- * defers the actual prose — when to enter plan mode, what the rules are
- * once enabled, when NOT to enter — to the harness. This module is the
- * desktop's harness, and ENTER_PLAN_MODE_DESCRIPTION is the canonical
- * Ion-on-desktop framing the model sees on every auto-mode prompt the
- * desktop dispatches.
- *
- * Third-party harnesses are NOT expected to copy this constant — they
- * write their own (TUIs may prefer minimal framing; domain-specific
- * harnesses may want "test plan" / "design doc" / "RFC" language). The
- * constant is exported so future override paths (e.g. a power-user
- * settings.json `desktop.enterPlanModeDescription` key per ADR-004's
- * Future considerations) can default to it.
- *
- * The text was lifted verbatim from the engine's prior in-tree default
- * (commit 89084038 / engine/internal/tools/enter_plan_mode.go) so the
- * desktop's user-facing behavior is unchanged from before ADR-004. If
- * you edit this text, the edit ships to every desktop install on the
- * next release — be intentional.
- */
-export const ENTER_PLAN_MODE_DESCRIPTION = `Switch the current session into plan mode.
-
-Call this tool when the task at hand warrants careful planning before execution:
-- The user has asked for a plan ("make a plan for...", "plan how to...", "before you do anything, plan...")
-- The request involves multiple files, architectural changes, or non-trivial scope
-- You need to confirm an approach with the user before making any changes
-- A previous workflow step has completed and a follow-up plan is needed
-
-Once called, the session switches to plan mode where:
-- Only read-only tools (Read, Grep, Glob, WebFetch, WebSearch) are available
-- You may write exclusively to the plan file to build your plan
-- Each turn must end with AskUserQuestion (for clarification) or ExitPlanMode (plan complete)
-- All code modifications are blocked until the user reviews and approves the plan
-
-Do NOT call this tool if:
-- You are already in plan mode.
-- The user's request is simple enough to execute directly without planning.
-- The user has just asked you to implement an existing plan — proceed directly with the work, do not re-plan.`
-
-/**
- * Desktop sparse plan-mode reminder text, injected by the engine every
- * planModeReminderInterval turns during plan-mode runs.
- *
- * Per Fix 3 / Fix 4 of the plan-mode end-of-turn discipline fix (see
- * docs/architecture/adr/005-plan-mode-prose-symmetry.md), the engine
- * exposes RunOptions.PlanModeSparseReminder as a parallel override to
- * RunOptions.PlanModePrompt. This constant is the desktop's reference
- * value, forwarded on every plan-mode prompt dispatch.
- *
- * The text is intentionally short (it appears every N turns) and includes
- * the Forbidden Prose Patterns callout that the full prompt also carries.
- * Power users can override via desktop.planModeSparseReminder in
- * ~/.ion/settings.json; the desktop reads that key at session start and
- * passes it here in place of this constant.
- *
- * Third-party harnesses supply their own or set RunOptions.PlanModeSparseReminder
- * directly; this constant is desktop-harness-specific, not a universal default.
- */
-export const PLAN_MODE_SPARSE_REMINDER =
-  'Plan mode still active (see full instructions from earlier in conversation). ' +
-  'Read-only except plan file. ' +
-  'End turns with AskUserQuestion (for clarifications) or ExitPlanMode (for plan approval). ' +
-  'Never use AskUserQuestion to ask for plan approval -- that is what ExitPlanMode is for. ' +
-  'Forbidden as prose: "Is this plan okay?", "Should I proceed?", "Let me know if you\'d like changes", ' +
-  '"How does this plan look?" -- these must use ExitPlanMode or AskUserQuestion.'
 
 /**
  * Origin of the incoming prompt. Drives which echoes we fire:
@@ -236,160 +170,6 @@ export interface IncomingPrompt {
 function engineKey(p: IncomingPrompt): string {
   if (p.isEngineTab && p.instanceId) return `${p.tabId}:${p.instanceId}`
   return p.tabId
-}
-
-/**
- * Send a message_added envelope to iOS via the remote transport. No-op when
- * no transport is connected. The `source` tag controls iOS-side dedupe
- * vs replace semantics (matches `tabs.ts:handlePrompt` legacy shape).
- */
-function emitRemoteMessageAdded(p: IncomingPrompt, content: string, role: 'user' | 'system'): void {
-  if (!state.remoteTransport) return
-  // For engine tabs the remote transport has a different envelope shape —
-  // engine_harness_message — for system content. User content for engine
-  // tabs is replayed via `engine_conversation_history` on load, so we don't
-  // echo individual user message_added events for engine tabs.
-  if (p.isEngineTab) {
-    if (role === 'system') {
-      state.remoteTransport.send({
-        type: 'engine_harness_message',
-        tabId: p.tabId,
-        instanceId: p.instanceId ?? null,
-        message: content,
-        source: 'pipeline',
-      })
-    }
-    // No user-role engine echo here — the renderer's submitEnginePrompt
-    // path handles its own optimistic insert; iOS sees the agent activity
-    // via engine_message_added events that come back from the engine
-    // bridge once the prompt actually runs.
-    return
-  }
-  state.remoteTransport.send({
-    type: 'message_added',
-    tabId: p.tabId,
-    message: {
-      // Reuse the request id ONLY for the user echo so iOS replaces its
-      // optimistic bubble by id (the canonical ms timestamp shipped here
-      // is what fixes the "56 years ago" symptom). System echoes need a
-      // distinct id, otherwise iOS treats them as edits of the user's
-      // turn and overwrites the user bubble — which is what produced the
-      // regression where a slash failure visibly "deleted" the user's
-      // message and replaced it with the error text.
-      id: role === 'system' ? `sys-${p.reqId}-${Date.now()}` : p.reqId,
-      role,
-      content,
-      timestamp: Date.now(),
-      source: p.source,
-    },
-  })
-}
-
-/**
- * Insert a system-message bubble into the desktop renderer's per-tab
- * messages. Lets the unified pipeline surface unknown-command feedback,
- * extension-command failures, and timeouts without going through an LLM
- * round-trip. Engine and CLI tabs use different store mutators so we
- * branch on isEngineTab.
- */
-async function insertRendererSystemMessage(p: IncomingPrompt, content: string): Promise<void> {
-  if (!state.mainWindow) return
-  const escape = (s: string) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n')
-  const escapedContent = escape(content)
-  try {
-    if (p.isEngineTab) {
-      if (!p.instanceId) return
-      const key = `${p.tabId}:${p.instanceId}`
-      const escapedKey = escape(key)
-      await state.mainWindow.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return;
-          var fn = store.getState().addEngineSystemMessage;
-          if (typeof fn !== 'function') return;
-          fn('${escapedKey}', '${escapedContent}');
-        })()
-      `)
-    } else {
-      const escapedTab = escape(p.tabId)
-      await state.mainWindow.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return;
-          var s = store.getState();
-          store.setState({
-            tabs: s.tabs.map(function(t) {
-              if (t.id !== '${escapedTab}') return t;
-              return Object.assign({}, t, {
-                status: t.status === 'connecting' ? 'idle' : t.status,
-                messages: t.messages.concat([{
-                  id: 'msg-' + Date.now() + '-' + Math.random(),
-                  role: 'system',
-                  content: '${escapedContent}',
-                  timestamp: Date.now()
-                }])
-              });
-            })
-          });
-        })()
-      `)
-    }
-  } catch (err) {
-    log(`insertRendererSystemMessage error: ${(err as Error).message}`)
-  }
-}
-
-/**
- * Restore a tab's status to idle when a slash-command dispatch finished
- * (success or failure) without producing a run. The renderer's
- * sendMessage/submitEnginePrompt optimistically set status='connecting' for
- * every prompt; when the unified pipeline determines the dispatch was a
- * pure command (no LLM turn coming), we need to actively clear that
- * connecting state. This is Phase 4 of the unified-pipeline plan.
- */
-async function clearConnectingStatus(p: IncomingPrompt): Promise<void> {
-  if (!state.mainWindow) return
-  const escape = (s: string) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-  const escapedTab = escape(p.tabId)
-  try {
-    if (p.isEngineTab) {
-      // Engine tabs use the same tab.status field as CLI tabs (set by
-      // submitEnginePrompt to 'running'). Reset it the same way.
-      await state.mainWindow.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return;
-          var s = store.getState();
-          store.setState({
-            tabs: s.tabs.map(function(t) {
-              if (t.id !== '${escapedTab}') return t;
-              if (t.status !== 'connecting' && t.status !== 'running') return t;
-              return Object.assign({}, t, { status: 'idle' });
-            })
-          });
-        })()
-      `)
-    } else {
-      await state.mainWindow.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return;
-          var s = store.getState();
-          store.setState({
-            tabs: s.tabs.map(function(t) {
-              if (t.id !== '${escapedTab}') return t;
-              if (t.status !== 'connecting') return t;
-              return Object.assign({}, t, { status: 'idle' });
-            })
-          });
-        })()
-      `)
-    }
-  } catch (err) {
-    log(`clearConnectingStatus error: ${(err as Error).message}`)
-  }
-  // Mirror to iOS so its tab status indicator flips too.
-  state.remoteTransport?.send({ type: 'tab_status', tabId: p.tabId, status: 'idle' })
 }
 
 /**
@@ -561,7 +341,6 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
 }
 
 /**
-/**
  * Handle a parsed slash: try extension command first, fall back to `.md`,
  * else emit "unknown command". Always echoes the user's original slash text
  * to the remote transport so iOS replaces its optimistic entry's bad
@@ -705,8 +484,8 @@ export async function processIncomingPrompt(p: IncomingPrompt): Promise<void> {
     text = text.trim()
       .replace(/—/g, '--')
       .replace(/–/g, '-')
-      .replace(/[‘’]/g, "'")
-      .replace(/[“”]/g, '"')
+      .replace(/['']/g, "'")
+      .replace(/[""]/g, '"')
   }
   p.text = text
 
