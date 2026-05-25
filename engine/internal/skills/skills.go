@@ -73,8 +73,9 @@ type Skill struct {
 	WhenToUse string
 
 	// DisableModelInvocation, when true, prevents the Skill tool from listing
-	// or executing this skill. It can still be invoked via a user-typed slash
-	// command through the desktop's CLI-compat expansion path. Populated from
+	// or executing this skill. Consumers may still invoke the skill out-of-band
+	// (e.g. a user-typed slash command that inlines the skill content) — that
+	// path is a harness concern and is not gated by this flag. Populated from
 	// the `disable-model-invocation` frontmatter key; treat "true" (case-
 	// insensitive) as true, anything else as false.
 	DisableModelInvocation bool

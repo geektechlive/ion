@@ -526,11 +526,12 @@ type RunOptions struct {
 	// Per ADR-004 (Move EnterPlanMode prose to harness): the engine ships
 	// only the sentinel mechanism (tool injection + runloop interception);
 	// the policy prose that tells the model *when* to enter plan mode and
-	// *what* the rules are belongs in the harness. The desktop ships its
-	// reference prose as the ENTER_PLAN_MODE_DESCRIPTION constant in
-	// desktop/src/main/prompt-pipeline.ts; third-party harnesses pick
-	// their own. See ADR-001 (parent boundary) and ADR-002 (the same
-	// pattern applied to early-stop continuation).
+	// *what* the rules are belongs in the harness. The Ion desktop client
+	// is the reference harness implementation and ships its prose as the
+	// ENTER_PLAN_MODE_DESCRIPTION constant in
+	// desktop/src/main/prompt-pipeline.ts; it has no special status — any
+	// harness supplies its own. See ADR-001 (parent boundary) and ADR-002
+	// (the same pattern applied to early-stop continuation).
 	//
 	// Forward-compat: when the harness wants the engine default (a TUI
 	// might prefer minimal framing, for instance), it leaves this empty.

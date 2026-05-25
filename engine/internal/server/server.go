@@ -555,10 +555,11 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 
 	case "clear_conversation_file":
 		// Wipes the LLM-visible message history for a stored conversation
-		// without requiring a live engine session. Issued by the desktop when
-		// /clear is typed on a tab that was loaded from disk but never sent a
-		// prompt (so no session exists to receive a dispatchClear). The key
-		// field carries the conversationId (sessionId) to wipe.
+		// without requiring a live engine session. Used by consumers that
+		// need to reset a conversation file by id when no session is running
+		// against it (e.g. a tab that was loaded from disk but never sent a
+		// prompt, so no in-memory session exists to receive a dispatchClear).
+		// The key field carries the conversationId (sessionId) to wipe.
 		utils.Log("Server", fmt.Sprintf("clear_conversation_file: sessionId=%s", cmd.Key))
 		err := s.manager.ClearConversationFile(cmd.Key)
 		s.sendResult(conn, cmd, err, nil)

@@ -141,8 +141,8 @@ func (m *Manager) dispatchClear(s *engineSession, key string) {
 	utils.Log("Session", fmt.Sprintf("cleared conversation id=%s for session %s — .tree.jsonl preserved", s.conversationID, key))
 	// Emit the engine_status snapshot first so consumers can mirror the
 	// reset context-percent before they see the command_result event. The
-	// order matters: consumers that update their status bar on every
-	// engine_status event would briefly show a stale percent if the
+	// order matters: consumers that mirror context-percent from every
+	// engine_status event would briefly observe a stale percent if the
 	// command_result arrived first.
 	m.emit(key, types.EngineEvent{
 		Type: "engine_status",

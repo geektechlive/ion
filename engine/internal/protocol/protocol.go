@@ -84,10 +84,10 @@ type ClientCommand struct {
 	// auto-mode runs. When non-empty, the engine forwards this string
 	// verbatim as the tool's description to the model. When empty (or
 	// omitted), the engine falls back to a one-line neutral default.
-	// Per ADR-004, the prose belongs in the harness — the desktop
-	// supplies its reference prose from
-	// desktop/src/main/prompt-pipeline.ts. Third-party harnesses pick
-	// their own. Mirrors RunOptions.EnterPlanModeDescription one-for-one.
+	// Per ADR-004, the prose belongs in the harness — the Ion desktop
+	// client is the reference implementation and supplies its prose
+	// from desktop/src/main/prompt-pipeline.ts; any harness supplies
+	// its own. Mirrors RunOptions.EnterPlanModeDescription one-for-one.
 	EnterPlanModeDescription string `json:"enterPlanModeDescription,omitempty"`
 
 	// send_prompt: harness-supplied text for the per-turn sparse plan-mode
@@ -134,8 +134,8 @@ var validCommands = map[string]bool{
 	// clear_conversation_file: wipes the LLM-visible Messages (and resets
 	// LastInputTokens / LastInputTokensMsgCount) on a stored conversation
 	// file by sessionId, without requiring a live engine session. Used by
-	// the desktop when /clear is issued on a tab that has a loaded
-	// conversationId but has never sent a prompt (so no session exists yet).
+	// consumers that need to reset a conversation file when no in-memory
+	// session is running against it (so dispatchClear cannot be used).
 	// Non-breaking additive command. Requires key (sessionId).
 	"clear_conversation_file": true,
 }

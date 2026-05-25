@@ -156,8 +156,9 @@ func executeSkill(ctx context.Context, input map[string]any, _ string) (*types.T
 	}
 
 	// Skills with disable-model-invocation: true cannot be invoked by the
-	// model. The user can still type /skill-name to inline the content via
-	// the desktop's CLI-compat expansion path.
+	// model. Consumers may still inline the skill content through their own
+	// slash-command / template-expansion paths; that path is a harness concern
+	// and runs outside this tool.
 	if skill.DisableModelInvocation {
 		return &types.ToolResult{
 			Content: fmt.Sprintf(
