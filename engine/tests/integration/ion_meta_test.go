@@ -138,10 +138,28 @@ func TestIonServeAndPrompt(t *testing.T) {
 		"text":      "Hello from serve test",
 		"requestId": "req-2",
 	})
-	time.Sleep(100 * time.Millisecond)
+
+	// Poll for the backend to record the start. Previously this was a fixed
+	// time.Sleep(100ms), which raced the dispatch on the macos-14 CI runner —
+	// send_prompt arrives over the socket, hops through the server's dispatch
+	// goroutine, then through SessionManager.SendPrompt, then through the run
+	// config builder, before the mock backend's StartRun is finally called.
+	// On a loaded macOS runner that chain occasionally exceeded 100ms and the
+	// test failed with "expected at least 1 started run." The poll keeps the
+	// fast path fast (returns on the first tick when StartRun has already
+	// landed) while tolerating slow runners up to 2s. A real regression — the
+	// backend never being called — still fails within 2s.
+	deadline := time.Now().Add(2 * time.Second)
+	var keys []string
+	for time.Now().Before(deadline) {
+		keys = mb.StartedKeys()
+		if len(keys) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	// Verify backend received prompt
-	keys := mb.StartedKeys()
 	if len(keys) == 0 {
 		t.Fatal("expected at least 1 started run")
 	}
