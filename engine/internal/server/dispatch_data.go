@@ -153,42 +153,7 @@ func (s *Server) dispatchMigrateConversation(conn net.Conn, cmd *protocol.Client
 //      provider at a private LLM gateway.
 func (s *Server) dispatchListModels(conn net.Conn, cmd *protocol.ClientCommand) {
 	models := providers.ListModels()
-	providerIDs := providers.ListProviderIDs()
-	providerEntries := make([]types.ProviderEntry, len(providerIDs))
-	for i, pid := range providerIDs {
-		entry := types.ProviderEntry{ID: pid}
-		if s.authResolver != nil {
-			entry.HasAuth, entry.AuthSource = s.authResolver.HasKey(pid)
-		}
-		// Special case: ollama doesn't need auth
-		if pid == "ollama" {
-			entry.HasAuth = true
-			entry.AuthSource = "none"
-		}
-		// CLI-capable backend (cli or hybrid) handles Anthropic auth via the
-		// Claude CLI itself. Surface that to clients so the model picker
-		// doesn't hide Anthropic models when no separate API key is configured.
-		if s.cliCapable && pid == "anthropic" && !entry.HasAuth {
-			entry.HasAuth = true
-			entry.AuthSource = "cli"
-		}
-		// Populate config details (gateway URL, API key reference)
-		if s.config != nil {
-			if pc, ok := s.config.Providers[pid]; ok {
-				entry.BaseURL = pc.BaseURL
-				// Show the API key reference if it looks like an env var
-				// (starts with $), otherwise just indicate it's set.
-				if pc.APIKey != "" {
-					if len(pc.APIKey) > 0 && pc.APIKey[0] == '$' {
-						entry.APIKeyRef = pc.APIKey
-					} else {
-						entry.APIKeyRef = "configured"
-					}
-				}
-			}
-		}
-		providerEntries[i] = entry
-	}
+	providerEntries := s.buildProviderEntries()
 	// For providers with a custom gateway (baseURL), only show
 	// user-configured models or live-discovered models — the hardcoded
 	// catalog doesn't apply to private gateways.
@@ -221,4 +186,49 @@ func (s *Server) dispatchListModels(conn net.Conn, cmd *protocol.ClientCommand) 
 		"models":    models,
 		"providers": providerEntries,
 	})
+}
+
+// buildProviderEntries assembles a ProviderEntry for each known provider,
+// filling in auth status from the resolver and applying special-case rules
+// for ollama (no auth needed) and CLI-capable anthropic fallback. Extracted
+// from dispatchListModels to allow direct testing of auth-resolution logic.
+func (s *Server) buildProviderEntries() []types.ProviderEntry {
+	providerIDs := providers.ListProviderIDs()
+	providerEntries := make([]types.ProviderEntry, len(providerIDs))
+	for i, pid := range providerIDs {
+		entry := types.ProviderEntry{ID: pid}
+		if s.authResolver != nil {
+			entry.HasAuth, entry.AuthSource = s.authResolver.HasKey(pid)
+		}
+		// Special case: ollama doesn't need auth
+		if pid == "ollama" {
+			entry.HasAuth = true
+			entry.AuthSource = "none"
+		}
+		// CLI-capable backend (cli or hybrid) handles Anthropic auth via the
+		// Claude CLI itself. Surface that to clients so the model picker
+		// doesn't hide Anthropic models when no separate API key is configured.
+		if s.cliCapable && pid == "anthropic" && !entry.HasAuth {
+			entry.HasAuth = true
+			entry.AuthSource = "cli"
+			utils.Debug("Models", fmt.Sprintf("provider=%s: CLI-auth fallback applied", pid))
+		}
+		// Populate config details (gateway URL, API key reference)
+		if s.config != nil {
+			if pc, ok := s.config.Providers[pid]; ok {
+				entry.BaseURL = pc.BaseURL
+				// Show the API key reference if it looks like an env var
+				// (starts with $), otherwise just indicate it's set.
+				if pc.APIKey != "" {
+					if len(pc.APIKey) > 0 && pc.APIKey[0] == '$' {
+						entry.APIKeyRef = pc.APIKey
+					} else {
+						entry.APIKeyRef = "configured"
+					}
+				}
+			}
+		}
+		providerEntries[i] = entry
+	}
+	return providerEntries
 }
