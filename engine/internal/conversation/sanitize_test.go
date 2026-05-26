@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/dsswift/ion/engine/internal/types"
@@ -300,5 +301,408 @@ func TestSanitize_OnlyOrphanedServerToolUseDropsMessage(t *testing.T) {
 	}
 	if out[0].Role != "user" || out[1].Role != "user" {
 		t.Fatalf("expected both remaining messages to be user, got %s and %s", out[0].Role, out[1].Role)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReplacePlanFilePlaceholder tests
+// ---------------------------------------------------------------------------
+
+// makeConvWithMessages is a test helper that builds a *Conversation with the
+// given messages and corresponding EntryMessage entries so both code paths in
+// ReplacePlanFilePlaceholder are exercised.
+func makeConvWithMessages(msgs []types.LlmMessage) *Conversation {
+	conv := &Conversation{
+		ID:       "test",
+		Messages: msgs,
+	}
+	for _, msg := range msgs {
+		conv.Entries = append(conv.Entries, SessionEntry{
+			ID:   fmt.Sprintf("e%d", len(conv.Entries)),
+			Type: EntryMessage,
+			Data: MessageData{Role: msg.Role, Content: msg.Content},
+		})
+	}
+	return conv
+}
+
+// TestReplacePlanFile_StringContent ensures [plan-file] in plain string content
+// is replaced in both Messages and Entries.
+func TestReplacePlanFile_StringContent(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{Role: "user", Content: "Please read [plan-file] and summarize it."},
+	})
+	ReplacePlanFilePlaceholder(conv, "/tmp/plan.md")
+
+	// Check message
+	s, ok := conv.Messages[0].Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", conv.Messages[0].Content)
+	}
+	if s != "Please read /tmp/plan.md and summarize it." {
+		t.Fatalf("unexpected message content: %s", s)
+	}
+
+	// Check entry
+	md := asMessageData(conv.Entries[0].Data)
+	if md == nil {
+		t.Fatalf("entry data is not MessageData")
+	}
+	es, ok := md.Content.(string)
+	if !ok {
+		t.Fatalf("expected string entry content, got %T", md.Content)
+	}
+	if es != "Please read /tmp/plan.md and summarize it." {
+		t.Fatalf("unexpected entry content: %s", es)
+	}
+}
+
+// TestReplacePlanFile_TextBlock ensures [plan-file] in a text block's Text field
+// is replaced in both Messages and Entries.
+func TestReplacePlanFile_TextBlock(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{
+			Role: "assistant",
+			Content: []types.LlmContentBlock{
+				{Type: "text", Text: "I'll write the plan to [plan-file] now."},
+			},
+		},
+	})
+	ReplacePlanFilePlaceholder(conv, "/home/user/plan.md")
+
+	blocks, ok := conv.Messages[0].Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("expected block slice, got %T", conv.Messages[0].Content)
+	}
+	if blocks[0].Text != "I'll write the plan to /home/user/plan.md now." {
+		t.Fatalf("unexpected text: %s", blocks[0].Text)
+	}
+
+	md := asMessageData(conv.Entries[0].Data)
+	if md == nil {
+		t.Fatalf("entry data is not MessageData")
+	}
+	eBlocks, ok := md.Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("expected block slice in entry, got %T", md.Content)
+	}
+	if eBlocks[0].Text != "I'll write the plan to /home/user/plan.md now." {
+		t.Fatalf("unexpected entry text: %s", eBlocks[0].Text)
+	}
+}
+
+// TestReplacePlanFile_ToolResultContent ensures [plan-file] in a tool_result
+// block's Content field is replaced.
+func TestReplacePlanFile_ToolResultContent(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{
+			Role: "user",
+			Content: []types.LlmContentBlock{
+				{Type: "tool_result", ToolUseID: "t1", Content: "Wrote plan to [plan-file]"},
+			},
+		},
+	})
+	ReplacePlanFilePlaceholder(conv, "/plans/my-plan.md")
+
+	blocks, ok := conv.Messages[0].Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("expected block slice, got %T", conv.Messages[0].Content)
+	}
+	if blocks[0].Content != "Wrote plan to /plans/my-plan.md" {
+		t.Fatalf("unexpected content: %s", blocks[0].Content)
+	}
+}
+
+// TestReplacePlanFile_ToolUseInputFilePath ensures [plan-file] in a tool_use
+// block's Input["file_path"] is replaced.
+func TestReplacePlanFile_ToolUseInputFilePath(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{
+			Role: "assistant",
+			Content: []types.LlmContentBlock{
+				{
+					Type: "tool_use",
+					ID:   "t1",
+					Name: "Write",
+					Input: map[string]any{
+						"file_path": "[plan-file]",
+						"content":   "# Plan\n- step 1",
+					},
+				},
+			},
+		},
+	})
+	ReplacePlanFilePlaceholder(conv, "/tmp/plan.md")
+
+	blocks, ok := conv.Messages[0].Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("expected block slice, got %T", conv.Messages[0].Content)
+	}
+	fp, ok := blocks[0].Input["file_path"].(string)
+	if !ok {
+		t.Fatalf("expected file_path to be string, got %T", blocks[0].Input["file_path"])
+	}
+	if fp != "/tmp/plan.md" {
+		t.Fatalf("unexpected file_path: %s", fp)
+	}
+}
+
+// TestReplacePlanFile_EmptyPath returns messages unchanged when planFilePath is empty.
+func TestReplacePlanFile_EmptyPath(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{Role: "user", Content: "read [plan-file]"},
+	})
+	ReplacePlanFilePlaceholder(conv, "")
+
+	s, ok := conv.Messages[0].Content.(string)
+	if !ok {
+		t.Fatalf("expected string content, got %T", conv.Messages[0].Content)
+	}
+	if s != "read [plan-file]" {
+		t.Fatalf("placeholder should not be replaced when path is empty: %s", s)
+	}
+}
+
+// TestReplacePlanFile_NilConversation does not panic on nil conversation.
+func TestReplacePlanFile_NilConversation(t *testing.T) {
+	ReplacePlanFilePlaceholder(nil, "/tmp/plan.md")
+	// No panic = pass
+}
+
+// TestReplacePlanFile_NoPlaceholder leaves messages untouched when there is no
+// placeholder to replace.
+func TestReplacePlanFile_NoPlaceholder(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{Role: "user", Content: "No placeholder here."},
+		{
+			Role: "assistant",
+			Content: []types.LlmContentBlock{
+				{Type: "text", Text: "Nothing to replace."},
+			},
+		},
+	})
+	ReplacePlanFilePlaceholder(conv, "/tmp/plan.md")
+
+	s, ok := conv.Messages[0].Content.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", conv.Messages[0].Content)
+	}
+	if s != "No placeholder here." {
+		t.Fatalf("content should be unchanged: %s", s)
+	}
+
+	blocks, ok := conv.Messages[1].Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("expected block slice, got %T", conv.Messages[1].Content)
+	}
+	if blocks[0].Text != "Nothing to replace." {
+		t.Fatalf("text should be unchanged: %s", blocks[0].Text)
+	}
+}
+
+// TestReplacePlanFile_MultiplePlaceholdersInOneField ensures all occurrences
+// within a single field are replaced.
+func TestReplacePlanFile_MultiplePlaceholdersInOneField(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{Role: "user", Content: "Read [plan-file] then update [plan-file] please."},
+	})
+	ReplacePlanFilePlaceholder(conv, "/p.md")
+
+	s, ok := conv.Messages[0].Content.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", conv.Messages[0].Content)
+	}
+	if s != "Read /p.md then update /p.md please." {
+		t.Fatalf("both placeholders should be replaced: %s", s)
+	}
+}
+
+// TestReplacePlanFile_Idempotent ensures calling the function twice with the
+// same path produces the same result as calling it once.
+func TestReplacePlanFile_Idempotent(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{Role: "user", Content: "see [plan-file]"},
+	})
+	ReplacePlanFilePlaceholder(conv, "/tmp/plan.md")
+	ReplacePlanFilePlaceholder(conv, "/tmp/plan.md")
+
+	s, ok := conv.Messages[0].Content.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", conv.Messages[0].Content)
+	}
+	if s != "see /tmp/plan.md" {
+		t.Fatalf("unexpected content after double replace: %s", s)
+	}
+}
+
+// TestReplacePlanFile_MixedBlockTypes ensures replacement works across multiple
+// block types in a single message (text + tool_use + tool_result).
+func TestReplacePlanFile_MixedBlockTypes(t *testing.T) {
+	conv := makeConvWithMessages([]types.LlmMessage{
+		{
+			Role: "assistant",
+			Content: []types.LlmContentBlock{
+				{Type: "text", Text: "Writing to [plan-file]"},
+				{Type: "tool_use", ID: "t1", Name: "Write", Input: map[string]any{
+					"file_path": "[plan-file]",
+					"content":   "plan body",
+				}},
+			},
+		},
+		{
+			Role: "user",
+			Content: []types.LlmContentBlock{
+				{Type: "tool_result", ToolUseID: "t1", Content: "Wrote [plan-file] successfully"},
+			},
+		},
+	})
+	ReplacePlanFilePlaceholder(conv, "/x/plan.md")
+
+	// Check assistant text block
+	aBlocks, ok := conv.Messages[0].Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("expected block slice, got %T", conv.Messages[0].Content)
+	}
+	if aBlocks[0].Text != "Writing to /x/plan.md" {
+		t.Fatalf("text not replaced: %s", aBlocks[0].Text)
+	}
+	fp, _ := aBlocks[1].Input["file_path"].(string)
+	if fp != "/x/plan.md" {
+		t.Fatalf("file_path not replaced: %s", fp)
+	}
+
+	// Check user tool_result content
+	uBlocks, ok := conv.Messages[1].Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("expected block slice, got %T", conv.Messages[1].Content)
+	}
+	if uBlocks[0].Content != "Wrote /x/plan.md successfully" {
+		t.Fatalf("tool_result content not replaced: %s", uBlocks[0].Content)
+	}
+}
+
+// TestReplacePlanFile_EntriesFixed ensures entries with [plan-file] are fixed
+// independently of messages, covering the persistence path where saveSplit
+// rebuilds from entries via BuildContextPath and serializes to .tree.jsonl.
+func TestReplacePlanFile_EntriesFixed(t *testing.T) {
+	conv := &Conversation{
+		ID: "test-entries",
+		// Messages are empty — only entries matter for this test.
+		Messages: nil,
+		Entries: []SessionEntry{
+			{
+				ID:   "e0",
+				Type: EntryMessage,
+				Data: MessageData{
+					Role:    "user",
+					Content: "Read [plan-file] and continue.",
+				},
+			},
+			{
+				ID:   "e1",
+				Type: EntryMessage,
+				Data: MessageData{
+					Role: "assistant",
+					Content: []types.LlmContentBlock{
+						{Type: "text", Text: "Writing to [plan-file]"},
+						{Type: "tool_use", ID: "t1", Name: "Write", Input: map[string]any{
+							"file_path": "[plan-file]",
+							"content":   "# Plan",
+						}},
+					},
+				},
+			},
+			{
+				ID:   "e2",
+				Type: EntryMessage,
+				Data: MessageData{
+					Role: "user",
+					Content: []types.LlmContentBlock{
+						{Type: "tool_result", ToolUseID: "t1", Content: "Wrote [plan-file] ok"},
+					},
+				},
+			},
+			{
+				ID:   "e3",
+				Type: EntryCompaction,
+				Data: CompactionData{Summary: "should be ignored"},
+			},
+		},
+	}
+
+	ReplacePlanFilePlaceholder(conv, "/real/plan.md")
+
+	// Entry 0: string content
+	md0 := asMessageData(conv.Entries[0].Data)
+	if md0 == nil {
+		t.Fatalf("entry 0 data is not MessageData")
+	}
+	if s, ok := md0.Content.(string); !ok || s != "Read /real/plan.md and continue." {
+		t.Fatalf("entry 0 content not replaced: %v", md0.Content)
+	}
+
+	// Entry 1: block content (text + tool_use)
+	md1 := asMessageData(conv.Entries[1].Data)
+	if md1 == nil {
+		t.Fatalf("entry 1 data is not MessageData")
+	}
+	blocks1, ok := md1.Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("entry 1 content not block slice: %T", md1.Content)
+	}
+	if blocks1[0].Text != "Writing to /real/plan.md" {
+		t.Fatalf("entry 1 text not replaced: %s", blocks1[0].Text)
+	}
+	fp, _ := blocks1[1].Input["file_path"].(string)
+	if fp != "/real/plan.md" {
+		t.Fatalf("entry 1 file_path not replaced: %s", fp)
+	}
+
+	// Entry 2: tool_result content
+	md2 := asMessageData(conv.Entries[2].Data)
+	if md2 == nil {
+		t.Fatalf("entry 2 data is not MessageData")
+	}
+	blocks2, ok := md2.Content.([]types.LlmContentBlock)
+	if !ok {
+		t.Fatalf("entry 2 content not block slice: %T", md2.Content)
+	}
+	if blocks2[0].Content != "Wrote /real/plan.md ok" {
+		t.Fatalf("entry 2 tool_result content not replaced: %s", blocks2[0].Content)
+	}
+
+	// Entry 3: compaction — should not be touched
+	if _, ok := conv.Entries[3].Data.(CompactionData); !ok {
+		t.Fatalf("entry 3 should still be CompactionData, got %T", conv.Entries[3].Data)
+	}
+}
+
+// TestReplacePlanFile_EntriesFromMapAny exercises the code path where entry
+// data has not been rehydrated (still a map[string]any from JSON) and contains
+// [plan-file] markers. This happens when conversations are loaded from disk
+// and round-tripped through JSON.
+func TestReplacePlanFile_EntriesFromMapAny(t *testing.T) {
+	conv := &Conversation{
+		ID: "test-mapany",
+		Entries: []SessionEntry{
+			{
+				ID:   "e0",
+				Type: EntryMessage,
+				Data: map[string]any{
+					"role":    "user",
+					"content": "Open [plan-file] please.",
+				},
+			},
+		},
+	}
+
+	ReplacePlanFilePlaceholder(conv, "/fixed/plan.md")
+
+	md := asMessageData(conv.Entries[0].Data)
+	if md == nil {
+		t.Fatalf("entry data not convertible to MessageData")
+	}
+	if s, ok := md.Content.(string); !ok || s != "Open /fixed/plan.md please." {
+		t.Fatalf("entry content not replaced: %v", md.Content)
 	}
 }
