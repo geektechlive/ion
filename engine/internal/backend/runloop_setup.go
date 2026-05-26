@@ -51,6 +51,12 @@ func loadOrCreateConversation(opts types.RunOptions, model string) *conversation
 		}
 		// Sanitize loaded messages (fix orphaned tool_result blocks, remove thinking)
 		loaded.Messages = conversation.SanitizeMessages(loaded.Messages)
+		// Replace [plan-file] placeholder with actual plan file path in loaded
+		// history — fixes both Messages (sent to LLM) and Entries (persisted to
+		// disk via saveSplit / BuildContextPath / .tree.jsonl).
+		if opts.PlanFilePath != "" {
+			conversation.ReplacePlanFilePlaceholder(loaded, opts.PlanFilePath)
+		}
 		return loaded
 	}
 	// Append a 6-byte random suffix so two runs that begin in the same

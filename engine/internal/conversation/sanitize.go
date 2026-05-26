@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
@@ -201,6 +202,106 @@ func SanitizeMessages(messages []types.LlmMessage) []types.LlmMessage {
 		utils.Log("Conversation", fmt.Sprintf("sanitized: removed %d orphaned blocks/messages", removed))
 	}
 	return result
+}
+
+const planFilePlaceholder = "[plan-file]"
+
+// replaceInContent replaces all occurrences of placeholder with replacement in
+// a Content field (any type: string, []LlmContentBlock, or []interface{}).
+// Returns the new content and whether any replacement occurred.
+func replaceInContent(content any, placeholder, replacement string) (any, bool) {
+	// Handle string content
+	if s, ok := content.(string); ok {
+		if strings.Contains(s, placeholder) {
+			return strings.ReplaceAll(s, placeholder, replacement), true
+		}
+		return content, false
+	}
+
+	// Handle block slice content (typed or untyped)
+	blocks := contentToBlockSlice(content)
+	if blocks == nil {
+		return content, false
+	}
+
+	changed := false
+	for j, b := range blocks {
+		// Text blocks: replace in .Text
+		if b.Text != "" && strings.Contains(b.Text, placeholder) {
+			blocks[j].Text = strings.ReplaceAll(b.Text, placeholder, replacement)
+			changed = true
+		}
+
+		// Tool result blocks: replace in .Content (the string field)
+		if b.Content != "" && strings.Contains(b.Content, placeholder) {
+			blocks[j].Content = strings.ReplaceAll(b.Content, placeholder, replacement)
+			changed = true
+		}
+
+		// Tool use blocks: replace placeholder in Input["file_path"] if it's a string
+		if b.Input != nil {
+			if fp, ok := b.Input["file_path"].(string); ok && strings.Contains(fp, placeholder) {
+				blocks[j].Input["file_path"] = strings.ReplaceAll(fp, placeholder, replacement)
+				changed = true
+			}
+		}
+	}
+
+	if changed {
+		return blocks, true
+	}
+	return content, false
+}
+
+// ReplacePlanFilePlaceholder replaces the literal string "[plan-file]" with the
+// actual plan file path in all text-bearing fields of the conversation's
+// Messages and Entries. This is an in-memory fixup so that persistence (which
+// rebuilds from Entries via BuildContextPath and serializes entries to
+// .tree.jsonl) writes the real path, not the placeholder.
+//
+// The replacement is idempotent and safe to call multiple times with the same
+// path.
+//
+// Background: a prior agent run replaced real plan file paths with the
+// placeholder "[plan-file]" in ~300 conversation files. When these conversations
+// are resumed, the model sees "[plan-file]" as a literal path and uses it in
+// tool calls, which the engine rejects. This function restores the real path at
+// load time in both Messages and Entries so that subsequent saves are clean.
+func ReplacePlanFilePlaceholder(conv *Conversation, planFilePath string) {
+	if planFilePath == "" || conv == nil {
+		return
+	}
+
+	replaced := 0
+
+	// 1. Fix Messages
+	for i, msg := range conv.Messages {
+		if newContent, changed := replaceInContent(msg.Content, planFilePlaceholder, planFilePath); changed {
+			conv.Messages[i].Content = newContent
+			replaced++
+		}
+	}
+
+	// 2. Fix Entries — entry data is a MessageData struct after rehydrateEntries;
+	// its .Content field has the same any type as LlmMessage.Content.
+	for i, entry := range conv.Entries {
+		if entry.Type != EntryMessage {
+			continue
+		}
+		md := asMessageData(entry.Data)
+		if md == nil {
+			continue
+		}
+		if newContent, changed := replaceInContent(md.Content, planFilePlaceholder, planFilePath); changed {
+			md.Content = newContent
+			conv.Entries[i].Data = *md
+			replaced++
+		}
+	}
+
+	if replaced > 0 {
+		utils.Log("Conversation", fmt.Sprintf("replaced [plan-file] placeholder with %q in %d messages/entries", planFilePath, replaced))
+	}
 }
 
 // contentToBlockSlice converts the Content field (any) to []LlmContentBlock if possible.
