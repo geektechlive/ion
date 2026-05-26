@@ -63,6 +63,12 @@ type ClientCommand struct {
 	EarlyStopOverrideThresholdPct int    `json:"earlyStopOverrideThresholdPct,omitempty"`
 	EarlyStopContinueMessage      string `json:"earlyStopContinueMessage,omitempty"`
 
+	// list_directory: absolute path to enumerate on the engine's host.
+	// Empty or "~" resolves to the engine user's home directory. ShowHidden
+	// includes dotfiles in the result.
+	Path       string `json:"path,omitempty"`
+	ShowHidden bool   `json:"showHidden,omitempty"`
+
 	// send_prompt: pre-encoded image attachments to attach to the user
 	// message as native image content blocks. The engine has no opinion on
 	// any client-side marker syntax inside Text — clients pass image bytes
@@ -140,6 +146,8 @@ var validCommands = map[string]bool{
 	"list_models":           true,
 	"store_credential":      true,
 	"refresh_models":        true,
+	"get_host_info":         true,
+	"list_directory":        true,
 	// clear_conversation_file: wipes the LLM-visible Messages (and resets
 	// LastInputTokens / LastInputTokensMsgCount) on a stored conversation
 	// file by sessionId, without requiring a live engine session. Used by
@@ -319,6 +327,11 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasNonEmptyString(raw, "provider") && hasString(raw, "credential")
 	case "refresh_models":
 		return true // optional: provider field to refresh a single provider
+	case "get_host_info":
+		return true
+	case "list_directory":
+		// path is optional ("" or "~" → engine home); no required fields
+		return true
 	case "clear_conversation_file":
 		// key carries the sessionId (conversationId) to wipe. Required and non-empty.
 		return hasNonEmptyString(raw, "key")

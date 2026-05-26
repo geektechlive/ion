@@ -513,6 +513,13 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		// Implementation in dispatch_data.go.
 		s.dispatchListModels(conn, cmd)
 
+	case "get_host_info":
+		s.sendResult(conn, cmd, nil, computeHostInfo())
+
+	case "list_directory":
+		data, err := listDirectory(cmd.Path, cmd.ShowHidden)
+		s.sendResult(conn, cmd, err, data)
+
 	case "store_credential":
 		if s.authResolver == nil {
 			s.sendResult(conn, cmd, fmt.Errorf("auth resolver not configured"), nil)
