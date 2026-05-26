@@ -72,6 +72,15 @@ export function checkWorktreeUncommitted(tab: TabState | undefined): void {
   }).catch(() => {})
 }
 
+/** Compact relative-time formatter for tab-pill subtitles. */
+export function formatRelativeShort(ms: number): string {
+  const d = Date.now() - ms
+  if (d < 60_000) return 'now'
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)}m`
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h`
+  return `${Math.floor(d / 86_400_000)}d`
+}
+
 /** Tristate "waiting for the user" derived from queued permission denials. */
 export type WaitingState = 'plan-ready' | 'question' | null
 
