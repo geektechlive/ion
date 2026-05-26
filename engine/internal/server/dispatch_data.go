@@ -153,6 +153,46 @@ func (s *Server) dispatchMigrateConversation(conn net.Conn, cmd *protocol.Client
 //      provider at a private LLM gateway.
 func (s *Server) dispatchListModels(conn net.Conn, cmd *protocol.ClientCommand) {
 	models := providers.ListModels()
+	providerEntries := s.buildProviderEntries()
+	// For providers with a custom gateway (baseURL), only show
+	// user-configured models or live-discovered models — the hardcoded
+	// catalog doesn't apply to private gateways.
+	customGatewayProviders := make(map[string]bool)
+	if s.config != nil {
+		for pid, pc := range s.config.Providers {
+			if pc.BaseURL != "" {
+				customGatewayProviders[pid] = true
+			}
+		}
+	}
+	if len(customGatewayProviders) > 0 {
+		// Build set of discovered model IDs so we don't filter them out
+		discoveredIDs := make(map[string]bool)
+		for pid := range customGatewayProviders {
+			for _, dm := range providers.GetDiscoveredModels(pid) {
+				discoveredIDs[dm.ID] = true
+			}
+		}
+		filtered := make([]types.ModelEntry, 0, len(models))
+		for _, m := range models {
+			if customGatewayProviders[m.ProviderID] && !m.IsCustom && !discoveredIDs[m.ID] {
+				continue // skip hardcoded catalog models for custom gateway providers
+			}
+			filtered = append(filtered, m)
+		}
+		models = filtered
+	}
+	s.sendResult(conn, cmd, nil, map[string]interface{}{
+		"models":    models,
+		"providers": providerEntries,
+	})
+}
+
+// buildProviderEntries assembles a ProviderEntry for each known provider,
+// filling in auth status from the resolver and applying special-case rules
+// for ollama (no auth needed) and CLI-capable anthropic fallback. Extracted
+// from dispatchListModels to allow direct testing of auth-resolution logic.
+func (s *Server) buildProviderEntries() []types.ProviderEntry {
 	providerIDs := providers.ListProviderIDs()
 	providerEntries := make([]types.ProviderEntry, len(providerIDs))
 	for i, pid := range providerIDs {
@@ -190,36 +230,5 @@ func (s *Server) dispatchListModels(conn net.Conn, cmd *protocol.ClientCommand) 
 		}
 		providerEntries[i] = entry
 	}
-	// For providers with a custom gateway (baseURL), only show
-	// user-configured models or live-discovered models — the hardcoded
-	// catalog doesn't apply to private gateways.
-	customGatewayProviders := make(map[string]bool)
-	if s.config != nil {
-		for pid, pc := range s.config.Providers {
-			if pc.BaseURL != "" {
-				customGatewayProviders[pid] = true
-			}
-		}
-	}
-	if len(customGatewayProviders) > 0 {
-		// Build set of discovered model IDs so we don't filter them out
-		discoveredIDs := make(map[string]bool)
-		for pid := range customGatewayProviders {
-			for _, dm := range providers.GetDiscoveredModels(pid) {
-				discoveredIDs[dm.ID] = true
-			}
-		}
-		filtered := make([]types.ModelEntry, 0, len(models))
-		for _, m := range models {
-			if customGatewayProviders[m.ProviderID] && !m.IsCustom && !discoveredIDs[m.ID] {
-				continue // skip hardcoded catalog models for custom gateway providers
-			}
-			filtered = append(filtered, m)
-		}
-		models = filtered
-	}
-	s.sendResult(conn, cmd, nil, map[string]interface{}{
-		"models":    models,
-		"providers": providerEntries,
-	})
+	return providerEntries
 }
