@@ -179,20 +179,19 @@ func (m *Manager) handleNormalizedEvent(runID string, event types.NormalizedEven
 				s2.lastTotalCost = tc.CostUsd
 			}
 			// Capture pending denials so ReconcileState can re-emit them
-			// when a client reconnects to a session blocked on
-			// AskUserQuestion / ExitPlanMode. Cleared on next prompt
-			// dispatch (see prompt_dispatch.go). We retain the full
-			// PermissionDenials slice from the task_complete payload — the
-			// renderer / iOS already filter to AskUserQuestion /
-			// ExitPlanMode for card rendering, but the field itself is
-			// authoritative as published by the backend.
+			// on the engine_status snapshot a re-attaching consumer
+			// requests. Cleared on next prompt dispatch (see
+			// prompt_dispatch.go). The full PermissionDenials slice
+			// from the task_complete payload is retained verbatim;
+			// consumer-side filtering or interpretation is out of
+			// scope for the engine.
 			//
 			// Snapshot semantics: this assignment REPLACES whatever was
 			// previously retained. The most recent task_complete is the
 			// authoritative truth about what (if anything) is still blocked.
 			// An empty PermissionDenials slice correctly clears the
 			// retained state — a task that completed cleanly has no
-			// outstanding question to re-show.
+			// outstanding denials to re-emit.
 			s2.lastPermissionDenials = tc.PermissionDenials
 			utils.Log("Session", fmt.Sprintf("task_complete: key=%s retained %d permission_denials for reconcile", key, len(tc.PermissionDenials)))
 		}

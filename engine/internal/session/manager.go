@@ -381,11 +381,12 @@ func (m *Manager) ClearConversationFile(sessionID string) error {
 //
 // `engine_status` follows the same snapshot rule. Beyond the existing
 // context/cost/model fields, the snapshot must also carry any unresolved
-// PermissionDenials (AskUserQuestion / ExitPlanMode awaiting user input)
-// — otherwise a desktop reinstall or daemon reconnect would lose the
-// card even though the session is still blocked on the question. The
-// session retains these via lastPermissionDenials, populated from the
-// most recent TaskCompleteEvent and cleared when a new prompt dispatches.
+// PermissionDenials retained from the most recent TaskCompleteEvent —
+// otherwise a re-attaching consumer would observe an engine_status that
+// silently drops the field while the session is still blocked on those
+// denials. The session retains these via lastPermissionDenials,
+// populated in event_translation.go and cleared when a new prompt
+// dispatches (see prompt_dispatch.go).
 func (m *Manager) ReconcileState(key string) {
 	m.mu.RLock()
 	s, ok := m.sessions[key]

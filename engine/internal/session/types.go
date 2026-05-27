@@ -76,21 +76,23 @@ type engineSession struct {
 	lastModel         string
 	lastTotalCost     float64
 
-	// lastPermissionDenials retains the AskUserQuestion / ExitPlanMode
-	// denial entries from the most recent TaskCompleteEvent. These are
-	// intercepted-tool calls that need a user response before the next
-	// prompt can be dispatched. We keep them on the session so a freshly
-	// reconnected client (desktop reinstall, daemon reconnect, etc.) can
-	// pick the card back up via ReconcileState — without this, the
-	// snapshot emitted on reconnect would drop the field and the
-	// AskUserQuestion / ExitPlanMode card would silently vanish from the
-	// client's view even though the session is still blocked on it.
+	// lastPermissionDenials retains the PermissionDenials slice from the
+	// most recent TaskCompleteEvent. The slice typically contains
+	// AskUserQuestion / ExitPlanMode entries — intercepted tool calls
+	// that the session reports as denied but unresolved until the next
+	// prompt either supersedes them or answers them. The engine keeps
+	// them on the session so ReconcileState can include them on the
+	// engine_status snapshot it emits; without this retention, a
+	// re-attaching consumer would observe an engine_status that
+	// silently drops a field that was authoritative on the last
+	// task_complete, while the session itself is still in the same
+	// state.
 	//
 	// Lifecycle:
 	//   - Populated in event_translation.go when a TaskCompleteEvent
 	//     carries non-empty PermissionDenials.
 	//   - Cleared in prompt_dispatch.go when a new prompt is dispatched
-	//     (the user is moving past the question).
+	//     (the new prompt supersedes the prior unresolved denial).
 	//   - Re-emitted by manager.go ReconcileState as part of the
 	//     engine_status snapshot.
 	//

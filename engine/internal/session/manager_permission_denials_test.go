@@ -12,18 +12,20 @@ import (
 // ReconcileState pending-permission-denial retention contract tests
 //
 // Background: AskUserQuestion and ExitPlanMode are interactive tool calls
-// that the engine intercepts and reports as PermissionDenials on the
-// TaskCompleteEvent. The renderer (desktop / iOS) renders a card from
-// these and blocks the conversation until the user answers.
+// the engine intercepts and reports as PermissionDenials on the
+// TaskCompleteEvent. The engine retains the most recent task_complete's
+// denial slice on engineSession.lastPermissionDenials so that the next
+// ReconcileState call can surface them on the engine_status snapshot.
 //
-// If a client disconnects (desktop reinstall, daemon reconnect) while a
-// session is blocked on an unanswered AskUserQuestion, the engine_status
-// emitted by ReconcileState must still carry the pending denials —
-// otherwise the reconnecting client has no signal to re-render the card,
-// even though the session is still genuinely blocked on it.
+// If a consumer re-attaches to a session that is still blocked on an
+// unanswered denial, the engine_status emitted by ReconcileState must
+// carry the retained PermissionDenials — otherwise the snapshot would
+// drop the field while the session is still in the same state. The
+// engine does not know or care how a consumer interprets the field;
+// it only guarantees the field's presence and authority.
 //
 // These tests pin that contract on the engine side. See
-// docs/engine-grounding.md §4 (snapshot contract) for the reconnect rule.
+// docs/engine-grounding.md §4 (snapshot contract) for the re-attach rule.
 // ---------------------------------------------------------------------------
 
 // TestReconcileState_RetainsPermissionDenials verifies that pending
