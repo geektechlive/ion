@@ -1,6 +1,8 @@
 package extension
 
 import (
+	"context"
+
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -139,6 +141,11 @@ type DispatchAgentOpts struct {
 	// Lets harness engineers fine-tune dispatched-agent budgets without
 	// touching global engine config.
 	MaxTurns int `json:"maxTurns,omitempty"`
+
+	// Context carries an optional deadline/cancellation for the dispatch.
+	// When nil, context.Background() is used as a safe fallback so existing
+	// call sites that omit it are not affected.
+	Context context.Context `json:"-"`
 
 	// OnEvent is called for each engine event emitted by the child session.
 	// Not serialized -- set via the host when dispatching from an extension.

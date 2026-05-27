@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -240,13 +241,22 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 		}
 		if ctx != nil && ctx.DispatchAgent != nil {
 			go func() {
-				// Wire OnEvent to send JSON-RPC notifications during dispatch
+				// Bound the entire dispatch by a configurable timeout so that a
+				// hanging child session cannot leak the goroutine or leave the
+				// extension subprocess waiting on a response indefinitely.
+				dispatchCtx, cancel := context.WithTimeout(context.Background(), h.dispatchTimeout)
+				defer cancel()
+
+				// Wire OnEvent to send JSON-RPC notifications during dispatch.
 				req.Params.OnEvent = func(ev types.EngineEvent) {
 					evData, err := json.Marshal(ev)
 					if err == nil {
 						h.sendNotification("dispatch_event", evData)
 					}
 				}
+				// Thread the bounded context so dispatch_agent.go can race against it.
+				req.Params.Context = dispatchCtx
+
 				result, err := ctx.DispatchAgent(req.Params)
 				if err != nil {
 					h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})

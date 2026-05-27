@@ -26,6 +26,7 @@ type TimeoutsConfig struct {
 	RelayWriteMs      int64 `json:"relayWriteMs,omitempty"`      // default: 10000
 	BroadcastWriteMs  int64 `json:"broadcastWriteMs,omitempty"`  // default: 5000
 	TruncationRetries int   `json:"truncationRetries,omitempty"` // default: 3
+	DispatchAgentMs   int64 `json:"dispatchAgentMs,omitempty"`   // default: 300000 (5min)
 }
 
 func (t *TimeoutsConfig) durationOr(val int64, defaultMs int64) time.Duration {
@@ -86,6 +87,9 @@ func (t *TimeoutsConfig) BroadcastWrite() time.Duration { return t.durationOr(t.
 
 // TruncationRetryLimit returns the max consecutive truncation retries (default 3).
 func (t *TimeoutsConfig) TruncationRetryLimit() int { return t.intOr(t.intField(func(c *TimeoutsConfig) int { return c.TruncationRetries }), 3) }
+
+// DispatchAgent returns the ext/dispatch_agent timeout (default 5min).
+func (t *TimeoutsConfig) DispatchAgent() time.Duration { return t.durationOr(t.field(func(c *TimeoutsConfig) int64 { return c.DispatchAgentMs }), 300000) }
 
 // field extracts a field value, returning 0 for nil receiver.
 func (t *TimeoutsConfig) field(fn func(*TimeoutsConfig) int64) int64 {
@@ -174,6 +178,9 @@ func MergeTimeouts(dst, src *TimeoutsConfig) *TimeoutsConfig {
 	}
 	if src.TruncationRetries != 0 {
 		dst.TruncationRetries = src.TruncationRetries
+	}
+	if src.DispatchAgentMs != 0 {
+		dst.DispatchAgentMs = src.DispatchAgentMs
 	}
 	return dst
 }

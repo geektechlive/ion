@@ -95,6 +95,7 @@ func cmdServe() {
 		mcp.SetDefaultMetadataTimeout(cfg.Timeouts.McpMetadata())
 		mcp.SetDefaultWriteTimeout(cfg.Timeouts.McpWrite())
 		extension.ConfiguredDefaultTimeout = cfg.Timeouts.HookDefault()
+		extension.ConfiguredDefaultDispatchTimeout = cfg.Timeouts.DispatchAgent()
 	}
 
 	for name, pcfg := range cfg.Providers {

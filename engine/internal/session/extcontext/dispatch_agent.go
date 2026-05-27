@@ -1,6 +1,7 @@
 package extcontext
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -146,6 +147,20 @@ func BuildDispatchAgentFunc(sa SessionAccessor) func(extension.DispatchAgentOpts
 			runOpts.MaxTurns = opts.MaxTurns
 		}
 
+		// Resolve the context: callers that pass nil get context.Background()
+		// so existing call sites are unaffected.
+		dispatchCtx := opts.Context
+		if dispatchCtx == nil {
+			dispatchCtx = context.Background()
+		}
+
+		// Convert WaitGroup completion to a channel for select.
+		doneCh := make(chan struct{})
+		go func() {
+			childDone.Wait()
+			close(doneCh)
+		}()
+
 		key := sa.SessionKey()
 		childReqID := fmt.Sprintf("%s-dispatch-%s", key, opts.Name)
 		if apiChild, ok := child.(*backend.ApiBackend); ok && childCfg != nil {
@@ -153,7 +168,19 @@ func BuildDispatchAgentFunc(sa SessionAccessor) func(extension.DispatchAgentOpts
 		} else {
 			child.StartRun(childReqID, runOpts)
 		}
-		childDone.Wait()
+
+		// Race child completion against the caller-supplied deadline.
+		select {
+		case <-doneCh:
+			// Normal completion — fall through.
+		case <-dispatchCtx.Done():
+			// Cancel the child run. The bridge goroutine will clean up once the
+			// backend fires OnExit (backends are expected to eventually call OnExit
+			// after Cancel). We do not block here -- returning the error immediately
+			// is the contract so the RPC response is always sent within the timeout.
+			child.Cancel(childReqID)
+			return nil, fmt.Errorf("dispatch_agent timed out: %w", dispatchCtx.Err())
+		}
 
 		elapsed := time.Since(start).Seconds()
 

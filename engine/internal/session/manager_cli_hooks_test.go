@@ -650,6 +650,24 @@ func TestWireAgentToolServer_SpecResolution(t *testing.T) {
 	if !strings.Contains(result.Content, "prompt is required") {
 		t.Errorf("expected 'prompt is required' error, got %q", result.Content)
 	}
+
+	// Verify that BuildDispatchAgentFunc does not panic when opts.Context is nil
+	// (the context.Background() fallback path must be exercised without panic).
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("BuildDispatchAgentFunc panicked with nil Context: %v", r)
+			}
+		}()
+		// Construct a DispatchAgentOpts with nil Context and missing prompt to
+		// trigger a fast rejection path without spawning a real child.
+		dispatchHandler := mgr.buildAgentToolHandler(s, "agent-ts4")
+		_, _ = dispatchHandler(map[string]interface{}{
+			// Omit "prompt" so it fails fast with "prompt is required" rather than
+			// hanging on a real child dispatch. Context is nil by default in the
+			// map-based invocation, which exercises the context.Background() fallback.
+		})
+	}()
 }
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,13 @@ import (
 // defaultRPCTimeout is the compiled default for extension RPC calls.
 const defaultRPCTimeout = 30 * time.Second
 
+// defaultDispatchTimeout is the compiled default for ext/dispatch_agent calls.
+const defaultDispatchTimeout = 5 * time.Minute
+
+// ConfiguredDefaultDispatchTimeout overrides defaultDispatchTimeout when set
+// from TimeoutsConfig at startup. A zero value means "use defaultDispatchTimeout".
+var ConfiguredDefaultDispatchTimeout time.Duration
+
 // Host manages extension subprocess lifecycle. It supports both in-process
 // extensions (Go functions registered directly on the SDK) and subprocess
 // extensions communicating via JSON-RPC 2.0 over stdin/stdout.
@@ -29,6 +36,10 @@ type Host struct {
 	// rpcTimeout is the per-call timeout for extension RPC requests.
 	// Defaults to defaultRPCTimeout (30s), overridable via SetRPCTimeout.
 	rpcTimeout time.Duration
+
+	// dispatchTimeout is the per-call timeout for ext/dispatch_agent requests.
+	// Defaults to defaultDispatchTimeout (5min), overridable via SetDispatchTimeout.
+	dispatchTimeout time.Duration
 
 	// writeMu serialises all writes to h.stdin so concurrent goroutines
 	// (send, sendResponse, sendNotification) cannot interleave NDJSON
@@ -122,10 +133,15 @@ func (h *Host) SetPersistentEmit(fn func(types.EngineEvent)) {
 
 // NewHost creates a new extension host with an empty SDK.
 func NewHost() *Host {
+	dt := defaultDispatchTimeout
+	if ConfiguredDefaultDispatchTimeout > 0 {
+		dt = ConfiguredDefaultDispatchTimeout
+	}
 	h := &Host{
-		sdk:        NewSDK(),
-		pending:    make(map[int64]chan *jsonrpcResponse),
-		rpcTimeout: defaultRPCTimeout,
+		sdk:             NewSDK(),
+		pending:         make(map[int64]chan *jsonrpcResponse),
+		rpcTimeout:      defaultRPCTimeout,
+		dispatchTimeout: dt,
 	}
 	// Start IDs at 1 (0 is reserved/unused).
 	h.nextID.Store(1)
@@ -143,6 +159,11 @@ func (h *Host) SDK() *SDK {
 // SetRPCTimeout overrides the per-call timeout for extension RPC requests.
 func (h *Host) SetRPCTimeout(d time.Duration) {
 	h.rpcTimeout = d
+}
+
+// SetDispatchTimeout overrides the per-call timeout for ext/dispatch_agent requests.
+func (h *Host) SetDispatchTimeout(d time.Duration) {
+	h.dispatchTimeout = d
 }
 
 // Name returns the extension's name as reported by the init handshake.
