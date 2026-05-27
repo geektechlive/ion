@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.29.3](https://github.com/dsswift/ion/compare/engine-v1.29.2...engine-v1.29.3) (2026-05-27)
+
+### Bug Fixes
+
+* **engine:** surface cache token fields on DispatchAgentResult (#146) ([ecb020b](https://github.com/dsswift/ion/commit/ecb020bca7067c59a242a8bd2ea232e7ff90fe8d))
+
 ## [1.29.2](https://github.com/dsswift/ion/compare/engine-v1.29.1...engine-v1.29.2) (2026-05-26)
 
 ### Bug Fixes
