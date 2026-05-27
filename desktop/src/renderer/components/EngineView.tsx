@@ -6,6 +6,7 @@ import { EngineDialog } from './EngineDialog'
 import { EngineStatusBar } from './EngineStatusBar'
 import { AgentPanel } from './AgentPanel'
 import { EngineFooter } from './EngineFooter'
+import { PermissionDeniedCard } from './PermissionDeniedCard'
 import { ArrowDown } from '@phosphor-icons/react'
 import {
   groupMessages,
@@ -64,6 +65,20 @@ export function EngineView({ tabId }: EngineViewProps) {
     return k ? (s.engineWorkingMessages.get(k) || '') : ''
   })
   const tabStatus = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.status)
+  // PermissionDenied is set on the parent tab by engine-event-slice when
+  // engine_status carries AskUserQuestion / ExitPlanMode denials. It is
+  // tab-scoped (not engine-instance-scoped) — see plan comment in
+  // engine-event-slice.ts case 'engine_status'. If a tab hosts multiple
+  // engine instances and two post denials concurrently, the last writer
+  // wins. That matches the existing single-card-per-tab UX in
+  // ConversationView; revisit if per-instance cards are wanted.
+  const permissionDenied = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.permissionDenied)
+  const tabMessages = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.messages || EMPTY_MESSAGES)
+  const tabPlanFilePath = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.planFilePath)
+  const tabGroupPinned = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.groupPinned)
+  const tabConversationId = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.conversationId)
+  const staticInfo = useSessionStore(s => s.staticInfo)
+  const submitEnginePrompt = useSessionStore(s => s.submitEnginePrompt)
   const isTall = useSessionStore(s => s.tallViewTabId === tabId)
   const toggleTallView = useSessionStore(s => s.toggleTallView)
   const engineModelOverride = useSessionStore(s => {
@@ -170,6 +185,35 @@ export function EngineView({ tabId }: EngineViewProps) {
       }
     }, 5_000)
   }
+
+  // ─── Permission-denied card handlers ───
+  //
+  // EngineView's variant of usePermissionDeniedHandlers. The conversation
+  // hook calls `sendMessage` (CLI/sessionPlane path); the engine variant
+  // calls `submitEnginePrompt` for the active engine instance so the
+  // answer is delivered as a new engine prompt on the same key.
+  //
+  // We deliberately do NOT reuse the conversation hook directly — that
+  // hook also implements the Plan-Mode → Implement flow which depends on
+  // CLI-specific machinery (resetTabSession, sendMessage signature with
+  // an implementationPhase flag). The engine variant currently supports
+  // only the AskUserQuestion path; ExitPlanMode on engine tabs is still
+  // an open item flagged in the plan.
+  const clearPermissionDenied = useCallback(() => {
+    useSessionStore.setState((s) => ({
+      tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, permissionDenied: null } : t)),
+    }))
+  }, [tabId])
+
+  const handleAnswerDenial = useCallback((answer: string) => {
+    console.log(`[EngineView] handleAnswerDenial: tab=${tabId.slice(0, 8)} key=${key} answerLen=${answer.length}`)
+    clearPermissionDenied()
+    if (!key) {
+      console.warn(`[EngineView] handleAnswerDenial: no active engine instance for tab=${tabId.slice(0, 8)} — dropping answer`)
+      return
+    }
+    submitEnginePrompt(tabId, answer, undefined, undefined)
+  }, [tabId, key, clearPermissionDenied, submitEnginePrompt])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
@@ -322,6 +366,27 @@ export function EngineView({ tabId }: EngineViewProps) {
           )}
         </AnimatePresence>
       </div>
+
+      {/* Permission-denied / AskUserQuestion card.
+          Rendered between the scrollable conversation area and the agent
+          panel so the question sits directly above the input where users
+          expect it. Wired to the engine's submitEnginePrompt so the answer
+          becomes a new prompt on the active engine instance. */}
+      <AnimatePresence>
+        {permissionDenied && (
+          <PermissionDeniedCard
+            tools={permissionDenied.tools}
+            tabId={tabId}
+            sessionId={tabConversationId ?? null}
+            projectPath={staticInfo?.projectPath || ''}
+            messages={tabMessages}
+            tabPlanFilePath={tabPlanFilePath}
+            tabGroupPinned={tabGroupPinned}
+            onDismiss={clearPermissionDenied}
+            onAnswer={handleAnswerDenial}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Agent bars */}
       <div style={{ flex: agentPanelFullscreen ? 1 : undefined, overflow: agentPanelFullscreen ? 'auto' : undefined, minHeight: 0 }}>

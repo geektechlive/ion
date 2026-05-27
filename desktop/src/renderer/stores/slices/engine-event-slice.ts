@@ -147,19 +147,71 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
                 engineConversationIds.set(key, [...existing, sessionId])
               }
             }
+
+            // Promote AskUserQuestion / ExitPlanMode permissionDenials
+            // carried on engine_status into the parent tab's
+            // `permissionDenied` state. This is the engine-view counterpart
+            // to the sessionPlane synthesis at
+            // engine-control-plane-events.ts:handleStatusEvent — which is
+            // bypassed for engine-view tabs because EngineControlPlane is
+            // keyed by bare tabId and engine-view events arrive with the
+            // compound `tabId:instanceId` key.
+            //
+            // Snapshot/idempotence rules:
+            //   - Only the renderer's `tab.permissionDenied` is mutated;
+            //     `tab.status` is left to the existing isIdle/isRunning
+            //     logic above (we don't have a per-engine 'completed'
+            //     status concept like the CLI sessionPlane does).
+            //   - When the array is empty/absent (a follow-up cost-only
+            //     `engine_status` tick), we PRESERVE any existing
+            //     `tab.permissionDenied` so the card stays visible.
+            //     The renderer-side card render relies on this — the
+            //     engine emits one engine_status with denials and then
+            //     a stream of cost-only ticks; clobbering would make the
+            //     card flicker out.
+            //   - We log both branches with verbosity matching
+            //     event-slice.ts's `[task_complete] tab=... branch=...`
+            //     lines so a single grep covers CLI + engine paths.
+            const askOrExitDenials: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> = (event.fields?.permissionDenials || []).filter(
+              (d: { toolName: string }) => d.toolName === 'AskUserQuestion' || d.toolName === 'ExitPlanMode',
+            )
+            const hasInterestingDenials = askOrExitDenials.length > 0
+            let denialTabsUpdate: typeof state.tabs | null = null
+            if (hasInterestingDenials) {
+              const toolNamesStr = JSON.stringify(askOrExitDenials.map((d) => d.toolName))
+              const instanceId = key.split(':')[1] || ''
+              console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=denials permDenied set to ${toolNamesStr}`)
+              denialTabsUpdate = state.tabs.map((t) =>
+                t.id === tabId ? { ...t, permissionDenied: { tools: askOrExitDenials } } : t,
+              )
+            } else if ((event.fields?.permissionDenials?.length ?? 0) === 0) {
+              // Cost-only or running tick — PRESERVE existing permissionDenied.
+              // Logged at debug verbosity (no state change). Keep the noise
+              // low; only log if we currently hold a card to preserve.
+              const existingTab = state.tabs.find((t) => t.id === tabId)
+              if (existingTab?.permissionDenied?.tools?.length) {
+                const instanceId = key.split(':')[1] || ''
+                console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=noDenials preserving existing permDenied (${existingTab.permissionDenied.tools.length} tools)`)
+              }
+            }
+
             const needsTabUpdate = isActive && (sessionId || isIdle || isRunning)
-            if (needsTabUpdate) {
-              const tabs = state.tabs.map((t) => {
+            // If we computed a denialTabsUpdate, fold the conversationId /
+            // status updates into the same `tabs.map` pass so we don't drop
+            // either change.
+            if (needsTabUpdate || denialTabsUpdate) {
+              const baseTabs = denialTabsUpdate || state.tabs
+              const tabs = baseTabs.map((t) => {
                 if (t.id !== tabId) return t
                 const updates: Partial<typeof t> = {}
                 if (sessionId && t.conversationId !== sessionId) {
                   updates.conversationId = sessionId
                   updates.lastKnownSessionId = sessionId
                 }
-                if (isRunning && t.status !== 'running') {
+                if (isRunning && t.status !== 'running' && isActive) {
                   updates.status = 'running' as const
                 }
-                if (isIdle && t.status !== 'idle') {
+                if (isIdle && t.status !== 'idle' && isActive) {
                   updates.status = 'idle' as const
                 }
                 return Object.keys(updates).length > 0 ? { ...t, ...updates } : t
