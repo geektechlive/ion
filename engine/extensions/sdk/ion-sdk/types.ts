@@ -502,10 +502,18 @@ export interface ElicitResult {
  */
 export type EngineEvent =
   | { type: 'engine_agent_state'; agents: any[] }
-  | { type: 'engine_status'; fields: { extensionName?: string; [key: string]: unknown } }
-  | { type: 'engine_working_message'; message: string }
-  | { type: 'engine_notify'; message: string; level: string }
-  | { type: 'engine_harness_message'; message: string; source?: string }
+  | { type: 'engine_status'; fields: { extensionName?: string; [key: string]: unknown }; metadata?: Record<string, unknown> }
+  | { type: 'engine_working_message'; message: string; metadata?: Record<string, unknown> }
+  | { type: 'engine_notify'; message: string; level: string; metadata?: Record<string, unknown> }
+  // `metadata` is an opaque pass-through map the engine forwards verbatim
+  // to clients. The desktop renderer honors `metadata.dedupKey` on harness
+  // messages to suppress repeated emissions within a single engine-instance
+  // scrollback — useful for "fire on every session_start" patterns like
+  // ion-meta's welcome. See docs/protocol/server-events.md for the
+  // well-known metadata keys. The convention is renderer-honored, not
+  // engine-enforced; any extension may pick its own keys (namespace as
+  // `<extensionName>:<messageKey>`).
+  | { type: 'engine_harness_message'; message: string; source?: string; metadata?: Record<string, unknown> }
   | { type: string; [key: string]: unknown }
 
 export interface ToolDef {
