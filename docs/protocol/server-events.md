@@ -304,6 +304,7 @@ Reports session-level status changes.
 |----------|--------------|------------------------------------|
 | `type`   | `"engine_status"` | Event type                   |
 | `fields` | StatusFields | Session status fields              |
+| `metadata` | object | Opaque harness-defined metadata (see [Well-known metadata keys for engine_harness_message](#well-known-metadata-keys-for-engine_harness_message) below). Engine forwards verbatim; clients may honor specific keys. |
 
 **StatusFields:**
 
@@ -327,6 +328,7 @@ A status message indicating the engine is working on something.
 |-----------|--------|--------------------------------------|
 | `type`    | `"engine_working_message"` | Event type          |
 | `message` | string | Working status text                  |
+| `metadata` | object | Opaque harness-defined metadata (see [Well-known metadata keys for engine_harness_message](#well-known-metadata-keys-for-engine_harness_message) below). Engine forwards verbatim; clients may honor specific keys. |
 
 #### engine_notify
 
@@ -337,6 +339,7 @@ A notification message from the engine.
 | `type`    | `"engine_notify"` | Event type                  |
 | `message` | string | Notification text                    |
 | `level`   | string | Severity level                       |
+| `metadata` | object | Opaque harness-defined metadata (see [Well-known metadata keys for engine_harness_message](#well-known-metadata-keys-for-engine_harness_message) below). Engine forwards verbatim; clients may honor specific keys. |
 
 #### engine_error
 
@@ -393,6 +396,15 @@ A message from the extension harness.
 | `type`    | `"engine_harness_message"` | Event type          |
 | `message` | string | Message text                         |
 | `source`  | string | Extension or harness source name     |
+| `metadata` | object | Opaque harness-defined metadata (see well-known keys below). Engine forwards verbatim; clients may honor specific keys. |
+
+##### Well-known metadata keys for engine_harness_message
+
+`metadata` on `engine_harness_message` (and on `engine_notify`, `engine_working_message`, `engine_status`) is an open-ended map of harness-defined hints. The engine treats the field as opaque pass-through — it neither validates nor interprets it. Conventions below are advisory: clients render what they understand and ignore the rest. Extensions may introduce their own keys; pick a unique prefix.
+
+| Key | Type | Purpose |
+|---|---|---|
+| `dedupKey` | string | Renderer-side dedup tag. The desktop session store suppresses repeated harness messages with the same `dedupKey` within a single engine-instance scrollback, so a re-emitted welcome on every `session_start` (e.g. across app restart with no intervening user turn) renders at most once per tab. Namespace convention: `<extensionName>:<messageKey>` (e.g. `ion-meta:welcome`). iOS receives the key on the wire but does not currently honor it; future iOS-side dedup is forward-compatible without a protocol change. The key persists with the message so the renderer's dedup table survives restart and rehydrate. |
 
 #### engine_dialog
 
