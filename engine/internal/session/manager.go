@@ -378,6 +378,14 @@ func (m *Manager) ClearConversationFile(sessionID string) error {
 // considers authoritative. Skipping the emission would leave reconnecting
 // clients showing stale agent rows from a previous session. See
 // docs/architecture/agent-state.md.
+//
+// `engine_status` follows the same snapshot rule. Beyond the existing
+// context/cost/model fields, the snapshot must also carry any unresolved
+// PermissionDenials (AskUserQuestion / ExitPlanMode awaiting user input)
+// — otherwise a desktop reinstall or daemon reconnect would lose the
+// card even though the session is still blocked on the question. The
+// session retains these via lastPermissionDenials, populated from the
+// most recent TaskCompleteEvent and cleared when a new prompt dispatches.
 func (m *Manager) ReconcileState(key string) {
 	m.mu.RLock()
 	s, ok := m.sessions[key]
@@ -394,15 +402,27 @@ func (m *Manager) ReconcileState(key string) {
 	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=reconcile", key, len(snapshot)))
 	m.emit(key, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
 
-	// Re-emit status
+	// Re-emit status. Read retained fields under the session lock so we
+	// observe a coherent snapshot (denials + cost + context together).
+	m.mu.RLock()
+	pendingDenials := s.lastPermissionDenials
+	lastPct := s.lastContextPct
+	lastWindow := s.lastContextWindow
+	lastModel := s.lastModel
+	lastCost := s.lastTotalCost
+	sessionState := m.sessionState(s)
+	m.mu.RUnlock()
+
+	utils.Log("Session", fmt.Sprintf("reconcile_status_emitted key=%s state=%s pendingDenials=%d model=%s contextPct=%d", key, sessionState, len(pendingDenials), lastModel, lastPct))
 	m.emit(key, types.EngineEvent{
 		Type: "engine_status",
 		Fields: &types.StatusFields{
-			State:          m.sessionState(s),
-			ContextPercent: s.lastContextPct,
-			ContextWindow:  s.lastContextWindow,
-			Model:          s.lastModel,
-			TotalCostUsd:   s.lastTotalCost,
+			State:             sessionState,
+			ContextPercent:    lastPct,
+			ContextWindow:     lastWindow,
+			Model:             lastModel,
+			TotalCostUsd:      lastCost,
+			PermissionDenials: pendingDenials,
 		},
 	})
 }
