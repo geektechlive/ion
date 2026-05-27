@@ -291,14 +291,46 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_harness_message': {
+          // Dedup hook: if the engine carries `metadata.dedupKey` on the
+          // event, suppress the push when a prior harness message in this
+          // engine-instance scrollback already has the same key. The
+          // engine treats `metadata` as opaque pass-through; this is the
+          // renderer-honored convention (see docs/protocol/server-events.md
+          // and Message.dedupKey in types-session.ts). Non-harness roles
+          // ignore the field. Bare harness messages with no metadata opt
+          // out — both push, no dedup applied.
+          const metaUnknown = (event as { metadata?: unknown }).metadata
+          const dedupKeyRaw =
+            metaUnknown && typeof metaUnknown === 'object'
+              ? (metaUnknown as Record<string, unknown>).dedupKey
+              : undefined
+          const dedupKey =
+            typeof dedupKeyRaw === 'string' && dedupKeyRaw.length > 0 ? dedupKeyRaw : undefined
           set((state) => {
             const messages = new Map(state.engineMessages)
             const msgs = [...(messages.get(key) || [])]
+            if (dedupKey) {
+              const prior = msgs.find((m) => m.role === 'harness' && m.dedupKey === dedupKey)
+              if (prior) {
+                // Log both sides of the decision so investigations don't
+                // require guessing why a "missing" welcome did not appear.
+                console.log(
+                  `[store] engine_harness_message dedup: key=${key} dedupKey=${dedupKey} ` +
+                  `prior=${prior.id} priorTs=${prior.timestamp} dropped duplicate emission`,
+                )
+                return state
+              }
+              console.log(
+                `[store] engine_harness_message dedup: key=${key} dedupKey=${dedupKey} ` +
+                `no prior match — pushing as the first occurrence`,
+              )
+            }
             msgs.push({
               id: nextMsgId(),
               role: 'harness' as const,
               content: event.message,
               timestamp: Date.now(),
+              ...(dedupKey ? { dedupKey } : {}),
             })
             messages.set(key, msgs)
             return { engineMessages: messages }

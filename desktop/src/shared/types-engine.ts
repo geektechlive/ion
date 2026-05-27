@@ -80,11 +80,17 @@ export interface EngineCommandListing {
 
 export type EngineEvent =
   | { type: 'engine_agent_state'; agents: AgentStateUpdate[] }
-  | { type: 'engine_status'; fields: StatusFields }
-  | { type: 'engine_working_message'; message: string }
-  | { type: 'engine_notify'; message: string; level: 'info' | 'warning' | 'error' }
+  | { type: 'engine_status'; fields: StatusFields; metadata?: Record<string, unknown> }
+  | { type: 'engine_working_message'; message: string; metadata?: Record<string, unknown> }
+  | { type: 'engine_notify'; message: string; level: 'info' | 'warning' | 'error'; metadata?: Record<string, unknown> }
   | { type: 'engine_dialog'; dialogId: string; method: 'select' | 'confirm' | 'input'; title: string; message?: string; options?: string[]; defaultValue?: string }
-  | { type: 'engine_harness_message'; message: string; source?: string }
+  // `metadata` is an opaque pass-through map the harness sets via ctx.emit
+  // that the engine forwards verbatim. The desktop renderer honors
+  // `metadata.dedupKey` (string) to suppress repeated harness messages
+  // within an engine-instance scrollback — see engine-event-slice.ts. The
+  // convention is renderer-honored, not engine-enforced; other extensions
+  // may pick their own keys (namespace as `<extensionName>:<messageKey>`).
+  | { type: 'engine_harness_message'; message: string; source?: string; metadata?: Record<string, unknown> }
   | { type: 'engine_text_delta'; text: string }
   | { type: 'engine_message_end'; usage: { inputTokens: number; outputTokens: number; contextPercent: number; cost: number } }
   | { type: 'engine_tool_start'; toolName: string; toolId: string }

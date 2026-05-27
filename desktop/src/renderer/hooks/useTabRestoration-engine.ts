@@ -81,6 +81,7 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
             toolInput: m.toolInput,
             toolStatus: m.toolStatus as Message['toolStatus'],
             timestamp: m.timestamp,
+            dedupKey: m.dedupKey,
           })))
         }
       }

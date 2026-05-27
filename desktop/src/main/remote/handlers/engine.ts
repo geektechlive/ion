@@ -312,7 +312,14 @@ export async function handleLoadEngineConversation(cmd: Extract<RemoteCommand, {
           var content = m.content || '';
           if (m.role === 'tool' && content.length > 2048) content = content.substring(0, 2048) + '\\n... [truncated]';
           else if (content.length > 10000) content = content.substring(0, 10000);
-          return { id: m.id, role: m.role, content: content, toolName: m.toolName, toolId: m.toolId, toolStatus: m.toolStatus, timestamp: m.timestamp };
+          // Carry dedupKey through to iOS so the data is available on
+          // reconnect / history-replay. iOS does not yet act on the key,
+          // but having it on the wire lets a future iOS-side dedup
+          // implementation match the desktop's behavior without a
+          // protocol change.
+          var out = { id: m.id, role: m.role, content: content, toolName: m.toolName, toolId: m.toolId, toolStatus: m.toolStatus, timestamp: m.timestamp };
+          if (m.dedupKey) out.dedupKey = m.dedupKey;
+          return out;
         });
       })()
     `) || []

@@ -149,6 +149,19 @@ export interface Message {
   autoExpandResult?: boolean
   /** File or plan attachments associated with this message */
   attachments?: Attachment[]
+  /**
+   * Optional dedup key carried verbatim from
+   * `engine_harness_message.metadata.dedupKey`. The renderer uses it to
+   * suppress repeated emissions in the same engine-instance scrollback —
+   * if a `role: 'harness'` message with this key already exists in the
+   * key's message list, the new event is dropped instead of pushed.
+   * Persists with the message so dedup survives app restart and rehydrate.
+   * Other roles ignore this field; only harness messages opt in.
+   * Convention: `<extensionName>:<messageKey>` (e.g. `ion-meta:welcome`).
+   * See engine-event-slice.ts for the consumer logic and
+   * docs/protocol/server-events.md for the well-known-keys table.
+   */
+  dedupKey?: string
   timestamp: number
 }
 

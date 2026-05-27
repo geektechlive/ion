@@ -34,7 +34,7 @@ export interface PersistedTab {
   isEngine?: boolean
   engineProfileId?: string | null
   engineInstances?: EngineInstance[]
-  engineMessages?: Record<string, Array<{ role: string; content: string; toolName?: string; toolId?: string; toolInput?: string; toolStatus?: string; timestamp: number }>>
+  engineMessages?: Record<string, Array<{ role: string; content: string; toolName?: string; toolId?: string; toolInput?: string; toolStatus?: string; timestamp: number; dedupKey?: string }>>
   engineAgentStates?: Record<string, Array<{ name: string; status: string; metadata?: Record<string, any> }>>
   /**
    * Most recent engine conversation ID per engine instance, keyed by
