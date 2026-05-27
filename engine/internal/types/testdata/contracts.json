@@ -149,6 +149,7 @@
     "message",
     "messagesAfter",
     "messagesBefore",
+    "metadata",
     "method",
     "options",
     "partialInput",
