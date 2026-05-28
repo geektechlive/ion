@@ -213,6 +213,16 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	m.mu.Lock()
 	s.lastModel = opts.Model
 	s.lastContextWindow = promptCtxWindow
+	// Clear any retained permission denials from a prior task_complete —
+	// the user is dispatching a new prompt, which is implicitly the answer
+	// to (or dismissal of) the previous AskUserQuestion / ExitPlanMode.
+	// Without this, a subsequent ReconcileState would re-surface a stale
+	// denial on top of an in-flight prompt, contradicting the session's
+	// current state.
+	if len(s.lastPermissionDenials) > 0 {
+		utils.Log("Session", fmt.Sprintf("prompt_dispatch: key=%s clearing %d retained permission_denials (new prompt supersedes)", key, len(s.lastPermissionDenials)))
+		s.lastPermissionDenials = nil
+	}
 	lastPct := s.lastContextPct
 	m.mu.Unlock()
 

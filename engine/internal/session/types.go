@@ -76,6 +76,33 @@ type engineSession struct {
 	lastModel         string
 	lastTotalCost     float64
 
+	// lastPermissionDenials retains the PermissionDenials slice from the
+	// most recent TaskCompleteEvent. The slice typically contains
+	// AskUserQuestion / ExitPlanMode entries — intercepted tool calls
+	// that the session reports as denied but unresolved until the next
+	// prompt either supersedes them or answers them. The engine keeps
+	// them on the session so ReconcileState can include them on the
+	// engine_status snapshot it emits; without this retention, a
+	// re-attaching consumer would observe an engine_status that
+	// silently drops a field that was authoritative on the last
+	// task_complete, while the session itself is still in the same
+	// state.
+	//
+	// Lifecycle:
+	//   - Populated in event_translation.go when a TaskCompleteEvent
+	//     carries non-empty PermissionDenials.
+	//   - Cleared in prompt_dispatch.go when a new prompt is dispatched
+	//     (the new prompt supersedes the prior unresolved denial).
+	//   - Re-emitted by manager.go ReconcileState as part of the
+	//     engine_status snapshot.
+	//
+	// Engine contract: engine_status is a snapshot of the session's
+	// current observable state. PermissionDenials was already part of
+	// that contract on the task_complete-derived emission; this field
+	// closes the gap so ReconcileState emits it too. Not a new field —
+	// already declared on StatusFields, mirrored in TS / Swift.
+	lastPermissionDenials []types.PermissionDenial
+
 	// Agent spawner counter – monotonically increasing across runs so
 	// agent names are globally unique within the session.
 	agentCounter int

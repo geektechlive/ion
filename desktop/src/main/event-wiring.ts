@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { IPC } from '../shared/types'
 import type { NormalizedEvent, EnrichedError } from '../shared/types'
 import { log as _log } from './logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry } from './state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry, forwardedEnginePermissionDenials } from './state'
 import { broadcast } from './broadcast'
 import { currentBackend } from './settings-store'
 import { normalizedToRemote } from './remote/protocol'
@@ -77,6 +77,47 @@ export function wireEngineBridgeEvents(): void {
         log(`engineBridge: agent_state forwarded key=${key} count=${agents.length} statuses=[${statuses}]`)
       }
       state.remoteTransport.send({ type: `engine_${event.type.replace('engine_', '')}`, tabId, instanceId, ...event })
+
+      // Synthesize a `permission_request` envelope for iOS when an
+      // engine-view `engine_status` event carries AskUserQuestion or
+      // ExitPlanMode denials. The CLI/sessionPlane path forwards these
+      // from `task_complete` in wireRemoteSessionPlaneForwarding above,
+      // but engine-view events never reach sessionPlane (key mismatch:
+      // EngineControlPlane is keyed by bare tabId, engine events arrive
+      // with `tabId:instanceId`). Without this block, iOS receives the
+      // engine_status itself (forwarded above) but has no decoder for
+      // `permissionDenials` inside it — the card-rendering path on iOS
+      // is keyed off `permission_request`. See plan-section "Files to
+      // modify → event-wiring.ts" for the cross-reference.
+      //
+      // Dedupe via forwardedEnginePermissionDenials: engine_status fires
+      // repeatedly, so without a guard every cost-only tick would re-push
+      // the same envelope and re-fire the iOS push notification.
+      if (event.type === 'engine_status' && Array.isArray(event.fields?.permissionDenials) && event.fields.permissionDenials.length > 0 && instanceId) {
+        for (const denial of event.fields.permissionDenials) {
+          if (denial.toolName !== 'AskUserQuestion' && denial.toolName !== 'ExitPlanMode') continue
+          const questionId = `denied-${denial.toolUseId}`
+          if (forwardedEnginePermissionDenials.has(questionId)) {
+            // Already pushed for this toolUseId — skip silently. We hit
+            // this path on every cost-only engine_status tick after the
+            // initial denial-carrying tick.
+            continue
+          }
+          forwardedEnginePermissionDenials.add(questionId)
+          const pushBody = denial.toolName === 'AskUserQuestion'
+            ? 'Question waiting for your answer'
+            : 'Plan ready for your review'
+          log(`engine_status: forwarding ${denial.toolName} denial to remote key=${key} questionId=${questionId}`)
+          state.remoteTransport.send({
+            type: 'permission_request',
+            tabId,
+            questionId,
+            toolName: denial.toolName,
+            toolInput: denial.toolInput,
+            options: [],
+          }, true, { title: 'Ion needs your attention', body: pushBody })
+        }
+      }
 
       // /clear success → relay an iOS-renderable divider so the mobile
       // client sees the checkpoint immediately. We piggy-back on the

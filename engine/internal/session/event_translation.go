@@ -178,6 +178,22 @@ func (m *Manager) handleNormalizedEvent(runID string, event types.NormalizedEven
 			if tc.CostUsd > 0 {
 				s2.lastTotalCost = tc.CostUsd
 			}
+			// Capture pending denials so ReconcileState can re-emit them
+			// on the engine_status snapshot a re-attaching consumer
+			// requests. Cleared on next prompt dispatch (see
+			// prompt_dispatch.go). The full PermissionDenials slice
+			// from the task_complete payload is retained verbatim;
+			// consumer-side filtering or interpretation is out of
+			// scope for the engine.
+			//
+			// Snapshot semantics: this assignment REPLACES whatever was
+			// previously retained. The most recent task_complete is the
+			// authoritative truth about what (if anything) is still blocked.
+			// An empty PermissionDenials slice correctly clears the
+			// retained state — a task that completed cleanly has no
+			// outstanding denials to re-emit.
+			s2.lastPermissionDenials = tc.PermissionDenials
+			utils.Log("Session", fmt.Sprintf("task_complete: key=%s retained %d permission_denials for reconcile", key, len(tc.PermissionDenials)))
 		}
 		m.mu.Unlock()
 		m.emit(key, types.EngineEvent{

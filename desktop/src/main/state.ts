@@ -109,3 +109,26 @@ export const modelCache = {
  */
 export const extensionCommandRegistry = new Map<string, Set<string>>()
 
+/**
+ * Dedupe set for AskUserQuestion / ExitPlanMode `permission_request`
+ * envelopes synthesized from engine-view `engine_status.permissionDenials`
+ * and forwarded to iOS. The engine emits engine_status repeatedly
+ * (cost-only ticks fire ~1ms after the denial-carrying tick), so we'd
+ * otherwise re-push the same `denied-<toolUseId>` question over and over
+ * — each one fires a push notification, which is the visible spam.
+ *
+ * Keyed by the synthetic `questionId` (`denied-<toolUseId>`). The toolUseId
+ * is engine-assigned and unique per call, so a fresh question always
+ * misses the set. Entries are cleared:
+ *   - When the user answers (renderer clears tab.permissionDenied → next
+ *     engine_status sees no denials → nothing to forward; the answered
+ *     toolUseId is never seen again because the engine doesn't re-emit it).
+ *   - When the engine tab is closed (closeTab; see wiring below).
+ *
+ * Memory bound: ~one entry per AskUserQuestion ever asked on this desktop
+ * process. Acceptable — toolUseId is a short string and the process is
+ * already long-lived; if it becomes a leak we can prune on engine_dead
+ * or on snapshot reconcile.
+ */
+export const forwardedEnginePermissionDenials = new Set<string>()
+
