@@ -116,6 +116,15 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_status': {
+          // Track whether the inside-`set` reducer captured a new
+          // sessionId into engineConversationIds — if so, we trigger an
+          // immediate persistence flush after the reducer returns so the
+          // sessionId survives a hard kill (closed laptop lid, OS force-
+          // quit, power loss) that arrives before the next debounced save.
+          // Without this, the renderer holds the sessionId in memory only
+          // and the user's "continuous" conversation silently restarts
+          // from scratch on the next launch.
+          let didCaptureNewSessionId = false
           set((state) => {
             const statusFields = new Map(state.engineStatusFields)
 
@@ -145,6 +154,19 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
               if (existing[existing.length - 1] !== sessionId) {
                 engineConversationIds = new Map(state.engineConversationIds)
                 engineConversationIds.set(key, [...existing, sessionId])
+                didCaptureNewSessionId = true
+                // Permanent diagnostic log per the repo logging policy
+                // (~/.claude/docs/standards/logging.md, repo CLAUDE.md
+                // "Logging policy"). This is the only place the runtime
+                // `engineConversationIds` map is mutated for engine-view
+                // tabs (compound `${tabId}:${instanceId}` keys); without
+                // this line, we have no way to confirm from logs alone
+                // that the source map is being populated before the
+                // persistence layer reads from it. Logs the exact key
+                // shape so a future "session not resumed on restart"
+                // investigation can confirm the key matches what
+                // session-store-persistence.ts expects.
+                console.log(`[engine_status] engineConversationIds.set key=${key} sessionId=${sessionId} chainLen=${existing.length + 1}`)
               }
             }
 
@@ -231,6 +253,23 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
             }
             return returnPatch
           })
+          // Durability: persist immediately whenever a new sessionId
+          // arrived. The default subscriber debounces saves at 100 ms,
+          // which is normally fine but creates a window where a hard
+          // kill (OS terminated us, laptop lid closed mid-write) drops
+          // the sessionId. The cost of an extra synchronous IPC write
+          // is small (one fs.writeFileSync via atomicWriteFileSync) and
+          // only happens at session-start transitions, not on every
+          // status tick. `__ionForceFlushTabs` is wired in
+          // session-store-persistence.ts:setupPersistence — it clears
+          // the pending debounce timer and runs persistTabs() now.
+          if (didCaptureNewSessionId) {
+            const flush = (window as { __ionForceFlushTabs?: () => void }).__ionForceFlushTabs
+            if (typeof flush === 'function') {
+              console.log(`[engine_status] forcing immediate persist after sessionId capture key=${key}`)
+              flush()
+            }
+          }
           break
         }
         case 'engine_working_message': {

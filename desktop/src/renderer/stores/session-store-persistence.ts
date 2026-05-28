@@ -105,7 +105,22 @@ function persistTabs(useSessionStore: Store): void {
               sessionIds[inst.id] = chain[chain.length - 1]
             }
           }
-          if (Object.keys(sessionIds).length > 0) result.engineSessionIds = sessionIds
+          if (Object.keys(sessionIds).length > 0) {
+            result.engineSessionIds = sessionIds
+          } else if (hPane.instances.length > 0) {
+            // Diagnostic: engine tab has instances but zero session IDs
+            // were resolved from the runtime map. This is the persisted
+            // shape of the bug the plan addresses — on the next restart
+            // `engineSessionIds` will be absent and every instance
+            // starts a brand new engine conversation. Log the runtime
+            // map's actual keys so we can see whether the source map
+            // is keyed differently than the lookup expects (e.g.
+            // `tabId` only vs. `${tabId}:${instanceId}`). This log is
+            // permanent per the repo logging policy.
+            const expectedKeys = hPane.instances.map((inst) => `${t.id}:${inst.id}`)
+            const actualKeys = [...eConvs.keys()].filter((k) => k.startsWith(`${t.id}`) || k === t.id)
+            console.log(`[persist] engineSessionIds empty for engine tab=${t.id.slice(0, 8)} instances=${hPane.instances.length} expectedKeys=${JSON.stringify(expectedKeys.map((k) => k.slice(0, 16)))} actualKeysUnderTab=${JSON.stringify(actualKeys.map((k) => k.slice(0, 16)))}`)
+          }
           return result
         })() : {}),
         ...(pane && pane.instances.length > 0 ? { terminalInstances: pane.instances } : {}),
