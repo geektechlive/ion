@@ -84,7 +84,7 @@ struct DesktopSettingsView: View {
             HStack(spacing: 12) {
                 Image(systemName: "desktopcomputer")
                     .font(.title3)
-                    .foregroundStyle(IonTheme.accent)
+                    .foregroundStyle(JarvisTheme.accent)
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(desktopName)
