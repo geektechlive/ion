@@ -14,6 +14,7 @@ struct IonRemoteApp: App {
         WindowGroup {
             ContentView()
                 .environment(viewModel)
+                .environment(viewModel.briefingsStore)
                 .preferredColorScheme(.dark)
                 .tint(JarvisTheme.accent)
                 .onAppear {
