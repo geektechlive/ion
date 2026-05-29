@@ -41,7 +41,7 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
     var isVisible: Bool {
         switch visibility {
         case "always": return true
-        case "sticky": return invited || status == "running"
+        case "sticky": return status == "running"
         case "ephemeral": return status == "running"
         default: return true
         }

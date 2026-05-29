@@ -22,6 +22,10 @@ extension SessionViewModel {
     func handleEngineToolEnd(tabId: String, instanceId: String?, toolId: String, result: String?, isError: Bool) {
         DiagnosticLog.log("ENGINE: tool-end tabId=\(tabId.prefix(8)) toolId=\(toolId.prefix(8)) isError=\(isError)")
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
+        // Capture toolName before clearing — Agent sub-dispatches report isError=true
+        // from the CLI exit code even when they complete successfully; suppress the
+        // error state for Agent tool calls so the UI shows a checkmark, not a red X.
+        let toolName = activeTools[key]?[toolId]?.toolName ?? ""
         activeTools[key]?[toolId] = nil
         if activeTools[key]?.isEmpty == true {
             activeTools.removeValue(forKey: key)
@@ -29,7 +33,8 @@ extension SessionViewModel {
         // Update tool message status in conversation
         if var msgs = engineMessages[key],
            let idx = msgs.lastIndex(where: { $0.toolId == toolId }) {
-            msgs[idx].toolStatus = isError ? "error" : "completed"
+            let effectiveIsError = isError && toolName != "Agent"
+            msgs[idx].toolStatus = effectiveIsError ? "error" : "completed"
             if let result = result {
                 msgs[idx].content = result
             }
