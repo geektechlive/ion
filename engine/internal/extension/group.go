@@ -287,20 +287,76 @@ func (g *ExtensionGroup) FireContextLoad(ctx *Context, info ContextLoadInfo) (st
 }
 
 // ---------------------------------------------------------------------------
-// PlanModePrompt: last non-empty prompt wins, merge allowedTools.
+// PlanModePrompt: last non-empty prompt wins, merge allowedTools, last non-empty sparseReminder wins.
 // ---------------------------------------------------------------------------
 
-func (g *ExtensionGroup) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string) {
+func (g *ExtensionGroup) FirePlanModePrompt(ctx *Context, planFilePath string) (string, []string, string) {
 	var prompt string
 	var allTools []string
+	var sparseReminder string
 	for _, h := range g.hosts {
-		p, tools := h.FirePlanModePrompt(ctx, planFilePath)
+		p, tools, sr := h.FirePlanModePrompt(ctx, planFilePath)
 		if p != "" {
 			prompt = p
 		}
 		allTools = append(allTools, tools...)
+		if sr != "" {
+			sparseReminder = sr
+		}
 	}
-	return prompt, allTools
+	return prompt, allTools, sparseReminder
+}
+
+// FireBeforePlanModeExit fans the before_plan_mode_exit hook out to every host
+// and folds per-host results into a single allow/deny decision. Last non-nil
+// Allow across all hosts wins. Returns (true, "") when no handler has an opinion.
+func (g *ExtensionGroup) FireBeforePlanModeExit(ctx *Context, info BeforePlanModeExitInfo) (allowed bool, reason string) {
+	allowed = true
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforePlanModeExit: dispatching to %d host(s) planFile=%s", len(g.hosts), info.PlanFilePath,
+	))
+	for _, h := range g.hosts {
+		a, r := h.FireBeforePlanModeExit(ctx, info)
+		if !a {
+			allowed = false
+			if r != "" {
+				reason = r
+			}
+		} else if !allowed {
+			// Later host re-allows after an earlier denial — last wins.
+			allowed = true
+			reason = ""
+		}
+	}
+	return allowed, reason
+}
+
+// FireBeforePlanModeEnter fans the before_plan_mode_enter hook out to every
+// host and folds per-host results into a single allow/deny decision. Last
+// non-nil Allow across all hosts wins (mirrors FireBeforeEarlyStopDecision
+// field-merge semantics). Returns (true, "") when no handler has an opinion.
+func (g *ExtensionGroup) FireBeforePlanModeEnter(ctx *Context, info PlanModeEnterInfo) (allowed bool, reason string) {
+	allowed = true // default: allow
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforePlanModeEnter: dispatching to %d host(s) source=%s", len(g.hosts), info.Source,
+	))
+	for _, h := range g.hosts {
+		a, r := h.FireBeforePlanModeEnter(ctx, info)
+		// Only override decision if the host explicitly said something.
+		// FireBeforePlanModeEnter always returns (true,"") as default, so we
+		// treat a denial as an override but must still apply last-writer wins.
+		if !a {
+			allowed = false
+			if r != "" {
+				reason = r
+			}
+		} else if !allowed {
+			// A later host re-allows after an earlier one denied — last wins.
+			allowed = true
+			reason = ""
+		}
+	}
+	return allowed, reason
 }
 
 // FireSystemInject fires system_inject across all hosts. Last non-empty text
@@ -361,10 +417,118 @@ func (g *ExtensionGroup) FireTurnStart(ctx *Context, info TurnInfo) {
 	}
 }
 
+// FireBeforeProviderRequest fans the before_provider_request hook out to every
+// host. Observe-only: per-host errors are logged but do not propagate, since
+// stalling the agent loop on a telemetry hook would be worse than a silent
+// extension failure. The number of hosts notified is logged at INFO so
+// operators can confirm the hook is actually reaching extensions.
+func (g *ExtensionGroup) FireBeforeProviderRequest(ctx *Context, info BeforeProviderRequestInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforeProviderRequest: dispatching to %d host(s) provider=%s model=%s turn=%d messages=%d tools=%d",
+		len(g.hosts), info.Provider, info.Model, info.TurnNumber, info.MessageCount, info.ToolCount,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireBeforeProviderRequest(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireBeforeProviderRequest error: %v", err))
+		}
+	}
+}
+
 func (g *ExtensionGroup) FireTurnEnd(ctx *Context, info TurnInfo) {
 	for _, h := range g.hosts {
 		if err := h.SDK().FireTurnEnd(ctx, info); err != nil {
 			utils.Log("ExtensionGroup", fmt.Sprintf("FireTurnEnd error: %v", err))
+		}
+	}
+}
+
+// FireBeforeEarlyStopDecision fans the before_early_stop_decision hook out
+// to every host and folds the per-host results into a single decision. Per-
+// field "last non-nil wins" mirrors the per-host SDK resolution, so the
+// last host in registration order has final say if multiple hosts set the
+// same field.
+//
+// Returns nil when no host expressed an opinion. The runloop treats a nil
+// return as "use the engine's default decision".
+func (g *ExtensionGroup) FireBeforeEarlyStopDecision(ctx *Context, info EarlyStopDecisionInfo) *EarlyStopDecisionResult {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireBeforeEarlyStopDecision: dispatching to %d host(s) runID=%s turn=%d cumOut=%d budget=%d wouldContinue=%v",
+		len(g.hosts), info.RunID, info.TurnNumber, info.CumulativeOutputTokens, info.Budget, info.WouldContinue,
+	))
+	var out EarlyStopDecisionResult
+	anySet := false
+	for _, h := range g.hosts {
+		v := h.SDK().FireBeforeEarlyStopDecision(ctx, info)
+		if v == nil {
+			continue
+		}
+		if v.ForceContinue != nil {
+			out.ForceContinue = v.ForceContinue
+			anySet = true
+		}
+		if v.OverrideBudget != 0 {
+			out.OverrideBudget = v.OverrideBudget
+			anySet = true
+		}
+		if v.OverrideThresholdPct != 0 {
+			out.OverrideThresholdPct = v.OverrideThresholdPct
+			anySet = true
+		}
+		if v.ContinueMessage != "" {
+			out.ContinueMessage = v.ContinueMessage
+			anySet = true
+		}
+	}
+	if !anySet {
+		return nil
+	}
+	return &out
+}
+
+// FireEarlyStopContinued fans the early_stop_continued hook out to every
+// host. Observe-only: errors are logged per host but never propagate.
+func (g *ExtensionGroup) FireEarlyStopContinued(ctx *Context, info EarlyStopContinuedInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireEarlyStopContinued: dispatching to %d host(s) runID=%s turn=%d count=%d pct=%d",
+		len(g.hosts), info.RunID, info.TurnNumber, info.ContinuationCount, info.Pct,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireEarlyStopContinued(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireEarlyStopContinued error: %v", err))
+		}
+	}
+}
+
+// FireAgentStart fans the agent_start hook out to every host. Observe-only:
+// per-host errors are logged but do not propagate. Fired by the parent
+// session's agent-spawner when a child agent begins running, so parent-host
+// extensions can observe child-agent lifecycle (start time, identity, task).
+func (g *ExtensionGroup) FireAgentStart(ctx *Context, info AgentInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireAgentStart: dispatching to %d host(s) name=%s",
+		len(g.hosts), info.Name,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireAgentStart(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireAgentStart error: %v", err))
+		}
+	}
+}
+
+// FireAgentEnd fans the agent_end hook out to every host. Observe-only:
+// per-host errors are logged but do not propagate. Fired by the parent
+// session's agent-spawner when a child agent terminates (success, error,
+// or cancellation). Parent-host extensions pair this with agent_start to
+// observe child-agent lifecycle without resorting to tool_start/tool_end
+// watchdog tricks on the Agent tool.
+func (g *ExtensionGroup) FireAgentEnd(ctx *Context, info AgentInfo) {
+	utils.Log("ExtensionGroup", fmt.Sprintf(
+		"FireAgentEnd: dispatching to %d host(s) name=%s",
+		len(g.hosts), info.Name,
+	))
+	for _, h := range g.hosts {
+		if err := h.SDK().FireAgentEnd(ctx, info); err != nil {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireAgentEnd error: %v", err))
 		}
 	}
 }
@@ -405,5 +569,14 @@ func (g *ExtensionGroup) FirePermissionDenied(ctx *Context, info PermissionDenie
 func (g *ExtensionGroup) FireFileChanged(ctx *Context, info FileChangedInfo) {
 	for _, h := range g.hosts {
 		h.SDK().FireFileChanged(ctx, info)
+	}
+}
+
+// FireWorkspaceFileChanged fans the workspace_file_changed hook out to every
+// host in the group. Called by the session-scoped fsnotify watcher on every
+// non-ignored create / modify / delete event under the working directory.
+func (g *ExtensionGroup) FireWorkspaceFileChanged(ctx *Context, info WorkspaceFileChangedInfo) {
+	for _, h := range g.hosts {
+		h.SDK().FireWorkspaceFileChanged(ctx, info)
 	}
 }

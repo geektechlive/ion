@@ -2,7 +2,6 @@ package server
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -20,7 +19,6 @@ import (
 	"github.com/dsswift/ion/engine/internal/protocol"
 	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/session"
-	"github.com/dsswift/ion/engine/internal/titling"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -93,6 +91,7 @@ func NewServer(socketPath string, b backend.RunBackend) *Server {
 	case *backend.CliBackend, *backend.HybridBackend:
 		cliCapable = true
 	}
+	utils.Log("Server", fmt.Sprintf("backend type=%T cliCapable=%v", b, cliCapable))
 
 	s := &Server{
 		socketPath: socketPath,
@@ -355,15 +354,19 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 	case "send_prompt":
 		var overrides *session.PromptOverrides
 		resolvedExts := cmd.ResolveExtensions()
-		if cmd.Model != "" || cmd.MaxTurns > 0 || cmd.MaxBudgetUsd > 0 || len(resolvedExts) > 0 || cmd.NoExtensions || cmd.AppendSystemPrompt != "" || len(cmd.Attachments) > 0 {
+		if cmd.Model != "" || cmd.MaxTurns > 0 || cmd.MaxBudgetUsd > 0 || len(resolvedExts) > 0 || cmd.NoExtensions || cmd.AppendSystemPrompt != "" || len(cmd.Attachments) > 0 || cmd.ImplementationPhase || cmd.EnterPlanModeDescription != "" || cmd.PlanModeSparseReminder != "" || cmd.PlanFilePath != "" {
 			overrides = &session.PromptOverrides{
-				Model:              cmd.Model,
-				MaxTurns:           cmd.MaxTurns,
-				MaxBudgetUsd:       cmd.MaxBudgetUsd,
-				Extensions:         resolvedExts,
-				NoExtensions:       cmd.NoExtensions,
-				AppendSystemPrompt: cmd.AppendSystemPrompt,
-				Attachments:        cmd.Attachments,
+				Model:                    cmd.Model,
+				MaxTurns:                 cmd.MaxTurns,
+				MaxBudgetUsd:             cmd.MaxBudgetUsd,
+				Extensions:               resolvedExts,
+				NoExtensions:             cmd.NoExtensions,
+				AppendSystemPrompt:       cmd.AppendSystemPrompt,
+				Attachments:              cmd.Attachments,
+				ImplementationPhase:      cmd.ImplementationPhase,
+				EnterPlanModeDescription: cmd.EnterPlanModeDescription,
+				PlanModeSparseReminder:   cmd.PlanModeSparseReminder,
+				PlanFilePath:             cmd.PlanFilePath,
 			}
 		}
 		err := s.manager.SendPrompt(cmd.Key, cmd.Text, overrides)
@@ -453,6 +456,21 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		// raised by ion.elicit() / ctx.Elicit() so the extension Promise resolves.
 		s.manager.HandleElicitationResponse(cmd.Key, cmd.ElicitRequestID, cmd.ElicitResponse, cmd.ElicitCancelled)
 
+	case "early_stop_decision_response":
+		// Fire-and-forget: no response sent. Resolves a pending early-stop
+		// wire-protocol request so the blocked agent loop proceeds with the
+		// supplied decision. The runloop has its own short timeout, so a
+		// missing response is non-fatal — it just means the engine falls
+		// through to its existing merge logic (typically: no continuation).
+		s.manager.HandleEarlyStopDecisionResponse(
+			cmd.Key,
+			cmd.EarlyStopRequestID,
+			cmd.EarlyStopForceContinue,
+			cmd.EarlyStopOverrideBudget,
+			cmd.EarlyStopOverrideThresholdPct,
+			cmd.EarlyStopContinueMessage,
+		)
+
 	case "list_stored_sessions":
 		limit := cmd.Limit
 		if limit <= 0 {
@@ -494,94 +512,20 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		s.sendResult(conn, cmd, err, result)
 
 	case "generate_title":
-		// Run in a goroutine to avoid blocking the client's read loop
-		// while the LLM call is in flight.
-		go func(c net.Conn, command *protocol.ClientCommand) {
-			defer func() {
-				if r := recover(); r != nil {
-					buf := make([]byte, 4096)
-					n := runtime.Stack(buf, false)
-					utils.Error("Server", fmt.Sprintf("panic in generate_title: %v\n%s", r, buf[:n]))
-					s.sendResult(c, command, fmt.Errorf("internal error"), nil)
-				}
-			}()
-			title, err := titling.GenerateTitle(context.Background(), command.Text)
-			if err != nil {
-				s.sendResult(c, command, err, nil)
-				return
-			}
-			s.sendResult(c, command, nil, map[string]string{"title": title})
-		}(conn, cmd)
+		// Implementation in dispatch_data.go.
+		s.dispatchGenerateTitle(conn, cmd)
 
 	case "reconcile_state":
 		s.manager.ReconcileState(cmd.Key)
 		s.sendResult(conn, cmd, nil, nil)
 
 	case "migrate_conversation":
-		go func(c net.Conn, command *protocol.ClientCommand) {
-			defer func() {
-				if r := recover(); r != nil {
-					buf := make([]byte, 4096)
-					n := runtime.Stack(buf, false)
-					utils.Error("Server", fmt.Sprintf("panic in migrate_conversation: %v\n%s", r, buf[:n]))
-					s.sendResult(c, command, fmt.Errorf("internal error"), nil)
-				}
-			}()
-
-			sourceID := command.Key
-			targetFormat := command.Text
-			targetDir := command.Message
-			newSessionID := conversation.GenEntryID() + "-" + conversation.GenEntryID()
-
-			var result *conversation.MigrateResult
-			var sourceMsgs []conversation.ValidationMsg
-			var err error
-
-			switch targetFormat {
-			case "claude_code":
-				var conv *conversation.Conversation
-				conv, err = conversation.Load(sourceID, "")
-				if err != nil {
-					s.sendResult(c, command, fmt.Errorf("load source conversation: %w", err), nil)
-					return
-				}
-				sourceMsgs = conversation.ExtractValidationMsgs(conv)
-				result, err = conversation.ConvertIonToClaudeCode(conv, newSessionID, targetDir)
-			case "ion":
-				// For Claude Code → Ion, key is the source session ID and
-				// args contains the source directory for the Claude Code JSONL.
-				sourceDir := command.Args
-				if sourceDir == "" {
-					s.sendResult(c, command, fmt.Errorf("args (source dir) required for ion conversion"), nil)
-					return
-				}
-				sourcePath := filepath.Join(sourceDir, sourceID+".jsonl")
-				sourceMsgs, err = conversation.ExtractValidationMsgsFromClaudeCode(sourcePath)
-				if err != nil {
-					s.sendResult(c, command, fmt.Errorf("load source messages: %w", err), nil)
-					return
-				}
-				result, err = conversation.ConvertClaudeCodeToIon(sourcePath, newSessionID, targetDir)
-			default:
-				s.sendResult(c, command, fmt.Errorf("unknown target format: %s", targetFormat), nil)
-				return
-			}
-
-			if err != nil {
-				s.sendResult(c, command, err, nil)
-				return
-			}
-
-			if err := conversation.ValidateConversion(sourceMsgs, result.OutputPath, targetFormat); err != nil {
-				s.sendResult(c, command, fmt.Errorf("validation failed: %w", err), nil)
-				return
-			}
-
-			s.sendResult(c, command, nil, result)
-		}(conn, cmd)
+		// Implementation in dispatch_data.go.
+		s.dispatchMigrateConversation(conn, cmd)
 
 	case "list_models":
-		s.sendResult(conn, cmd, nil, s.buildModelsList())
+		// Implementation in dispatch_data.go.
+		s.dispatchListModels(conn, cmd)
 
 	case "get_host_info":
 		s.sendResult(conn, cmd, nil, computeHostInfo())
@@ -630,6 +574,17 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		// Provider field is optional: empty = refresh all
 		providers.RefreshModels(cmd.Provider, true, resolveKey, providerConfigs)
 		s.sendResult(conn, cmd, nil, nil)
+
+	case "clear_conversation_file":
+		// Wipes the LLM-visible message history for a stored conversation
+		// without requiring a live engine session. Used by consumers that
+		// need to reset a conversation file by id when no session is running
+		// against it (e.g. a tab that was loaded from disk but never sent a
+		// prompt, so no in-memory session exists to receive a dispatchClear).
+		// The key field carries the conversationId (sessionId) to wipe.
+		utils.Log("Server", fmt.Sprintf("clear_conversation_file: sessionId=%s", cmd.Key))
+		err := s.manager.ClearConversationFile(cmd.Key)
+		s.sendResult(conn, cmd, err, nil)
 
 	case "shutdown":
 		_ = s.Stop()

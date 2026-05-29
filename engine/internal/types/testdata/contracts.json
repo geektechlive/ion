@@ -26,7 +26,13 @@
     ],
     "plan_mode_changed": [
       "enabled",
-      "planFilePath"
+      "planFilePath",
+      "planSlug"
+    ],
+    "plan_proposal": [
+      "kind",
+      "planFilePath",
+      "planSlug"
     ],
     "rate_limit": [
       "rateLimitType",
@@ -92,11 +98,37 @@
   "engineEvent": [
     "active",
     "agents",
+    "asyncDecl",
+    "asyncDurationMs",
+    "asyncId",
+    "asyncKind",
+    "asyncMethod",
+    "asyncOrigin",
+    "asyncPath",
+    "asyncReason",
+    "asyncRequestId",
+    "asyncStatus",
     "attemptNumber",
     "cancelled",
     "clearedBlocks",
+    "command",
+    "commandError",
+    "commands",
     "defaultValue",
     "dialogId",
+    "earlyStopBudget",
+    "earlyStopContinuationCount",
+    "earlyStopCumulativeOutput",
+    "earlyStopIsSubagent",
+    "earlyStopLastContinuationDelta",
+    "earlyStopMaxContinuations",
+    "earlyStopModel",
+    "earlyStopRequestId",
+    "earlyStopRunId",
+    "earlyStopStopReason",
+    "earlyStopThresholdPct",
+    "earlyStopTurnNumber",
+    "earlyStopWouldContinue",
     "elicitMode",
     "errorCategory",
     "errorCode",
@@ -107,6 +139,13 @@
     "index",
     "isError",
     "level",
+    "llmCallCost",
+    "llmCallInputTokens",
+    "llmCallJsonMode",
+    "llmCallLatencyMs",
+    "llmCallModel",
+    "llmCallOutputTokens",
+    "llmCallProvider",
     "message",
     "messagesAfter",
     "messagesBefore",
@@ -119,6 +158,8 @@
     "permToolName",
     "planFilePath",
     "planModeEnabled",
+    "planProposalKind",
+    "planSlug",
     "questionId",
     "requestId",
     "response",
@@ -146,6 +187,10 @@
       "name",
       "status"
     ],
+    "EngineCommandListing": [
+      "description",
+      "name"
+    ],
     "EngineConfig": [
       "extensions",
       "maxTokens",
@@ -154,7 +199,8 @@
       "sessionId",
       "systemHint",
       "thinking",
-      "workingDirectory"
+      "workingDirectory",
+      "workspaceWatchIgnore"
     ],
     "McpServerInfo": [
       "name",

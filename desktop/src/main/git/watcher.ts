@@ -99,11 +99,18 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
   let debounceTimer: Timer | null = null
   let pendingEvents = new Set<GitWatchEvent['kind']>()
   let startGeneration = 0
+  let heartbeatTimer: Timer | null = null
+  let currentRepoPath = ''
+  let lastEventAt = 0
+  let totalEventsSeen = 0
 
   return {
     start(repoPath: string, onEvent: (event: GitWatchEvent) => void): void {
       if (isActive) return
       const gen = ++startGeneration
+      currentRepoPath = repoPath
+      lastEventAt = Date.now()
+      totalEventsSeen = 0
 
       const flush = (): void => {
         debounceTimer = null
@@ -127,6 +134,8 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
       pw.subscribe(gitDir, (err, events) => {
         if (gen !== startGeneration) return   // stale callback from previous start
         if (err) { log(`Git watcher .git error: ${err.message}`); return }
+        lastEventAt = Date.now()
+        totalEventsSeen += events.length
         for (const event of events) {
           const kind = classifyGitMetaChange(event.path)
           if (kind) pendingEvents.add(kind)
@@ -145,6 +154,8 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
       pw.subscribe(repoPath, (err, events) => {
         if (gen !== startGeneration) return   // stale callback from previous start
         if (err) { log(`Git watcher tree error: ${err.message}`); return }
+        lastEventAt = Date.now()
+        totalEventsSeen += events.length
         if (events.length > 0) {
           pendingEvents.add('status:dirty')
           scheduleFlush()
@@ -161,6 +172,14 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
         })
         .catch((err: Error) => log(`Git watcher: failed to watch tree: ${err.message}`))
 
+      // Heartbeat — log every 60 s while active so future investigations
+      // can compare watcher liveness against the moment the renderer stopped
+      // seeing updates. Pure observability; no behavior change.
+      heartbeatTimer = setInterval(() => {
+        const ageSec = Math.round((Date.now() - lastEventAt) / 1000)
+        log(`Git watcher heartbeat: repo=${currentRepoPath} subs=${subscriptions.length} suspended=${isSuspended} eventsSeen=${totalEventsSeen} lastEventAgeSec=${ageSec}`)
+      }, 60_000)
+
       isActive = true
       log(`Git watcher started: ${repoPath}`)
     },
@@ -171,8 +190,12 @@ function createParcelWatcher(pw: ParcelModule): GitWatcher {
         clearTimeout(debounceTimer)
         debounceTimer = null
       }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
       pendingEvents.clear()
-      log(`Git watcher stop: unsubscribing ${subscriptions.length} subscriptions`)
+      log(`Git watcher stop: unsubscribing ${subscriptions.length} subscriptions for ${currentRepoPath} (eventsSeen=${totalEventsSeen})`)
       for (const sub of subscriptions) sub.unsubscribe().catch(() => {})
       subscriptions = []
       isActive = false

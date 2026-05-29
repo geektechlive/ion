@@ -285,6 +285,21 @@ func setupTestProvider(responses [][]types.LlmStreamEvent) *mockLlmProvider {
 	return mock
 }
 
+// testEarlyStopDisabled returns a pointer to false, used to opt tests out of
+// the default-on early-stop continuation feature. Backend unit tests use
+// tiny synthetic token counts (e.g. 5 output tokens) that fall well below
+// any sensible budget threshold and would otherwise trigger continuation
+// nudges, requiring multi-response scripts. Tests that specifically
+// exercise the early-stop logic (runloop_early_stop_test.go) opt back in
+// by leaving this field unset or passing &true.
+//
+// Real harness code never calls this — production runs ship with the
+// feature on by default. See docs/configuration/engine-json.md.
+func testEarlyStopDisabled() *bool {
+	v := false
+	return &v
+}
+
 type collectedEvents struct {
 	mu         sync.Mutex
 	normalized []types.NormalizedEvent
@@ -370,6 +385,7 @@ func TestStartRunSpawnsAndTracksRun(t *testing.T) {
 		Prompt:      "hello",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	// Briefly check IsRunning
@@ -463,6 +479,7 @@ func TestCancelReturnsTrueAndStopsRun(t *testing.T) {
 		Prompt:      "slow run",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	time.Sleep(100 * time.Millisecond)
@@ -487,6 +504,7 @@ func TestIsRunningDuringAndAfter(t *testing.T) {
 		Prompt:      "test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -510,6 +528,7 @@ func TestOnNormalizedReceivesEvents(t *testing.T) {
 		Prompt:      "test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -550,6 +569,7 @@ func TestOnExitCalledWithSessionID(t *testing.T) {
 		Prompt:      "test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -587,6 +607,7 @@ func TestOnErrorCalledOnProviderFailure(t *testing.T) {
 		Prompt:      "fail",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -638,6 +659,7 @@ func TestSetOnToolCallBlocksPreventsExecution(t *testing.T) {
 		Prompt:      "block test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	}, cfg)
 
 	if !waitForExit(c, 5*time.Second) {
@@ -698,6 +720,7 @@ func TestSetOnPerToolHookFiresBeforeAndAfter(t *testing.T) {
 		Prompt:      "hook test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	}, cfg)
 
 	if !waitForExit(c, 5*time.Second) {
@@ -745,6 +768,7 @@ func TestRunConfigTelemetryAttachesToRun(t *testing.T) {
 		Prompt:      "telemetry test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	}, cfg)
 
 	if !waitForExit(c, 5*time.Second) {
@@ -830,11 +854,13 @@ func TestConcurrentMultipleRuns(t *testing.T) {
 		Prompt:      "run a",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 	bMulti.StartRun("req-mb", types.RunOptions{
 		Prompt:      "run b",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	deadline := time.After(5 * time.Second)
@@ -897,6 +923,7 @@ func TestCancelDuringRun(t *testing.T) {
 		Prompt:      "block",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	time.Sleep(100 * time.Millisecond)
@@ -930,6 +957,7 @@ func TestToolExecutionErrorHandling(t *testing.T) {
 		Prompt:      "error tool",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -976,6 +1004,7 @@ func TestCostTracking(t *testing.T) {
 		Prompt:      "cost",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -1018,6 +1047,7 @@ func TestBudgetEnforcementStopsAtMaxCost(t *testing.T) {
 		ProjectPath: "/tmp",
 		Model:       testModel,
 		MaxBudgetUsd: 0.0001, // very low budget
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -1060,6 +1090,7 @@ func TestBudgetEnforcementStopsAtMaxTurns(t *testing.T) {
 		ProjectPath: "/tmp",
 		Model:       testModel,
 		MaxTurns:    3,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -1093,6 +1124,7 @@ func TestMaxTokensContinuation(t *testing.T) {
 		Prompt:      "continue test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -1126,6 +1158,7 @@ func TestTaskCompleteContainsExpectedFields(t *testing.T) {
 		Prompt:      "fields test",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -1162,6 +1195,7 @@ func TestErrorOnUnknownModel(t *testing.T) {
 		Prompt:      "test",
 		ProjectPath: "/tmp",
 		Model:       "nonexistent-model-xyz",
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -1188,6 +1222,7 @@ func TestErrorOnEmptyModel(t *testing.T) {
 		Prompt:      "test",
 		ProjectPath: "/tmp",
 		// Model intentionally omitted.
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {
@@ -1269,6 +1304,7 @@ func TestTextChunksAccumulated(t *testing.T) {
 		Prompt:      "multi",
 		ProjectPath: "/tmp",
 		Model:       testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
 	if !waitForExit(c, 5*time.Second) {

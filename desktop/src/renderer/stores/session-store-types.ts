@@ -43,6 +43,7 @@ export interface State {
   editorGeometry: { x: number; y: number; w: number; h: number }
   planGeometry: { x: number; y: number; w: number; h: number }
   tabsReady: boolean
+  initProgress: string | null
   backend: 'api' | 'cli'
   worktreeUncommittedMap: Map<string, boolean>
 
@@ -58,6 +59,26 @@ export interface State {
   engineMessages: Map<string, Message[]>
   engineModelOverrides: Map<string, string>
   engineDraftInputs: Map<string, string>
+  /**
+   * Pending AskUserQuestion / ExitPlanMode denials per engine instance,
+   * keyed by the compound `${tabId}:${instanceId}` key. A `null` slot is
+   * the explicit "no pending denial" marker for an instance (preserved
+   * across cost-only `engine_status` ticks).
+   *
+   * Engine sub-tabs (instances under a single engine view) are independent
+   * sub-conversations. Storing denial state per-instance (vs. on the
+   * parent `tab.permissionDenied`) keeps siblings from showing each
+   * other's AskUserQuestion / ExitPlanMode cards when the user switches
+   * between them. CLI tabs continue to use `tab.permissionDenied` — this
+   * map is engine-only.
+   *
+   * Parent-pill bubbling: `getWaitingState()` in `TabStripShared.ts` folds
+   * across an engine tab's instance entries so the strip pill still glows
+   * when any sub-tab is blocked. iOS receives the active instance's
+   * denial via `RemoteTabState.permissionQueue` (see snapshot.ts) so the
+   * iOS card path continues to work unchanged at the tab level.
+   */
+  enginePermissionDenied: Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null>
 
   tallViewTabId: string | null
   scrollToBottomCounter: number
@@ -67,7 +88,7 @@ export interface State {
   initStaticInfo: () => Promise<void>
   setPermissionMode: (mode: 'auto' | 'plan', source?: string) => void
   createTab: (useWorktree?: boolean) => Promise<string>
-  createTabInDirectory: (dir: string, useWorktree?: boolean, skipDuplicateCheck?: boolean) => Promise<string>
+  createTabInDirectory: (dir: string, useWorktree?: boolean, skipDuplicateCheck?: boolean, pinToGroupId?: string) => Promise<string>
   selectTab: (tabId: string) => void
   closeTab: (tabId: string) => void
   reorderTabs: (reorderedTabs: TabState[]) => void
@@ -121,7 +142,7 @@ export interface State {
   addSystemMessage: (content: string) => void
   startBashCommand: (command: string, execId: string) => { toolMsgId: string; tabId: string }
   completeBashCommand: (tabId: string, toolMsgId: string, command: string, stdout: string, stderr: string, exitCode: number | null) => void
-  sendMessage: (prompt: string, projectPath?: string, extraAttachments?: Attachment[], appendSystemPrompt?: string) => void
+  sendMessage: (prompt: string, projectPath?: string, extraAttachments?: Attachment[], appendSystemPrompt?: string, implementationPhase?: boolean) => void
   submitRemotePrompt: (tabId: string, prompt: string, imageAttachments?: ImageAttachmentPayload[]) => void
   submitRemoteBash: (tabId: string, command: string) => void
   respondPermission: (tabId: string, questionId: string, optionId: string) => void
@@ -143,6 +164,7 @@ export interface State {
   handleError: (tabId: string, error: EnrichedError) => void
   forceRecoverTab: (tabId: string, reason: string) => void
   moveTabToGroup: (tabId: string, groupId: string) => void
+  moveTabToGroupAndPin: (tabId: string, groupId: string) => void
   setTabGroupId: (tabId: string, groupId: string | null) => void
   toggleTabGroupPin: (tabId: string) => void
   setWorktreeUncommitted: (tabId: string, hasChanges: boolean) => void

@@ -16,7 +16,7 @@ Compaction can be triggered in three ways:
 2. **Manual** -- the `compact` command triggers compaction on demand.
 3. **Extension hook** -- the `session_before_compact` hook fires before compaction. If any handler returns `true`, compaction is cancelled.
 
-After compaction, the `session_compact` hook fires with details about the strategy used and messages before/after counts.
+After compaction, the `session_compact` hook fires with the strategy used, the messages-before/after counts, and a slice of structured facts (`Facts: []CompactionFact{Type, Content}`) the engine extracted from the pre-compaction message set. The facts cover decisions, file modifications, errors, preferences, and discoveries detected in the conversation; extensions maintaining external memory (vector store, knowledge graph, SQLite) can persist them durably before the source messages are discarded. `Facts` may be empty when only step-1 micro-compaction ran and no patterns matched.
 
 ## Built-in strategies
 

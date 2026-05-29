@@ -103,7 +103,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       return tabId
     },
 
-    createTabInDirectory: async (dir, useWorktree, skipDuplicateCheck) => {
+    createTabInDirectory: async (dir, useWorktree, skipDuplicateCheck, pinToGroupId) => {
       if (!skipDuplicateCheck) {
         const existingBlank = get().tabs.find((t) => isBlankConversationTab(t, dir))
         if (existingBlank) {
@@ -131,12 +131,24 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       const { tabGroupMode: tgm2, tabGroups: tgs2 } = usePreferencesStore.getState()
       const defaultGroupId2 = tgm2 === 'manual' ? (tgs2.find((g) => g.isDefault)?.id || tgs2[0]?.id || null) : null
 
+      // If caller explicitly requested a pinned group (e.g. iOS per-group "+" button
+      // or desktop "Move to group and pin"), honor it: place the tab in that group
+      // and set groupPinned=true from the start so the first sendMessage's
+      // auto-movement (gated on !groupPinned in send-slice.ts) skips this tab.
+      const useExplicitPin = !!pinToGroupId && tgm2 === 'manual'
+      const finalGroupId = useExplicitPin ? pinToGroupId! : defaultGroupId2
+      const finalPinned = useExplicitPin ? true : false
+      if (useExplicitPin) {
+        console.log(`[tab-pin] createTabInDirectory pinToGroupId=${pinToGroupId} overriding default group ${defaultGroupId2 ?? 'none'} for tab=${tabId.slice(0, 8)}`)
+      }
+
       const tab: TabState = {
         ...makeLocalTab(),
         id: tabId,
         workingDirectory: dir,
         hasChosenDirectory: true,
-        groupId: defaultGroupId2,
+        groupId: finalGroupId,
+        groupPinned: finalPinned,
       }
 
       if (useWorktree) {
@@ -240,6 +252,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         const engineConversationIds = new Map(get().engineConversationIds)
         const engineMessages = new Map(get().engineMessages)
         const engineDraftInputs = new Map(get().engineDraftInputs)
+        const enginePermissionDenied = new Map(get().enginePermissionDenied)
         const enginePanes = new Map(get().enginePanes)
         for (const k of engineAgentStates.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineAgentStates.delete(k)
         for (const k of engineStatusFields.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineStatusFields.delete(k)
@@ -251,8 +264,9 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         for (const k of engineConversationIds.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineConversationIds.delete(k)
         for (const k of engineMessages.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineMessages.delete(k)
         for (const k of engineDraftInputs.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineDraftInputs.delete(k)
+        for (const k of enginePermissionDenied.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePermissionDenied.delete(k)
         enginePanes.delete(tabId)
-        set({ engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineConversationIds, engineMessages, engineDraftInputs, enginePanes })
+        set({ engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineConversationIds, engineMessages, engineDraftInputs, enginePermissionDenied, enginePanes })
       }
       if (closingTab) {
         const dir = closingTab.workingDirectory
@@ -364,6 +378,35 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         const tab = s.tabs.find((t) => t.id === tabId)
         if (!tab) return s
         const updated = { ...tab, groupId }
+        const without = s.tabs.filter((t) => t.id !== tabId)
+        let insertIdx = -1
+        for (let i = without.length - 1; i >= 0; i--) {
+          if (without[i].groupId === groupId) { insertIdx = i; break }
+        }
+        const newTabs = [...without]
+        if (insertIdx >= 0) {
+          newTabs.splice(insertIdx + 1, 0, updated)
+        } else {
+          newTabs.push(updated)
+        }
+        return { tabs: newTabs }
+      })
+    },
+
+    // Combined "move and pin": same reordering as moveTabToGroup but also
+    // sets groupPinned=true in the same set() call. Used by the desktop
+    // "Move to group and pin" context-menu item and by iOS's matching
+    // command. Setting both fields in one update avoids the two-render
+    // flicker of calling moveTabToGroup then toggleTabGroupPin in sequence,
+    // and — more importantly — guarantees that any send-slice auto-movement
+    // observing the store sees groupPinned=true atomically with the group
+    // change, so it can never race in the half-pinned state.
+    moveTabToGroupAndPin: (tabId, groupId) => {
+      set((s) => {
+        const tab = s.tabs.find((t) => t.id === tabId)
+        if (!tab) return s
+        console.log(`[tab-pin] move+pin tab=${tabId.slice(0, 8)} → group=${groupId} (was group=${tab.groupId ?? 'none'}, pinned=${tab.groupPinned ?? false})`)
+        const updated = { ...tab, groupId, groupPinned: true }
         const without = s.tabs.filter((t) => t.id !== tabId)
         let insertIdx = -1
         for (let i = without.length - 1; i >= 0; i--) {

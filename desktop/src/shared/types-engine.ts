@@ -15,6 +15,15 @@ export interface EngineConfig {
   maxTokens?: number
   thinking?: { enabled: boolean; budgetTokens?: number }
   systemHint?: string
+  /**
+   * Override the engine's default ignore-glob list for the
+   * workspace_file_changed watcher. When omitted or empty the engine uses
+   * its built-ins (`.git/**`, `node_modules/**`, `dist/**`, etc.). A
+   * non-empty array REPLACES the defaults entirely (not merge). Patterns
+   * use doublestar syntax and match against forward-slash repo-relative
+   * paths.
+   */
+  workspaceWatchIgnore?: string[]
 }
 
 export interface EngineInstance {
@@ -56,6 +65,19 @@ export interface StatusFields {
   extensionName?: string
 }
 
+/**
+ * Slash-command listing carried inside engine_command_registry snapshots.
+ * Mirror of Go's types.EngineCommandListing. The desktop's prompt pipeline
+ * uses the `name` set as a routing hint so it can short-circuit `.md`
+ * template lookups for command names the session's extensions own. The
+ * `description` is the same hint the iOS autocomplete already shows for
+ * filesystem-discovered `.md` commands.
+ */
+export interface EngineCommandListing {
+  name: string
+  description?: string
+}
+
 export type EngineEvent =
   | { type: 'engine_agent_state'; agents: AgentStateUpdate[] }
   | { type: 'engine_status'; fields: StatusFields }
@@ -72,7 +94,19 @@ export type EngineEvent =
   | { type: 'engine_dead'; exitCode: number | null; signal: string | null; stderrTail: string[] }
   | { type: 'engine_error'; message: string; errorCode?: string; errorCategory?: string; retryable?: boolean; retryAfterMs?: number; httpStatus?: number }
   | { type: 'engine_permission_request'; questionId: string; permToolName: string; permToolDescription?: string; permToolInput?: Record<string, unknown>; permOptions: Array<{ id: string; label: string; kind?: string }> }
-  | { type: 'engine_plan_mode_changed'; planModeEnabled: boolean; planFilePath?: string }
+  | { type: 'engine_plan_mode_changed'; planModeEnabled: boolean; planFilePath?: string; planSlug?: string }
+  // engine_plan_proposal is the workflow-level counterpart to
+  // engine_plan_mode_changed: it fires when the model *proposes* a plan-mode
+  // transition (e.g. by calling ExitPlanMode) but the actual mode change is
+  // deferred to the consumer's user-approval chokepoint. The `kind` field
+  // discriminates the proposal — `"exit"` is the only kind emitted today;
+  // future kinds may include `"enter"` or `"amend"`. Consumers must treat
+  // unknown kinds as forward-compatible. See
+  // docs/architecture/adr/003-state-events-vs-workflow-events.md for the
+  // state-vs-workflow distinction. PlanFilePath and PlanSlug are carried
+  // directly so consumers don't have to scrape `permissionDenials.toolInput`
+  // to recover them.
+  | { type: 'engine_plan_proposal'; planProposalKind: 'exit' | string; planFilePath?: string; planSlug?: string }
   | { type: 'engine_stream_reset' }
   | { type: 'engine_compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
   | { type: 'engine_tool_stalled'; toolId: string; toolName: string; toolElapsed: number }
@@ -80,3 +114,97 @@ export type EngineEvent =
   | { type: 'engine_extension_respawned'; extensionName: string; attemptNumber: number }
   | { type: 'engine_events_dropped'; count: number }
   | { type: 'engine_extension_dead_permanent'; extensionName: string; attemptNumber: number }
+  // ─── Async-trigger events (D-010 / D-011) ───
+  //
+  // The engine emits these for every webhook and schedule fire plus
+  // every registration/deregistration so the desktop / iOS can render
+  // an audit-log panel of "what's declared" and "what just fired".
+  // The desktop does NOT act on these (they're observation-only);
+  // they're typed here so future UI work has the shape ready.
+  //
+  // Shared fields across the variants:
+  //   asyncKind:        "webhook" | "schedule"
+  //   asyncId:          route path (webhook) or job id (schedule)
+  //   asyncOrigin:      "init" | "runtime" — set on lifecycle events
+  //   asyncReason:      negative-path discriminator
+  //   asyncDecl:        the original declaration JSON, redacted of secrets
+  //   asyncRequestId:   webhook correlation id (received → responded)
+  //   asyncMethod:      HTTP method (webhook)
+  //   asyncPath:        HTTP path (mirrors asyncId for webhooks)
+  //   asyncStatus:      HTTP response status (webhook)
+  //   asyncDurationMs:  elapsed time of the fire
+  | { type: 'engine_webhook_received'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string }
+  | { type: 'engine_webhook_authenticated'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string }
+  | { type: 'engine_webhook_handler_error'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string; asyncStatus: number; asyncReason: string; asyncDurationMs: number }
+  | { type: 'engine_webhook_responded'; asyncKind: 'webhook'; asyncId: string; asyncRequestId: string; asyncMethod: string; asyncPath: string; asyncStatus: number; asyncDurationMs: number }
+  | { type: 'engine_webhook_registered'; asyncKind: 'webhook'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_webhook_deregistered'; asyncKind: 'webhook'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_schedule_fired'; asyncKind: 'schedule'; asyncId: string; asyncDurationMs: number }
+  | { type: 'engine_schedule_skipped'; asyncKind: 'schedule'; asyncId: string; asyncReason: string }
+  | { type: 'engine_schedule_failed'; asyncKind: 'schedule'; asyncId: string; asyncReason: string; asyncDurationMs: number }
+  | { type: 'engine_schedule_registered'; asyncKind: 'schedule'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_schedule_deregistered'; asyncKind: 'schedule'; asyncId: string; asyncOrigin: 'init' | 'runtime'; asyncDecl?: unknown }
+  | { type: 'engine_async_fire_dropped'; asyncKind: 'webhook' | 'schedule'; asyncId: string; asyncReason: string }
+  // engine_command_result is emitted at the end of every Manager.SendCommand
+  // dispatch — success (CommandError empty), extension-command failure
+  // (CommandError = the error message), and unknown command (CommandError =
+  // "unknown_command"). The `command` field carries the bare name so a
+  // consumer can switch on it without reparsing prose. The desktop's prompt
+  // pipeline awaits this event to decide between "dispatch landed, draw
+  // the divider" and "engine disclaims, fall through to `.md` expansion".
+  | { type: 'engine_command_result'; message?: string; command?: string; commandError?: string }
+  // engine_command_registry is a complete SNAPSHOT of the session's
+  // extension-registered slash commands. Emitted at session_start (after
+  // extensions wire up) and on every subsequent change (mid-session
+  // RegisterCommand, hot reload, etc.). Consumers REPLACE their cached
+  // routing-hint set with this payload. Empty `commands` is the authoritative
+  // "no extension commands live for this session" signal.
+  | { type: 'engine_command_registry'; commands: EngineCommandListing[] }
+  // engine_early_stop_decision_request is the wire-protocol surface for the
+  // before_early_stop_decision hook. Promotes the hook to the socket so
+  // socket-only harnesses (desktop, custom UIs, headless tooling) can
+  // participate without running a subprocess extension. The engine emits this
+  // event after the model emits end_turn / stop AND after the extension-side
+  // hook returned no opinion. Consumers must respond via the
+  // `early_stop_decision_response` client command, supplying the same
+  // fields the subprocess hook would return (all optional). The engine
+  // waits at most 100ms for a response; a missed deadline is treated as
+  // "no opinion" and the run proceeds with the existing merge logic.
+  //
+  // Field semantics mirror engine/internal/extension/EarlyStopDecisionInfo
+  // verbatim; see docs/hooks/reference.md for the canonical descriptions.
+  | {
+      type: 'engine_early_stop_decision_request'
+      earlyStopRequestId: string
+      earlyStopRunId: string
+      earlyStopModel: string
+      earlyStopTurnNumber: number
+      earlyStopStopReason: string
+      earlyStopCumulativeOutput: number
+      earlyStopBudget: number
+      earlyStopThresholdPct: number
+      earlyStopContinuationCount: number
+      earlyStopMaxContinuations: number
+      earlyStopLastContinuationDelta: number
+      earlyStopWouldContinue: boolean
+      earlyStopIsSubagent?: boolean
+    }
+  // engine_llm_call is the lightweight-inference observability event,
+  // emitted exactly once per successful ctx.LLMCall invocation. Carries
+  // model / provider / latency / token / cost / jsonMode metadata —
+  // never the prompt text or response content (privacy-by-default for
+  // harness-internal classification prompts). The desktop is observation-
+  // only; it does NOT need to act on this, but the variant is typed so
+  // any future cost-summary or telemetry-rendering work has the shape
+  // ready. See engine/internal/types/types.go for the canonical Go
+  // definition.
+  | {
+      type: 'engine_llm_call'
+      llmCallModel: string
+      llmCallProvider: string
+      llmCallLatencyMs: number
+      llmCallInputTokens: number
+      llmCallOutputTokens: number
+      llmCallCost: number
+      llmCallJsonMode?: boolean
+    }

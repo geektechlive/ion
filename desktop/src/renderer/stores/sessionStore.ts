@@ -45,6 +45,7 @@ const initialState = {
   editorGeometry: { x: 60, y: 80, w: 680, h: 480 },
   planGeometry: { x: 60, y: 80, w: 720, h: 420 },
   tabsReady: false,
+  initProgress: null,
   backend: 'api' as const,
   worktreeUncommittedMap: new Map(),
   engineAgentStates: new Map(),
@@ -59,6 +60,11 @@ const initialState = {
   engineMessages: new Map<string, Message[]>(),
   engineModelOverrides: new Map<string, string>(),
   engineDraftInputs: new Map<string, string>(),
+  // Per-engine-instance AskUserQuestion / ExitPlanMode denials. Keyed by
+  // `${tabId}:${instanceId}`. See `enginePermissionDenied` JSDoc on
+  // `State` (session-store-types.ts) for the full rationale. Mirrors the
+  // other per-instance maps (engineMessages, engineDraftInputs, etc.).
+  enginePermissionDenied: new Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null>(),
   tallViewTabId: null,
   scrollToBottomCounter: 0,
   settingsOpen: false,

@@ -15,7 +15,7 @@ Resource limits control how long an agent session can run and how much it can sp
 | `maxTurns` | int | unset (unlimited) | `--max-turns N` | Maximum number of LLM turns before the agent stops. Each turn is one request-response cycle with the model. Unset or `<= 0` means no cap. |
 | `maxBudgetUsd` | float | unset (unlimited) | `--max-budget USD` | Cost ceiling in US dollars. The agent stops when estimated spend reaches this value. Unset or `<= 0` means no cap. |
 | `suppressSystemMessages` | bool | unset (`false`) | -- | When `true`, engine-injected steering messages are sent to the LLM but not persisted to session history. |
-| `disablePlanModeReminder` | bool | unset (`false`) | -- | When `true`, the plan mode sparse reminder is not injected on turn 2+. |
+| `disablePlanModeReminder` | bool | unset (`false`) | -- | When `true`, the plan mode sparse reminder is not injected on turn 2+. Power users who want to customize the reminder text rather than suppress it entirely should see `RunOptions.PlanModeSparseReminder` in [client-commands.md](../protocol/client-commands.md#send_prompt) or the harness-level `desktop.planModeSparseReminder` key in [settings-json.md](./settings-json.md). |
 | `disableTurnLimitWarning` | bool | unset (`false`) | -- | When `true`, the turn-limit wind-down message is not injected. |
 | `disableMaxTokenContinue` | bool | unset (`false`) | -- | When `true`, the max-tokens continue prompt is not injected. |
 

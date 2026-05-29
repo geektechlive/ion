@@ -6,9 +6,10 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/conversation"
-	"github.com/dsswift/ion/engine/internal/export"
+	"github.com/dsswift/ion/engine/internal/scheduling"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
+	"github.com/dsswift/ion/engine/internal/webhooks"
 )
 
 // SessionInfo describes a session in the list response.
@@ -29,6 +30,29 @@ type Manager struct {
 	config   *types.EngineRuntimeConfig
 
 	onEvent func(string, types.EngineEvent)
+
+	// childBackendOverride is a test-only seam: when non-nil, newChildBackend
+	// returns this factory's output instead of constructing a real backend.
+	// Lets unit tests substitute an in-process stub for the child-agent
+	// spawner closure (which otherwise hardcodes an ApiBackend or CliBackend).
+	// Production callers must never set this -- it has no setter on the
+	// public API.
+	childBackendOverride func() backend.RunBackend
+
+	// Async-trigger subsystems. Lazily allocated on first
+	// ensureAsyncSubsystems call. Shared across every session managed
+	// by this Manager so the engine never binds two webhook listeners
+	// on the same port. asyncMu guards just these fields to keep the
+	// main m.mu uncontended for the most-frequent reads.
+	asyncMu       sync.Mutex
+	webhookServer *webhooks.Server
+	scheduler     *scheduling.Scheduler
+
+	// watchers deduplicates filesystem watchers across sessions that
+	// share the same working directory. Without this, N sessions on
+	// one repo tree consume N * dirs kqueue FDs, exhausting the
+	// per-process file descriptor limit.
+	watchers *watcherPool
 }
 
 // SetConfig stores the engine runtime config for applying defaults.
@@ -57,6 +81,7 @@ func NewManager(b backend.RunBackend) *Manager {
 	m := &Manager{
 		sessions: make(map[string]*engineSession),
 		backend:  b,
+		watchers: newWatcherPool(),
 	}
 
 	b.OnNormalized(m.handleNormalizedEvent)
@@ -118,84 +143,48 @@ func (m *Manager) ListSessions() []SessionInfo {
 
 
 // SendCommand dispatches an internal command to a session.
+//
+// Resolution order:
+//  1. Extension commands (s.extGroup.Commands()) — checked first so a harness
+//     that registers `/clear` or `/help` cannot be silently overridden by a
+//     stale `.md` template on the consumer side. Always read live from the
+//     group; never cached, so a command registered moments before this call
+//     is found even if the corresponding engine_command_registry snapshot is
+//     still in flight to consumers.
+//  2. Built-in cases below (`clear`, `compact`, `export`).
+//  3. Default arm: emit an engine_command_result with CommandError set so
+//     consumers can distinguish "ran fine" from "engine disclaims this name"
+//     and route to whatever fallback they own (e.g. local `.md` template
+//     expansion). Without this, consumers have no observable signal — the
+//     previous behavior was a silent no-op which leaves an in-flight
+//     conversation hanging. The default arm is the defence-in-depth backstop
+//     that makes mid-session registration races recoverable.
 func (m *Manager) SendCommand(key, command, args string) {
 	m.mu.RLock()
 	s, ok := m.sessions[key]
 	m.mu.RUnlock()
 	if !ok {
+		// Session not started yet (consumers may lazily start their engine
+		// session on first prompt). A slash command that arrives before the
+		// first prompt would otherwise vanish silently. Emit an
+		// unknown-command result so consumers can route to whatever fallback
+		// they own — semantically equivalent to "engine cannot run this
+		// command, try the next routing option". Contract-wise this is
+		// identical to the default-arm signal in dispatchCommand; consumers
+		// do not need to distinguish the two.
+		utils.Log("Session", fmt.Sprintf("SendCommand: session %s not found, emitting unknown_command for cmd=%s", key, command))
+		m.emit(key, types.EngineEvent{
+			Type:         "engine_command_result",
+			EventMessage: "unknown command: " + command,
+			Command:      command,
+			CommandError: "unknown_command",
+		})
 		return
 	}
-
-	// Check extension commands first
-	if s.extGroup != nil && !s.extGroup.IsEmpty() {
-		cmds := s.extGroup.Commands()
-		if cmd, exists := cmds[command]; exists {
-			ctx := m.newExtContext(s, key)
-			err := cmd.Execute(args, ctx)
-			if err == nil {
-				m.emit(key, types.EngineEvent{
-					Type:         "engine_command_result",
-					EventMessage: "command executed: " + command,
-				})
-			}
-			return
-		}
-	}
-
-	switch command {
-	case "clear":
-		if s.conversationID != "" {
-			conv, err := conversation.Load(s.conversationID, "")
-			if err == nil {
-				conv.Messages = nil
-				conv.LastInputTokens = 0
-				conv.LastInputTokensMsgCount = 0
-				_ = conversation.Save(conv, "")
-				s.lastContextPct = 0
-				utils.Log("Session", fmt.Sprintf("cleared conversation for session %s", key))
-				m.emit(key, types.EngineEvent{
-					Type: "engine_status",
-					Fields: &types.StatusFields{
-						State:          m.sessionState(s),
-						ContextPercent: 0,
-						ContextWindow:  s.lastContextWindow,
-						Model:          s.lastModel,
-						TotalCostUsd:   s.lastTotalCost,
-					},
-				})
-			}
-		}
-	case "compact":
-		if s.conversationID != "" {
-			conv, err := conversation.Load(s.conversationID, "")
-			if err == nil {
-				conversation.Compact(conv, 10)
-				_ = conversation.Save(conv, "")
-				utils.Log("Session", fmt.Sprintf("compacted session %s", key))
-			}
-		}
-	case "export":
-		if s.conversationID != "" {
-			conv, err := conversation.Load(s.conversationID, "")
-			if err == nil {
-				format := "markdown"
-				if args != "" {
-					format = args
-				}
-				output, err := export.ExportSession(conv, export.Options{Format: format})
-				if err == nil {
-					m.emit(key, types.EngineEvent{
-						Type:         "engine_export",
-						EventMessage: output,
-					})
-				} else {
-					utils.Log("Session", fmt.Sprintf("export failed for %s: %s", key, err))
-				}
-			}
-		}
-	default:
-		utils.Log("Session", fmt.Sprintf("unknown command %s/%s (args: %s)", key, command, args))
-	}
+	// Real dispatch lives in command_dispatch.go so this god-file stays at
+	// a manageable size. The session lookup is kept here because it's the
+	// gate that protects every dispatch arm from a nil session pointer.
+	m.dispatchCommand(s, key, command, args)
 }
 
 // StopSession cancels the active run and cleans up the session.
@@ -229,6 +218,7 @@ func (m *Manager) StopSession(key string) error {
 	telemCollector := s.telemetry
 	sessionRecorder := s.recorder
 	toolServer := s.toolServer
+	fsWatcherRelease := s.fsWatcherRelease
 
 	delete(m.sessions, key)
 	m.mu.Unlock()
@@ -237,9 +227,22 @@ func (m *Manager) StopSession(key string) error {
 	if toolServer != nil {
 		toolServer.Stop()
 	}
+	// Release the workspace watcher BEFORE firing session_end / closing the
+	// extension group so any in-flight watcher callbacks drain into a
+	// still-live group, and no late callback races with extGroup.Close().
+	if fsWatcherRelease != nil {
+		fsWatcherRelease()
+		utils.Info("session", fmt.Sprintf("stopSession: released watcher key=%s", key))
+	}
 	if extGroup != nil && !extGroup.IsEmpty() {
 		ctx := m.newExtContext(s, key)
 		_ = extGroup.FireSessionEnd(ctx)
+		// Remove every host from the async-trigger subsystems before
+		// Close() takes them down. Avoids the scheduler tick loop
+		// holding a stale host pointer.
+		for _, h := range extGroup.Hosts() {
+			m.unwireHostAsync(h)
+		}
 		extGroup.Close()
 	}
 	for _, conn := range mcpConns {
@@ -287,6 +290,28 @@ func (m *Manager) StopAll() error {
 	return nil
 }
 
+// Shutdown stops every active session and tears down the manager-level
+// async subsystems (webhook listener, scheduler tick loop). Safe to
+// call multiple times; safe to call when no subsystems have been
+// started. Tests that load extensions via StartSession should
+// register this with t.Cleanup so a leaked listener cannot bleed
+// the default port across subsequent tests.
+func (m *Manager) Shutdown() {
+	_ = m.StopAll()
+	m.asyncMu.Lock()
+	srv := m.webhookServer
+	sch := m.scheduler
+	m.webhookServer = nil
+	m.scheduler = nil
+	m.asyncMu.Unlock()
+	if srv != nil {
+		srv.Stop()
+	}
+	if sch != nil {
+		sch.Stop()
+	}
+}
+
 // IsRunning reports whether the named session has an active run.
 func (m *Manager) IsRunning(key string) bool {
 	m.mu.RLock()
@@ -303,6 +328,46 @@ func (m *Manager) sessionState(s *engineSession) string {
 	return "idle"
 }
 
+// ClearConversationFile wipes the LLM-visible history on a stored conversation
+// file by sessionId, without requiring a live engine session. It is the
+// stateless counterpart of dispatchClear: it performs the same load → zero
+// → save sequence but does not emit any events (no session exists to emit to)
+// and does not re-fire session_start (no extension group is loaded).
+//
+// Fields wiped (matches dispatchClear exactly):
+//   - Messages           — the flat LLM-visible message list
+//   - LastInputTokens    — context-percent numerator
+//   - LastInputTokensMsgCount — companion message-count counter
+//
+// Fields preserved: Entries, LeafID, TotalInputTokens, TotalOutputTokens,
+// TotalCost, ID, System, Model, CreatedAt, Version, ParentID,
+// WorkingDirectory — same rationale as dispatchClear (/clear is a checkpoint,
+// not a delete).
+//
+// Returns nil on success. Returns an error if the conversation file cannot be
+// loaded or saved; in that case no partial write occurs (Load/Save are atomic
+// operations at the file level).
+func (m *Manager) ClearConversationFile(sessionID string) error {
+	utils.Log("Session", fmt.Sprintf("ClearConversationFile: loading conversation sessionId=%s", sessionID))
+	conv, err := conversation.Load(sessionID, "")
+	if err != nil {
+		utils.Log("Session", fmt.Sprintf("ClearConversationFile: load failed sessionId=%s err=%v", sessionID, err))
+		return fmt.Errorf("load conversation %q: %w", sessionID, err)
+	}
+
+	conv.Messages = nil
+	conv.LastInputTokens = 0
+	conv.LastInputTokensMsgCount = 0
+
+	if err := conversation.Save(conv, ""); err != nil {
+		utils.Log("Session", fmt.Sprintf("ClearConversationFile: save failed sessionId=%s err=%v", sessionID, err))
+		return fmt.Errorf("save conversation %q: %w", sessionID, err)
+	}
+
+	utils.Log("Session", fmt.Sprintf("ClearConversationFile: id=%s cleared Messages (was %d entries) — .tree.jsonl preserved", sessionID, len(conv.Entries)))
+	return nil
+}
+
 // ReconcileState re-emits the current agent states and status for the given
 // session so that a freshly-connected (or reconnected) client can catch up
 // without waiting for the next organic state change.
@@ -313,6 +378,15 @@ func (m *Manager) sessionState(s *engineSession) string {
 // considers authoritative. Skipping the emission would leave reconnecting
 // clients showing stale agent rows from a previous session. See
 // docs/architecture/agent-state.md.
+//
+// `engine_status` follows the same snapshot rule. Beyond the existing
+// context/cost/model fields, the snapshot must also carry any unresolved
+// PermissionDenials retained from the most recent TaskCompleteEvent —
+// otherwise a re-attaching consumer would observe an engine_status that
+// silently drops the field while the session is still blocked on those
+// denials. The session retains these via lastPermissionDenials,
+// populated in event_translation.go and cleared when a new prompt
+// dispatches (see prompt_dispatch.go).
 func (m *Manager) ReconcileState(key string) {
 	m.mu.RLock()
 	s, ok := m.sessions[key]
@@ -329,15 +403,27 @@ func (m *Manager) ReconcileState(key string) {
 	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=reconcile", key, len(snapshot)))
 	m.emit(key, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
 
-	// Re-emit status
+	// Re-emit status. Read retained fields under the session lock so we
+	// observe a coherent snapshot (denials + cost + context together).
+	m.mu.RLock()
+	pendingDenials := s.lastPermissionDenials
+	lastPct := s.lastContextPct
+	lastWindow := s.lastContextWindow
+	lastModel := s.lastModel
+	lastCost := s.lastTotalCost
+	sessionState := m.sessionState(s)
+	m.mu.RUnlock()
+
+	utils.Log("Session", fmt.Sprintf("reconcile_status_emitted key=%s state=%s pendingDenials=%d model=%s contextPct=%d", key, sessionState, len(pendingDenials), lastModel, lastPct))
 	m.emit(key, types.EngineEvent{
 		Type: "engine_status",
 		Fields: &types.StatusFields{
-			State:          m.sessionState(s),
-			ContextPercent: s.lastContextPct,
-			ContextWindow:  s.lastContextWindow,
-			Model:          s.lastModel,
-			TotalCostUsd:   s.lastTotalCost,
+			State:             sessionState,
+			ContextPercent:    lastPct,
+			ContextWindow:     lastWindow,
+			Model:             lastModel,
+			TotalCostUsd:      lastCost,
+			PermissionDenials: pendingDenials,
 		},
 	})
 }

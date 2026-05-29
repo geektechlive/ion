@@ -122,6 +122,44 @@ type Context struct {
 	// matching snippets with metadata. Useful for extensions that need to
 	// recover details from earlier in the conversation.
 	SearchHistory func(query string, maxResults int) ([]HistoryMatch, error)
+
+	// SetPlanMode imperatively enables or disables plan mode for this session.
+	// The engine flips session state, emits PlanModeChangedEvent so consumers
+	// can mirror the new state, and (when enabled) ensures a planFilePath is
+	// allocated. When disabled, the plan file path is preserved so a
+	// subsequent re-enable reuses it (same plan ID semantics as any other
+	// harness-initiated toggle). Nil when not wired (e.g. in child-dispatch
+	// sessions that have no plan-mode capability).
+	//
+	// source is a free-form string logged for observability (e.g.
+	// "extension", "slash_command", "session_start"). It does not affect
+	// plan-mode semantics.
+	SetPlanMode func(enabled bool, source string)
+
+	// GetPlanMode returns the current plan-mode state for this session:
+	// (enabled, planFilePath). planFilePath is non-empty whenever a plan file
+	// has been allocated for the session (even if plan mode is currently off —
+	// the path is preserved across toggles until the session is reset).
+	// Nil when not wired.
+	GetPlanMode func() (enabled bool, planFilePath string)
+
+	// LLMCall fires a one-shot, no-tools, no-loop inference call against the
+	// session's provider registry. Returns the accumulated assistant text
+	// plus usage / cost telemetry. Designed for harness-internal extraction,
+	// classification, and routing prompts that should observe Ion's hook
+	// surface (notably before_provider_request) without paying the cost of a
+	// full dispatchAgent or a direct provider HTTP bypass.
+	//
+	// Fires before_provider_request once per invocation so handlers that
+	// track outbound model calls see both agent-loop traffic and lightweight
+	// inference traffic uniformly. Emits exactly one engine_llm_call event
+	// after the call completes, carrying observability metadata (model,
+	// providerID, latencyMs, tokens, cost, jsonMode) — never the prompt or
+	// response content. Errors return (nil, error); no engine_llm_call event
+	// fires on the error path.
+	//
+	// Nil when the session has no extension wiring (rare; defensive guard).
+	LLMCall func(opts LLMCallOpts) (*LLMCallResult, error)
 }
 
 // DispatchAgentOpts configures an engine-native agent dispatch.
@@ -147,13 +185,15 @@ type DispatchAgentOpts struct {
 
 // DispatchAgentResult holds the outcome of a dispatched agent.
 type DispatchAgentResult struct {
-	Output       string  `json:"output"`
-	ExitCode     int     `json:"exitCode"`
-	Elapsed      float64 `json:"elapsed"`
-	Cost         float64 `json:"cost"`
-	InputTokens  int     `json:"inputTokens"`
-	OutputTokens int     `json:"outputTokens"`
-	SessionID    string  `json:"sessionId,omitempty"`
+	Output                   string  `json:"output"`
+	ExitCode                 int     `json:"exitCode"`
+	Elapsed                  float64 `json:"elapsed"`
+	Cost                     float64 `json:"cost"`
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens,omitempty"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens,omitempty"`
+	SessionID                string  `json:"sessionId,omitempty"`
 }
 
 // DiscoverAgentsOpts configures which directories to scan for agent definitions

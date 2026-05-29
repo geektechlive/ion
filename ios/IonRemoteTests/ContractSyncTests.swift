@@ -8,8 +8,19 @@ import XCTest
 /// gains a field that Swift doesn't handle, JSONDecoder will still succeed
 /// (unknown keys are ignored by default). This test focuses on ensuring the
 /// fields we *do* declare can decode representative values without error.
+///
+/// Deliberate Swift omissions:
+///   - `EngineConfig` is intentionally not mirrored on iOS. The engine
+///     binary runs on the desktop, not on iOS; iOS never constructs or
+///     reads an `EngineConfig`. Future Go-side `EngineConfig` field
+///     additions therefore do not break iOS and do not require a Swift
+///     mirror update — they are tracked solely by the desktop's
+///     `types-engine.ts`. Drift attribution: if a future review flags
+///     a missing iOS mirror of an EngineConfig field, the answer is
+///     "by design"; flip back to this comment.
 final class ContractSyncTests: XCTestCase {
     private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
 
     // MARK: - Manifest loading
 
@@ -341,4 +352,5 @@ final class ContractSyncTests: XCTestCase {
             "Go ProviderEntry has fields not tracked in Swift test: \(unhandled.sorted())"
         )
     }
+
 }

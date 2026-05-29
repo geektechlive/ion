@@ -10,6 +10,96 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.42.0](https://github.com/dsswift/ion/compare/desktop-v1.41.0...desktop-v1.42.0) (2026-05-28)
+
+### Features
+
+* **desktop:** render askuserquestion card in engine view tabs ([a7a25ed](https://github.com/dsswift/ion/commit/a7a25ed4973623de71af305a2b083c71d12fa118))
+* **desktop:** add per-instance waiting state to engine ui ([b8be7b2](https://github.com/dsswift/ion/commit/b8be7b226a03e1c19ce5581031c14d013df6dff0))
+
+### Bug Fixes
+
+* **desktop:** reconcile engine state after start_session attach ([3345cba](https://github.com/dsswift/ion/commit/3345cba427154998c72893a46d2be710c4670912))
+* **desktop:** restore engine askuserquestion cards across restarts ([9d35938](https://github.com/dsswift/ion/commit/9d3593859e8b8d568c75cd80e62ffcf9c523a365))
+* **desktop:** persist engine session ids immediately on capture ([f8c043b](https://github.com/dsswift/ion/commit/f8c043bf9109bae12d31634d0ee4ddebe801ba30))
+
+## [1.41.0](https://github.com/dsswift/ion/compare/desktop-v1.40.1...desktop-v1.41.0) (2026-05-27)
+
+### Features
+
+* **desktop:** hide UI during initialization with progress text ([84ba374](https://github.com/dsswift/ion/commit/84ba37442f07b4ec44ad91d851c2d88c00d0c958))
+* **engine:** clarify plan mode exit timing in prompts ([f1906b5](https://github.com/dsswift/ion/commit/f1906b5279d079a790466ee8fe1e37fa46e9fbba))
+
+## [1.40.1](https://github.com/dsswift/ion/compare/desktop-v1.40.0...desktop-v1.40.1) (2026-05-26)
+
+### Bug Fixes
+
+* **desktop:** add logging to engine-bridge-fs and control plane remote check ([a62d755](https://github.com/dsswift/ion/commit/a62d755adca1db40bf5e6fecc094d2d18726f003))
+* **desktop:** wire lastMessagePreview persistence and add remote-probe tests ([986fa64](https://github.com/dsswift/ion/commit/986fa644646b5c31d785b300b865531dab404dc8))
+
+## [1.40.0](https://github.com/dsswift/ion/compare/desktop-v1.39.0...desktop-v1.40.0) (2026-05-26)
+
+### Features
+
+* **desktop:** persist last-message preview on tabs for richer tab pills ([29777cb](https://github.com/dsswift/ion/commit/29777cbd05d153f4b18144c9c466f83026c843dc))
+* **desktop:** show last-message preview and relative time on tab pills ([c8ef91e](https://github.com/dsswift/ion/commit/c8ef91ea6cc8d648c8d302bd57bc623d2c82ba54))
+
+## [1.39.0](https://github.com/dsswift/ion/compare/desktop-v1.38.1...desktop-v1.39.0) (2026-05-26)
+
+### Features
+
+* **desktop:** browse engine filesystem when picking working directory ([27af131](https://github.com/dsswift/ion/commit/27af1313b892af27b2422f1e11f234b96f4f2f34))
+
+## [1.38.1](https://github.com/dsswift/ion/compare/desktop-v1.38.0...desktop-v1.38.1) (2026-05-26)
+
+### Bug Fixes
+
+* **engine:** mark anthropic provider authed when CLI backend is in use ([6e17630](https://github.com/dsswift/ion/commit/6e17630481bffd107cf6e136344c878e53a83b43))
+
+## [1.38.0](https://github.com/dsswift/ion/compare/desktop-v1.37.1...desktop-v1.38.0) (2026-05-26)
+
+### Features
+
+* **engine:** add ctx.LLMCall lightweight inference primitive ([73ee012](https://github.com/dsswift/ion/commit/73ee012c4248dc52ce320c359aedae80403591f7))
+
+## [1.37.1](https://github.com/dsswift/ion/compare/desktop-v1.37.0...desktop-v1.37.1) (2026-05-26)
+
+### Bug Fixes
+
+* **engine:** persist and restore planFilePath across restarts ([e0a9f69](https://github.com/dsswift/ion/commit/e0a9f69a323df5afc3316da04b45c34ef5b8762c))
+
+## [1.37.0](https://github.com/dsswift/ion/compare/desktop-v1.36.0...desktop-v1.37.0) (2026-05-25)
+
+### Features
+
+* **desktop:** typed webhook and schedule events ([7c151df](https://github.com/dsswift/ion/commit/7c151df37ad97203f71f237be733d2c9735ff6f5))
+
+## [1.36.0](https://github.com/dsswift/ion/compare/desktop-v1.35.1...desktop-v1.36.0) (2026-05-25)
+
+### Features
+
+* **desktop:** unify slash pipeline + /clear checkpoint ([1a3894d](https://github.com/dsswift/ion/commit/1a3894dd2073077b90b98efb9cfec511bce284a9))
+* **engine:** early-stop continuation with opt-in wire protocol ([5f79236](https://github.com/dsswift/ion/commit/5f7923647e084ccd2be1ef1f3daf4d00bba7f3d8))
+* **desktop:** add opus 4.7 model with 1m context window ([3bceb82](https://github.com/dsswift/ion/commit/3bceb8240941cce0501125a1c15311872f65296e))
+* **engine:** plan-mode lifecycle with implementation phase ([10e63c4](https://github.com/dsswift/ion/commit/10e63c4dc8f4ca85991b323c24744882bca54037))
+* **engine:** add workspace_file_changed hook + watcher (#130) ([e8377e9](https://github.com/dsswift/ion/commit/e8377e96a91704524d430c13ec538031c3826608))
+* **desktop:** hide cd prefix and count collapsed tool groups ([8ff62da](https://github.com/dsswift/ion/commit/8ff62da2a901965c889195bf72a44c35acd66b0a))
+* **desktop:** add move to group and pin menu option ([49bebd8](https://github.com/dsswift/ion/commit/49bebd8bb31c8c2110e6b4eb4fa8e3dd37c908b9))
+* **desktop:** consume engine_plan_proposal in event pipeline ([ea13ca8](https://github.com/dsswift/ion/commit/ea13ca8795766de416d039b9b3d501e5d00d3dc7))
+* **desktop:** project user settings to iOS via wire protocol ([5d8e596](https://github.com/dsswift/ion/commit/5d8e5962f54c29c29dffd6b313af73a47b7c421c))
+
+### Bug Fixes
+
+* **desktop:** refresh git on tab switch, panel open, focus ([74c72ea](https://github.com/dsswift/ion/commit/74c72eac66eb0f67135e6ff0a00b215a859fc269))
+* **engine:** /clear leak + expand Skill tool with claude-skills manifest ([b7f1b2b](https://github.com/dsswift/ion/commit/b7f1b2bc423384aad95189b29c9c48ca8ac45c6f))
+* **desktop:** stub electron in tests for ci compatibility ([8f16df5](https://github.com/dsswift/ion/commit/8f16df519e9b3e6160b798cac03010188a08be8e))
+
+## [1.35.1](https://github.com/dsswift/ion/compare/desktop-v1.35.0...desktop-v1.35.1) (2026-05-23)
+
+### Bug Fixes
+
+* **desktop:** declare NSBonjourServices for Local Network prompt ([10869ee](https://github.com/dsswift/ion/commit/10869ee396ab31faa036f773d0b9adf91f4fffa0))
+
 ## [1.35.0](https://github.com/dsswift/ion/compare/desktop-v1.34.0...desktop-v1.35.0) (2026-05-22)
 
 ### Features

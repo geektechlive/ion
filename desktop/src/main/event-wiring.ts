@@ -2,10 +2,11 @@ import { readFileSync } from 'fs'
 import { IPC } from '../shared/types'
 import type { NormalizedEvent, EnrichedError } from '../shared/types'
 import { log as _log } from './logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview } from './state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry, forwardedEnginePermissionDenials } from './state'
 import { broadcast } from './broadcast'
 import { currentBackend } from './settings-store'
 import { normalizedToRemote } from './remote/protocol'
+import { formatClearDivider } from '../shared/clear-divider'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -30,10 +31,42 @@ export function wireEngineBridgeEvents(): void {
     if (event.type === 'engine_status' && event.fields) {
       event = { ...event, fields: { ...event.fields, backend: currentBackend } }
     }
+
+    // engine_command_registry: refresh the main-process routing-hint cache
+    // BEFORE broadcasting so the unified prompt pipeline always observes the
+    // newest snapshot if a slash command is dispatched in the same tick.
+    // Snapshot semantics — see state.ts comment on extensionCommandRegistry.
+    if (event.type === 'engine_command_registry') {
+      const listings = Array.isArray(event.commands) ? event.commands : []
+      if (listings.length === 0) {
+        // Empty list is the authoritative "no extension commands" signal —
+        // drop the entry entirely so a future re-populate sees a clean slot
+        // and routing-hint MISSes correctly trigger the engine-resolved
+        // backstop. Leaving an empty Set in the map would be observationally
+        // identical but harder to reason about in logs.
+        const had = extensionCommandRegistry.has(key)
+        extensionCommandRegistry.delete(key)
+        log(`engine_command_registry: cleared key=${key} (was=${had})`)
+      } else {
+        const names = new Set<string>(listings.map((l: { name: string }) => l.name))
+        extensionCommandRegistry.set(key, names)
+        log(`engine_command_registry: cached key=${key} count=${names.size} names=[${[...names].join(',')}]`)
+      }
+    }
+
     broadcast(IPC.ENGINE_EVENT, key, event)
     if (state.remoteTransport) {
       const tabId = key.split(':')[0]
       const instanceId = key.split(':')[1] || null
+      // Every engine event the desktop sees gets forwarded to iOS, with
+      // no per-event filtering. The previous special case that skipped
+      // engine_early_stop_decision_request was removed once iOS gained
+      // a decoder for it (see ios/IonRemote/Models/NormalizedEvent.swift
+      // and the contract test in ContractSyncTests.swift). iOS observes
+      // the event for diagnostic visibility only — the desktop is the
+      // authoritative responder via early-stop-policy.ts — but the wire
+      // protocol is now uniform across consumers.
+      //
       // Trace agent_state forwarding so we can correlate engine→desktop→iOS
       // flow when diagnosing stuck-row or stale-snapshot reports. Pairs
       // with the iOS-side `ENGINE: agent_state` DiagnosticLog line and the
@@ -44,6 +77,83 @@ export function wireEngineBridgeEvents(): void {
         log(`engineBridge: agent_state forwarded key=${key} count=${agents.length} statuses=[${statuses}]`)
       }
       state.remoteTransport.send({ type: `engine_${event.type.replace('engine_', '')}`, tabId, instanceId, ...event })
+
+      // Synthesize a `permission_request` envelope for iOS when an
+      // engine-view `engine_status` event carries AskUserQuestion or
+      // ExitPlanMode denials. The CLI/sessionPlane path forwards these
+      // from `task_complete` in wireRemoteSessionPlaneForwarding above,
+      // but engine-view events never reach sessionPlane (key mismatch:
+      // EngineControlPlane is keyed by bare tabId, engine events arrive
+      // with `tabId:instanceId`). Without this block, iOS receives the
+      // engine_status itself (forwarded above) but has no decoder for
+      // `permissionDenials` inside it — the card-rendering path on iOS
+      // is keyed off `permission_request`. See plan-section "Files to
+      // modify → event-wiring.ts" for the cross-reference.
+      //
+      // Dedupe via forwardedEnginePermissionDenials: engine_status fires
+      // repeatedly, so without a guard every cost-only tick would re-push
+      // the same envelope and re-fire the iOS push notification.
+      if (event.type === 'engine_status' && Array.isArray(event.fields?.permissionDenials) && event.fields.permissionDenials.length > 0 && instanceId) {
+        for (const denial of event.fields.permissionDenials) {
+          if (denial.toolName !== 'AskUserQuestion' && denial.toolName !== 'ExitPlanMode') continue
+          const questionId = `denied-${denial.toolUseId}`
+          if (forwardedEnginePermissionDenials.has(questionId)) {
+            // Already pushed for this toolUseId — skip silently. We hit
+            // this path on every cost-only engine_status tick after the
+            // initial denial-carrying tick.
+            continue
+          }
+          forwardedEnginePermissionDenials.add(questionId)
+          const pushBody = denial.toolName === 'AskUserQuestion'
+            ? 'Question waiting for your answer'
+            : 'Plan ready for your review'
+          log(`engine_status: forwarding ${denial.toolName} denial to remote key=${key} questionId=${questionId}`)
+          state.remoteTransport.send({
+            type: 'permission_request',
+            tabId,
+            questionId,
+            toolName: denial.toolName,
+            toolInput: denial.toolInput,
+            options: [],
+          }, true, { title: 'Ion needs your attention', body: pushBody })
+        }
+      }
+
+      // /clear success → relay an iOS-renderable divider so the mobile
+      // client sees the checkpoint immediately. We piggy-back on the
+      // existing envelopes iOS already decodes: `engine_harness_message`
+      // for engine tabs (NormalizedEvent.engineHarnessMessage handler),
+      // `message_added` for CLI tabs. Without this relay iOS would have
+      // to learn a new event type to render the divider; using the
+      // existing ones means iOS works without any Swift change.
+      //
+      // The renderer (engine-event-slice.ts) draws its own divider from
+      // the same engine_command_result event, so desktop and iOS both
+      // light up from a single engine signal.
+      if (event.type === 'engine_command_result' && event.command === 'clear' && !event.commandError) {
+        const divider = formatClearDivider(new Date())
+        if (instanceId) {
+          state.remoteTransport.send({
+            type: 'engine_harness_message',
+            tabId,
+            instanceId,
+            message: divider,
+            source: 'clear',
+          })
+        } else {
+          state.remoteTransport.send({
+            type: 'message_added',
+            tabId,
+            message: {
+              id: `clear-${Date.now()}`,
+              role: 'system',
+              content: divider,
+              timestamp: Date.now(),
+              source: 'desktop',
+            },
+          })
+        }
+      }
     }
     // Auto-reconcile on event drops so state self-heals
     if (event.type === 'engine_events_dropped') {

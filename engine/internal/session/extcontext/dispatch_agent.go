@@ -91,6 +91,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor) func(extension.DispatchAgentOpts
 		// Track child cost/tokens and forward events to extension callback.
 		var totalCost float64
 		var totalInputTokens, totalOutputTokens int
+		var totalCacheReadTokens, totalCacheCreationTokens int
 		var childSessionID string
 
 		var result string
@@ -118,6 +119,12 @@ func BuildDispatchAgentFunc(sa SessionAccessor) func(extension.DispatchAgentOpts
 				}
 				if tc.Usage.OutputTokens != nil {
 					totalOutputTokens = *tc.Usage.OutputTokens
+				}
+				if tc.Usage.CacheReadInputTokens != nil {
+					totalCacheReadTokens = *tc.Usage.CacheReadInputTokens
+				}
+				if tc.Usage.CacheCreationInputTokens != nil {
+					totalCacheCreationTokens = *tc.Usage.CacheCreationInputTokens
 				}
 				if tc.SessionID != "" {
 					childSessionID = tc.SessionID
@@ -148,9 +155,26 @@ func BuildDispatchAgentFunc(sa SessionAccessor) func(extension.DispatchAgentOpts
 
 		key := sa.SessionKey()
 		childReqID := fmt.Sprintf("%s-dispatch-%s", key, opts.Name)
-		if apiChild, ok := child.(*backend.ApiBackend); ok && childCfg != nil {
-			apiChild.StartRunWithConfig(childReqID, runOpts, childCfg)
-		} else {
+		// HybridBackend's StartRunWithConfig handles its own routing: for
+		// API-routed child models it forwards childCfg to the inner
+		// *ApiBackend; for CLI-routed child models it falls back to
+		// StartRun and drops childCfg (CliBackend wires hooks via flags).
+		// This is the only way to ensure non-Claude child models actually
+		// pick up the OnToolCall hook attached above.
+		switch c := child.(type) {
+		case *backend.ApiBackend:
+			if childCfg != nil {
+				c.StartRunWithConfig(childReqID, runOpts, childCfg)
+			} else {
+				c.StartRun(childReqID, runOpts)
+			}
+		case *backend.HybridBackend:
+			if childCfg != nil {
+				c.StartRunWithConfig(childReqID, runOpts, childCfg)
+			} else {
+				c.StartRun(childReqID, runOpts)
+			}
+		default:
 			child.StartRun(childReqID, runOpts)
 		}
 		childDone.Wait()
@@ -164,24 +188,28 @@ func BuildDispatchAgentFunc(sa SessionAccessor) func(extension.DispatchAgentOpts
 
 		if childErr != nil {
 			return &extension.DispatchAgentResult{
-				Output:       childErr.Error(),
-				ExitCode:     1,
-				Elapsed:      elapsed,
-				Cost:         totalCost,
-				InputTokens:  totalInputTokens,
-				OutputTokens: totalOutputTokens,
-				SessionID:    childSessionID,
+				Output:                   childErr.Error(),
+				ExitCode:                 1,
+				Elapsed:                  elapsed,
+				Cost:                     totalCost,
+				InputTokens:              totalInputTokens,
+				OutputTokens:             totalOutputTokens,
+				CacheReadInputTokens:     totalCacheReadTokens,
+				CacheCreationInputTokens: totalCacheCreationTokens,
+				SessionID:                childSessionID,
 			}, childErr
 		}
 
 		return &extension.DispatchAgentResult{
-			Output:       result,
-			ExitCode:     0,
-			Elapsed:      elapsed,
-			Cost:         totalCost,
-			InputTokens:  totalInputTokens,
-			OutputTokens: totalOutputTokens,
-			SessionID:    childSessionID,
+			Output:                   result,
+			ExitCode:                 0,
+			Elapsed:                  elapsed,
+			Cost:                     totalCost,
+			InputTokens:              totalInputTokens,
+			OutputTokens:             totalOutputTokens,
+			CacheReadInputTokens:     totalCacheReadTokens,
+			CacheCreationInputTokens: totalCacheCreationTokens,
+			SessionID:                childSessionID,
 		}, nil
 	}
 }

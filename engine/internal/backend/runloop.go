@@ -26,6 +26,17 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		hooks = run.cfg.Hooks
 	}
 
+	// Resolve the effective early-stop continuation config for this run.
+	// Defaults < engine.json < RunOptions < sub-agent gate. Log the final
+	// snapshot once at INFO so a reader can reconstruct the decision path
+	// from logs alone (per CLAUDE.md logging policy).
+	earlyStop := mergeEarlyStopConfig(opts, run.cfg)
+	utils.Info("ApiBackend", fmt.Sprintf(
+		"earlyStop: runID=%s enabled=%v budget=%d threshold=%d cap=%d diminishingDelta=%d source=%s isSubagent=%v",
+		run.requestID, earlyStop.enabled, earlyStop.budget, earlyStop.thresholdPct,
+		earlyStop.maxContinuations, earlyStop.diminishingDelta, earlyStop.source, opts.IsSubagent,
+	))
+
 	// Resolve provider
 	model := opts.Model
 	if model == "" {
@@ -62,7 +73,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	}
 
 	// Build system prompt (may rewrite opts.Prompt and opts.PlanModeTools)
-	conv.System = buildSystemPrompt(&opts, conv, hooks, run.requestID)
+	conv.System = buildSystemPrompt(&opts, conv, hooks, run.requestID, run)
 
 	// Add user message (using potentially-rewritten prompt). When the client
 	// supplied pre-encoded image attachments, build a structured content
@@ -142,12 +153,45 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			utils.Log("ApiBackend", fmt.Sprintf("wind-down injected: runID=%s turn=%d/%d", run.requestID, turn, maxTurns))
 		}
 
-		// Plan mode: inject sparse reminder on turn 2+ so the LLM
-		// doesn't drift from plan-mode constraints mid-conversation.
-		if run.planMode && turn > 1 {
-			b.injectSystemMessage(run, conv, hooks, opts, "plan_mode_reminder",
-				"[SYSTEM] "+buildPlanModeSparseReminder(run.planFilePath),
-				turn, maxTurns)
+		// Plan mode: inject sparse reminder so the LLM doesn't drift from
+		// plan-mode constraints mid-conversation. Two cases fire the reminder:
+		//   1. Turn 2+ in any plan-mode run (existing throttle, once per
+		//      planModeReminderInterval turns). Handles multi-turn runs.
+		//   2. Turn 1 of a run where the conversation already has many messages
+		//      (mature single-turn rounds). This is the mid-plan "what's next?"
+		//      case where the full prompt is ~220+ messages back and the model
+		//      needs the rule in recent context.
+		// See shouldInjectPlanModeReminderForRun in plan_mode_prompt.go for
+		// the full gate logic and planModeFirstTurnReminderThreshold rationale.
+		if run.planMode {
+			msgCount := len(conv.Messages)
+			run.mu.Lock()
+			lastReminderTurn := run.planModeReminderTurn
+			shouldInject := shouldInjectPlanModeReminderForRun(turn, lastReminderTurn, msgCount)
+			if shouldInject {
+				run.planModeReminderTurn = turn
+			}
+			run.mu.Unlock()
+			if shouldInject {
+				reminderText := buildPlanModeSparseReminder(run.planFilePath)
+				if run.planModeSparseReminderOverride != "" {
+					reminderText = run.planModeSparseReminderOverride
+				}
+				gate := "turn_gt1"
+				if turn == 1 {
+					gate = "mature_session"
+				}
+				source := "default"
+				if run.planModeSparseReminderOverride != "" {
+					source = "override"
+				}
+				b.injectSystemMessage(run, conv, hooks, opts, "plan_mode_reminder",
+					"[SYSTEM] "+reminderText,
+					turn, maxTurns)
+				utils.Info("PlanMode", fmt.Sprintf("run=%s reminder injected turn=%d lastTurn=%d interval=%d gate=%s msgCount=%d source=%s", run.requestID, turn, lastReminderTurn, planModeReminderInterval, gate, msgCount, source))
+			} else {
+				utils.Debug("PlanMode", fmt.Sprintf("run=%s reminder throttled turn=%d lastTurn=%d nextAt=%d", run.requestID, turn, lastReminderTurn, lastReminderTurn+planModeReminderInterval))
+			}
 		}
 
 		// Fire turn_start hook
@@ -239,6 +283,51 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			})
 		}
 
+		// Fire the before_provider_request extension hook immediately before
+		// the outbound call. Observe-only — handler return values are ignored
+		// and we never block the agent loop on this callback. Fires on every
+		// turn, including fallback hops, so handlers see the real wire request
+		// shape (post-fallback model, post-sanitization message list). Nil
+		// callback means no extensions are interested; the conditional is a
+		// pure read of an immutable struct field, so this is hot-path safe.
+		if hooks.OnBeforeProviderRequest != nil {
+			providerID := ""
+			if provider != nil {
+				providerID = provider.ID()
+			}
+			info := BeforeProviderRequestInfo{
+				Provider:        providerID,
+				Model:           streamOpts.Model,
+				TurnNumber:      turn,
+				MessageCount:    len(streamOpts.Messages),
+				ToolCount:       len(streamOpts.Tools),
+				HasSystemPrompt: streamOpts.System != "",
+				MaxTokens:       streamOpts.MaxTokens,
+			}
+			utils.Debug("ApiBackend", fmt.Sprintf(
+				"OnBeforeProviderRequest: runID=%s provider=%s model=%s turn=%d messages=%d tools=%d sysPrompt=%v maxTokens=%d",
+				run.requestID, info.Provider, info.Model, info.TurnNumber,
+				info.MessageCount, info.ToolCount, info.HasSystemPrompt, info.MaxTokens,
+			))
+			func() {
+				// Defensive: a panicking handler must not crash the agent loop.
+				// The hook is observe-only; recover, log, and proceed.
+				defer func() {
+					if r := recover(); r != nil {
+						utils.Error("ApiBackend", fmt.Sprintf(
+							"OnBeforeProviderRequest panicked: runID=%s panic=%v", run.requestID, r,
+						))
+					}
+				}()
+				hooks.OnBeforeProviderRequest(run.requestID, info)
+			}()
+		} else {
+			utils.Debug("ApiBackend", fmt.Sprintf(
+				"OnBeforeProviderRequest: no callback registered, skipping (runID=%s turn=%d)",
+				run.requestID, turn,
+			))
+		}
+
 		events, errc := providers.WithRetry(ctx, provider, streamOpts, retryConfig)
 
 		// Process stream events
@@ -287,8 +376,9 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			return
 		}
 
-		// Stream truncated (no stop reason) -- emit reset so desktop discards
-		// partial text, then retry the turn (capped at 3 consecutive).
+		// Stream truncated (no stop reason) -- emit reset so consumers
+		// discard partial text, then retry the turn (capped at 3
+		// consecutive).
 		if stopReason == "" {
 			truncationRetries++
 			maxTruncation := 3
@@ -316,13 +406,14 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		run.compactionsWithoutProgress = 0
 
 		// Track usage and cost
+		currentTurnOutputTokens := 0
 		if turnUsage != nil {
 			costUsd := computeCost(model, *turnUsage)
 			run.totalCost += costUsd
 			conversation.UpdateCost(conv, costUsd)
 
 			// Emit usage event with TOTAL input tokens (including cached) so
-			// desktop shows accurate context percentage
+			// consumers can compute accurate context percentage
 			totalIn := turnUsage.InputTokens + turnUsage.CacheReadInputTokens + turnUsage.CacheCreationInputTokens
 			outTok := turnUsage.OutputTokens
 			cacheRead := turnUsage.CacheReadInputTokens
@@ -335,6 +426,18 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					CacheCreationInputTokens: &cacheCreate,
 				},
 			}})
+
+			// Accumulate output tokens for the early-stop continuation
+			// decision. Done unconditionally — the feature gates itself on
+			// `earlyStop.enabled` inside maybeContinueEarlyStop, but the
+			// counter must stay in sync across turns so it's correct when
+			// a harness hook flips ForceContinue on later in the run.
+			currentTurnOutputTokens = outTok
+			run.cumulativeOutputTokens += outTok
+			utils.Debug("ApiBackend", fmt.Sprintf(
+				"earlyStop: tokens: runID=%s turn=%d turnOut=%d cumOut=%d",
+				run.requestID, turn, outTok, run.cumulativeOutputTokens,
+			))
 		}
 
 		// Add assistant message to conversation
@@ -374,6 +477,23 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				if block.Type == "text" {
 					resultText += block.Text
 				}
+			}
+
+			// Early-stop continuation decision. When the model stops well
+			// below the configured token budget the engine injects a
+			// "keep working" nudge and re-runs the turn instead of
+			// emitting TaskCompleteEvent. Engine-side defaults can be
+			// overridden globally (engine.json), per-run (RunOptions), or
+			// programmatically (before_early_stop_decision hook). See
+			// runloop_early_stop.go for full decision logic.
+			if b.maybeContinueEarlyStop(run, conv, hooks, opts, earlyStop, currentTurnOutputTokens, stopReason, turn, maxTurns) {
+				// Persist before looping so the injected user message
+				// survives a mid-loop crash. Same write semantics as the
+				// existing post-assistant-message Save above.
+				if err := conversation.Save(conv, ""); err != nil {
+					utils.Log("ApiBackend", "failed to save conversation after early-stop continuation: "+err.Error())
+				}
+				continue
 			}
 
 			// Save conversation
@@ -462,6 +582,20 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				utils.Log("ApiBackend", "failed to save conversation after AddToolResults: "+err.Error())
 			}
 
+			// Reset early-stop continuation counters on tool_use: the model
+			// is making forward progress through tools, so the next end_turn
+			// gets a fresh cap. Without this reset a long multi-tool run
+			// (e.g. a 10-step refactor) would consume the continuation
+			// budget on tool turns that produce little output text.
+			if run.continuationCount != 0 || run.lastContinuationDelta != 0 {
+				utils.Debug("ApiBackend", fmt.Sprintf(
+					"earlyStop: reset continuation counters on tool_use: runID=%s turn=%d prevCount=%d",
+					run.requestID, turn, run.continuationCount,
+				))
+				run.continuationCount = 0
+				run.lastContinuationDelta = 0
+			}
+
 		case "max_tokens":
 			// Detect whether a tool_use block was truncated. When the stream
 			// is cut mid-tool-call the input JSON is unparseable and gets
@@ -536,6 +670,14 @@ func (b *ApiBackend) injectSystemMessage(
 		}
 	case "max_token_continue":
 		if opts.DisableMaxTokenContinue {
+			return
+		}
+	case earlyStopContinueKind:
+		if opts.DisableEarlyStopContinue {
+			utils.Debug("ApiBackend", fmt.Sprintf(
+				"earlyStop: injection suppressed by DisableEarlyStopContinue: runID=%s turn=%d",
+				run.requestID, turn,
+			))
 			return
 		}
 	}

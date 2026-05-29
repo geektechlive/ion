@@ -88,6 +88,11 @@ type Conversation struct {
 	Entries                 []SessionEntry     `json:"entries,omitempty"`
 	LeafID                  *string            `json:"leafId"`
 	WorkingDirectory        string             `json:"workingDirectory,omitempty"`
+
+	// _isLegacy is set by Load when reading a legacy .jsonl or .json file.
+	// Save reads this flag to decide whether to unlink the legacy file after
+	// writing the new split format. Not JSON-tagged — never persisted.
+	_isLegacy bool
 }
 
 // ContextUsageInfo describes current context window consumption.

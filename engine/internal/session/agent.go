@@ -46,6 +46,23 @@ func (m *Manager) AbortAgent(key, agentName string, subtree bool) {
 	}
 }
 
+// steerable is a local interface satisfied by any backend that can steer
+// a running agent loop via an in-process message rather than the stdin
+// pipe. Both *backend.ApiBackend and *backend.HybridBackend implement it.
+// CliBackend does not — its runs are steered via WriteToStdin (the
+// stream-json stdin pipe of the Claude Code subprocess).
+//
+// Steer returns true if the steer was accepted (and will reach the run
+// loop), false otherwise (caller falls back to stdin). For HybridBackend
+// this returns false for CLI-routed runs so the fallback covers them.
+//
+// This local interface is the mechanism that keeps Steer off the public
+// RunBackend interface — adding it there would be a contract change.
+// See docs/engine-grounding.md §3.
+type steerable interface {
+	Steer(requestID, message string) bool
+}
+
 // SteerAgent sends a message to a running agent's stdin, or steers the main
 // session loop if agentName is empty.
 func (m *Manager) SteerAgent(key, agentName, message string) {
@@ -60,44 +77,31 @@ func (m *Manager) SteerAgent(key, agentName, message string) {
 	if agentName == "" {
 		rid := s.requestID
 		m.mu.RUnlock()
-		if rid != "" {
-			// steerable covers both ApiBackend (direct Steer call) and
-			// HybridBackend (routes to the inner backend that owns this run).
-			// CliBackend does not implement this interface — falls to stdin.
-			type steerable interface {
-				Steer(requestID, message string) bool
+		if rid == "" {
+			return
+		}
+		// Try the in-process steer path first (ApiBackend / HybridBackend's
+		// API-routed runs). If the backend doesn't implement steerable, or
+		// Steer returns false (HybridBackend with a CLI-routed run), fall
+		// back to the stdin-pipe path used by Claude Code subprocesses.
+		if steer, ok := m.backend.(steerable); ok {
+			if steer.Steer(rid, message) {
+				return
 			}
-			if sb, ok := m.backend.(steerable); ok {
-				if !sb.Steer(rid, message) {
-					// hybrid run routed to CLI: fall through to stdin
-					stdinMsg := map[string]interface{}{
-						"type": "user",
-						"message": map[string]interface{}{
-							"role": "user",
-							"content": []map[string]interface{}{
-								{"type": "text", "text": message},
-							},
-						},
-					}
-					if err := m.backend.WriteToStdin(rid, stdinMsg); err != nil {
-						utils.Log("Session", "steer via stdin failed: "+err.Error())
-					}
-				}
-			} else {
-				// CliBackend: write follow-up message over stdin pipe
-				stdinMsg := map[string]interface{}{
-					"type": "user",
-					"message": map[string]interface{}{
-						"role": "user",
-						"content": []map[string]interface{}{
-							{"type": "text", "text": message},
-						},
-					},
-				}
-				if err := m.backend.WriteToStdin(rid, stdinMsg); err != nil {
-					utils.Log("Session", "steer via stdin failed: "+err.Error())
-				}
-			}
+		}
+		// CliBackend (or hybrid CLI-routed): write follow-up message over
+		// stdin pipe of the Claude Code subprocess.
+		stdinMsg := map[string]interface{}{
+			"type": "user",
+			"message": map[string]interface{}{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{"type": "text", "text": message},
+				},
+			},
+		}
+		if err := m.backend.WriteToStdin(rid, stdinMsg); err != nil {
+			utils.Log("Session", "steer via stdin failed: "+err.Error())
 		}
 		return
 	}

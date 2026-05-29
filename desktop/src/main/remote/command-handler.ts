@@ -10,15 +10,17 @@ import {
   handleCancel,
   handleSetPermissionMode,
   handleLoadConversation,
-  handleSetTabGroupMode,
-  handleMoveTabToGroup,
-  handleToggleTabGroupPin,
-  handleReorderTabGroups,
   handleDiscoverCommands,
   handleSetTabModel,
   handleSetPreferredModel,
   handleSetEngineDefaultModel,
 } from './handlers/tabs'
+import {
+  handleSetTabGroupMode,
+  handleMoveTabToGroup,
+  handleToggleTabGroupPin,
+  handleReorderTabGroups,
+} from './handlers/tab-groups'
 import {
   handleEnginePrompt,
   handleEngineAbort,
@@ -72,6 +74,7 @@ import {
 } from './handlers/diagnostics'
 import { handleLoadAttachments } from './handlers/attachments'
 import { handleSetRemoteDisplay } from './handlers/display'
+import { handleSetDesktopSetting } from './handlers/desktop-settings'
 import type { RemoteCommand } from './protocol'
 
 function log(msg: string): void {
@@ -86,7 +89,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'create_terminal_tab': await handleCreateTerminalTab(cmd); break
     case 'create_engine_tab': await handleCreateEngineTab(cmd); break
     case 'close_tab': handleCloseTab(cmd); break
-    case 'prompt': handlePrompt(cmd); break
+    case 'prompt': await handlePrompt(cmd); break
     case 'cancel': handleCancel(cmd); break
     case 'respond_permission':
       sessionPlane.respondToPermission(cmd.tabId, cmd.questionId, cmd.optionId)
@@ -142,5 +145,6 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'diagnostic_logs_response': handleDiagnosticLogsResponse(cmd, deviceId); break
     case 'load_attachments': await handleLoadAttachments(cmd, deviceId); break
     case 'set_remote_display': await handleSetRemoteDisplay(cmd, deviceId); break
+    case 'set_desktop_setting': await handleSetDesktopSetting(cmd, deviceId); break
   }
 }

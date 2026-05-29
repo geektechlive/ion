@@ -1,0 +1,329 @@
+package session
+
+import (
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+
+	"github.com/dsswift/ion/engine/internal/conversation"
+	"github.com/dsswift/ion/engine/internal/extension"
+	"github.com/dsswift/ion/engine/internal/types"
+)
+
+// TestSendCommand_Clear_FiresSessionStart verifies that dispatching the
+// `clear` command re-fires the session_start hook on an already-loaded
+// extension group. This is the load-bearing behaviour of the /clear
+// checkpoint feature: the harness must get a chance to re-prime the
+// now-empty conversation.
+//
+// In-process hook pattern adapted from engine/internal/extension/sdk_test.go
+// (TestHost_InProcessExtension).
+func TestSendCommand_Clear_FiresSessionStart(t *testing.T) {
+	// HOME override so the engine's conversation.Save/Load (called with "")
+	// writes to a tempdir and not the developer's real ~/.ion.
+	t.Setenv("HOME", t.TempDir())
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+
+	const key = "clear-fires-session-start"
+	if _, err := mgr.StartSession(key, defaultConfig()); err != nil {
+		t.Fatalf("StartSession failed: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.StopSession(key) })
+
+	// Seed a conversationID so the clear branch actually runs (the engine
+	// guards on conversationID != "" before attempting any clear work).
+	mgr.mu.Lock()
+	s := mgr.sessions[key]
+	s.conversationID = "test-conv-" + key
+	mgr.mu.Unlock()
+
+	// Persist a stub conversation file so conversation.Load succeeds.
+	conv := conversation.CreateConversation(s.conversationID, "system", "test-model")
+	if err := conversation.Save(conv, ""); err != nil {
+		t.Fatalf("seed conversation save: %v", err)
+	}
+
+	// Register an in-process extension whose session_start handler increments
+	// a counter. We do NOT fire session_start as part of setup — counter
+	// should stay 0 until SendCommand("clear") triggers the re-fire.
+	var fired atomic.Int32
+	host := extension.NewHost()
+	host.SDK().On(extension.HookSessionStart, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
+		fired.Add(1)
+		return nil, nil
+	})
+	group := extension.NewExtensionGroup()
+	group.Add(host)
+	mgr.TestSetExtGroup(key, group)
+
+	if got := fired.Load(); got != 0 {
+		t.Fatalf("session_start fired before /clear: got %d, want 0", got)
+	}
+
+	// Dispatch /clear via the manager's command entrypoint.
+	mgr.SendCommand(key, "clear", "")
+
+	if got := fired.Load(); got != 1 {
+		t.Fatalf("session_start did not re-fire on /clear: got %d, want 1", got)
+	}
+}
+
+// TestSendCommand_Clear_WipesConversationMessages verifies the existing
+// (pre-PR) behaviour of /clear is preserved: it wipes Messages on the
+// on-disk conversation file. This was previously untested. We're adding
+// it now as a regression net for the load-bearing wipe behaviour.
+func TestSendCommand_Clear_WipesConversationMessages(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+
+	const key = "clear-wipes-messages"
+	if _, err := mgr.StartSession(key, defaultConfig()); err != nil {
+		t.Fatalf("StartSession failed: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.StopSession(key) })
+
+	// Seed a conversation with at least one persisted message so we can
+	// observe the wipe.
+	convID := "wipe-test-conv-" + key
+	mgr.mu.Lock()
+	mgr.sessions[key].conversationID = convID
+	mgr.mu.Unlock()
+
+	conv := conversation.CreateConversation(convID, "system", "test-model")
+	conv.Messages = []types.LlmMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+	}
+	conv.LastInputTokens = 42
+	conv.LastInputTokensMsgCount = 2
+	if err := conversation.Save(conv, ""); err != nil {
+		t.Fatalf("seed conversation save: %v", err)
+	}
+
+	// Confirm setup wrote what we expect.
+	convDir := filepath.Join(tempHome, ".ion", "conversations")
+	loaded, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("verify-seed Load: %v", err)
+	}
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("verify-seed: expected 2 messages on disk before clear, got %d", len(loaded.Messages))
+	}
+
+	// Dispatch /clear.
+	mgr.SendCommand(key, "clear", "")
+
+	// Reload from disk and assert Messages was wiped.
+	cleared, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("post-clear Load: %v", err)
+	}
+	if len(cleared.Messages) != 0 {
+		t.Errorf("expected Messages wiped after /clear, got %d messages: %+v", len(cleared.Messages), cleared.Messages)
+	}
+	if cleared.LastInputTokens != 0 {
+		t.Errorf("expected LastInputTokens reset to 0, got %d", cleared.LastInputTokens)
+	}
+	if cleared.LastInputTokensMsgCount != 0 {
+		t.Errorf("expected LastInputTokensMsgCount reset to 0, got %d", cleared.LastInputTokensMsgCount)
+	}
+}
+
+// TestSendCommand_Clear_NoExtensionsIsOk verifies that /clear on a session
+// without any extensions does not panic or error — it should just wipe
+// messages and skip the session_start re-fire (because there's nothing to
+// fire it on). Normal (non-engine) conversation tabs hit this branch.
+func TestSendCommand_Clear_NoExtensionsIsOk(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+
+	const key = "clear-no-extensions"
+	if _, err := mgr.StartSession(key, defaultConfig()); err != nil {
+		t.Fatalf("StartSession failed: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.StopSession(key) })
+
+	convID := "no-ext-conv-" + key
+	mgr.mu.Lock()
+	mgr.sessions[key].conversationID = convID
+	mgr.mu.Unlock()
+
+	conv := conversation.CreateConversation(convID, "", "test-model")
+	if err := conversation.Save(conv, ""); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+
+	// Should not panic. extGroup is nil at this point (no extensions loaded).
+	mgr.SendCommand(key, "clear", "")
+}
+
+// TestClearConversationFile verifies the stateless file-wipe path used when
+// the desktop issues /clear on a tab that has a loaded conversationId but
+// has never sent a prompt (so no live engine session exists).
+//
+// Key invariants:
+//   - Messages is nil after the wipe (LLM sees no prior history).
+//   - LastInputTokens and LastInputTokensMsgCount are zeroed.
+//   - Fields that MUST be preserved (TotalInputTokens, TotalCost, Entries,
+//     ID, Model, …) are untouched so the conversation tree, cost accounting,
+//     and metadata survive the /clear checkpoint.
+func TestClearConversationFile(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+
+	const convID = "no-session-clear-conv"
+	convDir := filepath.Join(tempHome, ".ion", "conversations")
+
+	// Seed a conversation with messages and non-zero counters.
+	conv := conversation.CreateConversation(convID, "system prompt", "test-model")
+	conv.Messages = []types.LlmMessage{
+		{Role: "user", Content: "msg 1"},
+		{Role: "assistant", Content: "reply 1"},
+		{Role: "user", Content: "msg 2"},
+	}
+	conv.LastInputTokens = 500
+	conv.LastInputTokensMsgCount = 3
+	conv.TotalInputTokens = 1200
+	conv.TotalCost = 0.42
+	if err := conversation.Save(conv, ""); err != nil {
+		t.Fatalf("seed conversation save: %v", err)
+	}
+
+	// Verify seeded state.
+	seeded, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("verify-seed Load: %v", err)
+	}
+	if len(seeded.Messages) != 3 {
+		t.Fatalf("verify-seed: expected 3 messages, got %d", len(seeded.Messages))
+	}
+
+	// Call ClearConversationFile — no session required.
+	if err := mgr.ClearConversationFile(convID); err != nil {
+		t.Fatalf("ClearConversationFile: %v", err)
+	}
+
+	// Reload and assert wipe.
+	cleared, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("post-clear Load: %v", err)
+	}
+
+	if len(cleared.Messages) != 0 {
+		t.Errorf("Messages not wiped: got %d message(s): %+v", len(cleared.Messages), cleared.Messages)
+	}
+	if cleared.LastInputTokens != 0 {
+		t.Errorf("LastInputTokens not reset: got %d", cleared.LastInputTokens)
+	}
+	if cleared.LastInputTokensMsgCount != 0 {
+		t.Errorf("LastInputTokensMsgCount not reset: got %d", cleared.LastInputTokensMsgCount)
+	}
+
+	// Preserved fields must be untouched.
+	if cleared.ID != convID {
+		t.Errorf("ID changed: got %q, want %q", cleared.ID, convID)
+	}
+	if cleared.TotalInputTokens != 1200 {
+		t.Errorf("TotalInputTokens changed: got %d, want 1200", cleared.TotalInputTokens)
+	}
+	if cleared.TotalCost != 0.42 {
+		t.Errorf("TotalCost changed: got %f, want 0.42", cleared.TotalCost)
+	}
+}
+
+// TestClearConversationFile_MissingConv verifies that ClearConversationFile
+// returns a meaningful error when the conversation file does not exist on
+// disk. The caller (server.go dispatch) propagates this as an RPC error.
+func TestClearConversationFile_MissingConv(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+
+	err := mgr.ClearConversationFile("no-such-conv-id")
+	if err == nil {
+		t.Fatal("expected error for missing conversation file, got nil")
+	}
+}
+
+// TestClearConversationFile_MessagesDurableAfterReload is the end-to-end
+// regression guard for issue #146. The root cause was that the legacy
+// loadFromJSONL path called BuildContextPath(conv) after loading, which
+// reconstructed Messages from Entries — making /clear invisible after a
+// process restart (the tree always had N entries → N messages rebuilt).
+//
+// With the split format (.llm.jsonl + .tree.jsonl), Messages is read verbatim
+// from .llm.jsonl. After /clear writes an empty body to .llm.jsonl, a fresh
+// Load must return Messages == nil regardless of how many Entries exist in
+// .tree.jsonl.
+func TestClearConversationFile_MessagesDurableAfterReload(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+
+	const convID = "clear-durability-146"
+	convDir := filepath.Join(tempHome, ".ion", "conversations")
+
+	// Seed a conversation with 5 messages (and corresponding Entries).
+	conv := conversation.CreateConversation(convID, "system", "test-model")
+	for i := 0; i < 5; i++ {
+		conversation.AddUserMessage(conv, "user message")
+		conversation.AddAssistantMessage(conv,
+			[]types.LlmContentBlock{{Type: "text", Text: "assistant reply"}},
+			types.LlmUsage{InputTokens: 100, OutputTokens: 50})
+	}
+	if err := conversation.Save(conv, ""); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	// Verify seed: 10 messages in the split format.
+	seeded, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("seed Load: %v", err)
+	}
+	if len(seeded.Messages) != 10 {
+		t.Fatalf("seed: expected 10 messages, got %d", len(seeded.Messages))
+	}
+	seedEntryCount := len(seeded.Entries)
+	if seedEntryCount != 10 {
+		t.Fatalf("seed: expected 10 entries, got %d", seedEntryCount)
+	}
+
+	// Apply /clear via ClearConversationFile.
+	if err := mgr.ClearConversationFile(convID); err != nil {
+		t.Fatalf("ClearConversationFile: %v", err)
+	}
+
+	// Reload — this is the critical assertion: Messages must be empty even
+	// though Entries still has 10 items. In the buggy code, BuildContextPath
+	// would reconstruct 10 messages from the tree.
+	cleared, err := conversation.Load(convID, convDir)
+	if err != nil {
+		t.Fatalf("post-clear Load: %v", err)
+	}
+	if len(cleared.Messages) != 0 {
+		t.Errorf("BUG #146: Messages not cleared after reload — got %d message(s): %+v",
+			len(cleared.Messages), cleared.Messages)
+	}
+	// Entries must be preserved — /clear is a checkpoint, not a delete.
+	if len(cleared.Entries) != seedEntryCount {
+		t.Errorf("Entries count changed after clear: got %d, want %d",
+			len(cleared.Entries), seedEntryCount)
+	}
+	if cleared.LastInputTokens != 0 {
+		t.Errorf("LastInputTokens = %d after clear, want 0", cleared.LastInputTokens)
+	}
+}
+

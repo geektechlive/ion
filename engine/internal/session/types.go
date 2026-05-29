@@ -27,6 +27,13 @@ type pendingPrompt struct {
 	extensions   []string
 	noExtensions bool
 	attachments  []types.ImageAttachment
+	// implementationPhase carries the client's
+	// ClientCommand.ImplementationPhase flag through the queue so the
+	// suppression of EnterPlanMode injection survives queueing on a busy
+	// session. Without this, a queued "implement" prompt would lose the
+	// flag and the engine would inject EnterPlanMode against the user's
+	// already-approved intent.
+	implementationPhase bool
 }
 
 // engineSession holds the state for a single session managed by the Manager.
@@ -57,12 +64,44 @@ type engineSession struct {
 	procRegistry *extension.ProcessRegistry
 	pending      *pending.Broker
 
+	// fsWatcherRelease releases this session's share of the pooled workspace
+	// watcher. The underlying watcher closes when the last session sharing
+	// the same working directory releases. nil when no watcher is active.
+	fsWatcherRelease func()
+
 	// Last-known context usage state, carried forward across status
 	// emissions so the footer always reflects the most recent data.
 	lastContextPct    int
 	lastContextWindow int
 	lastModel         string
 	lastTotalCost     float64
+
+	// lastPermissionDenials retains the PermissionDenials slice from the
+	// most recent TaskCompleteEvent. The slice typically contains
+	// AskUserQuestion / ExitPlanMode entries — intercepted tool calls
+	// that the session reports as denied but unresolved until the next
+	// prompt either supersedes them or answers them. The engine keeps
+	// them on the session so ReconcileState can include them on the
+	// engine_status snapshot it emits; without this retention, a
+	// re-attaching consumer would observe an engine_status that
+	// silently drops a field that was authoritative on the last
+	// task_complete, while the session itself is still in the same
+	// state.
+	//
+	// Lifecycle:
+	//   - Populated in event_translation.go when a TaskCompleteEvent
+	//     carries non-empty PermissionDenials.
+	//   - Cleared in prompt_dispatch.go when a new prompt is dispatched
+	//     (the new prompt supersedes the prior unresolved denial).
+	//   - Re-emitted by manager.go ReconcileState as part of the
+	//     engine_status snapshot.
+	//
+	// Engine contract: engine_status is a snapshot of the session's
+	// current observable state. PermissionDenials was already part of
+	// that contract on the task_complete-derived emission; this field
+	// closes the gap so ReconcileState emits it too. Not a new field —
+	// already declared on StatusFields, mirrored in TS / Swift.
+	lastPermissionDenials []types.PermissionDenial
 
 	// Agent spawner counter – monotonically increasing across runs so
 	// agent names are globally unique within the session.

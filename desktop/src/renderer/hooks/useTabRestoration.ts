@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
-import type { Message, AgentStateUpdate } from '../../shared/types'
+import type { Message } from '../../shared/types'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { setSavedBuffer } from '../components/TerminalInstance'
+import { restoreEngineTab } from './useTabRestoration-engine'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
@@ -23,14 +24,17 @@ export function useTabRestoration() {
     let aborted = false
     useSessionStore.getState().initStaticInfo().then(async () => {
       if (aborted) return
+      useSessionStore.setState({ initProgress: 'Loading saved tabs…' })
       const homeDir = useSessionStore.getState().staticInfo?.homePath || '~'
 
       // Try restoring saved tabs
       const saved = await window.ion.loadTabs().catch(() => null)
       if (saved && saved.tabs && saved.tabs.length > 0) {
+        useSessionStore.setState({ initProgress: `Restoring ${saved.tabs.length} tabs…` })
         // Restore each saved tab
         const restoredTabIds: Array<{ tabId: string; sessionId: string | null; index: number }> = []
         for (let i = 0; i < saved.tabs.length; i++) {
+          useSessionStore.setState({ initProgress: `Restoring tab ${i + 1} of ${saved.tabs.length}…` })
           const st = saved.tabs[i]
           if (st.conversationId && !st.isEngine) {
             // Conversation tab with a session -- resume it
@@ -75,6 +79,8 @@ export function useTabRestoration() {
                       contextTokens: st.contextTokens || null,
                       queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
                       draftInput: st.draftInput ?? '',
+                      lastMessagePreview: st.lastMessagePreview || null,
+                      lastEventAt: st.lastEventAt ?? null,
                       // Persisted permissionDenied is authoritative over resumeSession reconstruction
                       ...(st.permissionDenied ? { permissionDenied: st.permissionDenied } : {}),
                       ...(st.planFilePath ? { planFilePath: st.planFilePath } : {}),
@@ -90,110 +96,14 @@ export function useTabRestoration() {
             window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
             if (st.draftInput) console.log(`[restore] draft for tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
           } else if (st.isEngine) {
-            // Engine tab
-            const tabId = useSessionStore.getState().createEngineTab(st.workingDirectory, st.engineProfileId || undefined)
-            restoredTabIds.push({ tabId, sessionId: null, index: i })
-
-            // Build all engine state before any setState call to avoid
-            // intermediate renders where EngineView sees no instances
-            // (its auto-create effect would fire, causing duplicate sessions
-            // and cascading re-renders → React error #310).
-            const restoredPanes = new Map(useSessionStore.getState().enginePanes)
-            const restoredEngineMessages = new Map(useSessionStore.getState().engineMessages)
-            const restoredEngineAgentStates = new Map(useSessionStore.getState().engineAgentStates)
-            const restoredEngineDraftInputs = new Map(useSessionStore.getState().engineDraftInputs)
-
-            if (st.engineInstances && st.engineInstances.length > 0) {
-              restoredPanes.set(tabId, {
-                instances: st.engineInstances,
-                activeInstanceId: st.engineInstances[0].id,
-              })
-
-              if (st.engineMessages) {
-                for (const inst of st.engineInstances) {
-                  const saved = st.engineMessages[inst.id]
-                  if (saved && saved.length > 0) {
-                    const key = `${tabId}:${inst.id}`
-                    restoredEngineMessages.set(key, saved.map((m) => ({
-                      id: crypto.randomUUID(),
-                      role: m.role as Message['role'],
-                      content: m.content || '',
-                      toolName: m.toolName,
-                      toolId: m.toolId,
-                      toolStatus: m.toolStatus as Message['toolStatus'],
-                      timestamp: m.timestamp,
-                    })))
-                  }
-                }
-              }
-
-              if (st.engineAgentStates) {
-                for (const inst of st.engineInstances) {
-                  const saved = st.engineAgentStates[inst.id]
-                  if (saved && saved.length > 0) {
-                    const key = `${tabId}:${inst.id}`
-                    restoredEngineAgentStates.set(key, saved.map((a) => ({
-                      name: a.name,
-                      status: (a.status === 'running' ? 'done' : a.status) as AgentStateUpdate['status'],
-                      metadata: a.metadata,
-                    })))
-                  }
-                }
-              }
-
-              if (st.engineDrafts) {
-                for (const inst of st.engineInstances) {
-                  const d = st.engineDrafts[inst.id]
-                  if (d && d.length > 0) {
-                    const key = `${tabId}:${inst.id}`
-                    restoredEngineDraftInputs.set(key, d)
-                    console.log(`[restore] engine draft for ${tabId.slice(0, 8)}:${inst.id.slice(0, 8)} len=${d.length}`)
-                  }
-                }
-              }
-            }
-
-            // Single atomic setState: tab metadata + panes + messages + agent states + drafts
-            useSessionStore.setState((s) => ({
-              tabs: s.tabs.map((t) =>
-                t.id === tabId
-                  ? {
-                      ...t,
-                      customTitle: st.customTitle || null,
-                      pillColor: st.pillColor || null,
-                      groupId: st.groupId || null,
-                      groupPinned: st.groupPinned ?? false,
-                      modelOverride: st.modelOverride || null,
-                      conversationId: st.conversationId || null,
-                      draftInput: st.draftInput ?? '',
-                    }
-                  : t
-              ),
-              enginePanes: restoredPanes,
-              engineMessages: restoredEngineMessages,
-              engineAgentStates: restoredEngineAgentStates,
-              engineDraftInputs: restoredEngineDraftInputs,
-            }))
-            if (st.draftInput) console.log(`[restore] draft for engine tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
-
-            // Start engine processes (state is fully set up)
-            if (st.engineInstances && st.engineInstances.length > 0) {
-              const { engineProfiles } = usePreferencesStore.getState()
-              const profile = st.engineProfileId ? engineProfiles.find((p) => p.id === st.engineProfileId) : null
-              if (profile) {
-                for (const inst of st.engineInstances) {
-                  const key = `${tabId}:${inst.id}`
-                  window.ion.engineStart(key, {
-                    profileId: profile.id,
-                    extensions: profile.extensions,
-                    workingDirectory: st.workingDirectory,
-                    ...(st.conversationId ? { sessionId: st.conversationId } : {}),
-                  }).catch((err: any) => {
-                    console.error(`[restore] engine start failed for ${key}: ${err.message}`)
-                  })
-                }
-              }
-            }
+            // Engine tab — full restoration logic is extracted to
+            // useTabRestoration-engine.ts to keep this file under the
+            // 600-line cap. Returns the new tabId (used by the
+            // historical-message loop below; engine tabs don't have
+            // historicalSessionIds so the new id appears in
+            // restoredTabIds but gets skipped by the loop's
+            // `historicalIds.length > 0` guard).
+            restoreEngineTab(st, restoredTabIds, i)
           } else if (st.isTerminalOnly) {
             // Terminal-only tab
             const tabId = await useSessionStore.getState().createTerminalTab()
@@ -212,6 +122,8 @@ export function useTabRestoration() {
                       groupId: st.groupId || null,
                       groupPinned: st.groupPinned ?? false,
                       draftInput: st.draftInput ?? '',
+                      lastMessagePreview: st.lastMessagePreview || null,
+                      lastEventAt: st.lastEventAt ?? null,
                     }
                   : t
               ),
@@ -260,6 +172,8 @@ export function useTabRestoration() {
                       contextTokens: st.contextTokens || null,
                       queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
                       draftInput: st.draftInput ?? '',
+                      lastMessagePreview: st.lastMessagePreview || null,
+                      lastEventAt: st.lastEventAt ?? null,
                     }
                   : t
               ),
@@ -269,6 +183,7 @@ export function useTabRestoration() {
           }
         }
 
+        useSessionStore.setState({ initProgress: 'Loading history…' })
         // Load historical session messages for tabs that have them
         for (const { tabId, index } of restoredTabIds) {
           const st = saved.tabs[index]
@@ -395,6 +310,7 @@ export function useTabRestoration() {
           }))
         }
 
+        useSessionStore.setState({ initProgress: 'Restoring workspace…' })
         // Restore editor states (per-directory)
         if (saved.editorStates) {
           const restoredEditorStates = new Map<string, any>()
@@ -469,7 +385,7 @@ export function useTabRestoration() {
         const restoredExpanded = typeof saved.isExpanded === 'boolean'
           ? saved.isExpanded
           : usePreferencesStore.getState().expandOnTabSwitch
-        useSessionStore.setState({ isExpanded: restoredExpanded, tabsReady: true })
+        useSessionStore.setState({ isExpanded: restoredExpanded, tabsReady: true, initProgress: null })
         return
       }
 
@@ -482,6 +398,7 @@ export function useTabRestoration() {
         useSessionStore.setState((s) => ({
           tabs: s.tabs.map((t, i) => (i === 0 ? { ...t, workingDirectory: startDir, hasChosenDirectory: hasChosen } : t)),
         }))
+        useSessionStore.setState({ initProgress: 'Creating new tab…' })
         const registerInitialTab = async (retries = 5): Promise<void> => {
           for (let i = 0; i < retries; i++) {
             try {
@@ -490,6 +407,7 @@ export function useTabRestoration() {
                 tabs: s.tabs.map((t, idx) => (idx === 0 ? { ...t, id: tabId } : t)),
                 activeTabId: tabId,
                 tabsReady: true,
+                initProgress: null,
               }))
               return
             } catch {
@@ -497,7 +415,7 @@ export function useTabRestoration() {
             }
           }
           // All retries failed — still set tabsReady so UI isn't stuck forever
-          useSessionStore.setState({ tabsReady: true })
+          useSessionStore.setState({ tabsReady: true, initProgress: null })
         }
         registerInitialTab()
       }

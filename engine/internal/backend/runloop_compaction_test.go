@@ -3,6 +3,7 @@ package backend
 import (
 	"testing"
 
+	"github.com/dsswift/ion/engine/internal/compaction"
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/types"
 )
@@ -92,5 +93,137 @@ func TestCompactIfNeeded_BelowLimitIsNoOp(t *testing.T) {
 	}
 	if len(*events) != 0 {
 		t.Errorf("expected no events on below-limit call, got %d", len(*events))
+	}
+}
+
+// TestCompactReactive_HookReceivesFacts pins the contract added for issue #129:
+// after reactive compaction runs, the OnSessionCompact hook must receive the
+// facts the engine extracted from the pre-compaction message set, as a typed
+// []compaction.Fact under the "facts" key on the map payload. The session
+// bridge in prompt_runconfig.go relies on this exact shape; if the producer
+// stops embedding the typed slice (or switches to a stringly-typed shape),
+// this test catches it.
+func TestCompactReactive_HookReceivesFacts(t *testing.T) {
+	b := NewApiBackend()
+	_ = captureEvents(b, "reactive-facts")
+
+	conv := conversation.CreateConversation("reactive-facts", "", "test-model")
+	// Seed messages with text matching the decision and error fact patterns
+	// (see internal/compaction/compaction.go regexes). Reactive compaction
+	// does not gate on a token threshold — the runloop calls it whenever the
+	// provider returns prompt_too_long — so any non-empty conversation drives
+	// the full step-1 + step-2 + step-3 pipeline.
+	conv.Messages = append(conv.Messages,
+		types.LlmMessage{Role: "user", Content: "We decided to use SQLite for storage."},
+		types.LlmMessage{Role: "assistant", Content: "The build failed on darwin due to a linker error."},
+	)
+	// Pad so Compact (keepTurns=10) has something to truncate without
+	// emptying the conversation.
+	for i := 0; i < 20; i++ {
+		conv.Messages = append(conv.Messages, types.LlmMessage{Role: "user", Content: "filler q"})
+		conv.Messages = append(conv.Messages, types.LlmMessage{Role: "assistant", Content: "filler a"})
+	}
+
+	run := &activeRun{requestID: "reactive-facts", conv: conv}
+
+	var capturedInfo interface{}
+	var hookFired bool
+	hooks := RunHooks{
+		OnSessionCompact: func(_ string, info interface{}) {
+			hookFired = true
+			capturedInfo = info
+		},
+	}
+
+	ok := b.compactReactive(run, conv, hooks, 1)
+	if !ok {
+		t.Fatalf("compactReactive returned false; expected true")
+	}
+	if !hookFired {
+		t.Fatalf("OnSessionCompact hook did not fire")
+	}
+
+	m, ok := capturedInfo.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map payload, got %T", capturedInfo)
+	}
+	if got := m["strategy"]; got != "reactive" {
+		t.Errorf("strategy = %v, want reactive", got)
+	}
+	rawFacts, ok := m["facts"].([]compaction.Fact)
+	if !ok {
+		t.Fatalf("expected facts as []compaction.Fact, got %T (value: %v)", m["facts"], m["facts"])
+	}
+
+	// At minimum we expect one decision and one error fact from the seeded
+	// text. The extractor may emit additional facts (e.g. discoveries) from
+	// the filler — we only assert the two we deliberately seeded.
+	sawDecision, sawError := false, false
+	for _, f := range rawFacts {
+		switch f.Type {
+		case "decision":
+			sawDecision = true
+		case "error":
+			sawError = true
+		}
+	}
+	if !sawDecision {
+		t.Errorf("expected a decision fact in hook payload; got %d facts: %+v", len(rawFacts), rawFacts)
+	}
+	if !sawError {
+		t.Errorf("expected an error fact in hook payload; got %d facts: %+v", len(rawFacts), rawFacts)
+	}
+}
+
+// TestCompactReactive_HookEmptyFactsWhenNoPatterns is the negative half of
+// TestCompactReactive_HookReceivesFacts: when the conversation contains no
+// text matching any fact-extractor pattern, the hook still fires and the
+// "facts" key is present on the map but its value is an empty/nil slice.
+// The session bridge treats a missing key and an empty slice identically; a
+// panic on the type assertion in the bridge would catch a regression where
+// the producer stops setting the key entirely.
+func TestCompactReactive_HookEmptyFactsWhenNoPatterns(t *testing.T) {
+	b := NewApiBackend()
+	_ = captureEvents(b, "reactive-no-facts")
+
+	conv := conversation.CreateConversation("reactive-no-facts", "", "test-model")
+	// Plain filler text — no decision, error, preference, or discovery
+	// language; no file paths. Padded to give Compact something to truncate.
+	for i := 0; i < 12; i++ {
+		conv.Messages = append(conv.Messages, types.LlmMessage{Role: "user", Content: "q"})
+		conv.Messages = append(conv.Messages, types.LlmMessage{Role: "assistant", Content: "a"})
+	}
+
+	run := &activeRun{requestID: "reactive-no-facts", conv: conv}
+
+	var capturedInfo interface{}
+	var hookFired bool
+	hooks := RunHooks{
+		OnSessionCompact: func(_ string, info interface{}) {
+			hookFired = true
+			capturedInfo = info
+		},
+	}
+
+	ok := b.compactReactive(run, conv, hooks, 1)
+	if !ok {
+		t.Fatalf("compactReactive returned false; expected true")
+	}
+	if !hookFired {
+		t.Fatalf("OnSessionCompact hook did not fire")
+	}
+
+	m, ok := capturedInfo.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map payload, got %T", capturedInfo)
+	}
+	// Type assertion must succeed (the key is always present, even when
+	// empty). The slice itself may be nil or zero-length — both acceptable.
+	rawFacts, ok := m["facts"].([]compaction.Fact)
+	if !ok {
+		t.Fatalf("expected facts key to hold []compaction.Fact even when empty; got %T", m["facts"])
+	}
+	if len(rawFacts) != 0 {
+		t.Errorf("expected zero facts on filler conversation; got %d: %+v", len(rawFacts), rawFacts)
 	}
 }

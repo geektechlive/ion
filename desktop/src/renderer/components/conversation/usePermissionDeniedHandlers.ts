@@ -1,21 +1,23 @@
 import { useSessionStore } from '../../stores/sessionStore'
 import { usePreferencesStore } from '../../preferences'
-import { serializeConversation } from './serializeConversation'
 import type { TabState, Attachment } from '../../../shared/types'
 
 interface Handlers {
   onDismiss: () => void
   onAnswer: (answer: string) => void
   onApprove: (toolNames: string[]) => void
-  onImplement: (clearContext: boolean) => Promise<void>
-  onImplementAndUnpin: (clearContext: boolean) => Promise<void>
+  onImplement: () => Promise<void>
+  onImplementAndUnpin: () => Promise<void>
 }
 
 /**
- * Build the four PermissionDeniedCard callbacks for the active tab. The
- * `onImplement` handler does the most work: it starts a fresh session, optionally
- * clears UI state, reads the plan file, and seeds the next prompt with prior
- * conversation context so the model has full history without plan-mode patterns.
+ * Build the four PermissionDeniedCard callbacks for the active tab.
+ *
+ * onImplement starts a fresh engine session (to exit plan mode cleanly),
+ * reads the plan file, and sends "Implement the following plan:\n\n<content>"
+ * as the first message of the new session. The planning conversation history
+ * is not re-injected — the plan file is the complete artifact of the planning
+ * session and is all the model needs to implement it.
  */
 export function buildPermissionDeniedHandlers(
   tab: TabState,
@@ -24,6 +26,7 @@ export function buildPermissionDeniedHandlers(
     workingDir?: string,
     attachments?: Attachment[],
     appendSystemPrompt?: string,
+    implementationPhase?: boolean,
   ) => void,
 ): Handlers {
   const dismissPermissionDenied = () => {
@@ -38,19 +41,16 @@ export function buildPermissionDeniedHandlers(
 
   const onAnswer = (answer: string) => {
     dismissPermissionDenied()
-    // Resume session with the answer (no mode change, no context clear)
     sendMessage(answer)
   }
 
   const onApprove = (toolNames: string[]) => {
-    // Approve the denied tools for future runs on this tab
     window.ion.approveDeniedTools(tab.id, toolNames)
     dismissPermissionDenied()
-    // Tell the agent to retry
     sendMessage('The denied tools have been approved. Please retry the operation.')
   }
 
-  const onImplement = async (clearContext: boolean) => {
+  const onImplement = async () => {
     dismissPermissionDenied()
     // Switch to auto mode for implementation
     useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
@@ -71,11 +71,8 @@ export function buildPermissionDeniedHandlers(
       }
     }
 
-    let implementPrompt = 'Implement the plan'
-
     // Extract plan file path: tab state (engine event) > denial toolInput
     let planFilePath: string | null = tab.planFilePath || null
-
     if (!planFilePath && tab.permissionDenied?.tools) {
       const exitDenial = tab.permissionDenied.tools.find(
         (t) => t.toolName === 'ExitPlanMode' && t.toolInput
@@ -85,7 +82,7 @@ export function buildPermissionDeniedHandlers(
       }
     }
 
-    // Read plan content for both paths
+    // Read plan content
     let planContent: string | null = null
     if (planFilePath) {
       try {
@@ -96,61 +93,53 @@ export function buildPermissionDeniedHandlers(
       }
     }
 
-    // Both paths start a fresh session to break out of plan mode.
+    // Start a fresh session to break out of plan mode. This destroys the
+    // engine session (clearing planMode, injected plan-mode system prompts,
+    // and the restricted tool list) so the implementation run starts clean.
     window.ion.resetTabSession(tab.id)
 
-    if (clearContext) {
-      // Clear UI messages
-      useSessionStore.setState((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === tab.id
-            ? {
-                ...t,
-                messages: [],
-                historicalSessionIds: [
-                  ...t.historicalSessionIds,
-                  ...(t.conversationId && !t.historicalSessionIds.includes(t.conversationId)
-                    ? [t.conversationId] : []),
-                ],
-                conversationId: null,
-                lastResult: null,
-                currentActivity: '',
-                permissionQueue: [],
-                permissionDenied: null,
-                queuedPrompts: [],
-              }
-            : t
-        ),
-      }))
+    // Clear UI messages and reset conversation state so the implementation
+    // conversation starts visually fresh.
+    useSessionStore.setState((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === tab.id
+          ? {
+              ...t,
+              messages: [],
+              historicalSessionIds: [
+                ...t.historicalSessionIds,
+                ...(t.conversationId && !t.historicalSessionIds.includes(t.conversationId)
+                  ? [t.conversationId] : []),
+              ],
+              conversationId: null,
+              lastResult: null,
+              currentActivity: '',
+              permissionQueue: [],
+              permissionDenied: null,
+              queuedPrompts: [],
+            }
+          : t
+      ),
+    }))
 
-      if (planContent) {
-        implementPrompt = `Implement the following plan:\n\n${planContent}`
-      }
-    } else {
-      // Keep UI messages but start fresh Claude session.
-      // Conversation context goes via system prompt (invisible to user).
-      useSessionStore.setState((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === tab.id
-            ? {
-                ...t,
-                historicalSessionIds: [
-                  ...t.historicalSessionIds,
-                  ...(t.conversationId && !t.historicalSessionIds.includes(t.conversationId)
-                    ? [t.conversationId] : []),
-                ],
-                conversationId: null,
-              }
-            : t
-        ),
-      }))
+    // Structured signal to the engine that this run is the implement
+    // half of a plan-then-implement flow. The engine maps this onto
+    // RunOptions.ImplementationPhase, which suppresses EnterPlanMode
+    // sentinel-tool injection so the model can't re-propose plan-mode
+    // entry against the user's already-approved intent.
+    //
+    // Replaces the prior mechanism that prepended a "You are implementing
+    // a user-approved plan. Do not re-enter plan mode..." preamble to
+    // the user prompt and relied on the EnterPlanMode tool docstring
+    // telling the model to recognize those phrases. Substring matching
+    // was brittle (translation-sensitive, easy to bypass with
+    // paraphrasing) and bled UI/harness policy into engine-visible
+    // prompt text. The boolean is the mechanical equivalent and lives
+    // on the structured wire contract.
+    const implementPrompt = planContent
+      ? `Implement the following plan:\n\n${planContent}`
+      : 'Implement the plan.'
 
-      if (planContent) {
-        implementPrompt = `Implement the following plan:\n\n${planContent}`
-      }
-    }
-
-    // Build plan attachment for the message
     const planAttachment = planFilePath ? [{
       id: crypto.randomUUID(),
       type: 'plan' as const,
@@ -158,25 +147,15 @@ export function buildPermissionDeniedHandlers(
       path: planFilePath,
     }] : undefined
 
-    // For non-clear-context, inject prior conversation as system prompt context
-    // so the model has full history without plan-mode patterns, but the user
-    // only sees "Implement the plan".
-    const contextPrompt = !clearContext
-      ? serializeConversation(tab.messages)
-      : undefined
-    const appendSys = contextPrompt
-      ? `The following is the conversation history from the planning session. Use it as context for implementation.\n\n<previous_conversation>\n${contextPrompt}\n</previous_conversation>`
-      : undefined
-
-    sendMessage(implementPrompt, tab.workingDirectory, planAttachment, appendSys)
+    sendMessage(implementPrompt, tab.workingDirectory, planAttachment, undefined, true)
   }
 
-  const onImplementAndUnpin = async (clearContext: boolean): Promise<void> => {
+  const onImplementAndUnpin = async (): Promise<void> => {
     // Unpin first so the auto-move guard fires when onImplement switches
     // the tab to auto mode — tab will then move to in-progress as expected.
     useSessionStore.getState().toggleTabGroupPin(tab.id)
     console.log(`[tab-pin] implement-and-unpin: tab=${tab.id.slice(0, 8)} — pin cleared, handing off to onImplement`)
-    await onImplement(clearContext)
+    await onImplement()
   }
 
   return { onDismiss, onAnswer, onApprove, onImplement, onImplementAndUnpin }

@@ -9,7 +9,6 @@ struct GitPaneView: View {
 
     @State private var changesExpanded = true
     @State private var graphExpanded = true
-    @State private var loaded = false
 
     private var directory: String {
         viewModel.tab(for: tabId)?.workingDirectory ?? ""
@@ -89,8 +88,11 @@ struct GitPaneView: View {
                 }
             }
             .task {
-                guard !loaded else { return }
-                loaded = true
+                // Refresh on every appear (not just the first one) — the
+                // desktop watcher is best-effort, so the only way to be sure
+                // we're showing fresh state is to ask for it whenever the
+                // pane becomes visible. Closing and reopening the pane will
+                // re-fire this and refresh.
                 refresh()
             }
             .overlay(alignment: .top) {

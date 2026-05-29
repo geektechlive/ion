@@ -71,6 +71,111 @@ enum RemoteEvent: Codable, Sendable {
     case engineConversationHistory(tabId: String, instanceId: String?, messages: [EngineMessage])
     case engineModelOverride(tabId: String, instanceId: String?, model: String)
     case engineProfiles(profiles: [EngineProfile])
+    /// Workflow event from the engine: the model has proposed a plan-mode
+    /// transition (currently only kind="exit"). iOS does not yet act on
+    /// this — the desktop is the authoritative consumer that renders the
+    /// approval card — but iOS decodes the variant cleanly so the wire
+    /// protocol stays uniform across consumers. See
+    /// docs/architecture/adr/003-state-events-vs-workflow-events.md.
+    case enginePlanProposal(tabId: String, instanceId: String?, kind: String, planFilePath: String?, planSlug: String?)
+    /// Engine ↔ harness wire-protocol request emitted when the engine wants
+    /// an external opinion on whether to nudge a model that has stopped
+    /// below the configured output-token budget. The desktop is the
+    /// authoritative responder (see desktop/src/main/early-stop-policy.ts)
+    /// and replies via the `early_stop_decision_response` client command
+    /// within a 100ms window. iOS decodes the event cleanly so the wire
+    /// protocol stays uniform but does NOT respond — observing the event
+    /// is purely diagnostic.
+    ///
+    /// Field semantics mirror `extension.EarlyStopDecisionInfo` verbatim;
+    /// see engine/internal/types/types.go for the canonical comments.
+    /// All numeric fields are kept as `Int` (no Double widening) because
+    /// the engine emits whole-number counters; tab/instance/request IDs
+    /// are stable correlators useful for log-line pairing.
+    case engineEarlyStopDecisionRequest(
+        tabId: String,
+        instanceId: String?,
+        requestId: String,
+        runId: String,
+        model: String,
+        turnNumber: Int,
+        stopReason: String,
+        cumulativeOutput: Int,
+        budget: Int,
+        thresholdPct: Int,
+        continuationCount: Int,
+        maxContinuations: Int,
+        lastContinuationDelta: Int,
+        wouldContinue: Bool,
+        isSubagent: Bool
+    )
+    /// Complete snapshot of extension-registered slash commands for a
+    /// session. Emitted at session start and on every subsequent mutation
+    /// (RegisterCommand inside a hook, extension hot reload, etc.).
+    ///
+    /// Snapshot semantics: REPLACE the cached set with the payload; never
+    /// merge. Empty `commands: []` is the authoritative "no extension
+    /// commands live" signal. See docs/architecture/agent-state.md for
+    /// the canonical snapshot-replace pattern; the field comment on
+    /// types.EngineEvent.Commands and the file-level comment on
+    /// engine/internal/session/command_registry.go are the source of
+    /// truth on the engine side.
+    ///
+    /// The desktop's prompt pipeline consumes this for routing-hint
+    /// caching (engine-command names take precedence over local .md
+    /// template lookups). iOS does not yet act on the snapshot — the
+    /// unified slash-pipeline plan intentionally left the iOS UI out
+    /// of scope — but iOS decodes the variant cleanly so the wire stays
+    /// uniform across consumers.
+    case engineCommandRegistry(
+        tabId: String,
+        instanceId: String?,
+        commands: [EngineCommandListing]
+    )
+    /// Result of an engine SendCommand dispatch — success, extension
+    /// command failure, or unknown command. `message` carries any
+    /// human-readable note the engine emits; `command` is the bare
+    /// command name the engine resolved (e.g. "clear",
+    /// "ion--review-changes") so consumers can switch on it without
+    /// reparsing message prose; `commandError` is set when the dispatch
+    /// failed (extension threw, or "unknown_command" when the engine
+    /// disclaims the name).
+    ///
+    /// The desktop's prompt pipeline awaits this event to decide between
+    /// "dispatch landed, draw the divider" and "engine disclaims, fall
+    /// through to .md expansion". The desktop also uses the specific
+    /// success case (command == "clear" && commandError == nil) to relay
+    /// an iOS-renderable divider via engine_harness_message /
+    /// message_added — iOS receives the divider via those existing
+    /// event types and does not need to interpret engine_command_result
+    /// directly. Decoding the event here keeps the wire uniform; future
+    /// iOS features that want to react to command results have a clean
+    /// place to do so.
+    case engineCommandResult(
+        tabId: String,
+        instanceId: String?,
+        message: String?,
+        command: String?,
+        commandError: String?
+    )
+    /// Desktop user-preferences projection. Emitted on initial pairing
+    /// and on every subsequent change to a projectable setting (either
+    /// from iOS via `setDesktopSetting` or from the desktop UI). Snapshot
+    /// semantics — consumers REPLACE their cached view with the payload;
+    /// never merge.
+    ///
+    /// The payload carries three things: the current values map (key →
+    /// AnyCodable), the schema (per-key metadata for UI rendering), and
+    /// the ordered group descriptors. The schema-on-the-wire design
+    /// means iOS auto-renders any new desktop setting without a Swift
+    /// code change — the allowlist on the desktop is the single source
+    /// of truth. See `DesktopSettingsModel.swift` for the higher-level
+    /// model the SettingsView consumes.
+    case desktopSettingsSnapshot(
+        settings: [String: AnyCodable],
+        schema: [DesktopSettingSchemaEntry],
+        groups: [DesktopSettingGroupDescriptor]
+    )
     // Git events
     case gitChangesResponse(directory: String, response: GitChangesResponse)
     case gitGraphResponse(directory: String, response: GitGraphResponse)
@@ -144,6 +249,11 @@ enum RemoteEvent: Codable, Sendable {
         case engineConversationHistory = "engine_conversation_history"
         case engineModelOverride = "engine_model_override"
         case engineProfiles = "engine_profiles"
+        case enginePlanProposal = "engine_plan_proposal"
+        case engineEarlyStopDecisionRequest = "engine_early_stop_decision_request"
+        case engineCommandRegistry = "engine_command_registry"
+        case engineCommandResult = "engine_command_result"
+        case desktopSettingsSnapshot = "desktop_settings_snapshot"
         case gitChangesResponse = "git_changes_response"
         case gitGraphResponse = "git_graph_response"
         case gitDiffResponse = "git_diff_response"
@@ -186,6 +296,35 @@ enum RemoteEvent: Codable, Sendable {
         case attachments
         case sourceTabId, targetTabId
         case customName, customIcon, updatedAt, remoteDisplayUpdatedAt
+        // engine_plan_proposal — workflow event for plan-mode proposals.
+        // The engine emits these field names (no instanceId; the proposal
+        // is always at the tab level, not per-instance).
+        case planProposalKind, planFilePath, planSlug
+        // engine_early_stop_decision_request — wire-protocol request the
+        // engine emits when it wants an external opinion on continuation.
+        // The desktop responds; iOS only decodes for diagnostic visibility.
+        // Field names mirror the Go-side json tags on EngineEvent verbatim
+        // so the JSONDecoder picks them up without any custom mapping.
+        case earlyStopRequestId, earlyStopRunId, earlyStopModel
+        case earlyStopTurnNumber, earlyStopStopReason
+        case earlyStopCumulativeOutput, earlyStopBudget, earlyStopThresholdPct
+        case earlyStopContinuationCount, earlyStopMaxContinuations
+        case earlyStopLastContinuationDelta
+        case earlyStopWouldContinue, earlyStopIsSubagent
+        // engine_command_registry / engine_command_result — slash-pipeline
+        // wire events. `commands` already declared above (used by the
+        // RegistryView and other generic listings); `message` already
+        // declared above (shared with engine_working_message,
+        // engine_notify, engine_error, engine_harness_message). `command`
+        // is the bare resolved name (e.g. "clear"), and `commandError`
+        // is the failure reason or "unknown_command" when the engine
+        // disclaims the name.
+        case command, commandError
+        // desktop_settings_snapshot — Part 7 wire event.
+        // `settings` is the value map; `schema` carries per-key
+        // metadata (type, group, label, description, defaultValue);
+        // `groups` is the ordered list of section descriptors.
+        case settings, schema, groups
     }
 
     // MARK: - Decoder

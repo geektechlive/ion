@@ -18,14 +18,14 @@ export function GeneralCategory() {
   const setAllowSettingsEdits = usePreferencesStore((s) => s.setAllowSettingsEdits)
   const enableClaudeCompat = usePreferencesStore((s) => s.enableClaudeCompat)
   const setEnableClaudeCompat = usePreferencesStore((s) => s.setEnableClaudeCompat)
+  const enableEarlyStopContinuation = usePreferencesStore((s) => s.enableEarlyStopContinuation)
+  const setEnableEarlyStopContinuation = usePreferencesStore((s) => s.setEnableEarlyStopContinuation)
   const soundEnabled = usePreferencesStore((s) => s.soundEnabled)
   const setSoundEnabled = usePreferencesStore((s) => s.setSoundEnabled)
   const showTodoList = usePreferencesStore((s) => s.showTodoList)
   const setShowTodoList = usePreferencesStore((s) => s.setShowTodoList)
   const aiGeneratedTitles = usePreferencesStore((s) => s.aiGeneratedTitles)
   const setAiGeneratedTitles = usePreferencesStore((s) => s.setAiGeneratedTitles)
-  const showImplementClearContext = usePreferencesStore((s) => s.showImplementClearContext)
-  const setShowImplementClearContext = usePreferencesStore((s) => s.setShowImplementClearContext)
 
   const handleBrowse = async () => {
     const dir = await window.ion.selectDirectory()
@@ -160,6 +160,13 @@ export function GeneralCategory() {
       />
 
       <SettingToggle
+        label="Early-stop continuation nudge"
+        description="When the model stops below the engine's configured output-token target, reply to the engine's continuation hook with a 'keep working' prompt. Disable to never nudge."
+        checked={enableEarlyStopContinuation}
+        onChange={setEnableEarlyStopContinuation}
+      />
+
+      <SettingToggle
         label="Notification Sound"
         description="Play a sound when a task completes."
         checked={soundEnabled}
@@ -178,14 +185,6 @@ export function GeneralCategory() {
         description="Use AI to generate descriptive tab titles from your first message. Uses the fast model tier."
         checked={aiGeneratedTitles}
         onChange={setAiGeneratedTitles}
-      />
-
-      <SettingToggle
-        label="Clear Context on Implement"
-        description='Show the "Implement, clear context" option when exiting plan mode.'
-        checked={showImplementClearContext}
-        onChange={setShowImplementClearContext}
-        warning="Advanced feature — not recommended for typical use. Clearing context discards the conversation history that helps the agent maintain continuity."
       />
     </>
   )

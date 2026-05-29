@@ -15,6 +15,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/skills"
 	"github.com/dsswift/ion/engine/internal/telemetry"
+	"github.com/dsswift/ion/engine/internal/tools"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -124,11 +125,17 @@ func (a *sessionAccessor) McpConnections() []*mcp.Connection {
 func (a *sessionAccessor) SearchHistory(query string, maxResults int) []extension.HistoryMatch {
 	a.m.mu.RLock()
 	requestID := a.s.requestID
+	lastModel := a.s.lastModel
 	a.m.mu.RUnlock()
 	if requestID == "" {
 		return nil
 	}
-	apiBackend, ok := a.m.backend.(*backend.ApiBackend)
+	// resolvedBackend resolves to the inner *ApiBackend for hybrid (when the
+	// last dispatched model was non-Anthropic) or returns m.backend as-is
+	// for plain ApiBackend. CLI-routed hybrid runs and plain CliBackend
+	// return nil here — SearchHistory only operates on the API backend's
+	// in-process conversation buffer.
+	apiBackend, ok := a.m.resolvedBackend(lastModel).(*backend.ApiBackend)
 	if !ok {
 		return nil
 	}
@@ -153,6 +160,18 @@ func (a *sessionAccessor) SearchHistory(query string, maxResults int) []extensio
 
 func (a *sessionAccessor) TranslateEvent(ev types.NormalizedEvent, contextWindow int) types.EngineEvent {
 	return translateToEngineEvent(ev, contextWindow)
+}
+
+// SetPlanMode imperatively flips plan mode for this session. Used by
+// extensions via ctx.SetPlanMode. Delegates to Manager.SetPlanMode so all
+// the planFilePath-preservation and hasExitedPlanMode logic applies.
+func (a *sessionAccessor) SetPlanMode(enabled bool, source string) {
+	a.m.SetPlanMode(a.key, enabled, nil, source)
+}
+
+// GetPlanModeState returns (enabled, planFilePath) for this session.
+func (a *sessionAccessor) GetPlanModeState() (bool, string) {
+	return a.m.GetPlanModeState(a.key)
 }
 
 // newExtContext builds a fully-populated extension Context for the given session.
@@ -226,9 +245,10 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 
 	m.mu.Unlock()
 
-	// Signal that session startup is in progress so clients can show loading UI.
-	// Events flow through the socket broadcast independently of the request-response
-	// ACK, so the desktop receives these before StartSession returns.
+	// Signal that session startup is in progress so consumers can mirror
+	// loading state. Events flow through the socket broadcast independently
+	// of the request-response ACK, so consumers receive these before
+	// StartSession returns.
 	m.emit(key, types.EngineEvent{
 		Type:   "engine_status",
 		Fields: &types.StatusFields{Label: key, State: "starting"},
@@ -249,8 +269,24 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 			}
 		}
 	}
+	// Load Claude Code–style skills from ~/.claude/skills (one subdir per
+	// skill, each with a SKILL.md file). These are discovered when
+	// enableClaudeCompat is configured; the loader is always attempted so
+	// that users who install Claude-style skills without a compatibility flag
+	// still get model-invocable skill awareness. A missing directory is a
+	// silent no-op (returns nil, nil).
+	if claudeSkills, err := skills.LoadClaudeSkillsDirectory(skillPaths.ClaudeUser); err == nil {
+		for _, sk := range claudeSkills {
+			skills.RegisterSkill(sk)
+		}
+	}
 	if names := skills.ListSkillNames(); len(names) > 0 {
-		utils.Log("Session", fmt.Sprintf("loaded %d skills", len(names)))
+		utils.Log("Session", fmt.Sprintf("loaded %d skills: %v", len(names), names))
+		// Refresh the Skill tool's description so the model's tool manifest
+		// lists the available skills (with their when_to_use hints). This
+		// must run after all skills are registered; RefreshSkillToolDescription
+		// re-registers the Skill tool with a freshly-built manifest.
+		tools.RefreshSkillToolDescription()
 	}
 
 	// Connect MCP servers from config (outside lock)
@@ -337,6 +373,12 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 		host.SetOnDeath(func(h *extension.Host) {
 			m.handleHostDeath(capturedKey, h)
 		})
+		// Wire async-trigger lifecycle (D-010 / D-011) BEFORE
+		// committing any init-time webhook/schedule declarations so
+		// the registry's veto pipeline fires through the SDK with a
+		// real session context.
+		m.wireHostAsync(key, host)
+		m.commitHostInitAsyncDecls(key, host)
 		group.Add(host)
 	}
 	if group.IsEmpty() {
@@ -378,6 +420,17 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 	ctx := m.newExtContext(s, key)
 	_ = group.FireSessionStart(ctx)
 
+	// Start the workspace filesystem watcher after extensions are loaded and
+	// session_start has fired. Wiring after session_start lets extensions
+	// observe the very first batch of events without a startup-race; the
+	// watcher's own startup walk does not synthesize events for pre-existing
+	// files, so consumers see only post-start activity.
+	if release := m.startWorkspaceWatcher(s, key, group); release != nil {
+		m.mu.Lock()
+		s.fsWatcherRelease = release
+		m.mu.Unlock()
+	}
+
 	// Discover capabilities from extensions
 	caps := group.FireCapabilityDiscover(ctx)
 	for _, cap := range caps {
@@ -385,4 +438,25 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 			host.SDK().RegisterCapability(cap)
 		}
 	}
+
+	// Phase 0.5: publish the initial command-registry snapshot, then wire
+	// per-host onCommandsChange observers so subsequent mid-session
+	// RegisterCommand calls also trigger snapshots.
+	//
+	// Ordering matters: by emitting the initial snapshot FIRST and wiring
+	// observers SECOND, we collapse all init-time RegisterCommand calls
+	// (which fire during host.Load() and during FireSessionStart) into a
+	// single snapshot event rather than N events with intermediate states.
+	// Mid-session registrations after this point each get their own
+	// snapshot, which is the desired behavior — a consumer's cached view
+	// only needs to be re-warmed for changes that happen after init
+	// settles.
+	m.emitCommandRegistry(key)
+	for _, host := range group.Hosts() {
+		capturedKey := key
+		host.SetOnCommandsChange(func() {
+			m.emitCommandRegistry(capturedKey)
+		})
+	}
+	utils.Log("Session", fmt.Sprintf("loadAndWireExtensions: wired %d onCommandsChange observers for key=%s", len(group.Hosts()), key))
 }

@@ -140,6 +140,14 @@ func (m *Manager) respawnDeadExtensions(key string) {
 
 		utils.Info("Session", fmt.Sprintf("extension respawned: key=%s ext=%s attempt=%d", key, h.Name(), attempt))
 
+		// On respawn, the previous subprocess's webhook/schedule
+		// registrations are gone with it but the per-host registry
+		// survived (it lives on the Host, not the subprocess).
+		// Wipe it before re-committing the new init payload so
+		// re-registration doesn't collide with stale entries.
+		h.ResetAsyncRegistrations()
+		m.commitHostInitAsyncDecls(key, h)
+
 		// Fire extension_respawned on the new instance so the harness
 		// can rebuild caches.
 		_ = h.SDK().FireExtensionRespawned(ctx, extension.ExtensionRespawnedInfo{

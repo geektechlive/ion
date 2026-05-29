@@ -18,9 +18,9 @@ import {
   saveSessionChains,
   saveSessionLabels,
   writeEngineConfig,
-  writeSettings,
 } from '../settings-store'
 import { initRemoteTransport } from '../remote/transport-init'
+import { persistAndBroadcastSettings } from '../settings-broadcast'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -48,7 +48,13 @@ export function registerSettingsIpc(): void {
       let prev: Record<string, unknown> = {}
       try { prev = readSettings() } catch {}
 
-      writeSettings(data as Record<string, any>)
+      // Single write+broadcast path shared with the iOS set_desktop_setting
+      // wire command. The helper handles persistence atomically and emits a
+      // desktop_settings_snapshot only when a projectable key changed (the
+      // diff lives inside the helper now). Per engine-grounding §6 — both
+      // edit surfaces funnel through one helper, exactly one log prefix
+      // ([SETTINGS] persistAndBroadcast) to grep for in audit traces.
+      persistAndBroadcastSettings(data, prev)
 
       const transportConfigChanged =
         data.remoteEnabled !== prev.remoteEnabled ||

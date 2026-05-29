@@ -1,9 +1,88 @@
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
+import { formatClearDivider } from '../../../shared/clear-divider'
+
+/**
+ * Per-tab cache of extension-registered command names, populated by
+ * engine_command_registry snapshots emitted from the Go engine. Used by
+ * the slash-autocomplete UI in InputBar so extension commands appear in
+ * the menu alongside filesystem `.md` discoveries. Keyed by engine session
+ * key (tabId or `${tabId}:${instanceId}`) — autocomplete reads under the
+ * active tab/instance combination.
+ *
+ * Snapshot semantics: every event REPLACES the prior set. An empty
+ * `commands: []` is the authoritative "no extension commands" signal and
+ * clears the entry. Mirrors the main-process cache in
+ * `desktop/src/main/state.ts:extensionCommandRegistry`.
+ */
+const extensionCommandsByKey = new Map<string, Array<{ name: string; description?: string }>>()
+
+/** Get a snapshot of the current extension commands for an engine session key.
+ *  Used by autocomplete; returns an empty array when no commands are cached. */
+export function getRendererExtensionCommands(key: string): Array<{ name: string; description?: string }> {
+  return extensionCommandsByKey.get(key) ?? []
+}
 
 export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<State> {
   return {
     handleEngineEvent: (key, event) => {
+      // engine_command_registry and engine_command_result are CROSS-CUTTING
+      // events that apply to both CLI tabs (bare tabId key) and engine tabs
+      // (compound tabId:instanceId key). We dispatch on them BEFORE the
+      // engine-tab-only guard below so they reach the correct slice.
+      if (event.type === 'engine_command_registry') {
+        const listings = Array.isArray(event.commands) ? event.commands : []
+        if (listings.length === 0) {
+          extensionCommandsByKey.delete(key)
+        } else {
+          extensionCommandsByKey.set(key, listings.map((l: { name: string; description?: string }) => ({ name: l.name, description: l.description })))
+        }
+        // No store mutation here — autocomplete reads via
+        // getRendererExtensionCommands() during keystroke handling, not
+        // through reactive subscriptions. The renderer re-renders on the
+        // next keystroke and pulls a fresh list.
+        return
+      }
+      if (event.type === 'engine_command_result') {
+        // Engine confirms a command dispatch. We use this for two things:
+        //   1. The /clear divider — drawn when command='clear' and
+        //      commandError is empty. The unified pipeline collapsed the
+        //      legacy renderer-side divider injection into this single
+        //      engine-driven trigger so desktop and iOS render the divider
+        //      from the same signal.
+        //   2. (Future) /export markdown banner, /compact confirmation,
+        //      and any extension-emitted command result that wants a
+        //      visible system bubble.
+        //
+        // For now we only branch on /clear because the other built-ins
+        // (export, compact) had no renderer-side feedback in the legacy
+        // path either.
+        const cmdName = event.command || ''
+        const failed = !!event.commandError
+        const tabIdForCmd = key.includes(':') ? key.split(':')[0] : key
+        if (cmdName === 'clear' && !failed) {
+          const divider = formatClearDivider(new Date())
+          if (key.includes(':')) {
+            // Engine tab — insert into engineMessages keyed by the compound key.
+            set((state) => {
+              const messages = new Map(state.engineMessages)
+              const msgs = [...(messages.get(key) || [])]
+              msgs.push({ id: nextMsgId(), role: 'system' as const, content: divider, timestamp: Date.now() })
+              messages.set(key, msgs)
+              return { engineMessages: messages }
+            })
+          } else {
+            // CLI tab — insert into the tab's local messages array.
+            set((state) => ({
+              tabs: state.tabs.map((t) => t.id === tabIdForCmd
+                ? { ...t, messages: [...t.messages, { id: nextMsgId(), role: 'system' as const, content: divider, timestamp: Date.now() }] }
+                : t),
+            }))
+          }
+        }
+        return
+      }
+
       if (!key.includes(':')) return
 
       const tabId = key.split(':')[0]
@@ -37,6 +116,15 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_status': {
+          // Track whether the inside-`set` reducer captured a new
+          // sessionId into engineConversationIds — if so, we trigger an
+          // immediate persistence flush after the reducer returns so the
+          // sessionId survives a hard kill (closed laptop lid, OS force-
+          // quit, power loss) that arrives before the next debounced save.
+          // Without this, the renderer holds the sessionId in memory only
+          // and the user's "continuous" conversation silently restarts
+          // from scratch on the next launch.
+          let didCaptureNewSessionId = false
           set((state) => {
             const statusFields = new Map(state.engineStatusFields)
 
@@ -66,9 +154,85 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
               if (existing[existing.length - 1] !== sessionId) {
                 engineConversationIds = new Map(state.engineConversationIds)
                 engineConversationIds.set(key, [...existing, sessionId])
+                didCaptureNewSessionId = true
+                // Permanent diagnostic log per the repo logging policy
+                // (~/.claude/docs/standards/logging.md, repo CLAUDE.md
+                // "Logging policy"). This is the only place the runtime
+                // `engineConversationIds` map is mutated for engine-view
+                // tabs (compound `${tabId}:${instanceId}` keys); without
+                // this line, we have no way to confirm from logs alone
+                // that the source map is being populated before the
+                // persistence layer reads from it. Logs the exact key
+                // shape so a future "session not resumed on restart"
+                // investigation can confirm the key matches what
+                // session-store-persistence.ts expects.
+                console.log(`[engine_status] engineConversationIds.set key=${key} sessionId=${sessionId} chainLen=${existing.length + 1}`)
               }
             }
+
+            // Promote AskUserQuestion / ExitPlanMode permissionDenials
+            // carried on engine_status into the per-engine-instance
+            // `enginePermissionDenied` map (keyed by the compound
+            // `${tabId}:${instanceId}` key). This is the engine-view
+            // counterpart to the sessionPlane synthesis at
+            // engine-control-plane-events.ts:handleStatusEvent — which is
+            // bypassed for engine-view tabs because EngineControlPlane is
+            // keyed by bare tabId and engine-view events arrive with the
+            // compound key.
+            //
+            // Per-instance scoping (vs. mutating the parent
+            // `tab.permissionDenied`) is what keeps sibling instances
+            // under the same engine tab from showing each other's cards
+            // when the user switches between sub-tabs. The parent tab's
+            // pill still glows via getWaitingState() in TabStripShared.ts,
+            // which folds across this map for engine tabs.
+            //
+            // Snapshot/idempotence rules:
+            //   - We write `state.enginePermissionDenied.set(key, ...)`
+            //     using the FULL compound key — not the parent tabId.
+            //   - When the array is empty/absent (a follow-up cost-only
+            //     `engine_status` tick), we PRESERVE any existing entry
+            //     for this key so the card stays visible. The renderer-
+            //     side card render in EngineView relies on this — the
+            //     engine emits one engine_status with denials and then a
+            //     stream of cost-only ticks; clobbering would make the
+            //     card flicker out.
+            //   - We log both branches with verbosity matching
+            //     event-slice.ts's `[task_complete] tab=... branch=...`
+            //     lines so a single grep covers CLI + engine paths.
+            //     `enginePermDenied` is the engine-tab marker; CLI tabs
+            //     use the older `permDenied` token in their own logs.
+            const askOrExitDenials: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> = (event.fields?.permissionDenials || []).filter(
+              (d: { toolName: string }) => d.toolName === 'AskUserQuestion' || d.toolName === 'ExitPlanMode',
+            )
+            const hasInterestingDenials = askOrExitDenials.length > 0
+            let enginePermissionDeniedUpdate: Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null> | null = null
+            if (hasInterestingDenials) {
+              const toolNamesStr = JSON.stringify(askOrExitDenials.map((d) => d.toolName))
+              const instanceId = key.split(':')[1] || ''
+              console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=denials enginePermDenied set to ${toolNamesStr}`)
+              enginePermissionDeniedUpdate = new Map(state.enginePermissionDenied)
+              enginePermissionDeniedUpdate.set(key, { tools: askOrExitDenials })
+            } else if ((event.fields?.permissionDenials?.length ?? 0) === 0) {
+              // Cost-only or running tick — PRESERVE existing entry for
+              // this key. Logged at debug verbosity (no state change).
+              // Keep the noise low; only log if we currently hold a card
+              // to preserve for this instance.
+              const existing = state.enginePermissionDenied.get(key)
+              if (existing?.tools?.length) {
+                const instanceId = key.split(':')[1] || ''
+                console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=noDenials preserving existing enginePermDenied (${existing.tools.length} tools)`)
+              }
+            }
+
             const needsTabUpdate = isActive && (sessionId || isIdle || isRunning)
+            // Fold conversationId / status updates into the same tabs.map
+            // pass when applicable. The `enginePermissionDenied` map is
+            // returned separately — it lives outside the per-tab struct.
+            const returnPatch: Partial<typeof state> = { engineStatusFields: statusFields, engineConversationIds }
+            if (enginePermissionDeniedUpdate) {
+              returnPatch.enginePermissionDenied = enginePermissionDeniedUpdate
+            }
             if (needsTabUpdate) {
               const tabs = state.tabs.map((t) => {
                 if (t.id !== tabId) return t
@@ -77,18 +241,35 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
                   updates.conversationId = sessionId
                   updates.lastKnownSessionId = sessionId
                 }
-                if (isRunning && t.status !== 'running') {
+                if (isRunning && t.status !== 'running' && isActive) {
                   updates.status = 'running' as const
                 }
-                if (isIdle && t.status !== 'idle') {
+                if (isIdle && t.status !== 'idle' && isActive) {
                   updates.status = 'idle' as const
                 }
                 return Object.keys(updates).length > 0 ? { ...t, ...updates } : t
               })
-              return { engineStatusFields: statusFields, engineConversationIds, tabs }
+              returnPatch.tabs = tabs
             }
-            return { engineStatusFields: statusFields, engineConversationIds }
+            return returnPatch
           })
+          // Durability: persist immediately whenever a new sessionId
+          // arrived. The default subscriber debounces saves at 100 ms,
+          // which is normally fine but creates a window where a hard
+          // kill (OS terminated us, laptop lid closed mid-write) drops
+          // the sessionId. The cost of an extra synchronous IPC write
+          // is small (one fs.writeFileSync via atomicWriteFileSync) and
+          // only happens at session-start transitions, not on every
+          // status tick. `__ionForceFlushTabs` is wired in
+          // session-store-persistence.ts:setupPersistence — it clears
+          // the pending debounce timer and runs persistTabs() now.
+          if (didCaptureNewSessionId) {
+            const flush = (window as { __ionForceFlushTabs?: () => void }).__ionForceFlushTabs
+            if (typeof flush === 'function') {
+              console.log(`[engine_status] forcing immediate persist after sessionId capture key=${key}`)
+              flush()
+            }
+          }
           break
         }
         case 'engine_working_message': {
@@ -186,6 +367,35 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
               toolId: event.toolId,
               toolStatus: 'running' as const,
               timestamp: Date.now(),
+            })
+            messages.set(key, msgs)
+            return { engineMessages: messages }
+          })
+          break
+        }
+        case 'engine_tool_update': {
+          // The engine streams tool input incrementally as the model
+          // generates JSON. We accumulate the partial chunks onto the
+          // tool message's `toolInput` field so the persistence layer
+          // can serialize the final value (used by PermissionDeniedCard
+          // to render AskUserQuestion / ExitPlanMode question text and
+          // plan content on a fresh launch). Without this capture,
+          // `engineMessages[*].toolInput` was always undefined and the
+          // card lost its content across restarts.
+          //
+          // Snapshot semantics: each engine_tool_update is incremental
+          // — we concatenate partial chunks. The final value is the
+          // complete JSON-string toolInput. Storing it on the message
+          // (instead of a separate map) mirrors how CLI tabs do it via
+          // event-slice.ts so PermissionDeniedCard's fallback scan
+          // (`messages.find((m) => m.toolName === 'AskUserQuestion' &&
+          // m.toolInput)`) finds it on engine tabs too.
+          if (!event.toolId) break
+          set((state) => {
+            const messages = new Map(state.engineMessages)
+            const msgs = (messages.get(key) || []).map((m) => {
+              if (m.toolId !== event.toolId) return m
+              return { ...m, toolInput: (m.toolInput || '') + (event.partialInput || '') }
             })
             messages.set(key, msgs)
             return { engineMessages: messages }

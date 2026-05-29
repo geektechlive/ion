@@ -151,6 +151,57 @@ extension DiagnosticLog {
         case .engineProfiles(let profiles):
             log("EVENT: engineProfiles count=\(profiles.count)")
 
+        case .enginePlanProposal(let tabId, let instId, let kind, let path, _):
+            // Workflow event from the engine — iOS does not act on this
+            // (the desktop is the authoritative consumer for plan-proposal
+            // approval UI), but log it so the wire-protocol flow is fully
+            // observable in the diagnostic stream alongside other engine
+            // events.
+            log("EVENT: enginePlanProposal tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") kind=\(kind) path=\(path?.suffix(40) ?? "nil")")
+
+        case .engineEarlyStopDecisionRequest(let tabId, let instId, let reqId, _, _, let turn, _, let cumOut, let budget, let pct, _, _, _, let would, _):
+            // Engine ↔ harness wire-protocol request. The desktop is the
+            // authoritative responder; iOS only observes for diagnostic
+            // visibility. Log the most useful correlation fields (request
+            // ID, turn, percent-of-budget) so a developer triaging
+            // continuation issues can pair the iOS-side log line with the
+            // engine's `earlyStop: ...` lines and the desktop's
+            // `early-stop-policy` lines.
+            log("EVENT: engineEarlyStopDecisionRequest tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") reqId=\(reqId.prefix(8)) turn=\(turn) tokens=\(cumOut)/\(budget) thr=\(pct)% would=\(would)")
+
+        case .engineCommandRegistry(let tabId, let instId, let commands):
+            // Complete snapshot of session-scoped slash commands. Log
+            // the count + names so a developer can pair this line with
+            // the engine's `emitCommandRegistry: key=... count=...`
+            // line and the desktop's
+            // `engine_command_registry: cached key=... names=[...]`
+            // line during slash-pipeline triage. Empty list is the
+            // authoritative "no extension commands" signal — log it
+            // explicitly rather than skipping the line so the absence
+            // of commands surfaces in the trail.
+            let names = commands.map { $0.name }.joined(separator: ",")
+            log("EVENT: engineCommandRegistry tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") count=\(commands.count) names=[\(names)]")
+
+        case .engineCommandResult(let tabId, let instId, let message, let command, let commandError):
+            // Result of an engine SendCommand dispatch. Three branches
+            // worth distinguishing in the log: success (no error),
+            // extension failure (error present), unknown-command
+            // disclaim (error == "unknown_command"). The desktop reads
+            // these to decide between "dispatch landed" and "fall
+            // through"; iOS only observes.
+            let cmd = command ?? "<none>"
+            let err = commandError ?? "<none>"
+            let msgPreview = message?.prefix(60) ?? ""
+            log("EVENT: engineCommandResult tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") command=\(cmd) error=\(err) msg=\"\(msgPreview)\"")
+
+        case .desktopSettingsSnapshot(let settings, let schema, let groups):
+            // Snapshot of the desktop's projectable user preferences.
+            // Logged with counts only — the actual values can be
+            // sensitive and the wire payload is small enough that a
+            // future diagnostic dump can capture the full record if
+            // needed.
+            log("EVENT: desktopSettingsSnapshot values=\(settings.count) schema=\(schema.count) groups=\(groups.count)")
+
         case .gitChangesResponse(let dir, _):
             log("EVENT: gitChangesResponse dir=\(dir.suffix(30))")
 

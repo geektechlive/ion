@@ -57,7 +57,7 @@ Client --[Unix socket, NDJSON]--> Server
 | `internal/protocol` | NDJSON wire format |
 | `internal/server` | Unix socket server, multi-client broadcast |
 | `internal/session` | SessionManager: lifecycle, event routing (decomposing) |
-| `internal/backend` | RunBackend interface, ApiBackend (agent loop) |
+| `internal/backend` | RunBackend interface, ApiBackend (agent loop), CliBackend (Claude Code subprocess), HybridBackend (routes per-run by model) |
 | `internal/providers` | LlmProvider interface + implementations + retry |
 | `internal/tools` | Registry, 14 core tools, BashOperations |
 | `internal/extension` | SDK, Host (subprocess JSON-RPC), agent discovery (decomposing) |
@@ -135,7 +135,9 @@ Optional (harness opt-in): TaskCreate, TaskList, TaskGet, TaskStop.
 
 ## Hooks
 
-59 total: 13 lifecycle + 5 session + 2 pre-action + 7 content + 14 per-tool + 3 context + 2 permission + 1 file + 2 task + 2 elicitation + 1 context-inject + 3 capability + 4 extension-lifecycle.
+66 total: 13 lifecycle + 5 session + 2 pre-action + 2 early-stop + 7 content + 14 per-tool + 3 context + 3 permission + 1 file + 1 workspace + 2 task + 2 elicitation + 4 plan-mode/system-inject + 1 context-inject + 3 capability + 4 extension-lifecycle.
+
+The `before_plan_mode_enter`, `before_plan_mode_exit`, `system_inject`, `before_early_stop_decision`, `early_stop_continued`, `before_provider_request`, and `workspace_file_changed` hooks are recent additions; consult `docs/hooks/reference.md` for the canonical breakdown and per-hook payload shapes.
 
 Extension-lifecycle hooks (`extension_respawned`, `turn_aborted`, `peer_extension_died`, `peer_extension_respawned`) fire on auto-respawn. Auto-respawn is post-run only; mid-turn deaths defer to `handleRunExit`. Strike budget: 3 in 60s, reset after 2min healthy. Payloads: `docs/hooks/reference.md`.
 

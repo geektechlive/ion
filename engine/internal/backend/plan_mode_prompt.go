@@ -9,6 +9,56 @@ import (
 // Extensions and harness can override via HookPlanModePrompt or set_plan_mode command.
 var defaultPlanModeTools = []string{"Read", "Grep", "Glob", "Agent", "WebFetch", "WebSearch"}
 
+// planModeReminderInterval is the number of turns between sparse plan-mode
+// reminder injections. The first reminder fires on turn 2 (first post-entry
+// turn); subsequent reminders fire only when at least this many turns have
+// elapsed since the last injection. Matches Claude Code's
+// TURNS_BETWEEN_ATTACHMENTS=5 design (src/utils/attachments.ts).
+const planModeReminderInterval = 5
+
+// planModeFirstTurnReminderThreshold is the conversation message count above
+// which the sparse reminder fires even on turn 1 of a run. Fresh plan-mode
+// entry (small message count) already has the full prompt in context — no
+// double-injection needed. But mature single-turn rounds (many messages) are
+// exactly the case where the model drifts: the full prompt is ~220+ messages
+// back, and turn > 1 never fires because each "what's next?" is its own run.
+// Tuned at 8 so the very first turn of a brand-new plan-mode session is
+// silent, while any session that has had a back-and-forth gets the reminder.
+const planModeFirstTurnReminderThreshold = 8
+
+// shouldInjectPlanModeReminder is the throttle decision for the sparse
+// reminder. Returns true on the first post-entry turn (lastReminderTurn==0)
+// or when at least planModeReminderInterval turns have elapsed since the
+// previous injection. Pulled out as a free function for direct unit testing
+// without spinning up a full ApiBackend run.
+func shouldInjectPlanModeReminder(turn, lastReminderTurn int) bool {
+	if turn < 2 {
+		return false
+	}
+	return lastReminderTurn == 0 || (turn-lastReminderTurn) >= planModeReminderInterval
+}
+
+// shouldInjectPlanModeReminderForRun is the extended gate that replaces the
+// simple `turn > 1` check in the runloop. It folds in the "mature session
+// turn-1" branch so single-turn rounds in long-running plan-mode conversations
+// also receive the reminder.
+//
+// Gate logic:
+//   - Turn 1 and conversation is small (≤ threshold): skip — the full prompt
+//     was just injected at plan-mode entry, double-reminding is noise.
+//   - Turn 1 and conversation is large (> threshold): inject — the full prompt
+//     is far back in context; this is the mid-plan follow-up case that was
+//     previously broken.
+//   - Turn 2+: delegate to the existing shouldInjectPlanModeReminder throttle
+//     (first post-entry turn fires unconditionally; subsequent turns respect
+//     planModeReminderInterval).
+func shouldInjectPlanModeReminderForRun(turn, lastReminderTurn, conversationMessageCount int) bool {
+	if turn == 1 {
+		return conversationMessageCount > planModeFirstTurnReminderThreshold
+	}
+	return shouldInjectPlanModeReminder(turn, lastReminderTurn)
+}
+
 func buildPlanModePrompt(planFilePath string, planFileExists bool) string {
 	planFileInfo := fmt.Sprintf("No plan file exists yet. Create your plan at: %s using the Write tool.", planFilePath)
 	if planFileExists {
@@ -64,14 +114,20 @@ Before finishing, re-read the plan file and verify:
 - The verification step is actionable
 
 ### Phase 5: Exit
-When your plan is complete and you are confident it addresses the request, call ExitPlanMode. This presents your plan for user approval. Do NOT ask "is this plan okay?" via text -- ExitPlanMode handles that.
+When your plan is complete and you are confident it addresses the request, call ExitPlanMode. This presents your plan for user approval. Do NOT ask "is this plan okay?" via text -- ExitPlanMode handles that. Never use AskUserQuestion to ask about plan approval -- that is what ExitPlanMode is for. AskUserQuestion is only for clarifying questions about what to put *into* the plan.
+
+Do not use AskUserQuestion as a way to delay calling ExitPlanMode. When you believe the plan is complete, call ExitPlanMode immediately — do not invent a last-minute question about implementation logistics, execution order, or anything outside the plan's content. Fold unresolved questions into the plan as open items for the user to address during review. Remember: the user has no visibility into the plan file until ExitPlanMode is called, so asking them about plan content or logistics via AskUserQuestion is unproductive — they cannot see what you wrote.
 
 ## Turn Behavior
 Each of your turns should end in one of two ways:
-1. **AskUserQuestion** -- if you need clarification before you can finish the plan
+1. **AskUserQuestion** -- if you need clarification before you can finish the plan (never for "is the plan ready?" or "should I proceed?" -- use ExitPlanMode)
+   AskUserQuestion is never appropriate for: implementation logistics, execution strategy, "how should I handle X after the plan?", or any question whose answer would not change what gets written in the plan file. The user has no visibility into plan content until ExitPlanMode is called — do not ask about it.
 2. **ExitPlanMode** -- if the plan is complete and ready for review
 
 Do not end a turn without one of these. Do not implement anything.
+
+## Forbidden Prose Patterns
+Phrases like "Is this plan okay?", "Should I proceed?", "How does this plan look?", "Any changes before we start?", "Let me know if you'd like changes", "Does the plan look good?", "Should I go ahead?" — these MUST use ExitPlanMode (for approval) or AskUserQuestion (for clarification). Never write them as assistant prose. If you find yourself about to type one, stop and call the appropriate tool instead.
 
 ## Restrictions
 - You MUST NOT call Write or Edit on any file except the plan file
@@ -93,7 +149,10 @@ func buildPlanModeSparseReminder(planFilePath string) string {
 	return fmt.Sprintf(
 		"Plan mode still active (see full instructions from earlier in conversation). "+
 			"Read-only except plan file (%s).%s "+
-			"End turns with AskUserQuestion (for clarifications) or ExitPlanMode (for plan approval).",
+			"End turns with AskUserQuestion (for clarifications) or ExitPlanMode (for plan approval). "+
+			"Never use AskUserQuestion to ask for plan approval -- that is what ExitPlanMode is for. "+
+			"If the plan is written and complete, call ExitPlanMode — do not delay with another question. The user has no visibility into plan content until ExitPlanMode is called. "+
+			"Forbidden as prose: \"Is this plan okay?\", \"Should I proceed?\", \"Let me know if you'd like changes\", \"How does this plan look?\" -- these must use ExitPlanMode or AskUserQuestion.",
 		planFilePath, amendHint)
 }
 

@@ -19,7 +19,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   recentBaseDirectories: saved.recentBaseDirectories,
   directoryUsageCounts: saved.directoryUsageCounts,
   preferredOpenWith: saved.preferredOpenWith,
-  showImplementClearContext: saved.showImplementClearContext,
+  // showImplementClearContext removed in 30dc41fd — no longer needed (Implement always clears context)
   defaultPermissionMode: saved.defaultPermissionMode,
   expandOnTabSwitch: saved.expandOnTabSwitch,
   bashCommandEntry: saved.bashCommandEntry,
@@ -39,6 +39,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   worktreeSkipPrTitle: saved.worktreeSkipPrTitle,
   allowSettingsEdits: saved.allowSettingsEdits,
   enableClaudeCompat: saved.enableClaudeCompat ?? true,
+  enableEarlyStopContinuation: saved.enableEarlyStopContinuation ?? false,
   showTodoList: saved.showTodoList,
   aiGeneratedTitles: saved.aiGeneratedTitles,
   hideOnExternalLaunch: saved.hideOnExternalLaunch,
@@ -146,10 +147,6 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     set({ preferredOpenWith: app })
     saveSettings(getAllSettings(get))
   },
-  setShowImplementClearContext: (show) => {
-    set({ showImplementClearContext: show })
-    saveSettings(getAllSettings(get))
-  },
   setDefaultPermissionMode: (mode) => {
     set({ defaultPermissionMode: mode })
     saveSettings(getAllSettings(get))
@@ -232,6 +229,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   setEnableClaudeCompat: (enabled) => {
     set({ enableClaudeCompat: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setEnableEarlyStopContinuation: (enabled) => {
+    set({ enableEarlyStopContinuation: enabled })
     saveSettings(getAllSettings(get))
   },
   setShowTodoList: (enabled) => {

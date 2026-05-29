@@ -14,6 +14,13 @@ interface MoveToGroupSubmenuProps {
   currentGroupId: string
   onClose: () => void
   containerRef?: React.RefObject<HTMLDivElement | null>
+  /**
+   * When true, the submenu performs the combined "move and pin" action
+   * (groupPinned=true alongside the group change) instead of a plain move.
+   * Header text and the new-group creation path also pin the result.
+   * Defaults to false to preserve the existing plain-move behavior.
+   */
+  pinAfter?: boolean
 }
 
 /** Submenu listing destination tab-groups for a single tab. Auto and manual modes show different target sets. */
@@ -23,6 +30,7 @@ export function MoveToGroupSubmenu({
   currentGroupId,
   onClose,
   containerRef,
+  pinAfter = false,
 }: MoveToGroupSubmenuProps) {
   const colors = useColors()
   const popoverLayer = usePopoverLayer()
@@ -36,6 +44,11 @@ export function MoveToGroupSubmenu({
   }, [containerRef])
   const tabs = useSessionStore((s) => s.tabs)
   const moveTabToGroup = useSessionStore((s) => s.moveTabToGroup)
+  const moveTabToGroupAndPin = useSessionStore((s) => s.moveTabToGroupAndPin)
+  // The destination handler is chosen once per submenu instance and used
+  // for both the listed targets and the "new group" creation path so the
+  // pin-vs-plain semantics stay consistent across every entry point.
+  const performMove = pinAfter ? moveTabToGroupAndPin : moveTabToGroup
   const [showNewGroupInput, setShowNewGroupInput] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -107,7 +120,7 @@ export function MoveToGroupSubmenu({
       }}
     >
       <div className="px-2 py-1 text-[10px] font-medium" style={{ color: colors.textTertiary }}>
-        Move to group
+        {pinAfter ? 'Move to group and pin' : 'Move to group'}
       </div>
       {targets.map((t) => (
         <button
@@ -117,7 +130,7 @@ export function MoveToGroupSubmenu({
           onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = colors.tabActive }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
           onClick={() => {
-            moveTabToGroup(tabId, t.id)
+            performMove(tabId, t.id)
             onClose()
           }}
         >
@@ -137,7 +150,7 @@ export function MoveToGroupSubmenu({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && newGroupName.trim()) {
                     const id = usePreferencesStore.getState().createTabGroup(newGroupName.trim())
-                    moveTabToGroup(tabId, id)
+                    performMove(tabId, id)
                     onClose()
                   }
                   if (e.key === 'Escape') setShowNewGroupInput(false)

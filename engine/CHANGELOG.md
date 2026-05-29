@@ -13,6 +13,106 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.30.1](https://github.com/dsswift/ion/compare/engine-v1.30.0...engine-v1.30.1) (2026-05-28)
+
+### Bug Fixes
+
+* **engine:** retain pending permission denials for reconcile ([2adba4f](https://github.com/dsswift/ion/commit/2adba4ff507e1aa9ce4b92f282ddcae2219f9f92))
+
+## [1.30.0](https://github.com/dsswift/ion/compare/engine-v1.29.3...engine-v1.30.0) (2026-05-27)
+
+### Features
+
+* **engine:** improve ask user question tool instructions ([f15a7f9](https://github.com/dsswift/ion/commit/f15a7f9cb660b03be199797196a5881b721819eb))
+* **engine:** clarify plan mode exit timing in prompts ([f1906b5](https://github.com/dsswift/ion/commit/f1906b5279d079a790466ee8fe1e37fa46e9fbba))
+
+## [1.29.3](https://github.com/dsswift/ion/compare/engine-v1.29.2...engine-v1.29.3) (2026-05-27)
+
+### Bug Fixes
+
+* **engine:** surface cache token fields on DispatchAgentResult (#146) ([ecb020b](https://github.com/dsswift/ion/commit/ecb020bca7067c59a242a8bd2ea232e7ff90fe8d))
+
+## [1.29.2](https://github.com/dsswift/ion/compare/engine-v1.29.1...engine-v1.29.2) (2026-05-26)
+
+### Bug Fixes
+
+* **engine:** add logging to fs_browse and list_models ([2aafbb1](https://github.com/dsswift/ion/commit/2aafbb15c7e315c19fa1cbe71aa610ebba578447))
+* **engine:** extract buildProviderEntries and add CLI-auth tests ([669c124](https://github.com/dsswift/ion/commit/669c124f89277128b661eb9f3c20b9aed33013e6))
+
+## [1.29.1](https://github.com/dsswift/ion/compare/engine-v1.29.0...engine-v1.29.1) (2026-05-26)
+
+### Bug Fixes
+
+* **engine:** mark anthropic provider authed when CLI backend is in use ([6e17630](https://github.com/dsswift/ion/commit/6e17630481bffd107cf6e136344c878e53a83b43))
+
+## [1.29.0](https://github.com/dsswift/ion/compare/engine-v1.28.0...engine-v1.29.0) (2026-05-26)
+
+### Features
+
+* **engine:** add get_host_info and list_directory RPCs ([a1d4bca](https://github.com/dsswift/ion/commit/a1d4bcaa87f758af13219674dc6b18f472314fba))
+
+## [1.28.0](https://github.com/dsswift/ion/compare/engine-v1.27.0...engine-v1.28.0) (2026-05-26)
+
+### Features
+
+* **engine:** deduplicate filesystem watchers across sessions ([9f53926](https://github.com/dsswift/ion/commit/9f5392647e1d0db3cc5f1cc7e135ed7f003742c0))
+
+## [1.27.0](https://github.com/dsswift/ion/compare/engine-v1.26.1...engine-v1.27.0) (2026-05-26)
+
+### Features
+
+* **engine:** add ctx.LLMCall lightweight inference primitive ([73ee012](https://github.com/dsswift/ion/commit/73ee012c4248dc52ce320c359aedae80403591f7))
+
+## [1.26.1](https://github.com/dsswift/ion/compare/engine-v1.26.0...engine-v1.26.1) (2026-05-26)
+
+### Bug Fixes
+
+* **engine:** normalize paths in plan mode write gate ([554722b](https://github.com/dsswift/ion/commit/554722b9f23bd58472cf1ca591af5226c3ea49d2))
+* **engine:** persist and restore planFilePath across restarts ([e0a9f69](https://github.com/dsswift/ion/commit/e0a9f69a323df5afc3316da04b45c34ef5b8762c))
+* **engine:** replace [plan-file] in entries, not just messages ([71ee236](https://github.com/dsswift/ion/commit/71ee23621a44a9f6b40ee08eeac5da5d1d95a602))
+
+## [1.26.0](https://github.com/dsswift/ion/compare/engine-v1.25.0...engine-v1.26.0) (2026-05-25)
+
+### Features
+
+* **engine:** add asyncreg registry and async-trigger SDK types ([517d79b](https://github.com/dsswift/ion/commit/517d79b31e53db2fc63a7fa7bba9497c6b506fd3))
+* **engine:** wire host async-trigger registry and dynamic RPCs ([6ec61cc](https://github.com/dsswift/ion/commit/6ec61cc465ed59a2318793e10190da924d478319))
+* **engine:** webhook HTTP server with auth and route dispatch ([90c4100](https://github.com/dsswift/ion/commit/90c41001ad620a65c1f89f73e930aeb1ae7c8d58))
+* **engine:** scheduler with daily/weekly/interval kinds ([027086a](https://github.com/dsswift/ion/commit/027086a28b803b6ede11509e3513798fc366f720))
+* **engine:** wire async-trigger subsystems into session manager ([6a2ee54](https://github.com/dsswift/ion/commit/6a2ee548fe35ec73679b5e39221cea81336ba9d8))
+* **engine:** sdk runtime for ion.webhooks and ion.schedule ([02bb77f](https://github.com/dsswift/ion/commit/02bb77f0c2558db5530bbca47f139db3c2f98c7c))
+
+### Bug Fixes
+
+* **engine:** lint fixes for asyncreg and webhooks ([1c2f1f5](https://github.com/dsswift/ion/commit/1c2f1f513c2a6e125dfedfdf07815bae2e666c34))
+
+## [1.25.0](https://github.com/dsswift/ion/compare/engine-v1.24.0...engine-v1.25.0) (2026-05-25)
+
+### Features
+
+* **engine:** bridge getContextUsage and searchHistory (#127) ([59e0eb4](https://github.com/dsswift/ion/commit/59e0eb43e6b0ad8c6684aee17319bb53ed141de9))
+* **desktop:** unify slash pipeline + /clear checkpoint ([1a3894d](https://github.com/dsswift/ion/commit/1a3894dd2073077b90b98efb9cfec511bce284a9))
+* **engine:** early-stop continuation with opt-in wire protocol ([5f79236](https://github.com/dsswift/ion/commit/5f7923647e084ccd2be1ef1f3daf4d00bba7f3d8))
+* **engine:** publish command registry and unknown-command result ([9621103](https://github.com/dsswift/ion/commit/962110303b577a2dd08ee9384fae3652390fc73b))
+* **engine:** surface compaction facts to session_compact (#129) ([7923705](https://github.com/dsswift/ion/commit/7923705652b3afa290c326962185a47ddff4941d))
+* **engine:** plan-mode lifecycle with implementation phase ([10e63c4](https://github.com/dsswift/ion/commit/10e63c4dc8f4ca85991b323c24744882bca54037))
+* **engine:** add workspace_file_changed hook + watcher (#130) ([e8377e9](https://github.com/dsswift/ion/commit/e8377e96a91704524d430c13ec538031c3826608))
+* **engine:** add engine_plan_proposal workflow event ([844feaf](https://github.com/dsswift/ion/commit/844feaf5f08d0f1dc1c790190f0eddd4cd0074bf))
+
+### Bug Fixes
+
+* **engine:** wire before_provider_request hook (#128) ([d969bd5](https://github.com/dsswift/ion/commit/d969bd5fa2ebca0f003b38b97f1d3f937784624d))
+* **engine:** wire agent_start / agent_end hooks (#126) ([7c9373b](https://github.com/dsswift/ion/commit/7c9373b05c699efab2015638eb2237906abb7873))
+* **engine:** /clear leak + expand Skill tool with claude-skills manifest ([b7f1b2b](https://github.com/dsswift/ion/commit/b7f1b2bc423384aad95189b29c9c48ca8ac45c6f))
+* **engine:** split conversation persistence to fix /clear (#146) ([b512bfd](https://github.com/dsswift/ion/commit/b512bfddedb0a6faf1e9c20edcb0c8a7a5d8449f))
+* **engine:** replace sleep with poll in ion serve test ([6b71fae](https://github.com/dsswift/ion/commit/6b71fae57dc08211ab79d5a9986958249b9fbdf9))
+
+## [1.24.0](https://github.com/dsswift/ion/compare/engine-v1.23.3...engine-v1.24.0) (2026-05-23)
+
+### Features
+
+* **engine:** add hybrid backend routing ([1e530d1](https://github.com/dsswift/ion/commit/1e530d15dc4d43981979015a0a6c7742c7c61346))
+
 ## [1.23.3](https://github.com/dsswift/ion/compare/engine-v1.23.2...engine-v1.23.3) (2026-05-22)
 
 ### Bug Fixes

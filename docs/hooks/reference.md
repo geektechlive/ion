@@ -1,12 +1,12 @@
 ---
 title: Hook Reference
-description: Complete reference for all 60 Ion Engine hooks with payloads, return types, and behavior.
+description: Complete reference for all 63 Ion Engine hooks with payloads, return types, and behavior.
 sidebar_position: 2
 ---
 
 # Hook Reference
 
-All 60 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
+All 64 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
 
 ## Lifecycle (13)
 
@@ -93,7 +93,7 @@ type BeforePromptResult struct {
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
 | `session_before_compact` | Before context compaction | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter}` | `bool` | Return `true` to cancel compaction. |
-| `session_compact` | After compaction completes | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter}` | ignored | Observe only |
+| `session_compact` | After compaction completes | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter, Facts}` | ignored | Observe only. `Facts` carries structured snippets extracted from the pre-compaction messages — useful for persisting to external memory before they're discarded. May be empty. |
 | `session_before_fork` | Before session fork | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | `bool` | Return `true` to cancel fork. |
 | `session_fork` | After fork completes | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | ignored | Observe only |
 | `session_before_switch` | Before session switch | `nil` | ignored | Observe only |
@@ -106,8 +106,19 @@ type CompactionInfo struct {
     Strategy       string
     MessagesBefore int
     MessagesAfter  int
+    Facts          []CompactionFact // structured facts extracted from compacted messages; may be empty
 }
 ```
+
+**CompactionFact**
+```go
+type CompactionFact struct {
+    Type    string // "decision" | "file_mod" | "error" | "preference" | "discovery"
+    Content string // short snippet (sentence or path)
+}
+```
+
+`Facts` is populated on `session_compact` only (not on `session_before_compact`), and may be empty when step-1 micro-compaction alone is sufficient and no fact patterns matched. Message indices are intentionally not exposed — by the time the hook fires, the source messages have been mutated or truncated.
 
 **ForkInfo**
 ```go
@@ -123,7 +134,7 @@ type ForkInfo struct {
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
 | `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt}` | Last non-nil wins. Injects system prompt into the sub-agent. |
-| `before_provider_request` | Before LLM provider request | provider request data | ignored | Observe only |
+| `before_provider_request` | Immediately before each outbound LLM provider call from the agent loop. Fires once per turn (including fallback hops). | `BeforeProviderRequestInfo{Provider, Model, TurnNumber, MessageCount, ToolCount, HasSystemPrompt, MaxTokens}` | ignored | Observe only |
 
 ### Payload Types
 
@@ -131,6 +142,19 @@ type ForkInfo struct {
 ```go
 type BeforeAgentStartResult struct {
     SystemPrompt string
+}
+```
+
+**BeforeProviderRequestInfo**
+```go
+type BeforeProviderRequestInfo struct {
+    Provider        string // provider ID (e.g. "anthropic", "openai")
+    Model           string // model name post-fallback
+    TurnNumber      int    // 1-based, matches turn_start
+    MessageCount    int    // number of messages in the request payload
+    ToolCount       int    // number of tool definitions attached
+    HasSystemPrompt bool   // true when a non-empty system prompt is set
+    MaxTokens       int    // configured response cap; 0 = provider default
 }
 ```
 
@@ -261,11 +285,12 @@ type PermissionDeniedInfo struct {
 }
 ```
 
-## File Changes (1)
+## File Changes (2)
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
-| `file_changed` | File created, modified, or deleted | `FileChangedInfo{Path, Action}` | ignored | Observe only |
+| `file_changed` | LLM Write or Edit tool wrote a file (does **not** fire on external edits — see `workspace_file_changed`) | `FileChangedInfo{Path, Action}` | ignored | Observe only |
+| `workspace_file_changed` | Any non-ignored file or directory under the session working directory was created, modified, or deleted (LLM tools, user editor, shell scripts — anything) | `WorkspaceFileChangedInfo{Path, RelPath, Action}` | ignored | Observe only |
 
 ### Payload Types
 
@@ -276,6 +301,19 @@ type FileChangedInfo struct {
     Action string
 }
 ```
+
+**WorkspaceFileChangedInfo**
+```go
+type WorkspaceFileChangedInfo struct {
+    Path    string  // absolute, OS-native
+    RelPath string  // forward-slash, relative to WorkingDirectory
+    Action  string  // "create", "modify", or "delete"
+}
+```
+
+`workspace_file_changed` is backed by an engine-owned recursive fsnotify watcher rooted at `EngineConfig.WorkingDirectory`. Defaults ignore `.git/**`, `node_modules/**`, `dist/**`, `build/**`, `target/**`, `.next/**`, `.nuxt/**`, `.venv/**`, `__pycache__/**`, `.ion/**`, plus editor noise (`.DS_Store`, `*.swp`, `*.swo`, `*.tmp`, `*~`). Override the whole list via `EngineConfig.WorkspaceWatchIgnore` (non-empty array replaces the defaults; it does not merge).
+
+Out-of-tree paths are not covered. Extensions that need to watch files outside the working directory install their own `node:fs.watch` in their subprocess. Renames are reported as paired delete+create events (cross-editor rename detection is unreliable).
 
 ## Task Lifecycle (2)
 
@@ -324,19 +362,55 @@ type ElicitationResultInfo struct {
 }
 ```
 
-## Plan Mode (1)
+## Plan Mode (3)
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
-| `plan_mode_prompt` | Plan mode session starts | `string` (plan file path) | `PlanModePromptResult{Prompt, Tools}` or `string` | Last non-nil wins. Override plan mode prompt and/or allowed tool list. |
+| `before_plan_mode_enter` | LLM calls `EnterPlanMode` tool requesting mode transition | `PlanModeEnterInfo{Source}` | `*BeforePlanModeEnterResult{Allow, Reason}` | Last non-nil `Allow` across hosts wins. Return `Allow: &false` to deny. Default (nil or no handler): allow. |
+| `before_plan_mode_exit` | LLM calls `ExitPlanMode` tool requesting plan review | `BeforePlanModeExitInfo{PlanFilePath, Source}` | `*BeforePlanModeExitResult{Allow, Reason}` | Last non-nil `Allow` wins. Return `Allow: &false` to send the model back for more planning. Default: allow. |
+| `plan_mode_prompt` | Plan mode session starts | `string` (plan file path) | `PlanModePromptResult{Prompt, Tools, SparseReminder}` or `string` | Last non-nil wins. Override plan mode prompt, allowed tool list, and/or per-turn sparse reminder text. |
 
 ### Payload Types
+
+**PlanModeEnterInfo**
+```go
+type PlanModeEnterInfo struct {
+    Source string // "model_tool" when the LLM called EnterPlanMode
+}
+```
+
+**BeforePlanModeEnterResult**
+```go
+type BeforePlanModeEnterResult struct {
+    Allow  *bool  // nil = no opinion (allow); &false = deny; &true = explicit allow
+    Reason string // returned to the LLM in the tool result when Allow is &false
+}
+```
+
+**BeforePlanModeExitInfo**
+```go
+type BeforePlanModeExitInfo struct {
+    PlanFilePath string // path of the plan file being submitted for review
+    Source       string // "model_tool" when the LLM called ExitPlanMode
+}
+```
+
+**BeforePlanModeExitResult**
+```go
+type BeforePlanModeExitResult struct {
+    Allow  *bool  // nil = no opinion (allow); &false = deny; &true = explicit allow
+    Reason string // returned to the LLM in the tool result when Allow is &false
+}
+```
+
+Merge semantics: last handler that returns a non-nil `Allow` wins, matching `before_early_stop_decision`. A handler that returns `Allow: nil` (or returns `nil` entirely) abstains.
 
 **PlanModePromptResult**
 ```go
 type PlanModePromptResult struct {
-    Prompt string   // custom plan mode prompt; empty = use default
-    Tools  []string // custom allowed tools; nil = use default
+    Prompt         string   // custom plan mode prompt; empty = use default
+    Tools          []string // custom allowed tools; nil = use default
+    SparseReminder string   // custom per-turn sparse reminder; empty = use engine default buildPlanModeSparseReminder
 }
 ```
 
@@ -366,6 +440,7 @@ type SystemInjectInfo struct {
 | `"plan_mode_reminder"` | Turn 2+ during plan mode | `[SYSTEM] Plan mode still active...` |
 | `"turn_limit_warning"` | 2 turns before `maxTurns` | `[SYSTEM] You are approaching your turn limit...` |
 | `"max_token_continue"` | LLM response hits `max_tokens` | `Continue from where you left off.` |
+| `"early_stop_continue"` | Model emits `end_turn` below the configured token budget | harness-supplied (none by default) — see [ADR-002](../architecture/adr/002-engine-vs-harness-early-stop.md) |
 
 #### `SystemInjectResult`
 
@@ -374,6 +449,120 @@ type SystemInjectResult struct {
     Text     string `json:"text,omitempty"`     // replacement text; empty = use default
     Suppress bool   `json:"suppress,omitempty"` // true = do not inject
 }
+```
+
+## Early-Stop Continuation (2)
+
+These hooks let harness extensions take **programmatic control** of the early-stop continuation feature. The engine provides the mechanism — cumulative output-token tracking, threshold comparison, the decision hook, and the re-run-turn machinery — but does **not** ship an opinion about whether to nudge or what text to nudge with. Both are policy decisions that belong to the harness consumer. See [ADR-002: Engine vs Harness for Early-Stop Continuation](../architecture/adr/002-engine-vs-harness-early-stop.md) for the full rationale and [`earlyStopContinue` in engine.json](../configuration/engine-json.md#earlystopcontinue) for the configuration block.
+
+The feature ships **off by default**. To enable it, a harness must either flip `earlyStopContinue.enabled = true` in `engine.json`, pass `RunOptions.EarlyStopEnabled = &true` per dispatch, or wire a `before_early_stop_decision` handler that returns `ForceContinue: &true`. The desktop ships [`desktop/src/main/early-stop-policy.ts`](https://github.com/dsswift/ion/blob/main/desktop/src/main/early-stop-policy.ts) as a reference policy implementation — third-party harnesses can copy it verbatim or build their own.
+
+When the model emits `end_turn` / `stop` below the configured output-token target, the engine fires `before_early_stop_decision` so handlers can:
+
+- **Force a specific verdict** (`ForceContinue: &true | &false`) — e.g. "always continue while a `TodoWrite` is in progress" or "stop now because the user already approved the plan."
+- **Override the budget mid-run** (`OverrideBudget`) — e.g. "user just expanded scope; bump from 8k to 16k."
+- **Override the threshold** (`OverrideThresholdPct`).
+- **Supply the continuation prompt** (`ContinueMessage`) — required for any nudge to fire. The engine has no default text; if no handler supplies a message, the engine logs `earlyStop: enabled but no ContinueMessage supplied; skipping injection` and falls through to normal completion.
+
+After the engine has decided to continue (and the message has been injected), `early_stop_continued` fires as an observation point — useful for metrics, UI breadcrumbs, or coordinating sibling agents.
+
+If no extension expressed an opinion via `before_early_stop_decision`, the engine emits a `engine_early_stop_decision_request` event on the wire and blocks briefly (100ms timeout) for a `early_stop_decision_response` client command. This lets socket-only harnesses (the desktop, custom UIs, headless tooling) participate in the decision without running a subprocess extension.
+
+| Hook | When | Payload | Return | Effect |
+|------|------|---------|--------|--------|
+| `before_early_stop_decision` | After model emits `end_turn` / `stop`, before the engine evaluates continuation criteria | `EarlyStopDecisionInfo` | `*EarlyStopDecisionResult` | Per-field last-non-nil-across-hosts wins. See struct docs below. |
+| `early_stop_continued` | After a continuation has been injected, before the next turn starts | `EarlyStopContinuedInfo` | ignored | Observe only |
+
+**Execution order during an early-stop event:**
+
+1. `before_early_stop_decision` fires; handlers may override the verdict, budget, threshold, or message.
+2. If the (possibly-overridden) verdict is "continue", `system_inject` fires with `kind="early_stop_continue"`; handlers can rewrite or suppress the final text.
+3. The user message is appended to the conversation.
+4. `early_stop_continued` fires (observe-only) with the final injected text.
+
+If `system_inject` suppresses the message (returns `suppress: true`), the engine **does not** loop — it falls through to `TaskCompleteEvent`. The `early_stop_continued` hook still fires with an empty `InjectedText` so observers can record the suppression.
+
+#### `EarlyStopDecisionInfo`
+
+```go
+type EarlyStopDecisionInfo struct {
+    RunID                  string // engine-issued request ID
+    Model                  string // model that just stopped
+    TurnNumber             int    // turn that ended (1-based)
+    StopReason             string // "end_turn" or "stop"
+    CumulativeOutputTokens int    // total across every turn of this run
+    Budget                 int    // effective budget after engine.json + RunOptions
+    ThresholdPct           int    // effective completion threshold percent
+    ContinuationCount      int    // number of nudges already issued (0 before first)
+    MaxContinuations       int    // configured cap
+    LastContinuationDelta  int    // output-token delta from the previous continuation
+    WouldContinue          bool   // the engine's tentative verdict before this hook
+    IsSubagent             bool   // true for runs dispatched by the Agent tool
+}
+```
+
+#### `EarlyStopDecisionResult`
+
+```go
+type EarlyStopDecisionResult struct {
+    ForceContinue        *bool  // &true forces continue; &false forces stop; nil defers
+    OverrideBudget       int    // bump (or shrink) the effective budget for the remainder of the run; 0 = no override
+    OverrideThresholdPct int    // adjust the completion threshold; 0 = no override
+    ContinueMessage      string // replace the default continuation prompt text; "" = use default
+}
+```
+
+Merge semantics across multiple handlers: **last writer wins per field**. A handler that only sets `ContinueMessage` leaves an earlier handler's `ForceContinue` intact. Matches the `before_prompt` resolution pattern.
+
+#### `EarlyStopContinuedInfo`
+
+```go
+type EarlyStopContinuedInfo struct {
+    RunID                  string // engine-issued request ID
+    TurnNumber             int    // turn that just ended
+    ContinuationCount      int    // new count after this nudge (1-based)
+    Pct                    int    // percent of budget the model reached
+    CumulativeOutputTokens int    // running total across the run
+    Budget                 int    // effective budget at injection time (after any OverrideBudget)
+    InjectedText           string // final continuation text (after OnSystemInject rewrites); empty when suppressed
+}
+```
+
+#### Worked examples
+
+**Force-continue while a Todo is in progress:**
+
+```go
+sdk.On(extension.HookBeforeEarlyStopDecision, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
+    info := payload.(extension.EarlyStopDecisionInfo)
+    if hasInProgressTodo(ctx) {
+        cont := true
+        return extension.EarlyStopDecisionResult{ForceContinue: &cont}, nil
+    }
+    return nil, nil // defer to engine default
+})
+```
+
+**Bump the budget when the user expands scope mid-conversation:**
+
+```go
+sdk.On(extension.HookBeforeEarlyStopDecision, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
+    info := payload.(extension.EarlyStopDecisionInfo)
+    if userExpandedScope(ctx) && info.Budget < 16000 {
+        return extension.EarlyStopDecisionResult{OverrideBudget: 16000}, nil
+    }
+    return nil, nil
+})
+```
+
+**Supply a domain-specific continuation prompt:**
+
+```go
+sdk.On(extension.HookBeforeEarlyStopDecision, func(ctx *extension.Context, payload interface{}) (interface{}, error) {
+    return extension.EarlyStopDecisionResult{
+        ContinueMessage: "Continue. Focus on the test plan in plan.md before generating new code.",
+    }, nil
+})
 ```
 
 ## Context Injection (1)
@@ -478,3 +667,36 @@ type PeerExtensionInfo struct {
     AttemptNumber int    // populated only on peer_extension_respawned
 }
 ```
+
+## Async Registration Lifecycle (4)
+
+Fire when an extension registers or deregisters a webhook route or schedule job via the async-trigger subsystem. The `*_registered` variants are veto-capable: a handler that returns `AsyncRegistrationVeto{Block: true}` refuses the registration. The `*_deregistered` variants are observation-only — return values are ignored. Deregistration cannot be blocked because a veto there would let one extension permanently trap another extension's resources.
+
+| Hook | When | Payload | Return | Effect |
+|------|------|---------|--------|--------|
+| `webhook_registered` | Extension registers a webhook route (init or runtime) | `AsyncRegistrationInfo` | `AsyncRegistrationVeto` | Return `Block: true` to refuse registration. Last explicit opinion wins. |
+| `webhook_deregistered` | Webhook route removed (runtime deregister or session teardown) | `AsyncRegistrationInfo` | ignored | Observe only |
+| `schedule_registered` | Extension registers a schedule job (init or runtime) | `AsyncRegistrationInfo` | `AsyncRegistrationVeto` | Return `Block: true` to refuse registration. Last explicit opinion wins. |
+| `schedule_deregistered` | Schedule job removed (runtime deregister or session teardown) | `AsyncRegistrationInfo` | ignored | Observe only |
+
+### Payload Types
+
+**AsyncRegistrationInfo**
+```go
+type AsyncRegistrationInfo struct {
+    Kind   string      `json:"kind"`           // "webhook" or "schedule"
+    ID     string      `json:"id"`             // webhook path or schedule job id
+    Origin string      `json:"origin"`         // "init" or "runtime"
+    Decl   interface{} `json:"decl,omitempty"` // typed declaration (WebhookRoute or ScheduleJob)
+}
+```
+
+**AsyncRegistrationVeto**
+```go
+type AsyncRegistrationVeto struct {
+    Block  bool   `json:"block"`
+    Reason string `json:"reason,omitempty"`
+}
+```
+
+Veto semantics match `before_plan_mode_enter`: last handler that expresses an explicit opinion wins. A handler returning nil, a zero-value veto, or any non-veto value abstains. JSON-RPC subprocess extensions return `{block: true, reason: "..."}` map equivalents.

@@ -1,0 +1,135 @@
+/**
+ * Single write+broadcast helper for desktop settings.
+ *
+ * Per docs/engine-grounding.md §6 — "Both edit surfaces funnel through the
+ * same main-process write helper — exactly one persistence + broadcast
+ * path" — this module is the canonical home for the two operations both
+ * edit surfaces (the renderer's SAVE_SETTINGS IPC handler and the iOS
+ * `set_desktop_setting` wire command handler) share:
+ *
+ *   1. Persisting `settings.json` atomically.
+ *   2. Broadcasting a fresh `desktop_settings_snapshot` to every paired
+ *      iOS device when any projectable key changed.
+ *
+ * Before this module existed, the two edit surfaces each had their own
+ * write + broadcast logic — `ipc/settings.ts` for the renderer path and
+ * `remote/handlers/desktop-settings.ts` for the iOS path — with subtly
+ * different gating (the renderer path diffed against the prior settings
+ * and skipped the broadcast when no projectable key changed; the iOS
+ * path always broadcast). Centralising both call sites here makes the
+ * "exactly one path" claim literal and gives the audit log one prefix
+ * (`[SETTINGS] persistAndBroadcast`) to grep for.
+ *
+ * Snapshot semantics are inherited from the underlying wire event —
+ * consumers REPLACE their cached projection wholesale on every
+ * `desktop_settings_snapshot`; never merge. See the contract docs in
+ * `projectable-settings.ts` and `docs/architecture/desktop.md` for the
+ * full snapshot rules.
+ */
+
+import { log as _log } from './logger'
+import { state } from './state'
+import { writeSettings } from './settings-store'
+import {
+  isProjectableKey,
+  projectCurrentSettings,
+  projectableSchema,
+  projectableGroups,
+} from './projectable-settings'
+
+function log(msg: string): void {
+  _log('main', msg)
+}
+
+/**
+ * Broadcast a fresh `desktop_settings_snapshot` to every paired device.
+ *
+ * Cheap to call: reads `settings.json` once and emits one wire event.
+ * Safe to call when no transport is attached (no-op). Logs the broadcast
+ * so the operational log shows exactly which call sites triggered a
+ * snapshot.
+ *
+ * Most callers should prefer `persistAndBroadcastSettings()` which gates
+ * the broadcast on projectable-key changes. This standalone broadcast is
+ * exposed for the rare cases where the schema or grouping shape has
+ * changed without a settings-value change (e.g. a future hot-reload of
+ * the projectable allowlist), or for unconditional refreshes from
+ * higher-level pairing code.
+ */
+export function broadcastDesktopSettingsSnapshot(reason: string): void {
+  if (!state.remoteTransport) {
+    log(`[SETTINGS] broadcastDesktopSettingsSnapshot: skip reason=${reason} (no transport attached)`)
+    return
+  }
+  log(`[SETTINGS] broadcastDesktopSettingsSnapshot: sending reason=${reason}`)
+  state.remoteTransport.send({
+    type: 'desktop_settings_snapshot',
+    settings: projectCurrentSettings(),
+    schema: projectableSchema(),
+    groups: projectableGroups(),
+  })
+}
+
+/**
+ * Persist a new settings object and broadcast to paired iOS devices if
+ * any projectable key changed.
+ *
+ * The two edit surfaces call this:
+ *
+ *   - Renderer SAVE_SETTINGS IPC (`ipc/settings.ts`) passes the full
+ *     in-memory settings as `next` and the prior on-disk shape as
+ *     `prev`. The diff against the projectable allowlist determines
+ *     whether a broadcast is necessary.
+ *
+ *   - iOS `set_desktop_setting` wire command (`remote/handlers/
+ *     desktop-settings.ts`) passes a merged object as `next` and the
+ *     pre-merge shape as `prev`. Validation has already gated the key
+ *     against the allowlist by this point — the diff still runs so the
+ *     broadcast is skipped when iOS posts a no-op write (same value
+ *     it already had).
+ *
+ * `prev` MUST be the pre-write snapshot; pass `{}` when there is no
+ * prior state (the first write on a fresh install). Passing `null`
+ * forces a broadcast regardless of the diff — useful for code paths
+ * where the caller already knows a broadcast is required (e.g. a
+ * schema reload) but persistence still needs to go through this
+ * helper for the single-path guarantee.
+ *
+ * Throws when `writeSettings` throws — atomic write failures are
+ * surfaced to the caller rather than swallowed. The broadcast is
+ * skipped on write failure to keep the in-memory wire state consistent
+ * with the on-disk truth.
+ *
+ * Logging: every call logs the projectable-key delta. Verbose by design
+ * — settings writes are infrequent and the log line is the audit trail
+ * the user sees when they ask "what just changed on my paired devices?".
+ */
+export function persistAndBroadcastSettings(
+  next: Record<string, unknown>,
+  prev: Record<string, unknown> | null,
+): void {
+  writeSettings(next as Record<string, any>)
+
+  const forceBroadcast = prev === null
+  let changedProjectableKeys: string[] = []
+  if (!forceBroadcast) {
+    changedProjectableKeys = Object.keys(next).filter((k) => {
+      if (!isProjectableKey(k)) return false
+      return next[k] !== prev![k]
+    })
+  }
+
+  if (forceBroadcast) {
+    log(`[SETTINGS] persistAndBroadcast: forced broadcast (prev=null)`)
+    broadcastDesktopSettingsSnapshot('persistAndBroadcast:forced')
+    return
+  }
+
+  if (changedProjectableKeys.length === 0) {
+    log(`[SETTINGS] persistAndBroadcast: no projectable keys changed, skipping broadcast`)
+    return
+  }
+
+  log(`[SETTINGS] persistAndBroadcast: projectable_changed=true keys=[${changedProjectableKeys.join(',')}]`)
+  broadcastDesktopSettingsSnapshot('persistAndBroadcast:projectable_changed')
+}

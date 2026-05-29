@@ -109,6 +109,23 @@ type Host struct {
 	// in extension_respawned and engine_extension_died payloads.
 	lastExitCode   atomic.Int64 // negative sentinel = "no code"
 	lastExitSignal atomic.Pointer[string]
+
+	// Async-trigger plumbing: per-host asyncreg.Registry plus captured
+	// session key for resolving "which session does this fire belong
+	// to?". Stored as a *asyncHostState pointer so the zero-value Host
+	// pays no extra memory; allocation happens on first access via
+	// asyncRegistry(). See host_async.go for accessors.
+	async     *asyncHostState
+	asyncOnce sync.Once
+
+	// pendingInitWebhooks / pendingInitSchedules carry the async
+	// declarations the subprocess returned from init. The session
+	// manager commits them through the registry after wiring the
+	// lifecycle-hook callback so init-time veto handlers can fire.
+	// Guarded by async.mu when set; CommitPendingAsyncDecls reads and
+	// clears them under the same lock.
+	pendingInitWebhooks  []WebhookRoute
+	pendingInitSchedules []ScheduleJob
 }
 
 
@@ -169,4 +186,13 @@ func (h *Host) Tools() []ToolDefinition {
 // Commands returns all registered command definitions from the SDK.
 func (h *Host) Commands() map[string]CommandDefinition {
 	return h.sdk.Commands()
+}
+
+// SetOnCommandsChange wires an observer that fires (outside the SDK lock)
+// after any RegisterCommand call on this host. The session manager uses this
+// to broadcast an engine_command_registry snapshot when a host's command table
+// mutates. Mirror of SDK.SetOnCommandsChange — exposed at the Host level so
+// the session never reaches past the host abstraction. Nil clears.
+func (h *Host) SetOnCommandsChange(fn func()) {
+	h.sdk.SetOnCommandsChange(fn)
 }

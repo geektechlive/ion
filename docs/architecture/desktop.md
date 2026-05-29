@@ -158,3 +158,47 @@ User types prompt
   -> sessionStore.handleNormalizedEvent() updates messages
   -> React re-renders ConversationView
 ```
+
+## Settings projection to iOS
+
+The desktop owns user preferences (`~/.ion/settings.json`). A curated
+subset of those preferences is projectable to iOS so the user can flip
+behavior toggles from a phone without affecting other paired desktops.
+The allowlist + per-key metadata lives in
+`desktop/src/main/projectable-settings.ts` — the single source of truth
+for which settings reach iOS and what they look like.
+
+**Wire shape.** Two additive wire types:
+
+- `desktop_settings_snapshot` (event) carries the current values map
+  *plus the projection schema* (type, group, label, description,
+  defaultValue per key) *plus ordered group descriptors*. Snapshot
+  semantics — consumers REPLACE their cached view; never merge. Emitted
+  on initial pairing and on every projectable-setting change.
+- `set_desktop_setting` (command) writes one setting. The handler
+  validates the key against the allowlist, validates the value type
+  against the declared schema, persists via `writeSettings`, then
+  broadcasts a fresh snapshot to every paired iOS instance (including
+  the writer — every device sees a consistent view).
+
+**Per-desktop scoping.** iOS shows projected settings for the
+currently-connected desktop only. Switching transports clears the iOS
+cache and the new desktop's initial snapshot repopulates it.
+
+**Schema-on-the-wire.** iOS does not hardcode the projection. Adding a
+new setting on the desktop is a one-line entry in
+`PROJECTABLE_SETTINGS`; iOS auto-renders the new row on the next
+snapshot. The iOS UI tolerates unknown `group` identifiers by falling
+back to a generic "Other" section so older iOS builds remain
+forward-compatible.
+
+**Local-change broadcast.** When the user flips a setting on the
+desktop UI (via `SAVE_SETTINGS` in `ipc/settings.ts`), the handler
+diffs pre/post against the allowlist and broadcasts a fresh snapshot
+when any projectable key changed. The diff keeps the wire quiet for
+non-projectable saves (paths, fonts, model picks).
+
+**Reference:** [ADR-001](adr/001-engine-vs-harness.md) applied to a
+*client* boundary rather than the engine one — desktop owns the
+mechanism (file, allowlist, validator, broadcast); iOS owns the UI
+policy (which sections, what order, what affordance per type).

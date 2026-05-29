@@ -51,6 +51,12 @@ func loadOrCreateConversation(opts types.RunOptions, model string) *conversation
 		}
 		// Sanitize loaded messages (fix orphaned tool_result blocks, remove thinking)
 		loaded.Messages = conversation.SanitizeMessages(loaded.Messages)
+		// Replace [plan-file] placeholder with actual plan file path in loaded
+		// history — fixes both Messages (sent to LLM) and Entries (persisted to
+		// disk via saveSplit / BuildContextPath / .tree.jsonl).
+		if opts.PlanFilePath != "" {
+			conversation.ReplacePlanFilePlaceholder(loaded, opts.PlanFilePath)
+		}
 		return loaded
 	}
 	// Append a 6-byte random suffix so two runs that begin in the same
@@ -66,8 +72,12 @@ func loadOrCreateConversation(opts types.RunOptions, model string) *conversation
 // buildSystemPrompt assembles the final system prompt for a run, layering in
 // plan-mode prompt, before_prompt hook contributions, and the capability
 // prompt. May rewrite opts.Prompt and opts.PlanModeTools as a side effect when
-// a hook returns a non-empty replacement.
-func buildSystemPrompt(opts *types.RunOptions, conv *conversation.Conversation, hooks RunHooks, requestID string) string {
+// a hook returns a non-empty replacement. When run is non-nil and the
+// plan_mode_prompt hook returns a SparseReminder, the override is cached on
+// run.planModeSparseReminderOverride for use by per-turn reminder injections
+// (the RunOptions.PlanModeSparseReminder field takes precedence over the hook
+// at injection time — see runloop.go).
+func buildSystemPrompt(opts *types.RunOptions, conv *conversation.Conversation, hooks RunHooks, requestID string, run *activeRun) string {
 	systemPrompt := conv.System
 	if opts.SystemPrompt != "" {
 		systemPrompt = opts.SystemPrompt
@@ -83,12 +93,21 @@ func buildSystemPrompt(opts *types.RunOptions, conv *conversation.Conversation, 
 		// Check extension hook for custom plan mode prompt
 		planPrompt := opts.PlanModePrompt
 		if planPrompt == "" && hooks.OnPlanModePrompt != nil {
-			customPrompt, customTools := hooks.OnPlanModePrompt(opts.PlanFilePath)
+			customPrompt, customTools, customSparseReminder := hooks.OnPlanModePrompt(opts.PlanFilePath)
 			if customPrompt != "" {
 				planPrompt = customPrompt
 			}
 			if customTools != nil {
 				opts.PlanModeTools = customTools
+			}
+			// Cache the hook's sparse-reminder override on the run so per-turn
+			// reminder injections in runloop.go can reuse it without re-firing
+			// the hook. RunOptions.PlanModeSparseReminder takes precedence (see
+			// runloop.go reminder resolution block), so we only cache the hook
+			// result here; the resolution priority check happens at injection time.
+			if customSparseReminder != "" && run != nil && run.planModeSparseReminderOverride == "" {
+				run.planModeSparseReminderOverride = customSparseReminder
+				utils.Info("PlanMode", fmt.Sprintf("run=%s sparse_reminder_override=hook len=%d", requestID, len(customSparseReminder)))
 			}
 		}
 		if planPrompt == "" {
@@ -186,9 +205,48 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 			InputSchema: exitPlanDef.InputSchema,
 		})
 
-		// Signal to the desktop that plan mode is now active for this run.
+		// Emit a state-transition event so consumers can mirror the active
+		// plan-mode flag. Snapshot-style: the event is the authoritative
+		// signal that the run is now in plan mode.
 		b.emit(run, types.NormalizedEvent{Data: &types.PlanModeChangedEvent{Enabled: true}})
 		utils.Info("PlanMode", fmt.Sprintf("run=%s tools_filtered=%d allowed=%v", run.requestID, len(toolDefs), planTools))
+	} else {
+		// Inject EnterPlanMode sentinel in auto mode so the LLM can request
+		// a transition into plan mode when it judges the task warrants planning.
+		// Symmetric with ExitPlanMode which is injected only in plan mode.
+		//
+		// Implementation-phase suppression: when the harness has set
+		// RunOptions.ImplementationPhase=true (e.g. a harness button that
+		// hands off an approved plan to an "implement" run), the engine
+		// skips the injection entirely so the model can't propose a fresh
+		// plan-mode entry mid-implementation. This replaces the previous
+		// prompt-text substring-matching mechanism with a structured
+		// boolean — see the field comment in
+		// engine/internal/types/types.go.
+		if opts.ImplementationPhase {
+			utils.Info("PlanMode", fmt.Sprintf("run=%s skipping EnterPlanMode injection (implementation_phase=true)", run.requestID))
+		} else {
+			// Resolve the EnterPlanMode tool description: harness-supplied
+			// prose wins; empty falls back to the engine's one-line
+			// default. Per ADR-004 the policy prose lives in the harness;
+			// the engine never composes its own opinionated framing.
+			// Log which branch ran so the operational log captures the
+			// resolution path (logging policy: log both sides of every
+			// decision).
+			descSource := "default"
+			descLen := 0
+			if opts.EnterPlanModeDescription != "" {
+				descSource = "harness"
+				descLen = len(opts.EnterPlanModeDescription)
+			}
+			enterPlanDef := tools.EnterPlanModeToolWithDescription(opts.EnterPlanModeDescription)
+			toolDefs = append(toolDefs, types.LlmToolDef{
+				Name:        enterPlanDef.Name,
+				Description: enterPlanDef.Description,
+				InputSchema: enterPlanDef.InputSchema,
+			})
+			utils.Info("PlanMode", fmt.Sprintf("run=%s injected EnterPlanMode in auto mode enter_plan_mode_desc=%s len=%d", run.requestID, descSource, descLen))
+		}
 	}
 
 	// Filter by allowedTools if specified (empty list = no tools, nil = all tools)

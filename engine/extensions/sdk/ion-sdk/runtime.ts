@@ -6,9 +6,19 @@
 import { createInterface } from 'node:readline'
 import { format as utilFormat } from 'node:util'
 
+import {
+  dispatchFireAsync,
+  dispatchResolvePredicate,
+  dispatchResolveToken,
+  drainPendingInit,
+  registerRpcBridge,
+  scheduleApi,
+  webhooksApi,
+} from './runtime-async'
 import type {
   AgentSpec,
   CommandDef,
+  ContextUsage,
   DiscoverAgentsOpts,
   DiscoveredAgent,
   DispatchAgentOpts,
@@ -17,8 +27,11 @@ import type {
   ElicitResult,
   EngineEvent,
   ExtensionConfig,
+  HistoryMatch,
   IonContext,
   IonSDK,
+  LLMCallOpts,
+  LLMCallResult,
   ProcessInfo,
   SandboxProfile,
   SandboxWrapResult,
@@ -216,6 +229,51 @@ function buildContext(ctxData: any): IonContext {
         cancelled: !!result?.cancelled,
       }
     },
+    async getContextUsage(): Promise<ContextUsage | null> {
+      // Engine returns null when no run is active; preserve that signal so
+      // callers can branch on it (`if (!usage) ...`).
+      const result = await request('ext/get_context_usage', {})
+      if (result == null) return null
+      return {
+        percent: typeof result?.percent === 'number' ? result.percent : 0,
+        tokens: typeof result?.tokens === 'number' ? result.tokens : 0,
+        cost: typeof result?.cost === 'number' ? result.cost : 0,
+      }
+    },
+    async searchHistory(query: string, maxResults?: number): Promise<HistoryMatch[]> {
+      // Engine returns [] when no conversation is active or the searcher is
+      // unwired. Defend against any other shape by coercing to [] -- the
+      // typed return promises an array, never undefined.
+      const result = await request('ext/search_history', {
+        query: query || '',
+        maxResults: typeof maxResults === 'number' ? maxResults : 0,
+      })
+      if (!Array.isArray(result)) return []
+      return result as HistoryMatch[]
+    },
+    async llmCall(opts: LLMCallOpts): Promise<LLMCallResult> {
+      // One-shot lightweight inference. Forwards the opts verbatim to the
+      // engine's ext/llm_call RPC; the engine resolves the provider, fires
+      // before_provider_request, drains the stream, and emits the
+      // engine_llm_call observability event.
+      //
+      // We coerce every numeric/boolean field defensively because the engine
+      // returns a real LLMCallResult on success but a JSON-RPC error on
+      // failure (which the request helper unwraps into a thrown Error).
+      const result = await request('ext/llm_call', {
+        model: opts.model || '',
+        system: opts.system || '',
+        prompt: opts.prompt || '',
+        jsonMode: !!opts.jsonMode,
+        maxTokens: typeof opts.maxTokens === 'number' ? opts.maxTokens : 0,
+      })
+      return {
+        content: typeof result?.content === 'string' ? result.content : '',
+        inputTokens: typeof result?.inputTokens === 'number' ? result.inputTokens : 0,
+        outputTokens: typeof result?.outputTokens === 'number' ? result.outputTokens : 0,
+        cost: typeof result?.cost === 'number' ? result.cost : 0,
+      }
+    },
   }
 }
 
@@ -232,6 +290,11 @@ async function handleRequest(
     // -- Init handshake -----------------------------------------------------
     if (method === 'init') {
       initConfig = params || emptyConfig
+      // Drain any module-scope webhook / schedule registrations into
+      // the init payload so the engine sees them in the same response.
+      // After this call, subsequent registrations route through the
+      // ext/register_* RPCs instead of the pending queue.
+      const pending = drainPendingInit()
       respond(id, {
         tools: Array.from(tools.values()).map((t) => ({
           name: t.name,
@@ -244,7 +307,26 @@ async function handleRequest(
             { description: def.description },
           ]),
         ),
+        webhooks: pending.webhooks,
+        schedules: pending.schedules,
       })
+      return
+    }
+
+    // -- Async-trigger fires from the engine --------------------------------
+    if (method === 'engine/fire_async') {
+      const result = await dispatchFireAsync(params, buildContext)
+      respond(id, result)
+      return
+    }
+    if (method === 'engine/resolve_token') {
+      const result = await dispatchResolveToken(params)
+      respond(id, result)
+      return
+    }
+    if (method === 'engine/resolve_predicate') {
+      const result = await dispatchResolvePredicate(params)
+      respond(id, result)
       return
     }
 
@@ -389,6 +471,11 @@ export function createIon(): IonSDK {
   // `log` notification the native API uses.
   installConsoleRedirect()
 
+  // Wire the async-trigger runtime's RPC bridge so ion.webhooks /
+  // ion.schedule can issue ext/register_* and ext/deregister_* calls
+  // for dynamic registrations after init.
+  registerRpcBridge(request)
+
   process.nextTick(() => startListening())
 
   return {
@@ -401,5 +488,7 @@ export function createIon(): IonSDK {
     registerCommand(name, def) {
       commands.set(name, def)
     },
+    webhooks: webhooksApi,
+    schedule: scheduleApi,
   }
 }

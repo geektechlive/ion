@@ -1,5 +1,6 @@
 import { IS_REMOTE } from './engine-bridge'
 import { engineBridge } from './state'
+import { log } from './logger'
 import type { EngineDirListing, EngineHostInfo } from '../shared/types'
 
 /** Lookup of the bridge singleton. The import cycle (state -> control-plane ->
@@ -37,11 +38,15 @@ export function engineIsRemote(): boolean {
  *  Cached after the first successful call until the next disconnect. */
 export async function getEngineHostInfo(): Promise<{ ok: boolean; error?: string; data?: EngineHostInfo }> {
   if (hostInfoCache) {
+    log('engine-bridge-fs', 'getEngineHostInfo: cache hit')
     return { ok: true, data: hostInfoCache }
   }
   const result = await bridge().request<EngineHostInfo>('get_host_info')
   if (result.ok && result.data) {
     hostInfoCache = result.data
+    log('engine-bridge-fs', 'getEngineHostInfo: fetched home=' + result.data.home + ' host=' + result.data.hostname)
+  } else {
+    log('engine-bridge-fs', 'getEngineHostInfo: failed err=' + result.error)
   }
   return result
 }
@@ -52,5 +57,6 @@ export async function listEngineDirectory(
   path: string,
   showHidden: boolean,
 ): Promise<{ ok: boolean; error?: string; data?: EngineDirListing }> {
+  log('engine-bridge-fs', 'listEngineDirectory: path=' + path + ' showHidden=' + showHidden)
   return bridge().request<EngineDirListing>('list_directory', { path, showHidden })
 }

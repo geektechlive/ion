@@ -75,6 +75,100 @@ export interface SandboxPattern {
 }
 
 /**
+ * Context window usage snapshot for the active run, returned by
+ * {@link IonContext.getContextUsage}. Mirrors the Go SDK's `ContextUsage`
+ * struct so TS and Go extensions see identical fields.
+ *
+ * - `percent`: 0-100 fraction of the model's context window consumed.
+ *   Capped at 100 even if the heuristic overshoots.
+ * - `tokens`: best-known token count of the conversation in the window.
+ *   When the most recent API response cached an exact figure, that exact
+ *   figure (plus an estimate for any messages added since) is returned;
+ *   otherwise a heuristic estimate over all messages is used.
+ * - `cost`: cumulative cost in USD for the active run. May be `0` when the
+ *   engine has not yet wired cost-tracking into the per-run accessor --
+ *   treat as "unknown" until non-zero.
+ */
+export interface ContextUsage {
+  percent: number
+  tokens: number
+  cost: number
+}
+
+/**
+ * A single match returned by {@link IonContext.searchHistory}. Mirrors the
+ * Go SDK's `HistoryMatch` struct.
+ *
+ * - `index`: position of the matched message in the conversation's message
+ *   array (0-based).
+ * - `role`: `"user"`, `"assistant"`, `"tool"`, etc.
+ * - `type`: discriminator for the matched content kind -- `"text"` for
+ *   message bodies, `"tool_use"` / `"tool_result"` for tool-call segments.
+ * - `snippet`: a short excerpt of the matched content with the query
+ *   highlighted by context (engine-truncated; do not assume full content).
+ * - `toolName` / `toolUseId`: populated when `type` references a tool
+ *   segment; absent otherwise.
+ */
+export interface HistoryMatch {
+  index: number
+  role: string
+  type: string
+  snippet: string
+  toolName?: string
+  toolUseId?: string
+}
+
+/**
+ * Options for {@link IonContext.llmCall}. The lightweight one-shot
+ * inference primitive — a single round-trip to the provider with no
+ * tools, no agent loop, no fallback chain.
+ *
+ * Designed for harness-internal extraction / classification / routing
+ * prompts that previously had to bypass Ion entirely (direct provider
+ * HTTP) to avoid the cost of a full {@link IonContext.dispatchAgent}.
+ * Going through `llmCall` keeps these calls visible to Ion's hook
+ * surface (notably `before_provider_request`) and to per-call
+ * observability (`engine_llm_call` event).
+ *
+ * - `model`: the model to call. Required. Resolves through the same
+ *   provider registry the agent loop uses, so any model the session
+ *   can dispatch is callable here.
+ * - `system`: optional system prompt. Omit for none.
+ * - `prompt`: the single user-role message. Required.
+ * - `jsonMode`: advisory flag requesting JSON-formatted output. Today
+ *   the engine forwards this in observability metadata only; provider-
+ *   side wiring is reserved for a future release. Parse defensively.
+ * - `maxTokens`: response cap (0 = provider default).
+ */
+export interface LLMCallOpts {
+  model: string
+  system?: string
+  prompt: string
+  jsonMode?: boolean
+  maxTokens?: number
+}
+
+/**
+ * Result from {@link IonContext.llmCall}. Carries the model's text
+ * response plus token / cost telemetry mirroring the data the engine
+ * emits on the `engine_llm_call` observability event.
+ *
+ * - `content`: the concatenated assistant text. Empty when the model
+ *   produced no text output (rare; llmCall has no tools to call so
+ *   tool_use-only completions yield empty content).
+ * - `inputTokens` / `outputTokens`: provider-reported usage.
+ * - `cost`: USD cost estimate via the model registry. `0` when the
+ *   model is not in the registry (e.g. a custom model without cost
+ *   metadata) — treat as "unknown" not "free".
+ */
+export interface LLMCallResult {
+  content: string
+  inputTokens: number
+  outputTokens: number
+  cost: number
+}
+
+/**
  * Sandbox profile for {@link IonContext.sandboxWrap}. All fields are optional.
  * - `fsAllowWrite` / `fsDenyWrite` / `fsDenyRead`: filesystem path lists.
  * - `netAllowedDomains` (allowlist) wins over `netBlockedDomains` (blocklist).
@@ -277,6 +371,97 @@ export interface IonContext {
    * ```
    */
   elicit(opts: ElicitOptions): Promise<ElicitResult>
+
+  /**
+   * Return a snapshot of the active run's context window usage, or `null`
+   * when no run is active (e.g. the extension is called from a slash
+   * command before the first prompt, or from extension load time).
+   *
+   * Use this to make proactive decisions before the LLM round-trips:
+   *   - Skip expensive memory-recall or context-injection steps when the
+   *     window is already near capacity.
+   *   - Surface a warning event to the user before reactive compaction
+   *     fires (which happens at >80%).
+   *   - Downgrade model selection under heavy context pressure.
+   *
+   * @example
+   * ```ts
+   * ion.on('before_prompt', async (ctx, prompt) => {
+   *   const usage = await ctx.getContextUsage()
+   *   if (usage && usage.percent > 70) {
+   *     ctx.emit({ type: 'engine_notify', message: `Context ${usage.percent}% full`, level: 'warn' })
+   *   }
+   * })
+   * ```
+   */
+  getContextUsage(): Promise<ContextUsage | null>
+
+  /**
+   * Search the active conversation's message history for content matching
+   * `query`. Returns up to `maxResults` matches (engine-capped; pass `0`
+   * or omit for the default cap). Returns an empty array when no
+   * conversation is active.
+   *
+   * Useful for recovering details lost to compaction -- after a
+   * `session_compact`, earlier messages live only in the persisted log;
+   * `searchHistory` searches the full persisted record, not just the
+   * in-context messages.
+   *
+   * @example
+   * ```ts
+   * ion.registerCommand('recall', {
+   *   description: '/recall <query>',
+   *   execute: async (args, ctx) => {
+   *     const matches = await ctx.searchHistory(args, 5)
+   *     ctx.sendMessage(matches.map(m => `[${m.index} ${m.role}] ${m.snippet}`).join('\n'))
+   *   },
+   * })
+   * ```
+   */
+  searchHistory(query: string, maxResults?: number): Promise<HistoryMatch[]>
+
+  /**
+   * One-shot lightweight inference call. Fires a single round-trip to
+   * the provider — no tools, no agent loop, no fallback chain. The
+   * lightweight counterpart to {@link IonContext.dispatchAgent}.
+   *
+   * Use this for harness-internal classification, extraction, and
+   * routing prompts that don't need the full agent machinery. Examples:
+   *   - "Is this user message about coding?" (intent classification)
+   *   - "Extract the city from this query." (slot filling)
+   *   - "Pick a specialist agent for this task." (router prompts)
+   *
+   * `llmCall` fires `before_provider_request` once per invocation so
+   * extensions that count or tag outbound model traffic see uniform
+   * telemetry across both the agent loop and lightweight inference.
+   * After the call completes, the engine emits exactly one
+   * `engine_llm_call` event carrying model / provider / latency /
+   * tokens / cost / jsonMode — but never the prompt or response
+   * content (privacy-by-default for harness-internal prompts).
+   *
+   * Errors reject the promise with a normal Error. On error no
+   * `engine_llm_call` event fires; the harness decides whether to
+   * surface a failure event of its own.
+   *
+   * If a path needs tools, that's {@link IonContext.dispatchAgent}.
+   * `llmCall` is intentionally the no-tools, no-loop primitive.
+   *
+   * @example
+   * ```ts
+   * ion.on('turn_end', async (ctx, payload) => {
+   *   const { content } = await ctx.llmCall({
+   *     model: 'qwen2-7b',
+   *     system: 'Reply with one word: yes or no.',
+   *     prompt: `Does this turn mention scheduling? "${payload.lastMessage}"`,
+   *     maxTokens: 5,
+   *   })
+   *   if (content.trim().toLowerCase().startsWith('yes')) {
+   *     await ctx.emit({ type: 'jarvis_scheduling_signal', message: payload.lastMessage })
+   *   }
+   * })
+   * ```
+   */
+  llmCall(opts: LLMCallOpts): Promise<LLMCallResult>
 }
 
 /** Options for {@link IonContext.sendPrompt}. */
@@ -404,6 +589,33 @@ export interface AgentInfo {
   task?: string
 }
 
+/**
+ * Payload for `before_provider_request`.
+ *
+ * Fired immediately before each outbound LLM provider request from the agent
+ * loop, describing the wire request the engine is about to dispatch. The hook
+ * is observe-only — handler return values are ignored.
+ *
+ * Contract: new fields may be added with safe defaults; existing fields are
+ * stable. Mirrors `engine/internal/extension/sdk_hook_types.go::BeforeProviderRequestInfo`.
+ */
+export interface BeforeProviderRequestInfo {
+  /** Provider ID resolved for this request (e.g. "anthropic", "openai"). */
+  provider: string
+  /** Model name the request will be sent to (post-fallback). */
+  model: string
+  /** Agent-loop turn number that triggered this request (1-based, matches turn_start). */
+  turnNumber: number
+  /** Number of messages in the request payload. */
+  messageCount: number
+  /** Number of tool definitions attached to the request. */
+  toolCount: number
+  /** True when the request carries a non-empty system prompt. */
+  hasSystemPrompt: boolean
+  /** Configured response cap; absent or 0 means provider default. */
+  maxTokens?: number
+}
+
 /** Optional return from `before_agent_start`. */
 export interface BeforeAgentStartResult {
   systemPrompt?: string
@@ -419,6 +631,22 @@ export interface BeforePromptResult {
 export interface PlanModePromptResult {
   prompt?: string
   tools?: string[]
+  /** Custom text for the per-turn sparse reminder; empty/omitted = use engine default. */
+  sparseReminder?: string
+}
+
+/**
+ * A single structured fact extracted from messages that were about to be
+ * compacted away. Surfaced on `session_compact` so extensions maintaining
+ * external memory (vector store, knowledge graph, SQLite, etc.) can durably
+ * persist them before the source messages are discarded.
+ *
+ * `type` is one of: `decision`, `file_mod`, `error`, `preference`, `discovery`.
+ * `content` is a short human-readable snippet (sentence or path).
+ */
+export interface CompactionFact {
+  type: string
+  content: string
 }
 
 /**
@@ -426,11 +654,17 @@ export interface PlanModePromptResult {
  * - `strategy`: `auto` (proactive, context > 80%) or `reactive` (API returned prompt_too_long)
  * - `messagesBefore`: message count before compaction
  * - `messagesAfter`: message count after compaction (only set in `session_compact`)
+ * - `facts`: structured facts extracted from the pre-compaction message set
+ *   (only populated on `session_compact`). May be empty or absent when no
+ *   patterns matched. Treat each fact as self-contained — message indices are
+ *   intentionally not exposed because they reference messages that no longer
+ *   exist after the hook fires.
  */
 export interface CompactionInfo {
   strategy: 'auto' | 'reactive'
   messagesBefore: number
   messagesAfter: number
+  facts?: CompactionFact[]
 }
 
 /** Payload for `session_before_fork` and `session_fork`. */
@@ -510,9 +744,41 @@ export interface PermissionClassifyInfo {
   input: Record<string, unknown>
 }
 
-/** Payload for `file_changed`. */
+/**
+ * Payload for `file_changed`.
+ *
+ * Fires only after the LLM's Write or Edit tool successfully writes a file.
+ * This is NOT a filesystem watcher: external edits (user saving in their
+ * editor, shell scripts, MCP servers) do NOT trigger it. For external-edit
+ * notifications subscribe to `workspace_file_changed` instead.
+ */
 export interface FileChangedInfo {
   path: string
+  action: string
+}
+
+/**
+ * Payload for `workspace_file_changed`.
+ *
+ * Fires whenever a non-ignored file or directory inside the session's
+ * working directory is created, modified, or deleted by anything (including
+ * the LLM, the user's editor, shell scripts). Backed by an engine-owned
+ * recursive fsnotify watcher rooted at `EngineConfig.workingDirectory`.
+ *
+ * - `path` is the absolute, OS-native path.
+ * - `relPath` is forward-slash separated and relative to the working
+ *   directory, so glob-matching is portable.
+ * - `action` is one of `"create"`, `"modify"`, `"delete"`. Rename is
+ *   reported as a paired delete + create -- cross-editor rename detection
+ *   is unreliable.
+ *
+ * Out-of-tree paths are NOT covered. Extensions that need to watch paths
+ * outside the working directory install their own watchers via
+ * `node:fs.watch` inside their subprocess.
+ */
+export interface WorkspaceFileChangedInfo {
+  path: string
+  relPath: string
   action: string
 }
 
@@ -590,6 +856,240 @@ export interface PeerExtensionInfo {
 }
 
 /**
+ * Payload for the `before_plan_mode_enter` hook. Fired when the LLM calls
+ * the EnterPlanMode tool (or any future mechanism that requests a
+ * model-initiated transition into plan mode). Handlers may return a
+ * {@link BeforePlanModeEnterResult} to deny the transition; the default is
+ * allow.
+ *
+ * Mirrors `extension.PlanModeEnterInfo` in the Go SDK.
+ */
+export interface PlanModeEnterInfo {
+  /**
+   * Identifies what triggered the request. `"model_tool"` when the LLM
+   * called the EnterPlanMode sentinel tool directly.
+   */
+  source: string
+}
+
+/**
+ * Optional return value from a `before_plan_mode_enter` handler. A handler
+ * that returns `undefined` (or omits `allow`) defers to the engine default
+ * (allow). The last non-nil `allow` across all hosts wins (last-writer
+ * semantics).
+ */
+export interface BeforePlanModeEnterResult {
+  /**
+   * Controls whether plan mode entry is permitted. `undefined` / `null`
+   * defers to the engine default (allow). `true` explicitly allows.
+   * `false` denies.
+   */
+  allow?: boolean | null
+  /**
+   * Optional human-readable explanation returned to the LLM in the tool
+   * result when `allow` is `false`.
+   */
+  reason?: string
+}
+
+/**
+ * Payload for the `before_plan_mode_exit` hook. Fired when the LLM calls
+ * the ExitPlanMode sentinel tool, before the run is terminated and the
+ * plan-ready card is surfaced to the user. Handlers may return a
+ * {@link BeforePlanModeExitResult} to veto the exit (e.g. send the model
+ * back for more planning) or to allow it.
+ */
+export interface BeforePlanModeExitInfo {
+  /** Path of the plan file being submitted for review. */
+  planFilePath: string
+  /** Always `"model_tool"` today; future kinds may include `"extension"`. */
+  source: string
+}
+
+/**
+ * Optional return value from a `before_plan_mode_exit` handler. A handler
+ * that returns `undefined` (or omits `allow`) defers to the engine default
+ * (allow). The last non-nil `allow` across all hosts wins.
+ */
+export interface BeforePlanModeExitResult {
+  /**
+   * Controls whether the plan-mode exit proceeds. `undefined` / `null`
+   * defers to the default (allow). `false` denies (keeps the model in
+   * plan mode).
+   */
+  allow?: boolean | null
+  /**
+   * Returned to the LLM in the tool result when `allow` is `false`,
+   * explaining why the exit was denied and what the model should do
+   * next.
+   */
+  reason?: string
+}
+
+/**
+ * Payload for the `before_early_stop_decision` hook. Fires after the
+ * model emits `end_turn` / `stop` and after the engine has updated its
+ * cumulative output-token counter, but **before** it evaluates the
+ * continuation criteria.
+ *
+ * Mirrors `extension.EarlyStopDecisionInfo` in the Go SDK. See the
+ * [Early-Stop Continuation](../hooks/reference.md) section and
+ * [ADR-002](../architecture/adr/002-engine-vs-harness-early-stop.md).
+ */
+export interface EarlyStopDecisionInfo {
+  /** Engine-issued request ID for this run. */
+  runId: string
+  /** Model identifier that just stopped. */
+  model: string
+  /** Turn that ended (1-based, matches `turn_start`). */
+  turnNumber: number
+  /**
+   * Provider-reported stop reason that triggered this decision
+   * (`"end_turn"` or `"stop"`). Always non-empty.
+   */
+  stopReason: string
+  /**
+   * Running total of output tokens across every turn of this run
+   * (including the turn that just ended).
+   */
+  cumulativeOutputTokens: number
+  /**
+   * Effective output-token budget for this run after engine-config +
+   * RunOptions merging (before any handler override).
+   */
+  budget: number
+  /** Effective completion-threshold percent. */
+  thresholdPct: number
+  /**
+   * Number of times the engine has already nudged the model on this run
+   * (0 before the first nudge).
+   */
+  continuationCount: number
+  /** Configured cap. */
+  maxContinuations: number
+  /**
+   * Output-token delta from the previous continuation (0 on the first
+   * decision). Used by the diminishing-returns guard.
+   */
+  lastContinuationDelta: number
+  /**
+   * Engine's tentative verdict before this hook runs. Handlers may flip
+   * it via {@link EarlyStopDecisionResult.forceContinue}.
+   */
+  wouldContinue: boolean
+  /**
+   * True when this run is a child agent dispatched by the Agent tool.
+   * The engine defaults the feature off for subagents; the hook still
+   * fires so harness can force-on with `forceContinue: true`.
+   */
+  isSubagent?: boolean
+}
+
+/**
+ * Optional return value from a `before_early_stop_decision` handler. Any
+ * combination of fields may be set; omitted / `undefined` values mean
+ * "defer to the engine's decision." The last non-nil result across hosts
+ * wins for each individual field.
+ */
+export interface EarlyStopDecisionResult {
+  /**
+   * Overrides the engine's verdict. `true` forces a continuation (even
+   * if `wouldContinue=false`); `false` forces a stop (even if
+   * `wouldContinue=true`). `undefined` / `null` defers to engine logic.
+   */
+  forceContinue?: boolean | null
+  /**
+   * Bumps (or shrinks) the effective output-token budget for the
+   * remainder of the run. `0` / omitted means "no override." Useful when
+   * scope expands mid-run.
+   */
+  overrideBudget?: number
+  /**
+   * Adjusts the completion threshold for the remainder of the run.
+   * `0` / omitted means "no override."
+   */
+  overrideThresholdPct?: number
+  /**
+   * Replaces the default continuation prompt text. Empty / omitted means
+   * "use the engine's default phrasing." Per ADR-002 the engine ships
+   * no default text — at least one handler in the chain (or the
+   * wire-protocol responder) must supply one for any injection to fire.
+   */
+  continueMessage?: string
+}
+
+/**
+ * Payload for the `early_stop_continued` hook. Fires after the engine
+ * has decided to continue, the message has been written, and the loop
+ * is about to start a new turn. Observe-only — return values are
+ * ignored.
+ */
+export interface EarlyStopContinuedInfo {
+  /** Engine-issued request ID for this run. */
+  runId: string
+  /**
+   * Turn that just ended (the new turn has not started yet).
+   */
+  turnNumber: number
+  /** New continuation count after this nudge (1-based). */
+  continuationCount: number
+  /** Percent-of-budget the model reached before stopping. */
+  pct: number
+  /** Running total across the run. */
+  cumulativeOutputTokens: number
+  /**
+   * Effective budget at the moment of injection (after any
+   * `overrideBudget` from a `before_early_stop_decision` handler).
+   */
+  budget: number
+  /**
+   * Final continuation prompt text that landed in the conversation
+   * (after `system_inject` rewrites). Empty when the downstream
+   * `system_inject` hook suppressed the injection.
+   */
+  injectedText: string
+}
+
+/**
+ * Payload for the `system_inject` hook. Fired before the engine injects
+ * a system message into the conversation. Handlers can rewrite the text
+ * or suppress the injection entirely by returning a
+ * {@link SystemInjectResult}.
+ *
+ * The `kind` field discriminates the injection reason. Known kinds:
+ * `"plan_mode_reminder"`, `"turn_limit_warning"`, `"max_token_continue"`,
+ * `"early_stop_continue"`. Unknown kinds should be treated as
+ * forward-compatible.
+ */
+export interface SystemInjectInfo {
+  /** Discriminator for the injection reason. */
+  kind: string
+  /** Engine's default injection text. May be empty (e.g. early-stop). */
+  defaultText: string
+  /** Current turn number. */
+  turn: number
+  /** Configured max turns (0 = unlimited). */
+  maxTurns: number
+}
+
+/**
+ * Optional return value from a `system_inject` handler.
+ */
+export interface SystemInjectResult {
+  /**
+   * Replacement text. Empty / omitted means "use the default."
+   */
+  text?: string
+  /**
+   * `true` cancels the injection entirely. The engine logs the
+   * suppression and does not write the message to the conversation. For
+   * `early_stop_continue` specifically, suppression also prevents the
+   * re-run-turn loop.
+   */
+  suppress?: boolean
+}
+
+/**
  * Map of hook name -> payload type. Used by the {@link IonSDK.on} overloads
  * to give handlers strongly-typed `payload` parameters when the hook name is
  * a string literal. Hooks that fire with no payload map to `void`.
@@ -619,7 +1119,7 @@ export interface HookPayloadMap {
 
   // Pre-action (2)
   before_agent_start: AgentInfo
-  before_provider_request: unknown
+  before_provider_request: BeforeProviderRequestInfo
 
   // Content (7)
   context: unknown
@@ -660,6 +1160,7 @@ export interface HookPayloadMap {
 
   // File (1)
   file_changed: FileChangedInfo
+  workspace_file_changed: WorkspaceFileChangedInfo
 
   // Task (2)
   task_created: TaskLifecycleInfo
@@ -682,6 +1183,23 @@ export interface HookPayloadMap {
   turn_aborted: TurnAbortedInfo
   peer_extension_died: PeerExtensionInfo
   peer_extension_respawned: PeerExtensionInfo
+
+  // Plan mode (3) -- workflow + state transitions on the plan-mode lifecycle.
+  // See docs/architecture/adr/003-state-events-vs-workflow-events.md for the
+  // state-vs-workflow distinction these hooks live alongside.
+  before_plan_mode_enter: PlanModeEnterInfo
+  before_plan_mode_exit: BeforePlanModeExitInfo
+
+  // System inject (1) -- fired before the engine injects any system message.
+  // The `kind` discriminator carries the reason (plan_mode_reminder,
+  // turn_limit_warning, max_token_continue, early_stop_continue).
+  system_inject: SystemInjectInfo
+
+  // Early-stop continuation (2) -- engine provides the mechanism, harness
+  // owns the policy and the prompt text. See
+  // docs/architecture/adr/002-engine-vs-harness-early-stop.md.
+  before_early_stop_decision: EarlyStopDecisionInfo
+  early_stop_continued: EarlyStopContinuedInfo
 }
 
 /** Convenience type: union of all hook names. */
@@ -736,4 +1254,189 @@ export interface IonSDK {
   on(hook: string, handler: HookHandler<any>): void
   registerTool(def: ToolDef): void
   registerCommand(name: string, def: CommandDef): void
+
+  /**
+   * Webhook route registration. Call `.register(route)` to bind an
+   * inbound HTTP path; static (module-scope) and dynamic (post-init)
+   * calls share the same shape and return a `WebhookHandle` with
+   * `.unregister()`.
+   *
+   * @example
+   * ```ts
+   * ion.webhooks.register({
+   *   path: '/webhook/github',
+   *   method: 'POST',
+   *   auth: { kind: 'hmac-signature', headerName: 'X-Hub-Signature-256',
+   *           algorithm: 'sha256', token: () => process.env.GH_SECRET ?? '' },
+   *   handler: async (ctx, req) => {
+   *     await ctx.dispatchAgent({ name: 'pr-reviewer', task: req.text() })
+   *     return { status: 200, body: 'ok' }
+   *   },
+   * })
+   * ```
+   */
+  webhooks: {
+    register(route: WebhookRoute): Promise<WebhookHandle>
+  }
+
+  /**
+   * Scheduled job registration. Three kinds: daily, weekly, interval.
+   * Each returns a `ScheduleHandle` with `.unregister()`. Static and
+   * dynamic registration share the same shape.
+   *
+   * @example
+   * ```ts
+   * ion.schedule.daily({
+   *   id: 'morning-summary',
+   *   time: '09:00',
+   *   tz: 'America/New_York',
+   *   handler: async (ctx) => {
+   *     await ctx.dispatchAgent({ name: 'summariser', task: 'today' })
+   *   },
+   * })
+   *
+   * ion.schedule.interval({
+   *   id: 'inbox-poll',
+   *   intervalMs: 30_000,
+   *   handler: async (ctx) => {
+   *     // ...
+   *   },
+   * })
+   * ```
+   */
+  schedule: {
+    daily(opts: ScheduleDaily): Promise<ScheduleHandle>
+    weekly(opts: ScheduleWeekly): Promise<ScheduleHandle>
+    interval(opts: ScheduleInterval): Promise<ScheduleHandle>
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Async-trigger types (webhooks, schedules) — D-010 / D-011.
+// ---------------------------------------------------------------------------
+//
+// Extensions register webhook routes and scheduled jobs via the
+// ion.webhooks.register and ion.schedule.{daily, weekly, interval}
+// surfaces from the runtime. Static (module-scope) and dynamic
+// (post-init) registration share the same shape and the same handle
+// for later .unregister().
+
+/** Authentication strategies a webhook route can declare. */
+export type WebhookAuth =
+  | { kind: 'none' }
+  | { kind: 'bearer'; token: () => string | Promise<string> | string }
+  | { kind: 'shared-secret'; headerName: string; token: () => string | Promise<string> | string }
+  | { kind: 'hmac-signature'; headerName: string; algorithm: 'sha256'; token: () => string | Promise<string> | string }
+
+/**
+ * Single inbound webhook request as the engine hands it to the
+ * extension handler. The body is materialised as a string; `json()`
+ * and `text()` are sugar over it. Headers are single-valued (the
+ * first value wins for multi-valued headers).
+ */
+export interface WebhookRequest {
+  method: string
+  path: string
+  url: string
+  query: string
+  headers: Record<string, string>
+  body: string
+  remote: string
+  /** Parse the body as JSON. Returns {} on malformed or empty body. */
+  json<T = unknown>(): T
+  /** Return the raw body as text. */
+  text(): string
+}
+
+/**
+ * Handler return shape for a webhook fire. The engine writes status
+ * and body, plus any extra headers. Missing fields default to
+ * status=200, body="" (no-content response).
+ */
+export interface WebhookResponse {
+  status?: number
+  body?: string
+  headers?: Record<string, string>
+}
+
+/**
+ * A single webhook route registration. Path is the URL the engine's
+ * HTTP listener will match on (exact, must start with '/'). Method
+ * defaults to POST on the engine side; specify explicitly to register
+ * a GET endpoint.
+ */
+export interface WebhookRoute {
+  path: string
+  method?: string
+  auth: WebhookAuth
+  /** Body size cap in bytes. Zero/omitted inherits the engine config default (1 MiB). */
+  maxBodyBytes?: number
+  /** Override bind interface (advanced — usually inherited from engine config). */
+  interface?: string
+  /**
+   * Handler invoked for each matching request. The ctx is freshly
+   * built per fire; ctx.dispatchAgent / sendPrompt / emit /
+   * setPlanMode / etc. all work normally.
+   *
+   * Return the response shape or void (treated as `{status: 200}`).
+   */
+  handler: (ctx: IonContext, req: WebhookRequest) => Promise<WebhookResponse> | WebhookResponse
+}
+
+/** Handle returned by ion.webhooks.register. */
+export interface WebhookHandle {
+  id: string
+  unregister(): Promise<void>
+}
+
+/** Daily schedule: fires once per day at the configured wall-clock time. */
+export interface ScheduleDaily {
+  id: string
+  time: string // "HH:MM" 24-hour
+  tz?: string  // IANA timezone; empty inherits engine default
+  timeoutMs?: number
+  enabled?: () => boolean | Promise<boolean>
+  handler: (ctx: IonContext) => Promise<void> | void
+}
+
+/** Weekly schedule: fires once per week on dayOfWeek at time. */
+export interface ScheduleWeekly {
+  id: string
+  time: string                       // "HH:MM" 24-hour
+  dayOfWeek: 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
+  tz?: string
+  timeoutMs?: number
+  enabled?: () => boolean | Promise<boolean>
+  handler: (ctx: IonContext) => Promise<void> | void
+}
+
+/** Interval schedule: fires every intervalMs (>=1000ms required). */
+export interface ScheduleInterval {
+  id: string
+  intervalMs: number
+  timeoutMs?: number
+  enabled?: () => boolean | Promise<boolean>
+  handler: (ctx: IonContext) => Promise<void> | void
+}
+
+/** Wire-format job (handler stripped — kept locally). Used internally
+ *  by the SDK runtime to ship init-time and runtime declarations to
+ *  the engine. Extension authors normally don't construct this shape
+ *  directly; use the ScheduleDaily/Weekly/Interval inputs above.
+ */
+export interface ScheduleJob {
+  id: string
+  kind: 'daily' | 'weekly' | 'interval'
+  time?: string
+  dayOfWeek?: string
+  intervalMs?: number
+  tz?: string
+  timeoutMs?: number
+  enabledRefName?: string
+}
+
+/** Handle returned by ion.schedule.daily/weekly/interval. */
+export interface ScheduleHandle {
+  id: string
+  unregister(): Promise<void>
 }

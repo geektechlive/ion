@@ -30,10 +30,14 @@ func TestConversationJSONLRoundTrip(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Verify file exists
-	jsonlPath := filepath.Join(dir, "roundtrip-test.jsonl")
-	if _, err := os.Stat(jsonlPath); err != nil {
-		t.Fatalf("JSONL file not created: %v", err)
+	// Verify split sidecar files exist (new format).
+	llmPath := filepath.Join(dir, "roundtrip-test.llm.jsonl")
+	treePath := filepath.Join(dir, "roundtrip-test.tree.jsonl")
+	if _, err := os.Stat(llmPath); err != nil {
+		t.Fatalf(".llm.jsonl file not created: %v", err)
+	}
+	if _, err := os.Stat(treePath); err != nil {
+		t.Fatalf(".tree.jsonl file not created: %v", err)
 	}
 
 	// Load
@@ -59,7 +63,7 @@ func TestConversationJSONLRoundTrip(t *testing.T) {
 		t.Errorf("TotalOutputTokens: got %d, want 13", loaded.TotalOutputTokens)
 	}
 
-	// Verify messages were rebuilt from entries
+	// Verify messages loaded from .llm.jsonl (entry-derived canonical context).
 	if len(loaded.Messages) != 4 {
 		t.Fatalf("Messages: got %d, want 4", len(loaded.Messages))
 	}

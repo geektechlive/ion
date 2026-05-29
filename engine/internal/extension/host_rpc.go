@@ -122,6 +122,12 @@ func (h *Host) handleExtNotification(method string, raw []byte) {
 // with both a method and id field). The engine sends a response back.
 func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 	ctx := h.currentCtx.Load()
+	// Async-trigger registration RPCs live in host_rpc_async.go to keep
+	// this file under the 800-line cap. handleAsyncRPC returns true when
+	// it dispatched the method.
+	if h.handleAsyncRPC(method, id, raw) {
+		return
+	}
 	switch method {
 	case "ext/register_process":
 		var req struct {
@@ -424,6 +430,73 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			h.sendResponse(id, json.RawMessage(data), nil)
 		}()
 
+	case "ext/get_context_usage":
+		// Read-only query: return the active run's context usage snapshot,
+		// or null when no run is active / the getter is unwired (extensions
+		// loaded outside a session see null and can branch on it).
+		if ctx == nil || ctx.GetContextUsage == nil {
+			utils.Debug("extension", "ext/get_context_usage: no ctx or no getter, returning null")
+			h.sendResponse(id, json.RawMessage(`null`), nil)
+			return
+		}
+		usage := ctx.GetContextUsage()
+		if usage == nil {
+			utils.Debug("extension", "ext/get_context_usage: getter returned nil, responding null")
+			h.sendResponse(id, json.RawMessage(`null`), nil)
+			return
+		}
+		// Marshal with explicit JSON tags so the wire shape stays stable
+		// independent of the in-package struct layout.
+		data, err := json.Marshal(struct {
+			Percent int     `json:"percent"`
+			Tokens  int     `json:"tokens"`
+			Cost    float64 `json:"cost"`
+		}{Percent: usage.Percent, Tokens: usage.Tokens, Cost: usage.Cost})
+		if err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/get_context_usage: marshal failed: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+			return
+		}
+		utils.Debug("extension", fmt.Sprintf("ext/get_context_usage: returning percent=%d tokens=%d cost=%f", usage.Percent, usage.Tokens, usage.Cost))
+		h.sendResponse(id, json.RawMessage(data), nil)
+
+	case "ext/search_history":
+		var req struct {
+			Params struct {
+				Query      string `json:"query"`
+				MaxResults int    `json:"maxResults,omitempty"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/search_history: parse error: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32602, Message: "parse error: " + err.Error()})
+			return
+		}
+		// Empty array (not null) when no active conversation / unwired -- TS
+		// callers can iterate safely without null-guarding.
+		if ctx == nil || ctx.SearchHistory == nil {
+			utils.Debug("extension", fmt.Sprintf("ext/search_history: no ctx or no searcher (query=%q max=%d), returning []", req.Params.Query, req.Params.MaxResults))
+			h.sendResponse(id, json.RawMessage(`[]`), nil)
+			return
+		}
+		matches, err := ctx.SearchHistory(req.Params.Query, req.Params.MaxResults)
+		if err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/search_history: searcher returned error: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+			return
+		}
+		if matches == nil {
+			matches = []HistoryMatch{}
+		}
+		data, err := json.Marshal(matches)
+		if err != nil {
+			utils.Error("extension", fmt.Sprintf("ext/search_history: marshal failed: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+			return
+		}
+		utils.Debug("extension", fmt.Sprintf("ext/search_history: returning %d matches (query=%q max=%d)", len(matches), req.Params.Query, req.Params.MaxResults))
+		h.sendResponse(id, json.RawMessage(data), nil)
+
 	case "ext/sandbox_wrap":
 		var req struct {
 			Params struct {
@@ -470,6 +543,63 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			return sandbox.DetectPlatform()
 		}()})
 		h.sendResponse(id, json.RawMessage(data), nil)
+
+	case "ext/llm_call":
+		// One-shot lightweight inference. The TS SDK calls this to
+		// avoid the cost of dispatch_agent for harness-internal
+		// classification / extraction prompts. Runs the call on a
+		// goroutine so a slow provider doesn't stall the RPC reader;
+		// the response goes back through the standard sendResponse
+		// path when the call completes (or errors).
+		var req struct {
+			Params struct {
+				Model     string `json:"model"`
+				System    string `json:"system,omitempty"`
+				Prompt    string `json:"prompt"`
+				JSONMode  bool   `json:"jsonMode,omitempty"`
+				MaxTokens int    `json:"maxTokens,omitempty"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			utils.Log("extension", fmt.Sprintf("ext/llm_call: parse error: %v", err))
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32602, Message: "parse error: " + err.Error()})
+			return
+		}
+		if ctx == nil || ctx.LLMCall == nil {
+			utils.Log("extension", "ext/llm_call: no ctx or no LLMCall wired; rejecting")
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: "llmCall not available outside an active session"})
+			return
+		}
+		utils.Debug("extension", fmt.Sprintf(
+			"ext/llm_call: dispatching model=%s sysLen=%d promptLen=%d jsonMode=%v maxTokens=%d",
+			req.Params.Model, len(req.Params.System), len(req.Params.Prompt),
+			req.Params.JSONMode, req.Params.MaxTokens,
+		))
+		go func() {
+			result, err := ctx.LLMCall(LLMCallOpts{
+				Model:     req.Params.Model,
+				System:    req.Params.System,
+				Prompt:    req.Params.Prompt,
+				JSONMode:  req.Params.JSONMode,
+				MaxTokens: req.Params.MaxTokens,
+			})
+			if err != nil {
+				utils.Log("extension", fmt.Sprintf("ext/llm_call: failed: %v", err))
+				h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+				return
+			}
+			data, marshalErr := json.Marshal(result)
+			if marshalErr != nil {
+				utils.Error("extension", fmt.Sprintf("ext/llm_call: marshal failed: %v", marshalErr))
+				h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: marshalErr.Error()})
+				return
+			}
+			utils.Debug("extension", fmt.Sprintf(
+				"ext/llm_call: success contentLen=%d in=%d out=%d cost=%.6f",
+				len(result.Content), result.InputTokens, result.OutputTokens, result.Cost,
+			))
+			h.sendResponse(id, json.RawMessage(data), nil)
+		}()
 
 	default:
 		h.sendResponse(id, nil, &jsonrpcError{Code: -32601, Message: "method not found: " + method})
