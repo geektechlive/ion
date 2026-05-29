@@ -40,6 +40,11 @@
 	<string>Ion Remote uses the microphone to transcribe your voice into text for sending messages.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Ion Remote uses on-device speech recognition to convert your voice to text. Audio is processed entirely on your device.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UIAppFonts</key>
 	<array>
 		<string>JetBrainsMonoNLNerdFontMono-Regular.ttf</string>
