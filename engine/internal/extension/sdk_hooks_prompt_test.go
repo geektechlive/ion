@@ -202,7 +202,7 @@ func TestSDK_FireBeforeAgentStart(t *testing.T) {
 		return BeforeAgentStartResult{SystemPrompt: "You are the Chief of Staff."}, nil
 	})
 
-	sysPrompt, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "pre-agent"})
+	sysPrompt, _, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "pre-agent"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestSDK_FireBeforeAgentStart_MapResult(t *testing.T) {
 		return map[string]interface{}{"systemPrompt": "From subprocess"}, nil
 	})
 
-	sysPrompt, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "test"})
+	sysPrompt, _, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "test"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

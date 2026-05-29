@@ -53,11 +53,30 @@ type SessionAccessor interface {
 
 	// GetPlanModeState returns (planModeEnabled, planFilePath) for the session.
 	GetPlanModeState() (bool, string)
+
+	// AppendOrUpdateAgentState creates a new agent state entry or updates
+	// an existing one (matched by name). Returns the entry's ID.
+	AppendOrUpdateAgentState(state types.AgentStateUpdate) string
+
+	// UpdateAgentStateByID finds an agent state entry by its ID and applies
+	// the updater function.
+	UpdateAgentStateByID(id string, updater func(*types.AgentStateUpdate))
+
+	// EmitAgentSnapshot emits the current merged agent state snapshot as
+	// an engine_agent_state event.
+	EmitAgentSnapshot(reason string)
 }
 
 // NewExtContext builds a fully-populated extension.Context by delegating all
-// callbacks to the provided SessionAccessor.
-func NewExtContext(sa SessionAccessor) *extension.Context {
+// callbacks to the provided SessionAccessor. The optional DispatchRegistry
+// enables background dispatch and recall support; pass nil to disable.
+func NewExtContext(sa SessionAccessor, registries ...*DispatchRegistry) *extension.Context {
+	// Accept an optional registry via variadic to avoid breaking existing callers.
+	var registry *DispatchRegistry
+	if len(registries) > 0 {
+		registry = registries[0]
+	}
+
 	ctx := &extension.Context{
 		SessionKey: sa.SessionKey(),
 		Cwd:        sa.WorkingDirectory(),
@@ -144,7 +163,19 @@ func NewExtContext(sa SessionAccessor) *extension.Context {
 	}
 
 	// Wire engine-native agent dispatch.
-	ctx.DispatchAgent = BuildDispatchAgentFunc(sa)
+	ctx.DispatchAgent = BuildDispatchAgentFunc(sa, registry)
+
+	// Wire recall support for background dispatches.
+	if registry != nil {
+		ctx.RecallAgent = func(name string, opts extension.RecallAgentOpts) (bool, error) {
+			reason := opts.Reason
+			if reason == "" {
+				reason = "recall_agent"
+			}
+			found := registry.Recall(name, reason)
+			return found, nil
+		}
+	}
 
 	// Wire the lightweight one-shot inference primitive. Always available
 	// (no nil check needed at call sites) because the closure itself

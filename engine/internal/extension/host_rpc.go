@@ -245,24 +245,114 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			return
 		}
 		if ctx != nil && ctx.DispatchAgent != nil {
-			go func() {
-				// Wire OnEvent to send JSON-RPC notifications during dispatch
-				req.Params.OnEvent = func(ev types.EngineEvent) {
-					evData, err := json.Marshal(ev)
-					if err == nil {
-						h.sendNotification("dispatch_event", evData)
+			// Wire raw event forwarding.
+			req.Params.OnEvent = func(ev types.EngineEvent) {
+				evData, err := json.Marshal(ev)
+				if err == nil {
+					h.sendNotification("dispatch_event", evData)
+				}
+			}
+
+			if req.Params.Background {
+				// Background dispatch: wire completion callbacks to send
+				// JSON-RPC notifications, respond immediately with a stub.
+				agentName := req.Params.Name
+				req.Params.OnComplete = func(result DispatchAgentResult) {
+					result.Name = agentName
+					data, _ := json.Marshal(result)
+					h.sendNotification("dispatch_complete", data)
+				}
+				req.Params.OnError = func(err DispatchError) {
+					err.Name = agentName
+					data, _ := json.Marshal(err)
+					h.sendNotification("dispatch_error", data)
+				}
+				req.Params.OnRecall = func(info RecallInfo) {
+					info.Name = agentName
+					data, _ := json.Marshal(info)
+					h.sendNotification("dispatch_recall", data)
+				}
+
+				// Wire lifecycle callbacks to notifications.
+				req.Params.OnToolStart = func(info DispatchToolStartInfo) {
+					info.Name = agentName
+					data, _ := json.Marshal(info)
+					h.sendNotification("dispatch_tool_start", data)
+				}
+				req.Params.OnToolEnd = func(info DispatchToolEndInfo) {
+					info.Name = agentName
+					data, _ := json.Marshal(info)
+					h.sendNotification("dispatch_tool_end", data)
+				}
+				req.Params.OnToolError = func(info DispatchToolErrorInfo) {
+					info.Name = agentName
+					data, _ := json.Marshal(info)
+					h.sendNotification("dispatch_tool_error", data)
+				}
+				req.Params.OnUsage = func(info DispatchUsageInfo) {
+					info.Name = agentName
+					data, _ := json.Marshal(info)
+					h.sendNotification("dispatch_usage", data)
+				}
+				req.Params.OnTextDelta = func(info DispatchTextDeltaInfo) {
+					info.Name = agentName
+					data, _ := json.Marshal(info)
+					h.sendNotification("dispatch_text_delta", data)
+				}
+
+				// Dispatch in a goroutine; respond immediately with stub.
+				go func() {
+					result, err := ctx.DispatchAgent(req.Params)
+					if err != nil {
+						// For background dispatch, the error shouldn't happen
+						// at the stub level, but handle defensively.
+						h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+						return
 					}
-				}
-				result, err := ctx.DispatchAgent(req.Params)
-				if err != nil {
-					h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
-					return
-				}
-				data, _ := json.Marshal(result)
-				h.sendResponse(id, json.RawMessage(data), nil)
-			}()
+					data, _ := json.Marshal(result)
+					h.sendResponse(id, json.RawMessage(data), nil)
+				}()
+			} else {
+				// Foreground dispatch: run in goroutine, send response when done.
+				go func() {
+					result, err := ctx.DispatchAgent(req.Params)
+					if err != nil {
+						h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+						return
+					}
+					data, _ := json.Marshal(result)
+					h.sendResponse(id, json.RawMessage(data), nil)
+				}()
+			}
 		} else {
 			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: "dispatch not available"})
+		}
+
+	case "ext/recall_agent":
+		var req struct {
+			Params struct {
+				Name   string `json:"name"`
+				Reason string `json:"reason,omitempty"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32602, Message: "parse error: " + err.Error()})
+			return
+		}
+		if ctx != nil && ctx.RecallAgent != nil {
+			found, err := ctx.RecallAgent(req.Params.Name, RecallAgentOpts{
+				Reason: req.Params.Reason,
+			})
+			if err != nil {
+				h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+				return
+			}
+			data, _ := json.Marshal(struct {
+				Found bool `json:"found"`
+			}{Found: found})
+			h.sendResponse(id, json.RawMessage(data), nil)
+		} else {
+			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: "recall not available"})
 		}
 
 	case "ext/register_agent_spec":

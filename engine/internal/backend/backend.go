@@ -217,6 +217,11 @@ type RunConfig struct {
 	Telemetry     TelemetryCollector
 	Timeouts      *types.TimeoutsConfig
 
+	// DefaultModel is the engine-wide default model from EngineConfig.
+	// Used as a fallback when the requested model doesn't resolve to a
+	// provider (e.g. an unrecognized tier alias in an agent .md).
+	DefaultModel string
+
 	// EarlyStopContinue carries the engine-wide defaults for the early-stop
 	// continuation feature (from ~/.ion/engine.json or built-in defaults).
 	// Nil means "use built-in defaults" (types.EarlyStopDefaults()). Per-run

@@ -21,7 +21,10 @@ import Foundation
 /// The wire format has `name`, `status`, and a `metadata` map containing
 /// all other fields (displayName, type, visibility, invited, etc.).
 struct AgentStateUpdate: Codable, Identifiable, Sendable {
-    var id: String { name }
+    /// Engine-generated unique identifier per dispatch. Falls back to name
+    /// for extension-managed roster entries that don't carry an id.
+    var id: String { agentId ?? name }
+    let agentId: String?
     let name: String
     let displayName: String
     let type: String          // "chief", "specialist", "staff", "consultant"
@@ -49,11 +52,13 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case name, status, metadata
+        case agentId = "id"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
+        agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
         status = try container.decode(String.self, forKey: .status)
         let meta = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata) ?? [:]
 

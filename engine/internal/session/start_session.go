@@ -174,10 +174,34 @@ func (a *sessionAccessor) GetPlanModeState() (bool, string) {
 	return a.m.GetPlanModeState(a.key)
 }
 
+func (a *sessionAccessor) AppendOrUpdateAgentState(state types.AgentStateUpdate) string {
+	idx := a.s.agents.FindStateIndex(state.Name)
+	if idx >= 0 {
+		a.s.agents.UpdateState(state.Name, func(existing *types.AgentStateUpdate) {
+			existing.ID = state.ID
+			existing.Status = state.Status
+			existing.Metadata = state.Metadata
+		})
+		return state.ID
+	}
+	a.s.agents.AppendState(state)
+	return state.ID
+}
+
+func (a *sessionAccessor) UpdateAgentStateByID(id string, updater func(*types.AgentStateUpdate)) {
+	a.s.agents.UpdateStateByID(id, updater)
+}
+
+func (a *sessionAccessor) EmitAgentSnapshot(reason string) {
+	snapshot := a.s.agents.MergedSnapshot()
+	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=%s", a.key, len(snapshot), reason))
+	a.m.emit(a.key, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
+}
+
 // newExtContext builds a fully-populated extension Context for the given session.
 // All functional callbacks are wired through the extcontext.SessionAccessor interface.
 func (m *Manager) newExtContext(s *engineSession, key string) *extension.Context {
-	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key})
+	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key}, s.dispatchRegistry)
 }
 
 // StartSession creates a new session with the given config.
@@ -202,13 +226,14 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	}
 
 	s := &engineSession{
-		key:            key,
-		config:         config,
-		conversationID:  config.SessionID,
-		agents:         agents.NewRegistry(),
-		childPIDs:      make(map[int]struct{}),
-		pending:        pending.New(),
-		maxQueueDepth:  32,
+		key:              key,
+		config:           config,
+		conversationID:   config.SessionID,
+		agents:           agents.NewRegistry(),
+		childPIDs:        make(map[int]struct{}),
+		pending:          pending.New(),
+		maxQueueDepth:    32,
+		dispatchRegistry: extcontext.NewDispatchRegistry(),
 	}
 
 	// Initialize process registry for extension-spawned subprocesses.
@@ -397,7 +422,16 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 		})
 		host.SetPersistentEmit(func(ev types.EngineEvent) {
 			if ev.Type == "engine_agent_state" {
+				// Cache the extension's roster, then re-emit a merged snapshot
+				// that includes engine-managed entries (dispatch state with
+				// task, conversationId, progress). Forwarding the extension's
+				// raw event would overwrite engine-managed entries on the
+				// desktop due to the complete-snapshot contract.
 				s.agents.CacheExtStates(ev.Agents)
+				merged := s.agents.MergedSnapshot()
+				utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=ext_emit_merged", capturedKey, len(merged)))
+				m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: merged})
+				return
 			}
 			if ev.Type == "engine_status" && ev.Fields != nil && ev.Fields.ExtensionName != "" {
 				m.mu.Lock()

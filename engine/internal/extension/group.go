@@ -203,21 +203,24 @@ func (g *ExtensionGroup) FireInput(ctx *Context, prompt string) (string, error) 
 	return prompt, nil
 }
 
-// FireBeforeAgentStart chains the system prompt through each host.
-// Last non-empty value wins.
-func (g *ExtensionGroup) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, error) {
-	var systemPrompt string
+// FireBeforeAgentStart chains the system prompt and agent name through each
+// host. Last non-empty value wins for each field independently.
+func (g *ExtensionGroup) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, string, error) {
+	var systemPrompt, agentName string
 	for _, h := range g.hosts {
-		sp, err := h.FireBeforeAgentStart(ctx, info)
+		sp, an, err := h.FireBeforeAgentStart(ctx, info)
 		if err != nil {
 			utils.Log("ExtensionGroup", fmt.Sprintf("FireBeforeAgentStart error: %v", err))
-			return systemPrompt, err
+			return systemPrompt, agentName, err
 		}
 		if sp != "" {
 			systemPrompt = sp
 		}
+		if an != "" {
+			agentName = an
+		}
 	}
-	return systemPrompt, nil
+	return systemPrompt, agentName, nil
 }
 
 // FirePerToolResult chains the result string through each host.

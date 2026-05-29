@@ -32,9 +32,72 @@ export interface DispatchAgentOpts {
    */
   maxTurns?: number
   onEvent?: (event: EngineEvent) => void
+
+  // --- Background dispatch ---
+
+  /**
+   * When true, the dispatch returns a stub result immediately and runs the
+   * child session in the background. The terminal outcome is delivered via
+   * {@link onComplete}, {@link onError}, or {@link onRecall} callbacks.
+   *
+   * Background dispatches are tracked in the engine's dispatch registry and
+   * can be cancelled via {@link IonContext.recallAgent}.
+   */
+  background?: boolean
+
+  /**
+   * Fires when a background dispatch finishes successfully (exit code 0).
+   * Not called for foreground dispatches.
+   */
+  onComplete?: (result: DispatchAgentResult) => void
+
+  /**
+   * Fires when a background dispatch finishes with an error (non-zero exit
+   * code or child error). Not called for foreground dispatches.
+   */
+  onError?: (err: DispatchError) => void
+
+  /**
+   * Fires when a background dispatch is cancelled via
+   * {@link IonContext.recallAgent}. Not called for foreground dispatches.
+   */
+  onRecall?: (info: RecallInfo) => void
+
+  // --- Lifecycle event callbacks ---
+
+  /**
+   * Fires when the dispatched agent begins a tool invocation. Delivers
+   * structured data parsed from the child session's ToolCallEvent.
+   */
+  onToolStart?: (info: DispatchToolStartInfo) => void
+
+  /**
+   * Fires when a dispatched agent's tool invocation completes successfully
+   * (isError=false on the ToolResultEvent).
+   */
+  onToolEnd?: (info: DispatchToolEndInfo) => void
+
+  /**
+   * Fires when a dispatched agent's tool invocation completes with an error
+   * (isError=true on the ToolResultEvent).
+   */
+  onToolError?: (info: DispatchToolErrorInfo) => void
+
+  /**
+   * Fires when the dispatched agent emits a usage event, carrying both
+   * per-turn usage and cumulative totals across the dispatch.
+   */
+  onUsage?: (info: DispatchUsageInfo) => void
+
+  /**
+   * Fires when the dispatched agent emits a text chunk, carrying the delta
+   * and accumulated text so far.
+   */
+  onTextDelta?: (info: DispatchTextDeltaInfo) => void
 }
 
 export interface DispatchAgentResult {
+  name: string
   output: string
   exitCode: number
   elapsed: number
@@ -42,6 +105,77 @@ export interface DispatchAgentResult {
   inputTokens: number
   outputTokens: number
   sessionId?: string
+}
+
+/** Describes a failed background dispatch. Delivered via {@link DispatchAgentOpts.onError}. */
+export interface DispatchError {
+  name: string
+  message: string
+  exitCode: number
+  elapsed: number
+}
+
+/** Describes a recalled (cancelled) background dispatch. Delivered via {@link DispatchAgentOpts.onRecall}. */
+export interface RecallInfo {
+  name: string
+  reason: string
+  elapsed: number
+  toolCount: number
+}
+
+/** Options for {@link IonContext.recallAgent}. */
+export interface RecallAgentOpts {
+  /** Human-readable reason for the recall. Logged by the engine. */
+  reason?: string
+}
+
+// --- Dispatch lifecycle callback payloads ---
+
+/** Payload for {@link DispatchAgentOpts.onToolStart}. */
+export interface DispatchToolStartInfo {
+  name: string
+  toolName: string
+  toolId: string
+}
+
+/** Payload for {@link DispatchAgentOpts.onToolEnd}. */
+export interface DispatchToolEndInfo {
+  name: string
+  toolName: string
+  toolId: string
+  content: string
+}
+
+/** Payload for {@link DispatchAgentOpts.onToolError}. */
+export interface DispatchToolErrorInfo {
+  name: string
+  toolName: string
+  toolId: string
+  content: string
+}
+
+/** Payload for {@link DispatchAgentOpts.onUsage}. */
+export interface DispatchUsageInfo {
+  name: string
+  /** Per-turn input tokens from the current UsageEvent. */
+  inputTokens: number
+  /** Per-turn output tokens from the current UsageEvent. */
+  outputTokens: number
+  /** Cumulative input tokens across all turns in this dispatch. */
+  cumulativeInputTokens: number
+  /** Cumulative output tokens across all turns in this dispatch. */
+  cumulativeOutputTokens: number
+  /** Cumulative USD cost across all turns. Updated from TaskCompleteEvent. */
+  cumulativeCost: number
+}
+
+/** Payload for {@link DispatchAgentOpts.onTextDelta}. */
+export interface DispatchTextDeltaInfo {
+  name: string
+  /** The new text chunk. */
+  delta: string
+  /** All text accumulated so far across the dispatch. */
+  accumulated: string
 }
 
 export interface DiscoverAgentsOpts {
@@ -67,6 +201,17 @@ export interface DiscoveredAgent {
   tools?: string[]
   systemPrompt?: string
   meta?: Record<string, string>
+}
+
+/** Options for {@link IonSDK.registerAgentTools}. All fields are optional. */
+export interface RegisterAgentToolsOpts {
+  /** Filter which agents get dispatch tools. Default: agents with a parent
+   *  (excludes root orchestrators). */
+  filter?: (agent: DiscoveredAgent) => boolean
+  /** Customize the tool name. Default: `dispatch_<name>` with hyphens→underscores. */
+  toolName?: (agent: DiscoveredAgent) => string
+  /** Customize the tool description. Default: "Dispatch the <description> specialist". */
+  description?: (agent: DiscoveredAgent) => string
 }
 
 export interface SandboxPattern {
@@ -311,6 +456,30 @@ export interface IonContext {
    */
   sendPrompt(text: string, opts?: SendPromptOpts): Promise<void>
   dispatchAgent(opts: DispatchAgentOpts): Promise<DispatchAgentResult>
+
+  /**
+   * Terminate a running background dispatch by agent name. Returns `true` if
+   * a dispatch was found and recalled, `false` otherwise. The recalled agent's
+   * {@link DispatchAgentOpts.onRecall} callback fires with the provided reason.
+   *
+   * Only applies to dispatches started with `background: true`. Has no effect
+   * on foreground (synchronous) dispatches.
+   *
+   * @example
+   * ```ts
+   * // Launch a background agent
+   * await ctx.dispatchAgent({
+   *   name: 'code-reviewer',
+   *   task: 'Review the PR',
+   *   background: true,
+   *   onRecall: (info) => log.info(`recalled: ${info.reason}`),
+   * })
+   *
+   * // Later, cancel it
+   * const found = await ctx.recallAgent('code-reviewer', { reason: 'user requested' })
+   * ```
+   */
+  recallAgent(name: string, opts?: RecallAgentOpts): Promise<boolean>
   discoverAgents(opts?: DiscoverAgentsOpts): Promise<DiscoveredAgent[]>
   /**
    * Wrap a shell command with platform-appropriate sandbox restrictions.
@@ -1262,6 +1431,28 @@ export interface IonSDK {
   on(hook: string, handler: HookHandler<any>): void
   registerTool(def: ToolDef): void
   registerCommand(name: string, def: CommandDef): void
+  /**
+   * Auto-discover agents from the extension's `agents/*.md` directory and
+   * register a dispatch tool per agent. Each tool calls `ctx.dispatchAgent`
+   * with the agent's name hardcoded, giving the LLM deterministic dispatch
+   * without relying on the optional `name` parameter of the generic Agent tool.
+   *
+   * Call this at module scope (before the init handshake) so the tools appear
+   * in the LLM's tool list from the first turn. Pair with
+   * `ctx.suppressTool('Agent')` in `session_start` to remove the generic
+   * Agent tool and eliminate ambiguity.
+   *
+   * By default, root agents (no `parent` field) are excluded since they
+   * represent the conversation itself, not dispatch targets.
+   *
+   * @example
+   * ```ts
+   * const ion = createIon()
+   * ion.registerAgentTools()
+   * ion.on('session_start', (ctx) => { ctx.suppressTool('Agent') })
+   * ```
+   */
+  registerAgentTools(opts?: RegisterAgentToolsOpts): void
 
   /**
    * Webhook route registration. Call `.register(route)` to bind an

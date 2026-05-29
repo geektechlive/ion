@@ -30,6 +30,7 @@ import {
   emitAgentRunning,
   emitAgentDone,
   emitTerminalSnapshot,
+  SPECIALISTS,
 } from './agent-state'
 import { isFreshConversation } from './fresh-session'
 import { WELCOME_MARKDOWN } from './greeting'
@@ -48,10 +49,24 @@ import {
 
 const ion = createIon()
 
+// Register a dispatch tool per specialist agent. Each tool hardcodes the
+// agent name so the LLM can't forget to pass it. The generic Agent tool
+// is suppressed in session_start below to eliminate ambiguity.
+ion.registerAgentTools()
+
 // ─── Hook wiring ──────────────────────────────────────────────────────────
 
 ion.on('session_start', (ctx) => {
   log.info('ion-meta extension active', { sessionKey: ctx.sessionKey })
+  // Suppress the generic Agent tool so the LLM can only use the
+  // per-specialist dispatch tools registered by registerAgentTools().
+  // This eliminates the ambiguity where the LLM might call Agent()
+  // without a name parameter.
+  try {
+    ctx.suppressTool('Agent')
+  } catch (err) {
+    log.error('ion-meta: failed to suppress Agent tool', { err: (err as Error).message })
+  }
   // Emit an initial agent-state snapshot so the desktop's Agents panel
   // reflects ion-meta the moment the session begins. Complete-snapshot
   // contract: this snapshot lists every specialist ion-meta exposes,
@@ -110,6 +125,23 @@ ion.on('before_prompt', (ctx, _prompt) => {
   // Inject the persona on every prompt. The persona is cached per
   // extensionDir so this is cheap after the first call.
   return { systemPrompt: loadPersona(ctx.config.extensionDir) }
+})
+
+// Belt-and-suspenders: if the generic Agent tool is somehow called without
+// a name (e.g. suppressTool failed, or another extension re-enabled it),
+// try to resolve the specialist from the task text. The engine fires
+// before_agent_start in the spawner when requestedName is empty; returning
+// agentName here supplies the name for spec resolution.
+ion.on('before_agent_start', (_ctx, info) => {
+  if (info?.name) return undefined // already named — nothing to do
+  const task = (info?.task ?? '').toLowerCase()
+  if (!task) return undefined
+  const match = classifyAgentFromTask(task)
+  if (match) {
+    log.info('ion-meta: before_agent_start resolved agent from task', { agent: match, taskLen: task.length })
+    return { agentName: match }
+  }
+  return undefined
 })
 
 ion.on('agent_start', (ctx, info) => {
@@ -308,5 +340,23 @@ function classifyIntent(text: string): string | undefined {
   if (match('dispatch', 'engine_agent_state', 'agent panel', 'capability_match', 'multi-agent')) {
     return 'orchestration.design'
   }
+  return undefined
+}
+
+/** Map task text to a specialist name for the before_agent_start fallback.
+ *  Uses the same keyword-classification pattern as classifyIntent but maps
+ *  to specialist names instead of capability ids. */
+function classifyAgentFromTask(text: string): string | undefined {
+  const m = (...kw: string[]) => kw.some(k => text.includes(k))
+  if (m('agent file', 'agent markdown', 'agent hierarchy', 'agent design', 'parent agent', 'child agent')) return 'agent-designer'
+  if (m('scaffold', 'create extension', 'new extension', 'bootstrap', 'build me', 'build a')) return 'extension-builder'
+  if (m('audit', 'review', 'improve', 'refactor extension')) return 'extension-improver'
+  if (m('extension structure', 'entry point', 'json-rpc', 'manifest', 'extension.json')) return 'extension-architect'
+  if (m('hook', 'payload', 'before_prompt', 'session_start', 'turn_end', 'on_error')) return 'hook-specialist'
+  if (m('skill file', 'skill prompt', 'write a skill')) return 'skill-author'
+  if (m('test', 'mockprovider', 'integration test')) return 'testing-guide'
+  if (m('dispatch', 'orchestrat', 'multi-agent', 'agent panel', 'capability')) return 'orchestration-designer'
+  // Broad teaching intent — default to tutor
+  if (m('how does', 'explain', 'what is', 'show me', 'example of', 'difference between')) return 'ion-tutor'
   return undefined
 }

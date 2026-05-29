@@ -80,6 +80,7 @@ type EnginePaneState struct {
 // AgentStateUpdate describes the current state of an agent.
 type AgentStateUpdate struct {
 	Name     string                 `json:"name"`
+	ID       string                 `json:"id,omitempty"`
 	Status   string                 `json:"status"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -398,6 +399,39 @@ type EngineEvent struct {
 	LlmCallOutputTokens int     `json:"llmCallOutputTokens,omitempty"`
 	LlmCallCost         float64 `json:"llmCallCost,omitempty"`
 	LlmCallJsonMode     bool    `json:"llmCallJsonMode,omitempty"`
+
+	// --- engine_dispatch_start / engine_dispatch_end ---
+	//
+	// Emitted on the parent session's event stream when an extension-initiated
+	// dispatch begins and ends. These are factual telemetry events — not agent
+	// state (which the harness owns via engine_agent_state). With these events,
+	// harnesses can persist dispatch records or surface dispatch status in UIs
+	// without hand-rolling plumbing.
+	//
+	// engine_dispatch_start fields:
+	//   - DispatchAgent:     the dispatched agent name
+	//   - DispatchTask:      the task string passed to the agent
+	//   - DispatchModel:     the resolved model for the dispatch
+	//   - DispatchSessionID: the child session's request ID
+	//
+	// engine_dispatch_end fields:
+	//   - DispatchAgent:       the dispatched agent name
+	//   - DispatchExitCode:    0=success, 1=error, 2=recalled
+	//   - DispatchElapsed:     wall-clock seconds
+	//   - DispatchCost:        USD cost of the dispatch
+	//   - DispatchInputTokens: total input tokens
+	//   - DispatchOutputTokens: total output tokens
+	//   - DispatchToolCount:   number of tool calls made during dispatch
+	DispatchAgent        string  `json:"dispatchAgent,omitempty"`
+	DispatchTask         string  `json:"dispatchTask,omitempty"`
+	DispatchModel        string  `json:"dispatchModel,omitempty"`
+	DispatchSessionID    string  `json:"dispatchSessionId,omitempty"`
+	DispatchExitCode     int     `json:"dispatchExitCode,omitempty"`
+	DispatchElapsed      float64 `json:"dispatchElapsed,omitempty"`
+	DispatchCost         float64 `json:"dispatchCost,omitempty"`
+	DispatchInputTokens  int     `json:"dispatchInputTokens,omitempty"`
+	DispatchOutputTokens int     `json:"dispatchOutputTokens,omitempty"`
+	DispatchToolCount    int     `json:"dispatchToolCount,omitempty"`
 }
 
 // MessageEndUsage reports token usage at the end of a message.

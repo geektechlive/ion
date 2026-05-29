@@ -38,6 +38,7 @@ export interface EnginePaneState {
 
 export interface AgentStateUpdate {
   name: string
+  id?: string
   status: 'idle' | 'running' | 'done' | 'error'
   metadata?: Record<string, any>
 }
@@ -213,4 +214,28 @@ export type EngineEvent =
       llmCallOutputTokens: number
       llmCallCost: number
       llmCallJsonMode?: boolean
+    }
+  // engine_dispatch_start is emitted on the parent session's event stream when
+  // an extension-initiated dispatch begins. Carries the agent name, task, model,
+  // and child session ID. Observation-only — harnesses can use this and
+  // engine_dispatch_end to persist dispatch records or surface dispatch status.
+  | {
+      type: 'engine_dispatch_start'
+      dispatchAgent: string
+      dispatchTask: string
+      dispatchModel: string
+      dispatchSessionId: string
+    }
+  // engine_dispatch_end is emitted when an extension-initiated dispatch completes
+  // (success, error, or recall). Carries telemetry: exit code, elapsed time,
+  // cost, tokens, and tool count.
+  | {
+      type: 'engine_dispatch_end'
+      dispatchAgent: string
+      dispatchExitCode: number
+      dispatchElapsed: number
+      dispatchCost: number
+      dispatchInputTokens: number
+      dispatchOutputTokens: number
+      dispatchToolCount: number
     }

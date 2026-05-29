@@ -34,6 +34,12 @@ func (m *Manager) buildRunConfig(
 ) *backend.RunConfig {
 	runCfg := &backend.RunConfig{}
 
+	// Thread the engine's default model so the run loop can fall back
+	// when a requested model doesn't resolve (e.g. unrecognized tier alias).
+	if m.config != nil && m.config.DefaultModel != "" {
+		runCfg.DefaultModel = m.config.DefaultModel
+	}
+
 	// Thread timeouts config into the run so tool execution and the run loop
 	// can read configured values.
 	if m.config != nil && m.config.Timeouts != nil {

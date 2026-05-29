@@ -52,6 +52,15 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	}
 
 	provider := b.resolveProvider(model)
+	if provider == nil && run.cfg != nil && run.cfg.DefaultModel != "" && run.cfg.DefaultModel != model {
+		// Graceful degradation: the requested model (e.g. an unrecognized
+		// tier alias like "standard") didn't resolve. Fall back to the
+		// engine's default model instead of hard-failing.
+		utils.Warn("ApiBackend", fmt.Sprintf("model %q not found, falling back to default %q", model, run.cfg.DefaultModel))
+		model = run.cfg.DefaultModel
+		opts.Model = model
+		provider = b.resolveProvider(model)
+	}
 	if provider == nil {
 		utils.Error("ApiBackend", fmt.Sprintf("no provider for model %q", model))
 		b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{

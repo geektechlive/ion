@@ -464,7 +464,19 @@ func (b *ApiBackend) executeTools(
 			if run.cfg != nil && run.cfg.Timeouts != nil {
 				toolTimeout = run.cfg.Timeouts.ToolDefault()
 			}
-			toolCtx, toolCancel := context.WithTimeout(gCtx, toolTimeout)
+
+			// The Agent tool is a long-running child session with cooperative
+			// cancellation (parent abort → gCtx cancelled → child cancelled).
+			// Wrapping it in the standard tool timeout would kill child agents
+			// at 5 minutes. Use gCtx directly so Agent runs are bounded only
+			// by parent lifecycle, not by the tool deadline.
+			var toolCtx context.Context
+			var toolCancel context.CancelFunc
+			if block.Name == tools.AgentToolName {
+				toolCtx, toolCancel = context.WithCancel(gCtx)
+			} else {
+				toolCtx, toolCancel = context.WithTimeout(gCtx, toolTimeout)
+			}
 			defer toolCancel()
 
 			// Inject timeouts config into context for individual tools to read.

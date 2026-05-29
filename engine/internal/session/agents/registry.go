@@ -129,6 +129,8 @@ func (r *Registry) AppendState(state types.AgentStateUpdate) {
 }
 
 // UpdateState finds a state by name and applies the updater function.
+// When multiple entries share the same name (e.g., extension roster +
+// engine-managed), the first match wins.
 func (r *Registry) UpdateState(name string, updater func(*types.AgentStateUpdate)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -140,6 +142,32 @@ func (r *Registry) UpdateState(name string, updater func(*types.AgentStateUpdate
 	}
 }
 
+// UpdateStateByID finds a state by its unique ID and applies the updater.
+func (r *Registry) UpdateStateByID(id string, updater func(*types.AgentStateUpdate)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.states {
+		if r.states[i].ID == id {
+			updater(&r.states[i])
+			return
+		}
+	}
+}
+
+// FindStateIndex returns the index of the first state with the given name,
+// or -1 if not found. Used to check whether a specialist already has an
+// engine-managed state entry before appending a duplicate.
+func (r *Registry) FindStateIndex(name string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.states {
+		if r.states[i].Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 // ClearStates removes all states.
 func (r *Registry) ClearStates() {
 	r.mu.Lock()
@@ -147,15 +175,94 @@ func (r *Registry) ClearStates() {
 	r.states = nil
 }
 
+// ClearRunningStates removes only states with status "running", preserving
+// terminal states (done, error, cancelled) that carry conversation history.
+// Called on run exit so that completed agent rows survive for post-run
+// inspection and persistence.
+func (r *Registry) ClearRunningStates() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.states[:0] // reuse backing array
+	for _, s := range r.states {
+		if s.Status != "running" {
+			kept = append(kept, s)
+		}
+	}
+	r.states = kept
+}
+
 // MergedSnapshot returns a combined slice of extension-managed states and
-// engine-managed states.
+// engine-managed states. When both contain an entry with the same name,
+// the engine-managed entry wins (it carries richer metadata: task,
+// conversationId, progress). This prevents duplicate rows in the agent
+// panel when the extension's roster and the engine's dispatch state
+// both track the same specialist.
+//
+// An engine entry also supersedes an extension entry when its name is a
+// numbered variant of the extension name (e.g. "cloud-architect-7"
+// supersedes "cloud-architect"). This handles the case where the LLM
+// called the generic Agent tool without a name, creating a numbered
+// entry, while the extension roster has the base name.
 func (r *Registry) MergedSnapshot() []types.AgentStateUpdate {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	// Build a set of extension names for reverse-prefix lookup.
+	extNames := make(map[string]bool, len(r.lastExtStates))
+	for _, ext := range r.lastExtStates {
+		extNames[ext.Name] = true
+	}
+
+	// Collect engine-managed names and determine which extension entries
+	// they supersede (exact match or numbered-variant match).
+	superseded := make(map[string]bool, len(r.states))
+	for _, s := range r.states {
+		// Exact match
+		if extNames[s.Name] {
+			superseded[s.Name] = true
+			continue
+		}
+		// Numbered-variant match: "cloud-architect-7" supersedes "cloud-architect"
+		// by checking if stripping the last "-<digits>" suffix yields an ext name.
+		base := stripNumberedSuffix(s.Name)
+		if base != s.Name && extNames[base] {
+			superseded[base] = true
+		}
+	}
+
 	merged := make([]types.AgentStateUpdate, 0, len(r.lastExtStates)+len(r.states))
-	merged = append(merged, r.lastExtStates...)
+	for _, ext := range r.lastExtStates {
+		if !superseded[ext.Name] {
+			merged = append(merged, ext)
+		}
+	}
 	merged = append(merged, r.states...)
 	return merged
+}
+
+// stripNumberedSuffix removes a trailing "-<digits>" suffix from a name.
+// Returns the original string if no such suffix exists.
+// Examples: "cloud-architect-7" → "cloud-architect", "agent-1" → "agent-1" (no ext match expected)
+func stripNumberedSuffix(name string) string {
+	// Find the last dash
+	lastDash := -1
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '-' {
+			lastDash = i
+			break
+		}
+	}
+	if lastDash <= 0 || lastDash == len(name)-1 {
+		return name
+	}
+	// Check if everything after the last dash is digits
+	suffix := name[lastDash+1:]
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return name
+		}
+	}
+	return name[:lastDash]
 }
 
 // CacheExtStates caches the most recent extension-emitted agent states.
