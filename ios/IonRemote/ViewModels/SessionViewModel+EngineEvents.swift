@@ -9,9 +9,10 @@ extension SessionViewModel {
     func handleEngineToolStart(tabId: String, instanceId: String?, toolName: String, toolId: String) {
         DiagnosticLog.log("ENGINE: tool-start tabId=\(tabId.prefix(8)) tool=\(toolName) toolId=\(toolId.prefix(8))")
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-        let info = ActiveToolInfo(id: toolId, toolName: toolName, startTime: Date())
-        activeTools[key, default: [:]][toolId] = info
         let runningAgent = engineAgentStates[key]?.first { $0.status == "running" && $0.type != "chief" }
+        var info = ActiveToolInfo(id: toolId, toolName: toolName, startTime: Date())
+        info.agentName = runningAgent?.displayName
+        activeTools[key, default: [:]][toolId] = info
         var msgs = engineMessages[key] ?? []
         msgs.append(EngineMessage(id: toolId, role: "tool", content: "", toolName: toolName, toolId: toolId, toolStatus: "running", timestamp: Date().timeIntervalSince1970 * 1000, agentName: runningAgent?.displayName))
         engineMessages[key] = msgs

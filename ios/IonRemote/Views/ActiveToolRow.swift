@@ -21,8 +21,8 @@ struct ActiveToolRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // Tool name capsule
-            Text(tool.toolName)
+            // Tool name capsule — prefer agent display name when available (e.g. "Agent" → "AdminAgent")
+            Text(tool.agentName ?? tool.toolName)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8)
@@ -81,7 +81,7 @@ struct ActiveToolRow: View {
                 viewModel.abortEngine(tabId: tabId)
             }
         } message: {
-            Text("\(tool.toolName) has been running for \(Int(elapsed))s. This may be waiting for a macOS permission dialog. Aborting will stop the entire run.")
+            Text("\(tool.agentName ?? tool.toolName) has been running for \(Int(elapsed))s. This may be waiting for a macOS permission dialog. Aborting will stop the entire run.")
         }
     }
 

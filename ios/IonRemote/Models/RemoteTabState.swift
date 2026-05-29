@@ -86,4 +86,5 @@ struct ActiveToolInfo: Identifiable {
     let toolName: String
     let startTime: Date
     var isStalled: Bool = false
+    var agentName: String?
 }

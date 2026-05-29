@@ -204,10 +204,22 @@ extension SessionViewModel {
             DiagnosticLog.log("ENGINE: agent_state key=\(key) count=\(agents.count) statuses=[\(statuses)]")
             engineAgentStates[key] = agents
 
-            // Retroactively stamp running tool chips with the agent name.
+            // Retroactively stamp active tool chips with the agent name.
             // Runs on every update because the extension emits a placeholder
             // "Staff member" first, then a second event with the real name —
             // so we must re-stamp when displayName changes too.
+            if let newNonChief = agents.first(where: { $0.status == "running" && $0.type != "chief" }),
+               var toolChips = activeTools[key] {
+                var chipsUpdated = false
+                for toolId in toolChips.keys where toolChips[toolId]?.toolName == "Agent"
+                    && toolChips[toolId]?.agentName != newNonChief.displayName {
+                    toolChips[toolId]?.agentName = newNonChief.displayName
+                    chipsUpdated = true
+                }
+                if chipsUpdated { activeTools[key] = toolChips }
+            }
+
+            // Retroactively stamp running tool chips (engine messages) with the agent name.
             if let newNonChief = agents.first(where: { $0.status == "running" && $0.type != "chief" }),
                var msgs = engineMessages[key] {
                 var updated = false
