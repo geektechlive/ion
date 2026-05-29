@@ -351,9 +351,6 @@ export class EngineBridge extends EventEmitter {
     return this._sendWithData<T>({ cmd, ...payload })
   }
 
-  /** Send a typed-response command. Sibling helpers (e.g. engine-bridge-fs.ts) layer on top of the bridge via this. */
-  async request<T>(cmd: string, payload: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; data?: T }> { await this.connect(); return this._sendWithData<T>({ cmd, ...payload }) }
-
   /** Track the conversation ID for a session so it can be restored on reconnect. */
   updateSessionConversationId(key: string, conversationId: string): void {
     const entry = this.activeSessions.get(key)
