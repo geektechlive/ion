@@ -222,10 +222,10 @@ struct TabListView: View {
                     Haptic.light()
                     viewModel.sync()
                 }
-                .onChange(of: viewModel.connectionState) { _, newState in
-                    if newState == .disconnected {
+                .onChange(of: viewModel.connectionState) { oldState, newState in
+                    if newState == .disconnected && oldState != .reconnecting {
                         navigationPath = NavigationPath()
-                    } else if newState == .connected {
+                    } else if newState == .connected && oldState != .reconnecting && navigationPath.isEmpty {
                         if let engineTab = viewModel.tabs.first(where: { $0.isEngine == true }) {
                             navigationPath.append(engineTab.id)
                         }

@@ -120,6 +120,19 @@ final class ChatCollectionVC<Payload, RowContent: View>:
         collectionView.contentInsetAdjustmentBehavior = .always
         view.addSubview(collectionView)
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillShow(_:)),
+            name: UIResponder.keyboardWillShowNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(forceScrollNotification(_:)),
+            name: .forceScrollToBottom,
+            object: nil
+        )
+
         let reg = UICollectionView.CellRegistration<UICollectionViewCell, ChatItem<Payload>> {
             [weak self] cell, _, wrapper in
             guard let self else { return }
@@ -205,6 +218,20 @@ final class ChatCollectionVC<Payload, RowContent: View>:
                 self.scrollToBottom(animated: false)
             }
         }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    // MARK: - Notification handlers
+
+    @objc private func keyboardWillShow(_ notification: Notification) {
+        scrollToBottom(animated: true)
+    }
+
+    @objc private func forceScrollNotification(_ notification: Notification) {
+        scrollToBottom(animated: false)
     }
 
     // MARK: - Scroll

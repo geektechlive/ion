@@ -194,8 +194,11 @@ extension SessionViewModel {
             tabs[idx].permissionMode = .auto
         }
         guard let transport else {
-            Task { @MainActor [weak self] in
-                self?.showToast(ToastMessage(style: .error, title: "Not connected", detail: "Command could not be sent"))
+            DiagnosticLog.log("CMD: dropped (no transport, state=\(connectionState))")
+            if connectionState != .reconnecting && connectionState != .connecting {
+                Task { @MainActor [weak self] in
+                    self?.showToast(ToastMessage(style: .error, title: "Not connected", detail: "Command could not be sent"))
+                }
             }
             return
         }
@@ -520,9 +523,11 @@ extension SessionViewModel {
     func send(_ command: RemoteCommand) {
         DiagnosticLog.logCommand(command)
         guard let transport else {
-            DiagnosticLog.log("CMD: dropped (no transport)")
-            Task { @MainActor [weak self] in
-                self?.showToast(ToastMessage(style: .error, title: "Not connected", detail: "Command could not be sent"))
+            DiagnosticLog.log("CMD: dropped (no transport, state=\(connectionState))")
+            if connectionState != .reconnecting && connectionState != .connecting {
+                Task { @MainActor [weak self] in
+                    self?.showToast(ToastMessage(style: .error, title: "Not connected", detail: "Command could not be sent"))
+                }
             }
             return
         }

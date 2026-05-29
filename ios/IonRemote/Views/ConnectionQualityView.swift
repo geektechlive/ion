@@ -15,6 +15,10 @@ struct ConnectionQualityView: View {
     var body: some View {
         if viewModel.connectionState == .connected {
             content
+        } else if viewModel.connectionState == .reconnecting || viewModel.connectionState == .connecting {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundColor(JarvisTheme.accent)
+                .symbolEffect(.pulse)
         } else {
             EmptyView()
         }

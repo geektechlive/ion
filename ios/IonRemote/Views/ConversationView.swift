@@ -69,6 +69,12 @@ struct ConversationView: View {
         currentActivity.hasPrefix("Compacting")
     }
 
+    private var runningStaffAgents: [AgentStateUpdate] {
+        let key = viewModel.engineCompoundKey(tabId: tabId)
+        return (viewModel.engineAgentStates[key] ?? [])
+            .filter { $0.status == "running" || $0.status == "invited" }
+    }
+
     private var pendingPermission: PermissionRequest? {
         if let queue = tab?.permissionQueue {
             // ExitPlanMode cards should only show when the tab is no longer running
@@ -270,10 +276,17 @@ struct ConversationView: View {
 
             // Activity indicator — pinned above status bar, always visible
             if isRunning {
-                ActivityIndicatorView(
-                    text: currentActivity,
-                    dotColorOverride: isCompacting ? .blue : nil
-                )
+                if !runningStaffAgents.isEmpty {
+                    StaffActivityView(agents: runningStaffAgents)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 4)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    ActivityIndicatorView(
+                        text: currentActivity,
+                        dotColorOverride: isCompacting ? .blue : nil
+                    )
+                }
             }
 
             // Voice playback bar — always visible when speaking
@@ -332,7 +345,7 @@ struct ConversationView: View {
             InputBar(tabId: tabId)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        .toolbarBackground(JarvisTheme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -452,6 +465,7 @@ struct ConversationView: View {
         ) { [self] rowItem in
             rowView(rowItem)
         }
+        .ignoresSafeArea(.keyboard)
     }
 
     // MARK: - Row dispatch
