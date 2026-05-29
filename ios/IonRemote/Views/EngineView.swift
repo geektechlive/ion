@@ -363,6 +363,7 @@ struct EngineView: View {
                     .font(.subheadline)
                     .foregroundStyle(JarvisTheme.accent)
             }
+            .accessibilityLabel("Conversations")
             Button {
                 showStatusDrawer = true
             } label: {
@@ -370,17 +371,21 @@ struct EngineView: View {
                     .font(.subheadline)
                     .foregroundStyle(JarvisTheme.accent)
             }
+            .accessibilityLabel("Info")
             Button { showFileExplorer = true } label: {
                 Image(systemName: "folder")
                     .font(.subheadline)
             }
+            .accessibilityLabel("Files")
             Button { showGitPane = true } label: {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.subheadline)
             }
+            .accessibilityLabel("Branches")
             Button { viewModel.addEngineInstance(tabId: tabId) } label: {
                 Image(systemName: "plus.rectangle")
             }
+            .accessibilityLabel("New tab")
         }
     }
 

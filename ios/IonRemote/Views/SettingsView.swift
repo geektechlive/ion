@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var showVoiceTestAlert = false
     @State private var voicePromptText: String = ""
     @State private var editingDevice: PairedDevice? = nil
+    @State private var showUnpairAllConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -504,8 +505,7 @@ struct SettingsView: View {
             }
 
             Button(role: .destructive) {
-                dismiss()
-                viewModel.resetAll()
+                showUnpairAllConfirmation = true
             } label: {
                 HStack {
                     Spacer()
@@ -517,6 +517,19 @@ struct SettingsView: View {
             .buttonStyle(.bordered)
             .tint(.red)
             .listRowBackground(Color.clear)
+            .confirmationDialog(
+                "Unpair All Devices",
+                isPresented: $showUnpairAllConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Unpair All", role: .destructive) {
+                    dismiss()
+                    viewModel.resetAll()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will remove all paired desktops. You will need to re-pair to reconnect.")
+            }
         }
     }
 }

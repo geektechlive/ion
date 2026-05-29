@@ -76,4 +76,5 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 extension Notification.Name {
     static let apnsTokenRefreshed = Notification.Name("apnsTokenRefreshed")
     static let briefingFromPush = Notification.Name("briefingFromPush")
+    static let forceScrollToBottom = Notification.Name("forceScrollToBottom")
 }

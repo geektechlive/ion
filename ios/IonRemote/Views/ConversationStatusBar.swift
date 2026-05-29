@@ -71,6 +71,7 @@ struct ConversationStatusBar: View {
                 .foregroundStyle(.secondary)
                 .opacity(isRunning ? 0.5 : 1.0)
             }
+            .disabled(isRunning)
 
             Spacer()
 

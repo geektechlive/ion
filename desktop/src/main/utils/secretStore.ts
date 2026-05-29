@@ -143,7 +143,8 @@ export function decryptFromDisk(value: string): string {
       const buf = Buffer.from(value.slice(ENC_V1_PREFIX.length), 'base64')
       return safeStorage.decryptString(buf)
     } catch {
-      return value
+      console.warn('[secretStore] safeStorage.decryptString failed; value cleared — re-enter in settings')
+      return ''
     }
   }
 

@@ -125,7 +125,6 @@ struct InputBar: View {
                     .autocorrectionDisabled()
                     .lineLimit(1...5)
                     .focused($isFocused)
-                    .disabled(!isConnected)
                     .onSubmit { sendMessage() }
 
                 if isRunning {
@@ -157,8 +156,11 @@ struct InputBar: View {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title)
                         .foregroundStyle(sendButtonColor)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .disabled(cannotSend)
+                .accessibilityLabel("Send message")
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
@@ -278,8 +280,11 @@ struct InputBar: View {
             Image(systemName: "paperclip")
                 .font(.title3)
                 .foregroundStyle(isConnected ? .secondary : .quaternary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .disabled(!isConnected)
+        .accessibilityLabel("Attach file")
     }
 
     // MARK: - Mic button
@@ -291,6 +296,8 @@ struct InputBar: View {
             Image(systemName: "mic.fill")
                 .font(.title3)
                 .foregroundStyle(micButtonColor)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .disabled(!isConnected)
         .accessibilityLabel("Record voice input")
@@ -367,6 +374,7 @@ struct InputBar: View {
             text: promptText,
             attachments: attachments.isEmpty ? nil : attachments
         )
+        NotificationCenter.default.post(name: .forceScrollToBottom, object: nil)
         isFocused = false
         viewModel.clearTabDraft(tabId)
         pendingAttachments = []
