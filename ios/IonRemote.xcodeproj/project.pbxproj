@@ -154,6 +154,7 @@
 		A1B2C3D4E5F600010001B1AA /* StatusDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010001B0AA /* StatusDrawerView.swift */; };
 		A1B2C3D4E5F600010001C1AA /* TranscriptFlyout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010001C0AA /* TranscriptFlyout.swift */; };
 		A1B2C3D4E5F600F10007AA /* StaffActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600F10006AA /* StaffActivityView.swift */; };
+		A1B2C3D4E5F600F10009AA /* BouncingDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600F10008AA /* BouncingDot.swift */; };
 		A1B2C3D4E5F600010007F0AA /* jarvis-message.caf in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010007F1AA /* jarvis-message.caf */; };
 		A1B2C3D4E5F600010007F2AA /* jarvis-morning.caf in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010007F3AA /* jarvis-morning.caf */; };
 		A1B2C3D4E5F600010007F4AA /* jarvis-midday.caf in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010007F5AA /* jarvis-midday.caf */; };
@@ -321,6 +322,7 @@
 		A1B2C3D4E5F600010001B0AA /* StatusDrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDrawerView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010001C0AA /* TranscriptFlyout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptFlyout.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600F10006AA /* StaffActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StaffActivityView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F600F10008AA /* BouncingDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BouncingDot.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010007F1AA /* jarvis-message.caf */ = {isa = PBXFileReference; lastKnownFileType = audio.aiff; path = "jarvis-message.caf"; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010007F3AA /* jarvis-morning.caf */ = {isa = PBXFileReference; lastKnownFileType = audio.aiff; path = "jarvis-morning.caf"; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010007F5AA /* jarvis-midday.caf */ = {isa = PBXFileReference; lastKnownFileType = audio.aiff; path = "jarvis-midday.caf"; sourceTree = "<group>"; };
@@ -507,6 +509,7 @@
 					A1B2C3D4E5F600010001B0AA /* StatusDrawerView.swift */,
 					A1B2C3D4E5F600010001C0AA /* TranscriptFlyout.swift */,
 					A1B2C3D4E5F600F10006AA /* StaffActivityView.swift */,
+					A1B2C3D4E5F600F10008AA /* BouncingDot.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -869,6 +872,7 @@
 				A1B2C3D4E5F600010001B1AA /* StatusDrawerView.swift in Sources */,
 				A1B2C3D4E5F600010001C1AA /* TranscriptFlyout.swift in Sources */,
 				A1B2C3D4E5F600F10007AA /* StaffActivityView.swift in Sources */,
+				A1B2C3D4E5F600F10009AA /* BouncingDot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
