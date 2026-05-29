@@ -58,7 +58,12 @@ struct InputBar: View {
     }
 
     private var slashCommands: [DiscoveredSlashCommand] {
-        viewModel.discoveredCommands[workingDirectory] ?? []
+        let dir = viewModel.discoveredCommands[workingDirectory] ?? []
+        let eng = viewModel.engineCommandsByTab[tabId] ?? []
+        // Engine commands first so Jarvis slash commands take precedence,
+        // then file-system discovered commands. Deduplicate by name.
+        var seen = Set<String>()
+        return (eng + dir).filter { seen.insert($0.name).inserted }
     }
 
     private var hasUploading: Bool {

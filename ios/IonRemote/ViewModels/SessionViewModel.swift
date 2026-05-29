@@ -214,6 +214,9 @@ final class SessionViewModel {
     // Discovered slash commands (per working directory)
     var discoveredCommands: [String: [DiscoveredSlashCommand]] = [:]
 
+    // Engine-registered slash commands (per tabId, from engine_command_registry)
+    var engineCommandsByTab: [String: [DiscoveredSlashCommand]] = [:]
+
     // Upload attachment results (consumed by InputBar / EngineView)
     var pendingUploadResults: [UploadAttachmentResult] = []
 

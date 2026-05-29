@@ -82,20 +82,13 @@ extension SessionViewModel {
     }
 
     @MainActor
-    func handleEngineCommandRegistry() {
-        // Complete snapshot of slash commands exposed by the session's
-        // loaded extensions. Desktop's prompt pipeline uses this as a
-        // routing-hint cache (engine-command names take precedence over
-        // local .md template lookups). iOS does not yet consume the
-        // registry for autocomplete — Phase 0.5 of the unified slash-
-        // pipeline plan intentionally left the iOS UI out of scope.
-        //
-        // Snapshot semantics: when iOS does start consuming this, the
-        // payload is a REPLACE-style snapshot, not an incremental
-        // update. Empty `commands: []` is the authoritative "no
-        // extension commands for this session" signal — not a no-op.
-        // See docs/architecture/agent-state.md for the canonical
-        // snapshot-replace pattern.
+    func handleEngineCommandRegistry(tabId: String, commands: [EngineCommandListing]) {
+        // Snapshot semantics: replace the cached set wholesale.
+        // Empty array = no extension commands for this session.
+        let mapped = commands.map {
+            DiscoveredSlashCommand(name: $0.name, description: $0.description ?? "", scope: "engine", source: "engine")
+        }
+        engineCommandsByTab[tabId] = mapped
     }
 
     @MainActor
