@@ -172,6 +172,7 @@ struct EngineMessage: Identifiable, Sendable {
     var toolStatus: String?
     var timestamp: Double?
     var isInternal: Bool?
+    var agentName: String?
     /// View-only: number of consecutive bootstrap messages that were collapsed
     /// into this one (not encoded/decoded — excluded from CodingKeys). Nil when
     /// this message is displayed individually. When > 0 the harness row renders
@@ -181,7 +182,7 @@ struct EngineMessage: Identifiable, Sendable {
 
 extension EngineMessage: Codable {
     private enum CodingKeys: String, CodingKey {
-        case id, role, content, toolName, toolId, toolStatus, timestamp
+        case id, role, content, toolName, toolId, toolStatus, timestamp, agentName
         case isInternal = "internal"
     }
 
@@ -202,6 +203,7 @@ extension EngineMessage: Codable {
         toolStatus = try container.decodeIfPresent(String.self, forKey: .toolStatus)
         timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
         isInternal = try container.decodeIfPresent(Bool.self, forKey: .isInternal)
+        agentName = try container.decodeIfPresent(String.self, forKey: .agentName)
     }
 }
 

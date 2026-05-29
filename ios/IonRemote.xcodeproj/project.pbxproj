@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1B2C3D4E5F60001000001AA /* IonRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000002AA /* IonRemoteApp.swift */; };
+		A1B2C3D4E5F60001009D01AA /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009D00AA /* AppDelegate.swift */; };
 		A1B2C3D4E5F60001000003AA /* NormalizedEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */; };
 		A1B2C3D4E5F60001000005AA /* RemoteTabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */; };
 		A1B2C3D4E5F60001000007AA /* RemoteCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */; };
@@ -170,6 +171,7 @@
 
 /* Begin PBXFileReference section */
 		A1B2C3D4E5F60001000002AA /* IonRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IonRemoteApp.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001009D00AA /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEvent.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTabState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteCommand.swift; sourceTree = "<group>"; };
@@ -370,6 +372,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F60001000002AA /* IonRemoteApp.swift */,
+				A1B2C3D4E5F60001009D00AA /* AppDelegate.swift */,
 				A1B2C3D4E5F60001000024AA /* Assets.xcassets */,
 				A1B2C3D4E5F6000100002EAA /* Info.plist */,
 				A1B2C3D4E5F6000100002FAA /* IonRemote.entitlements */,
@@ -731,6 +734,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D4E5F60001000001AA /* IonRemoteApp.swift in Sources */,
+				A1B2C3D4E5F60001009D01AA /* AppDelegate.swift in Sources */,
 				A1B2C3D4E5F60001000003AA /* NormalizedEvent.swift in Sources */,
 				A1B2C3D4E5F60001000005AA /* RemoteTabState.swift in Sources */,
 				A1B2C3D4E5F60001000007AA /* RemoteCommand.swift in Sources */,
