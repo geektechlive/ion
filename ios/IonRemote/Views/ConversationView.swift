@@ -344,9 +344,11 @@ struct ConversationView: View {
 
             InputBar(tabId: tabId)
         }
+        .background(JarvisTheme.background.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(JarvisTheme.background, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Text(tab?.displayTitle ?? "Tab")
