@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   formatClearDivider,
   isClearDivider,
+  formatImplementDivider,
   buildClearDividerRemoteEvent,
 } from '../clear-divider'
 
@@ -40,6 +41,23 @@ describe('isClearDivider', () => {
     expect(isClearDivider('── Cleared at 3:42 PM ──')).toBe(true)
     expect(isClearDivider('── Cleared at 15:42 ──')).toBe(true)
     expect(isClearDivider('── Cleared anything ──')).toBe(true)
+  })
+})
+
+describe('formatImplementDivider', () => {
+  it('emits the `── Implementing plan at <time> ──` sentinel shape', () => {
+    const out = formatImplementDivider(new Date('2024-01-01T15:42:00'))
+    expect(out.startsWith('── Implementing plan at ')).toBe(true)
+    expect(out.endsWith(' ──')).toBe(true)
+  })
+
+  it('is not detected as a clear divider', () => {
+    expect(isClearDivider(formatImplementDivider(new Date()))).toBe(false)
+  })
+
+  it('starts with the generic `──` prefix used for divider rendering', () => {
+    const out = formatImplementDivider(new Date())
+    expect(out.startsWith('──')).toBe(true)
   })
 })
 

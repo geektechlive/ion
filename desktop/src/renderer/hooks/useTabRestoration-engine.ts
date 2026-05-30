@@ -200,6 +200,13 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
             draftInput: st.draftInput ?? '',
             lastMessagePreview: st.lastMessagePreview || null,
             lastEventAt: st.lastEventAt ?? null,
+            // Restore the persisted permission mode. createEngineTab
+            // defaults to 'auto' for NEW tabs (extensions control plan
+            // mode), but restored tabs must honour whatever mode was
+            // active when the app quit — the extension may have set
+            // plan mode mid-conversation and the user expects it to
+            // survive a restart.
+            permissionMode: st.permissionMode,
             // NB: deliberately NOT restoring st.permissionDenied
             // for engine tabs — legacy field, now superseded by
             // enginePermissionDenied (per-instance). See the

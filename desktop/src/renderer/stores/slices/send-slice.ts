@@ -286,6 +286,9 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         return
       }
 
+      const currentMode = get().tabs.find(t => t.id === tabId)?.permissionMode ?? tab.permissionMode
+      window.ion.setPermissionMode(tabId, currentMode, 'prompt_sync')
+
       let remoteExtensions: string[] | undefined
       if (tab.isEngine && tab.engineProfileId) {
         const profile = usePreferencesStore.getState().engineProfiles.find((p) => p.id === tab.engineProfileId)

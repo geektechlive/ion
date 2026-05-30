@@ -218,6 +218,7 @@ export async function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' 
     source: 'remote',
     isEngineTab: false,
     projectPath,
+    implementationPhase: cmd.implementationPhase,
   }).catch((err: unknown) => {
     log(`handlePrompt: pipeline error: ${(err as Error).message}`)
   })
@@ -230,14 +231,51 @@ export function handleCancel(cmd: Extract<RemoteCommand, { type: 'cancel' }>): v
   }
 }
 
-export function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type: 'set_permission_mode' }>): void {
+export async function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type: 'set_permission_mode' }>): Promise<void> {
   const mode = cmd.mode
   if (mode !== 'auto' && mode !== 'plan') {
     log(`Remote set_permission_mode: invalid mode "${mode}"`)
     return
   }
   log(`Remote set_permission_mode: tab=${cmd.tabId} mode=${mode}`)
-  sessionPlane.setPermissionMode(cmd.tabId, mode)
+
+  // Engine tabs are keyed by `tabId:instanceId` in the engine.
+  // The generic sessionPlane.setPermissionMode uses bare tabId which
+  // silently misses the engine session. Detect engine tabs and route
+  // through the compound-key bridge path.
+  let routed = false
+  if (state.mainWindow) {
+    try {
+      const escapedTab = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const info = await state.mainWindow.webContents.executeJavaScript(`
+        (function() {
+          var store = window.__Ion_SESSION_STORE__;
+          if (!store) return null;
+          var s = store.getState();
+          var tab = s.tabs.find(function(t) { return t.id === '${escapedTab}'; });
+          if (!tab || !tab.isEngine) return null;
+          var pane = s.enginePanes.get('${escapedTab}');
+          if (!pane || !pane.activeInstanceId) return null;
+          return { instanceId: pane.activeInstanceId };
+        })()
+      `)
+      if (info?.instanceId) {
+        const compoundKey = `${cmd.tabId}:${info.instanceId}`
+        log(`Remote set_permission_mode: engine tab, using compound key=${compoundKey}`)
+        engineBridge.sendSetPlanMode(compoundKey, mode === 'plan', undefined, 'remote')
+        routed = true
+      }
+    } catch (err) {
+      log(`Remote set_permission_mode: engine tab detection failed: ${(err as Error).message}`)
+    }
+  }
+
+  // CLI tabs (or fallback when engine detection fails)
+  if (!routed) {
+    sessionPlane.setPermissionMode(cmd.tabId, mode)
+  }
+
+  // Always broadcast so the UI updates regardless of tab type
   broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId: cmd.tabId, mode })
 }
 

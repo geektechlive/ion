@@ -137,6 +137,7 @@ export interface IonAPI {
   // ─── Engine operations ───
   engineStart(key: string, config: EngineConfig): Promise<{ ok: boolean; error?: string }>
   enginePrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]): Promise<{ ok: boolean; error?: string }>
+  engineSetPlanMode(key: string, enabled: boolean): void
   engineAbort(key: string): Promise<void>
   engineAbortAgent(key: string, agentName: string, subtree: boolean): Promise<void>
   engineDialogResponse(key: string, dialogId: string, value: any): Promise<void>
@@ -360,6 +361,7 @@ const api: IonAPI = {
   // ─── Engine operations ───
   engineStart: (key, config) => ipcRenderer.invoke(IPC.ENGINE_START, { key, config }),
   enginePrompt: (key, text, model, appendSystemPrompt, imageAttachments) => ipcRenderer.invoke(IPC.ENGINE_PROMPT, { key, text, model, appendSystemPrompt, imageAttachments }),
+  engineSetPlanMode: (key, enabled) => ipcRenderer.send('ion:engine-set-plan-mode', key, enabled),
   engineAbort: (key) => ipcRenderer.invoke(IPC.ENGINE_ABORT, { key }),
   engineAbortAgent: (key, agentName, subtree) =>
     ipcRenderer.invoke(IPC.ENGINE_ABORT_AGENT, { key, agentName, subtree }),

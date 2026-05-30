@@ -136,6 +136,26 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
       log(`engine_prompt: project-path query failed for tab=${cmd.tabId}: ${(err as Error).message}`)
     }
 
+    // Resolve planFilePath from the renderer store so the engine can
+    // restore the plan file after a session restart instead of
+    // allocating a fresh slug. Same executeJavaScript pattern as
+    // projectPath above.
+    let planFilePath: string | undefined
+    try {
+      const escapedTabForPlan = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const pfp = await state.mainWindow.webContents.executeJavaScript(`
+        (function() {
+          var store = window.__Ion_SESSION_STORE__;
+          if (!store) return null;
+          var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTabForPlan}'; });
+          return tab && tab.planFilePath ? tab.planFilePath : null;
+        })()
+      `)
+      planFilePath = pfp || undefined
+    } catch (err) {
+      log(`engine_prompt: planFilePath query failed for tab=${cmd.tabId}: ${(err as Error).message}`)
+    }
+
     await processIncomingPrompt({
       tabId: cmd.tabId,
       text: rewrittenText,
@@ -147,6 +167,8 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
       instanceId,
       appendSystemPrompt: voicePrompt,
       projectPath,
+      implementationPhase: cmd.implementationPhase,
+      planFilePath,
     })
   } catch (err) {
     log(`engine_prompt error: ${(err as Error).message}`)

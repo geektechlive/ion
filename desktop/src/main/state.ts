@@ -132,3 +132,21 @@ export const extensionCommandRegistry = new Map<string, Set<string>>()
  */
 export const forwardedEnginePermissionDenials = new Set<string>()
 
+/**
+ * Last tab status forwarded to iOS for engine-view tabs.
+ *
+ * Engine-view events bypass `EngineControlPlane` (compound key mismatch:
+ * the control plane is keyed by bare tabId, engine-view events arrive as
+ * `tabId:instanceId`). That means no `tab-status-change` event fires on
+ * the sessionPlane for engine tabs — iOS never learns the tab transitioned
+ * from 'running' to 'idle'/'completed'.
+ *
+ * `wireEngineBridgeEvents` synthesizes `tab_status` messages for iOS from
+ * `engine_status.fields.state`. This map deduplicates: we only forward
+ * when the derived status differs from the last forwarded value.
+ *
+ * Keyed by bare tabId (not compound key) since `tab_status` is a per-tab
+ * concept on iOS.
+ */
+export const lastForwardedEngineTabStatus = new Map<string, string>()
+

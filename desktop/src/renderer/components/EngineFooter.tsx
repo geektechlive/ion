@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowsOutSimple, ArrowsInSimple, CaretDown } from '@phosphor-icons/react'
+import { ArrowsOutSimple, ArrowsInSimple, CaretDown, ListChecks, ShieldCheck } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { useSessionStore } from '../stores/sessionStore'
@@ -34,10 +34,15 @@ export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engine
   const popoverLayer = usePopoverLayer()
   const setEngineModel = useSessionStore((s) => s.setEngineModel)
   const engineDefaultModel = usePreferencesStore((s) => s.engineDefaultModel)
+  const permissionMode = useSessionStore(
+    (s) => s.tabs.find((t) => t.id === activeTabId)?.permissionMode ?? 'auto',
+  )
+  const setPermissionMode = useSessionStore((s) => s.setPermissionMode)
 
   const [hover, setHover] = useState(false)
   const barRef = useRef<HTMLSpanElement>(null)
   const [pos, setPos] = useState({ bottom: 0, left: 0 })
+  const [showModeConfirm, setShowModeConfirm] = useState(false)
 
   // Model picker state
   const [modelOpen, setModelOpen] = useState(false)
@@ -158,6 +163,24 @@ export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engine
               <span style={{ color: colors.textTertiary }}>|</span>
               <span style={{ color: '#e5a100', fontSize: 10, fontWeight: 500 }}>via CLI</span>
             </>}
+            <span style={{ color: colors.textTertiary }}>|</span>
+            <span
+              role="button"
+              onClick={() => setShowModeConfirm(true)}
+              style={{
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 2,
+                color: permissionMode === 'plan' ? '#2eb8a6' : colors.textTertiary,
+              }}
+              title="Permission mode — extensions control this; click to override"
+            >
+              {permissionMode === 'plan'
+                ? <ListChecks size={11} weight="bold" />
+                : <ShieldCheck size={11} weight="fill" />}
+              {permissionMode === 'plan' ? 'Plan' : 'Auto'}
+            </span>
           </>
         ) : (
           <span style={{ color: colors.textTertiary }}>--</span>
@@ -234,6 +257,83 @@ export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engine
           onClose={() => setModelOpen(false)}
           position={modelPos}
         />,
+        popoverLayer,
+      )}
+
+      {/* Permission mode override confirmation */}
+      {popoverLayer && showModeConfirm && createPortal(
+        <div
+          data-ion-ui
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            pointerEvents: 'auto',
+          }}
+          onClick={() => setShowModeConfirm(false)}
+        >
+          <div
+            data-ion-ui
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: colors.popoverBg,
+              backdropFilter: 'blur(20px)',
+              WebkitBackdropFilter: 'blur(20px)',
+              border: `1px solid ${colors.popoverBorder}`,
+              borderRadius: 12,
+              padding: '16px 20px',
+              maxWidth: 340,
+              boxShadow: colors.popoverShadow,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600, color: colors.textPrimary, marginBottom: 8 }}>
+              Change Mode
+            </div>
+            <div style={{ fontSize: 12, color: colors.textSecondary, lineHeight: 1.5, marginBottom: 16 }}>
+              The extension controls this tab&apos;s planning mode. Changing it manually may interfere with the extension&apos;s workflow.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                data-ion-ui
+                onClick={() => setShowModeConfirm(false)}
+                style={{
+                  background: 'none',
+                  border: `1px solid ${colors.containerBorder}`,
+                  borderRadius: 6,
+                  padding: '5px 14px',
+                  fontSize: 12,
+                  color: colors.textSecondary,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                data-ion-ui
+                onClick={() => {
+                  setPermissionMode(permissionMode === 'plan' ? 'auto' : 'plan', 'ui_dropdown')
+                  setShowModeConfirm(false)
+                }}
+                style={{
+                  background: colors.accent,
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '5px 14px',
+                  fontSize: 12,
+                  color: '#fff',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Switch to {permissionMode === 'plan' ? 'Auto' : 'Plan'}
+              </button>
+            </div>
+          </div>
+        </div>,
         popoverLayer,
       )}
     </div>

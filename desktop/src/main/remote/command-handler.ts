@@ -96,7 +96,8 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'respond_permission':
       sessionPlane.respondToPermission(cmd.tabId, cmd.questionId, cmd.optionId)
       break
-    case 'set_permission_mode': handleSetPermissionMode(cmd); break
+    case 'set_permission_mode': await handleSetPermissionMode(cmd); break
+    case 'reset_tab_session': sessionPlane.resetTabSession(cmd.tabId); break
     case 'load_conversation': await handleLoadConversation(cmd, deviceId); break
     case 'engine_prompt': await handleEnginePrompt(cmd, deviceId); break
     case 'engine_abort': handleEngineAbort(cmd); break

@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { IPC } from '../shared/types'
 import type { NormalizedEvent, EnrichedError } from '../shared/types'
 import { log as _log } from './logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry, forwardedEnginePermissionDenials } from './state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry, forwardedEnginePermissionDenials, lastForwardedEngineTabStatus } from './state'
 import { broadcast } from './broadcast'
 import { currentBackend } from './settings-store'
 import { normalizedToRemote } from './remote/protocol'
@@ -126,6 +126,41 @@ export function wireEngineBridgeEvents(): void {
             toolInput: denial.toolInput,
             options: [],
           }, true, { title: 'Ion needs your attention', body: pushBody })
+        }
+      }
+
+      // Synthesize a `tab_status` event for iOS when an engine-view
+      // `engine_status` reports a state transition. Engine-view events
+      // bypass EngineControlPlane (compound-key mismatch), so no
+      // `tab-status-change` fires on the sessionPlane — iOS never learns
+      // the tab moved from 'running' to 'idle'/'completed'. The desktop
+      // renderer handles this locally in engine-event-slice.ts, but iOS
+      // depends on explicit `tab_status` messages.
+      //
+      // Mirrors engine-control-plane-events.ts:handleStatusEvent logic:
+      //   - idle + AskUserQuestion/ExitPlanMode denials → 'completed'
+      //   - idle (no denials) → 'idle'
+      //   - running → 'running'
+      //
+      // Deduped via lastForwardedEngineTabStatus to avoid flooding on
+      // cost-only ticks (engine_status fires repeatedly with the same
+      // state while the run is in progress or idling).
+      if (event.type === 'engine_status' && event.fields?.state && instanceId) {
+        const fieldState = event.fields.state as string
+        let derivedStatus: string | null = null
+        if (fieldState === 'idle') {
+          const hasInteresting = Array.isArray(event.fields.permissionDenials) &&
+            event.fields.permissionDenials.some(
+              (d: { toolName: string }) => d.toolName === 'ExitPlanMode' || d.toolName === 'AskUserQuestion',
+            )
+          derivedStatus = hasInteresting ? 'completed' : 'idle'
+        } else if (fieldState === 'running') {
+          derivedStatus = 'running'
+        }
+        if (derivedStatus && lastForwardedEngineTabStatus.get(tabId) !== derivedStatus) {
+          lastForwardedEngineTabStatus.set(tabId, derivedStatus)
+          log(`engine_status: synthesizing tab_status for remote tabId=${tabId} instance=${instanceId} derivedStatus=${derivedStatus}`)
+          state.remoteTransport.send({ type: 'tab_status', tabId, status: derivedStatus as any })
         }
       }
 

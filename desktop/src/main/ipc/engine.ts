@@ -30,6 +30,27 @@ export function registerEngineIpc(): void {
     // happen for engine tabs in practice).
     const [tabId, instanceId] = key.includes(':') ? key.split(':', 2) : [key, null]
     const reqId = `desktop-engine-${Date.now()}`
+
+    // Resolve planFilePath from the renderer store so the engine can
+    // restore the plan file after a desktop restart instead of
+    // allocating a fresh slug. Mirrors the projectPath resolution
+    // pattern in remote/handlers/engine.ts.
+    let planFilePath: string | undefined
+    try {
+      const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const pfp = await state.mainWindow?.webContents.executeJavaScript(`
+        (function() {
+          var store = window.__Ion_SESSION_STORE__;
+          if (!store) return null;
+          var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTab}'; });
+          return tab && tab.planFilePath ? tab.planFilePath : null;
+        })()
+      `)
+      planFilePath = pfp || undefined
+    } catch (err) {
+      log(`IPC ENGINE_PROMPT: planFilePath query failed key=${key}: ${(err as Error).message}`)
+    }
+
     try {
       await processIncomingPrompt({
         tabId,
@@ -41,6 +62,7 @@ export function registerEngineIpc(): void {
         appendSystemPrompt,
         model,
         imageAttachments,
+        planFilePath,
       })
       return { ok: true }
     } catch (err) {
@@ -100,5 +122,10 @@ export function registerEngineIpc(): void {
     }
     log(`IPC SET_PERMISSION_MODE: tab=${tabId} mode=${mode} source=${source ?? 'unknown'}`)
     sessionPlane.setPermissionMode(tabId, mode, source)
+  })
+
+  ipcMain.on('ion:engine-set-plan-mode', (_event, key: string, enabled: boolean) => {
+    log(`IPC engine-set-plan-mode: key=${key} enabled=${enabled}`)
+    engineBridge.sendSetPlanMode(key, enabled, undefined, 'prompt_sync')
   })
 }

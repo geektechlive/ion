@@ -28,6 +28,13 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         hasChosenDirectory: !!(dir || defaultBase),
         pillIcon: 'lightning',
         groupId,
+        // Engine tabs start in auto mode regardless of the desktop default.
+        // Extensions control plan mode via ctx.SetPlanMode — the user's
+        // default permission mode preference applies to CLI tabs only.
+        permissionMode: 'auto',
+        // Clear the plan-model override that makeLocalTab may have set
+        // (it applies the split model when defaultPermissionMode is 'plan').
+        modelOverride: null,
       }
 
       set((state) => ({
@@ -299,6 +306,14 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
+      // Sync plan mode to the engine session via compound key before
+      // submitting the prompt. The engine session is keyed by
+      // `tabId:instanceId`; the generic setPermissionMode path uses
+      // bare tabId which silently misses the engine session.
+      const currentTab = get().tabs.find(t => t.id === tabId)
+      if (currentTab?.permissionMode === 'plan') {
+        window.ion.engineSetPlanMode(key, true)
+      }
       // Build a FileAttachment list from the encoded image attachments so
       // the user-message bubble can render images inline. The path is the
       // only field needed at render time; main-side READ_IMAGE_DATA_URL

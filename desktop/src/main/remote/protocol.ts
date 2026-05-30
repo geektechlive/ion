@@ -81,10 +81,11 @@ export type RemoteCommand =
   | { type: 'create_tab'; workingDirectory?: string; pinToGroupId?: string }
   | { type: 'create_terminal_tab'; workingDirectory?: string }
   | { type: 'close_tab'; tabId: string }
-  | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }
+  | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean }
   | { type: 'cancel'; tabId: string }
   | { type: 'respond_permission'; tabId: string; questionId: string; optionId: string }
   | { type: 'set_permission_mode'; tabId: string; mode: 'auto' | 'plan' }
+  | { type: 'reset_tab_session'; tabId: string }
   | { type: 'load_conversation'; tabId: string; before?: string }
   | { type: 'terminal_input'; tabId: string; instanceId: string; data: string }
   | { type: 'terminal_resize'; tabId: string; instanceId: string; cols: number; rows: number }
@@ -97,7 +98,7 @@ export type RemoteCommand =
   | { type: 'rewind'; tabId: string; messageId: string }
   | { type: 'fork_from_message'; tabId: string; messageId: string }
   | { type: 'create_engine_tab'; workingDirectory?: string; profileId?: string }
-  | { type: 'engine_prompt'; tabId: string; instanceId?: string; text: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }
+  | { type: 'engine_prompt'; tabId: string; instanceId?: string; text: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean }
   | { type: 'engine_abort'; tabId: string; instanceId?: string }
   | { type: 'engine_dialog_response'; tabId: string; instanceId?: string; dialogId: string; value: any }
   | { type: 'engine_add_instance'; tabId: string }
