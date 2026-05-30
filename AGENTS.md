@@ -39,6 +39,10 @@ Cohesion of change: a feature lives in one folder. Full reference: `docs/archite
 
 Run `make hooks` once per clone to point git at `.githooks/`. The pre-push hook runs `make check-file-sizes` so cap violations fail locally before reaching CI. Bypass with `--no-verify` only when intentional.
 
+## Forbidden commands
+
+**Never run `make desktop`.** It builds, packages, installs to `/Applications`, and relaunches the desktop app. If you are running inside an Ion session, this kills the engine process hosting your conversation and often loses conversation state. The user runs `make desktop` manually when they are ready. If a desktop rebuild is needed, tell the user to run it.
+
 ## Quality gates (must pass before merge)
 
 | Gate | Command |
