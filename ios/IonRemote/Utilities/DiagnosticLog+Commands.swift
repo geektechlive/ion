@@ -20,7 +20,10 @@ extension DiagnosticLog {
         case .closeTab(let tabId):
             log("CMD: closeTab tabId=\(tabId.prefix(8))")
 
-        case .prompt(let tabId, let text, _, let clientMsgId, let attachments):
+        case .resetTabSession(let tabId):
+            log("CMD: resetTabSession tabId=\(tabId.prefix(8))")
+
+        case .prompt(let tabId, let text, _, let clientMsgId, let attachments, _):
             log("CMD: prompt tabId=\(tabId.prefix(8)) len=\(text.count) msgId=\(clientMsgId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
 
         case .cancel(let tabId):
@@ -71,7 +74,7 @@ extension DiagnosticLog {
         case .createEngineTab(let dir, let profileId):
             log("CMD: createEngineTab dir=\(dir?.suffix(30) ?? "nil") profile=\(profileId ?? "nil")")
 
-        case .enginePrompt(let tabId, let text, let instId, let attachments):
+        case .enginePrompt(let tabId, let text, let instId, let attachments, _):
             log("CMD: enginePrompt tabId=\(tabId.prefix(8)) len=\(text.count) inst=\(instId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
 
         case .engineAbort(let tabId, let instId):

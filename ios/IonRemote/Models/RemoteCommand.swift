@@ -12,6 +12,7 @@ enum RemoteCommand: Codable, Sendable {
     case createTab(workingDirectory: String?, pinToGroupId: String? = nil)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
+    case resetTabSession(tabId: String)
     /// User-typed prompt routed to the desktop's prompt pipeline.
     ///
     /// iOS does NOT carry the harness-supplied EnterPlanMode tool
@@ -28,7 +29,7 @@ enum RemoteCommand: Codable, Sendable {
     /// `enterPlanModeDescription` field of its own if it ever became
     /// an independent harness — at which point it would also need its
     /// own copy of the prose. Today the wire stays minimal.
-    case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil)
+    case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil, implementationPhase: Bool? = nil)
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)
     case setPermissionMode(tabId: String, mode: PermissionMode)
@@ -45,7 +46,7 @@ enum RemoteCommand: Codable, Sendable {
     case forkFromMessage(tabId: String, messageId: String)
     case unpair
     case createEngineTab(workingDirectory: String?, profileId: String?)
-    case enginePrompt(tabId: String, text: String, instanceId: String? = nil, attachments: [CommandAttachment]? = nil)
+    case enginePrompt(tabId: String, text: String, instanceId: String? = nil, attachments: [CommandAttachment]? = nil, implementationPhase: Bool? = nil)
     case engineAbort(tabId: String, instanceId: String? = nil)
     case engineDialogResponse(tabId: String, dialogId: String, value: String, instanceId: String? = nil)
     case engineAddInstance(tabId: String)
@@ -119,6 +120,7 @@ enum RemoteCommand: Codable, Sendable {
         case createTab = "create_tab"
         case createTerminalTab = "create_terminal_tab"
         case closeTab = "close_tab"
+        case resetTabSession = "reset_tab_session"
         case prompt
         case cancel
         case respondPermission = "respond_permission"
@@ -196,7 +198,7 @@ enum RemoteCommand: Codable, Sendable {
         // project root. New CodingKeys (no collision with existing entries);
         // checked against the full enum above before adding.
         case oldPath, newPath
-        case attachments, dataUrl, name, correlationId, orderedIds
+        case attachments, dataUrl, name, correlationId, orderedIds, implementationPhase
         case enabled, systemPrompt
         case logs, deviceId, deviceName
         case sourceTabId, targetTabId
@@ -230,6 +232,10 @@ enum RemoteCommand: Codable, Sendable {
         case .closeTab:
             let tabId = try container.decode(String.self, forKey: .tabId)
             self = .closeTab(tabId: tabId)
+
+        case .resetTabSession:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            self = .resetTabSession(tabId: tabId)
 
         case .prompt:
             let tabId = try container.decode(String.self, forKey: .tabId)

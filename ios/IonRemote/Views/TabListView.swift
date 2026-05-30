@@ -307,7 +307,10 @@ struct TabListView: View {
                             } label: {
                                 Label("Rename", systemImage: "pencil")
                             }
-                            if viewModel.tabGroupMode == "manual" {
+                            // Pin/unpin and move-to-group-and-pin are irrelevant for
+                            // engine tabs — they are multiplexed (multiple sub-conversations)
+                            // and shouldn't auto-move between groups.
+                            if viewModel.tabGroupMode == "manual" && tab.isEngine != true {
                                 Button {
                                     viewModel.toggleTabGroupPin(tabId: tab.id)
                                 } label: {
@@ -341,6 +344,21 @@ struct TabListView: View {
                                         }
                                     } label: {
                                         Label("Move to Group and Pin", systemImage: "pin")
+                                    }
+                                }
+                            } else if viewModel.tabGroupMode == "manual" && tab.isEngine == true {
+                                // Engine tabs: allow plain move-to-group (manual
+                                // organization) but skip pin/unpin and move-and-pin.
+                                let targets = viewModel.tabGroups.filter { $0.id != tab.groupId }
+                                if !targets.isEmpty {
+                                    Menu {
+                                        ForEach(targets) { target in
+                                            Button(target.label) {
+                                                viewModel.moveTabToGroup(tabId: tab.id, groupId: target.id)
+                                            }
+                                        }
+                                    } label: {
+                                        Label("Move to Group", systemImage: "arrow.right.arrow.left")
                                     }
                                 }
                             }

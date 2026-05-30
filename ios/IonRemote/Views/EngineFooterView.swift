@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Single-line status footer for engine tabs showing label, team, model picker, and context.
+/// Single-line status footer for engine tabs showing label, team, model picker, mode, and context.
 struct EngineFooterView: View {
     let fields: StatusFields
     let onSelectModel: (String) -> Void
@@ -8,6 +8,13 @@ struct EngineFooterView: View {
 
     /// Currently selected model override (if any); falls back to engine-reported model.
     var selectedModel: String = "claude-sonnet-4-6"
+
+    /// Current permission mode for this engine tab (nil hides the toggle).
+    var permissionMode: PermissionMode?
+    /// Called when the user confirms a mode override.
+    var onToggleMode: (() -> Void)?
+
+    @State private var showModeConfirm = false
 
     private var displayLabel: String {
         if selectedModel.isEmpty {
@@ -64,6 +71,25 @@ struct EngineFooterView: View {
                 .foregroundStyle(.secondary)
             }
 
+            // Permission mode toggle — engine tabs are extension-controlled,
+            // so tapping shows a confirmation before overriding.
+            if let mode = permissionMode, onToggleMode != nil {
+                Divider()
+                    .frame(height: 12)
+
+                Button {
+                    showModeConfirm = true
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: mode == .plan ? "doc.text" : "bolt.fill")
+                        Text(mode == .plan ? "Plan" : "Auto")
+                            .fontWeight(.medium)
+                    }
+                    .foregroundStyle(mode == .plan ? IonTheme.accent : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
             Spacer()
 
             // Context usage
@@ -85,6 +111,19 @@ struct EngineFooterView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.ultraThinMaterial)
+        .confirmationDialog(
+            "Change Mode",
+            isPresented: $showModeConfirm,
+            titleVisibility: .visible
+        ) {
+            let targetMode = permissionMode == .plan ? "Auto" : "Plan"
+            Button("Switch to \(targetMode)") {
+                onToggleMode?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The extension controls this tab's planning mode. Changing it manually may interfere with the extension's workflow.")
+        }
     }
 
     private var contextColor: Color {

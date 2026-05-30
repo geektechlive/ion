@@ -338,7 +338,13 @@ struct EngineView: View {
                         viewModel.setEngineModel(tabId: tabId, model: model)
                     },
                     availableModels: viewModel.availableModels,
-                    selectedModel: viewModel.engineModelOverrides[compoundKey] ?? ""
+                    selectedModel: viewModel.engineModelOverrides[compoundKey] ?? "",
+                    permissionMode: viewModel.tab(for: tabId)?.permissionMode,
+                    onToggleMode: {
+                        guard let current = viewModel.tab(for: tabId)?.permissionMode else { return }
+                        let newMode: PermissionMode = current == .plan ? .auto : .plan
+                        viewModel.setPermissionMode(tabId: tabId, mode: newMode)
+                    }
                 )
             }
             Divider()

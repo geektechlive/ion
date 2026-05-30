@@ -88,7 +88,7 @@ struct TabRowView: View {
 
             Spacer()
 
-            if tab.groupPinned == true {
+            if tab.groupPinned == true && tab.isEngine != true {
                 Image(systemName: "pin.fill")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)

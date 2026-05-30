@@ -17,8 +17,17 @@ struct PlanApprovalCardView: View {
         request.toolInput?["planFilePath"]?.value as? String
     }
 
-    private var isGroupPinned: Bool {
-        viewModel.tabs.first(where: { $0.id == tabId })?.groupPinned == true
+    private var tab: RemoteTabState? {
+        viewModel.tabs.first(where: { $0.id == tabId })
+    }
+
+    /// Show the split "Implement and Unpin" / "Implement" row only for
+    /// pinned conversation tabs. Engine tabs are multiplexed (multiple
+    /// sub-conversations under one tab) and shouldn't auto-move between
+    /// groups, so pin/unpin is irrelevant — always show a single
+    /// "Implement" button.
+    private var showUnpinOption: Bool {
+        tab?.groupPinned == true && tab?.isEngine != true
     }
 
     var body: some View {
@@ -90,7 +99,7 @@ struct PlanApprovalCardView: View {
                 }
 
                 // Action buttons — split row when pinned, single button otherwise
-                if isGroupPinned {
+                if showUnpinOption {
                     GeometryReader { geo in
                         let spacing: CGFloat = 8
                         // Subtract the card's .padding() insets (16pt each side) so
