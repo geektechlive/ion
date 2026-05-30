@@ -94,6 +94,9 @@ export class EngineControlPlane extends EventEmitter {
     tab.conversationId = null
     tab.engineSessionStarted = false
     tab.promptCount = 0
+    tab.activeRequestId = null
+    tab.status = 'idle'         // Prevent stale events from the dying session
+    tab.startedAt = 0           // from triggering task_complete synthesis
   }
 
   closeTab(tabId: string): void {
