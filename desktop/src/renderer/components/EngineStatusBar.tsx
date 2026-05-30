@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { Plus, X } from '@phosphor-icons/react'
 import { Reorder } from 'framer-motion'
+import { useShallow } from 'zustand/shallow'
 import { useColors } from '../theme'
 import { useSessionStore } from '../stores/sessionStore'
 import type { EngineInstance } from '../../shared/types'
@@ -21,6 +22,23 @@ export function EngineStatusBar({ tabId }: Props) {
   // AskUserQuestion / ExitPlanMode denial. The map identity changes on
   // every write in engine-event-slice.ts.
   useSessionStore((s) => s.enginePermissionDenied)
+  // Subscribe to engineStatusFields and project it into a per-instance
+  // {instanceId → state} map so the renderTab closure below can read
+  // each pill's running-state without calling hooks inside .map().
+  // engine-event-slice.ts replaces the entry for `${tabId}:${instanceId}`
+  // on every engine_status event, so the map identity changes on every
+  // status tick and React re-runs this selector. We use useShallow so
+  // we don't re-render unless the {id, state} pairs actually change.
+  const engineStateByInstance = useSessionStore(
+    useShallow((s) => {
+      const out = new Map<string, string>()
+      for (const inst of pane?.instances || []) {
+        const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
+        if (state) out.set(inst.id, state)
+      }
+      return out
+    }),
+  )
   // Other engine tabs this instance can be moved to
   const engineTargetTabs = tabs.filter((t) => t.isEngine && t.id !== tabId)
 
@@ -72,14 +90,34 @@ export function EngineStatusBar({ tabId }: Props) {
     // instance has the pending denial. The parent-tab pill in TabStrip
     // bubbles "any instance waiting" via getWaitingState().
     const waitingState = getEngineInstanceWaitingState(`${tabId}:${inst.id}`)
+    // Per-instance running indicator. When an engine instance has an
+    // active run in flight, surface that on its inner pill so users
+    // with multiple engine conversations in one tab can see at a glance
+    // which ones are working. Sourced from the engine_status snapshot
+    // map (populated in engine-event-slice.ts case 'engine_status'),
+    // which is the same authoritative idle/running signal that drives
+    // the outer tab pill and the EngineView Interrupt button. Only
+    // shown when the waiting-state dot isn't already taking the slot —
+    // 'question' / 'plan-ready' are stickier user-facing states and
+    // win the dot for the same reasons TabStripStatusDot prefers them
+    // over the running dot.
+    const engineState = engineStateByInstance.get(inst.id)
+    const isRunningState =
+      engineState === 'running' || engineState === 'starting' || engineState === 'connecting'
     const dotColor =
       waitingState === 'question' ? colors.infoText :
         waitingState === 'plan-ready' ? colors.statusComplete :
-          null
+          isRunningState ? colors.statusRunning :
+            null
     const dotGlow =
       waitingState === 'question' ? colors.tabGlowQuestion :
         waitingState === 'plan-ready' ? colors.tabGlowPlanReady :
           null
+    // Pulse the dot only for the live "running" indicator — the waiting
+    // dots use the steady glow established by TabStripStatusDot to
+    // distinguish "the engine is doing work" from "the engine is
+    // waiting on you".
+    const dotPulse = !waitingState && isRunningState
     return (
       <Reorder.Item
         key={inst.id}
@@ -111,7 +149,7 @@ export function EngineStatusBar({ tabId }: Props) {
       >
         {dotColor && (
           <span
-            className="flex-shrink-0"
+            className={`flex-shrink-0 ${dotPulse ? 'animate-pulse-dot' : ''}`}
             style={{
               width: 6,
               height: 6,
