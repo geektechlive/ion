@@ -143,6 +143,7 @@
 		A1B2C3D4E5F60001005302AA /* AttachmentImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005303AA /* AttachmentImagePreview.swift */; };
 		A1B2C3D4E5F60001005304AA /* RemoteImageFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */; };
 		A1B2C3D4E5F60001009000AA /* TabSearchHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009001AA /* TabSearchHelper.swift */; };
+		A1B2C3D4E5F60001009D01AA /* SafeDecodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009D00AA /* SafeDecodable.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -295,6 +296,7 @@
 		A1B2C3D4E5F60001006001AA /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteImageFetcher.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009001AA /* TabSearchHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabSearchHelper.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001009D00AA /* SafeDecodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeDecodable.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -540,6 +542,7 @@
 				A1B2C3D4E5F60001005301AA /* AttachmentImageCache.swift */,
 				A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */,
 				A1B2C3D4E5F60001009001AA /* TabSearchHelper.swift */,
+				A1B2C3D4E5F60001009D00AA /* SafeDecodable.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -801,6 +804,7 @@
 				A1B2C3D4E5F60001005210AA /* VoiceInputOverlay.swift in Sources */,
 				A1B2C3D4E5F60001005102AA /* KeychainHelper.swift in Sources */,
 				A1B2C3D4E5F60001009000AA /* TabSearchHelper.swift in Sources */,
+				A1B2C3D4E5F60001009D01AA /* SafeDecodable.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
