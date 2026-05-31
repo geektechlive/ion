@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.31.2](https://github.com/dsswift/ion/compare/engine-v1.31.1...engine-v1.31.2) (2026-05-31)
+
+### Bug Fixes
+
+* **engine:** intercept exit plan mode in all modes ([30b094d](https://github.com/dsswift/ion/commit/30b094d034a74977351dceabdaecffa189045759))
+
 ## [1.31.1](https://github.com/dsswift/ion/compare/engine-v1.31.0...engine-v1.31.1) (2026-05-31)
 
 ### Bug Fixes

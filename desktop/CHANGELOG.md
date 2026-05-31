@@ -10,6 +10,17 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.45.0](https://github.com/dsswift/ion/compare/desktop-v1.44.0...desktop-v1.45.0) (2026-05-31)
+
+### Features
+
+* **desktop:** add running state to engine instances ([e7a34a6](https://github.com/dsswift/ion/commit/e7a34a69f34bd904a6ebf4e22e8412ecb271b26d))
+
+### Bug Fixes
+
+* **desktop:** prevent mousedown handler from dismissing confirm dialog ([3f83d36](https://github.com/dsswift/ion/commit/3f83d36a57f62382e5bf4f36f808dc8551f7cf71))
+* **desktop:** flush tab state before app exit ([60d39a3](https://github.com/dsswift/ion/commit/60d39a3ab766daf6ed04f7c41b3b9a024f45fd96))
+
 ## [1.44.0](https://github.com/dsswift/ion/compare/desktop-v1.43.0...desktop-v1.44.0) (2026-05-31)
 
 ### Features
