@@ -232,7 +232,44 @@ Read the response from stdin:
 {"jsonrpc":"2.0","id":100001,"result":{"ok":true}}
 ```
 
+**Recalling an agent:**
+
+```json
+{"jsonrpc":"2.0","id":100002,"method":"ext/recall_agent","params":{"name":"researcher","reason":"no longer needed"}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":100002,"result":{"found":true}}
+```
+
+The `found` field is `true` when a running background dispatch was found and recalled, `false` otherwise.
+
 Your extension needs to handle both incoming requests (from engine) and incoming responses (to your outgoing requests) on the same stdin stream. Distinguish them by checking whether the message has a `method` field (incoming request) or not (response to your request).
+
+## Dispatch lifecycle notifications
+
+When a background dispatch is active (started with `ext/dispatch_agent` and `background: true`), the engine sends lifecycle notifications *to* the extension on stdin. These are JSON-RPC notifications (no `id` field) that your extension receives:
+
+| Method | When | Payload |
+|--------|------|---------|
+| `dispatch_complete` | Background agent finished successfully | `{name, output, exitCode, elapsed, cost, inputTokens, outputTokens, sessionId}` |
+| `dispatch_error` | Background agent failed | `{name, message, exitCode, elapsed}` |
+| `dispatch_recall` | Background agent was recalled | `{name, reason, elapsed, toolCount}` |
+| `dispatch_tool_start` | Tool invocation began in child | `{name, toolName, toolId}` |
+| `dispatch_tool_end` | Tool completed in child | `{name, toolName, toolId, content}` |
+| `dispatch_tool_error` | Tool errored in child | `{name, toolName, toolId, content}` |
+| `dispatch_usage` | Token usage update from child | `{name, inputTokens, outputTokens, cumulativeInputTokens, cumulativeOutputTokens, cumulativeCost}` |
+| `dispatch_text_delta` | Streaming text from child | `{name, delta, accumulated}` |
+
+Example incoming notification:
+
+```json
+{"jsonrpc":"2.0","method":"dispatch_complete","params":{"name":"researcher","output":"Found 12 TODOs","exitCode":0,"elapsed":8.3,"cost":0.012,"inputTokens":5000,"outputTokens":2000}}
+```
+
+Handle these by checking the `method` field on incoming messages alongside the existing `hook/*`, `tool/*`, and `command/*` patterns.
 
 ## Key implementation notes
 

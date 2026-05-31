@@ -133,7 +133,7 @@ type ForkInfo struct {
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
-| `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt}` | Last non-nil wins. Injects system prompt into the sub-agent. |
+| `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt, AgentName}` | Last non-empty wins per field independently. Injects system prompt and/or resolves agent name. |
 | `before_provider_request` | Immediately before each outbound LLM provider call from the agent loop. Fires once per turn (including fallback hops). | `BeforeProviderRequestInfo{Provider, Model, TurnNumber, MessageCount, ToolCount, HasSystemPrompt, MaxTokens}` | ignored | Observe only |
 
 ### Payload Types
@@ -141,7 +141,8 @@ type ForkInfo struct {
 **BeforeAgentStartResult**
 ```go
 type BeforeAgentStartResult struct {
-    SystemPrompt string
+    SystemPrompt string `json:"systemPrompt,omitempty"` // injected system prompt; empty = no change
+    AgentName    string `json:"agentName,omitempty"`    // override agent name; empty = no change
 }
 ```
 
