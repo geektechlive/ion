@@ -256,7 +256,12 @@ struct EngineView: View {
                 let agentList = ScrollView {
                     VStack(spacing: 4) {
                         ForEach(visibleAgents) { agent in
-                            AgentBarRow(agent: agent)
+                            AgentBarRow(
+                                agent: agent,
+                                messages: viewModel.agentConversationMessages[agent.name],
+                                isLoadingMessages: viewModel.agentConversationLoading.contains(agent.name),
+                                onExpand: { viewModel.loadAgentConversation(agent: agent) }
+                            )
                         }
                     }
                     .padding(.horizontal, 8)

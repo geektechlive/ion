@@ -55,6 +55,7 @@ enum RemoteCommand: Codable, Sendable {
     case engineSelectInstance(tabId: String, instanceId: String)
     case engineMoveInstance(sourceTabId: String, instanceId: String, targetTabId: String)
     case loadEngineConversation(tabId: String, instanceId: String?)
+    case loadAgentConversation(conversationIds: [String])
     case setTabGroupMode(mode: String)
     case moveTabToGroup(tabId: String, groupId: String)
     case toggleTabGroupPin(tabId: String)
@@ -147,6 +148,7 @@ enum RemoteCommand: Codable, Sendable {
         case engineSelectInstance = "engine_select_instance"
         case engineMoveInstance = "engine_move_instance"
         case loadEngineConversation = "load_engine_conversation"
+        case loadAgentConversation = "load_agent_conversation"
         case setTabGroupMode = "set_tab_group_mode"
         case moveTabToGroup = "move_tab_to_group"
         case toggleTabGroupPin = "toggle_tab_group_pin"
@@ -209,6 +211,7 @@ enum RemoteCommand: Codable, Sendable {
         // we declare only `key` here and reuse the existing `value`
         // CodingKey above.
         case key
+        case conversationIds
     }
 
     init(from decoder: Decoder) throws {
@@ -378,6 +381,10 @@ enum RemoteCommand: Codable, Sendable {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             self = .loadEngineConversation(tabId: tabId, instanceId: instanceId)
+
+        case .loadAgentConversation:
+            let conversationIds = try container.decode([String].self, forKey: .conversationIds)
+            self = .loadAgentConversation(conversationIds: conversationIds)
 
         case .setTabGroupMode:
             let mode = try container.decode(String.self, forKey: .mode)

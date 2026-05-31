@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 // MARK: - Engine Event Handlers
 
@@ -137,5 +138,34 @@ extension SessionViewModel {
         engineMessages.removeValue(forKey: removedKey)
         engineConversationLoaded.remove(removedKey)
         engineTurnHasText.remove(removedKey)
+    }
+
+    // MARK: - Agent conversation history
+
+    @MainActor
+    func handleAgentConversationHistory(agentName: String, messages: [EngineMessage]) {
+        let filtered = messages.filter { $0.isInternal != true }
+        DiagnosticLog.log("ENGINE: agent_conversation_history agent=\(agentName) count=\(messages.count) filtered=\(filtered.count)")
+        agentConversationMessages[agentName] = filtered
+        agentConversationLoading.remove(agentName)
+    }
+
+    @MainActor
+    func loadAgentConversation(agent: AgentStateUpdate) {
+        guard !agent.conversationIds.isEmpty else { return }
+        guard !agentConversationLoading.contains(agent.name) else { return }
+        DiagnosticLog.log("ENGINE: loading agent conversation agent=\(agent.name) convIds=\(agent.conversationIds)")
+        agentConversationLoading.insert(agent.name)
+        send(.loadAgentConversation(conversationIds: agent.conversationIds))
+    }
+
+    // MARK: - Diagnostic log request
+
+    @MainActor
+    func handleRequestDiagnosticLogs() {
+        let logs = DiagnosticLog.exportAllSessions()
+        let deviceId = activeDeviceId ?? "unknown"
+        let deviceName = UIDevice.current.name
+        send(.diagnosticLogsResponse(logs: logs, deviceId: deviceId, deviceName: deviceName))
     }
 }

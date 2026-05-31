@@ -254,6 +254,9 @@ extension SessionViewModel {
             engineMessages[key] = filtered
             engineConversationLoaded.insert(key)
 
+        case .agentConversationHistory(let agentName, let messages):
+            handleAgentConversationHistory(agentName: agentName, messages: messages)
+
         case .engineDead(let tabId, let instanceId, let exitCode, let signal, let stderrTail):
             handleEngineDead(tabId: tabId, instanceId: instanceId, exitCode: exitCode, signal: signal, stderrTail: stderrTail)
 
@@ -585,16 +588,6 @@ extension SessionViewModel {
         } else {
             pendingUploadResults.append(UploadAttachmentResult(id: id, name: name, path: path, correlationId: correlationId, error: nil))
         }
-    }
-
-    // MARK: - Diagnostic log request
-
-    @MainActor
-    private func handleRequestDiagnosticLogs() {
-        let logs = DiagnosticLog.exportAllSessions()
-        let deviceId = activeDeviceId ?? "unknown"
-        let deviceName = UIDevice.current.name
-        send(.diagnosticLogsResponse(logs: logs, deviceId: deviceId, deviceName: deviceName))
     }
 
 }

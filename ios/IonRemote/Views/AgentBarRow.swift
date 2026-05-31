@@ -3,6 +3,9 @@ import SwiftUI
 /// A single agent bar row: compact header + expandable conversation body.
 struct AgentBarRow: View {
     let agent: AgentStateUpdate
+    let messages: [EngineMessage]?
+    let isLoadingMessages: Bool
+    let onExpand: (() -> Void)?
     @State private var isExpanded = false
     @State private var now = Date()
 
@@ -22,6 +25,7 @@ struct AgentBarRow: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     withAnimation(.snappy(duration: 0.15)) { isExpanded.toggle() }
+                    if isExpanded { onExpand?() }
                 }
             if isExpanded { expandedBody }
         }
@@ -113,8 +117,24 @@ struct AgentBarRow: View {
                         dispatchBubble(task)
                     }
 
-                    // Agent output — rendered as markdown
-                    if let fullOutput = agent.fullOutput, !fullOutput.isEmpty {
+                    // Agent conversation history (loaded on expand).
+                    // When loaded, replaces fullOutput (matches desktop behavior).
+                    // Skips user messages whose content matches the dispatch task
+                    // already shown in the bubble above.
+                    if let msgs = messages, !msgs.isEmpty {
+                        ForEach(conversationMessages(msgs)) { msg in
+                            conversationBubble(msg)
+                        }
+                    } else if isLoadingMessages {
+                        HStack(spacing: 6) {
+                            ProgressView().scaleEffect(0.6)
+                            Text("Loading conversation…")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 12)
+                    } else if let fullOutput = agent.fullOutput, !fullOutput.isEmpty {
+                        // Fallback: show fullOutput only when no conversation loaded
                         MarkdownContentView(
                             blocks: MarkdownBlockCache.shared.blocks(for: fullOutput)
                         )
@@ -153,6 +173,52 @@ struct AgentBarRow: View {
         .background(Color.orange.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 10)
+    }
+
+    // MARK: - Conversation rendering
+
+    /// Filters conversation messages: drops user messages whose content
+    /// matches the dispatch task (already shown in the bubble) and drops
+    /// tool/system messages (matches desktop's groupMessages behavior).
+    private func conversationMessages(_ msgs: [EngineMessage]) -> [EngineMessage] {
+        let task = agent.task ?? ""
+        return msgs.filter { msg in
+            guard msg.role == "assistant" || msg.role == "user" else { return false }
+            if msg.role == "user" && !task.isEmpty && msg.content.trimmingCharacters(in: .whitespacesAndNewlines) == task.trimmingCharacters(in: .whitespacesAndNewlines) {
+                return false
+            }
+            return !msg.content.isEmpty
+        }
+    }
+
+    /// Renders a single conversation message with role-appropriate styling.
+    @ViewBuilder
+    private func conversationBubble(_ msg: EngineMessage) -> some View {
+        if msg.role == "user" {
+            // User messages as a subtle bubble (distinct from dispatch)
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "person.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                Text(msg.content)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.systemGray5).opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 10)
+        } else {
+            // Assistant messages as markdown
+            MarkdownContentView(
+                blocks: MarkdownBlockCache.shared.blocks(for: msg.content)
+            )
+            .textSelection(.enabled)
+            .padding(.horizontal, 12)
+        }
     }
 
     // MARK: - Helpers

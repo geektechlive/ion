@@ -152,6 +152,9 @@ final class SessionViewModel {
     var engineMessages: [String: [EngineMessage]] = [:]         // compoundKey -> messages
     var engineConversationLoaded: Set<String> = []               // compoundKeys that have loaded history
     var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
+    // Agent dispatch conversation history (per agent name)
+    var agentConversationMessages: [String: [EngineMessage]] = [:]  // agentName -> messages
+    var agentConversationLoading: Set<String> = []                   // agent names currently loading
     // Engine instance state (per engine tab)
     var engineInstances: [String: [EngineInstanceInfo]] = [:]   // tabId -> instances
     var activeEngineInstance: [String: String] = [:]              // tabId -> active instanceId

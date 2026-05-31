@@ -74,6 +74,7 @@ enum RemoteEvent: Codable, Sendable {
     /// is the same pass-through JSON helper used by `desktopSettingsSnapshot`.
     case engineHarnessMessage(tabId: String, instanceId: String?, message: String, source: String?, metadata: [String: AnyCodable]?)
     case engineConversationHistory(tabId: String, instanceId: String?, messages: [EngineMessage])
+    case agentConversationHistory(agentName: String, messages: [EngineMessage])
     case engineModelOverride(tabId: String, instanceId: String?, model: String)
     case engineProfiles(profiles: [EngineProfile])
     /// Workflow event from the engine: the model has proposed a plan-mode
@@ -257,6 +258,7 @@ enum RemoteEvent: Codable, Sendable {
         case engineInstanceMoved = "engine_instance_moved"
         case engineHarnessMessage = "engine_harness_message"
         case engineConversationHistory = "engine_conversation_history"
+        case agentConversationHistory = "agent_conversation_history"
         case engineModelOverride = "engine_model_override"
         case engineProfiles = "engine_profiles"
         case enginePlanProposal = "engine_plan_proposal"
@@ -348,6 +350,7 @@ enum RemoteEvent: Codable, Sendable {
         // like `metadata.dedupKey` without a wire change. See
         // docs/protocol/server-events.md for well-known keys.
         case metadata
+        case agentName
     }
 
     // MARK: - Decoder

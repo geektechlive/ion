@@ -166,6 +166,10 @@ extension RemoteCommand {
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
 
+        case .loadAgentConversation(let conversationIds):
+            try container.encode(TypeKey.loadAgentConversation, forKey: .type)
+            try container.encode(conversationIds, forKey: .conversationIds)
+
         case .setTabGroupMode(let mode):
             try container.encode(TypeKey.setTabGroupMode, forKey: .type)
             try container.encode(mode, forKey: .mode)

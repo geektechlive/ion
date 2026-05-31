@@ -39,6 +39,7 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
     let color: String?
     let model: String?
     let startTime: Double?   // Unix timestamp in seconds
+    let conversationIds: [String]
 
     /// Whether this agent should be shown in the UI based on visibility rules.
     var isVisible: Bool {
@@ -76,6 +77,13 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
             startTime = Double(st)
         } else {
             startTime = nil
+        }
+        if let ids = meta["conversationIds"]?.value as? [AnyCodable] {
+            conversationIds = ids.compactMap { $0.value as? String }
+        } else if let id = meta["conversationId"]?.value as? String {
+            conversationIds = [id]
+        } else {
+            conversationIds = []
         }
 
         // Bool and numeric values may arrive as various types
@@ -120,6 +128,7 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
         if let color { meta["color"] = AnyCodable(color) }
         if let model { meta["model"] = AnyCodable(model) }
         if let startTime { meta["startTime"] = AnyCodable(startTime) }
+        if !conversationIds.isEmpty { meta["conversationIds"] = AnyCodable(conversationIds.map { AnyCodable($0) }) }
         try container.encode(meta, forKey: .metadata)
     }
 }

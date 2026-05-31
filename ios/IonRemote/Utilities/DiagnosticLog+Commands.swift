@@ -101,6 +101,9 @@ extension DiagnosticLog {
         case .loadEngineConversation(let tabId, let instId):
             log("CMD: loadEngineConversation tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
 
+        case .loadAgentConversation(let conversationIds):
+            log("CMD: loadAgentConversation ids=\(conversationIds.count)")
+
         case .setTabGroupMode(let mode):
             log("CMD: setTabGroupMode mode=\(mode)")
 
