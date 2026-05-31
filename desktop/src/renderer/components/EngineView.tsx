@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useSessionStore } from '../stores/sessionStore'
+import { usePreferencesStore } from '../preferences'
 import { useColors } from '../theme'
 import { EngineDialog } from './EngineDialog'
 import { EngineStatusBar } from './EngineStatusBar'
@@ -181,17 +182,13 @@ export function EngineView({ tabId }: EngineViewProps) {
 
   // ─── Permission-denied card handlers ───
   //
-  // EngineView's variant of usePermissionDeniedHandlers. The conversation
-  // hook calls `sendMessage` (CLI/sessionPlane path); the engine variant
-  // calls `submitEnginePrompt` for the active engine instance so the
-  // answer is delivered as a new engine prompt on the same key.
-  //
-  // We deliberately do NOT reuse the conversation hook directly — that
-  // hook also implements the Plan-Mode → Implement flow which depends on
-  // CLI-specific machinery (resetTabSession, sendMessage signature with
-  // an implementationPhase flag). The engine variant currently supports
-  // only the AskUserQuestion path; ExitPlanMode on engine tabs is still
-  // an open item flagged in the plan.
+  // EngineView's variant of the ConversationView's
+  // buildPermissionDeniedHandlers. The conversation hook calls
+  // `sendMessage` (CLI path); the engine variant calls
+  // `submitEnginePrompt` for the active engine instance so the answer
+  // is delivered as a new prompt on the same key. Engine tabs do NOT
+  // need `resetTabSession` — the engine manages its own session
+  // lifecycle; we just disable plan mode and submit a new prompt.
   const clearPermissionDenied = useCallback(() => {
     if (!key) return
     useSessionStore.setState((s) => {
@@ -210,6 +207,76 @@ export function EngineView({ tabId }: EngineViewProps) {
     }
     submitEnginePrompt(tabId, answer, undefined, undefined)
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt])
+
+  const handleImplement = useCallback(async () => {
+    console.log(`[EngineView] handleImplement: tab=${tabId.slice(0, 8)} key=${key}`)
+    clearPermissionDenied()
+
+    // Switch to auto mode — for engine tabs this calls
+    // engineSetPlanMode(compoundKey, false) internally (tab-slice.ts:38-43).
+    useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
+
+    // Auto-switch to the implementation model if the split feature is enabled
+    const { planModelSplitEnabled, implementModeModel } = usePreferencesStore.getState()
+    if (planModelSplitEnabled && implementModeModel) {
+      useSessionStore.getState().setTabModel(tabId, implementModeModel)
+    }
+
+    // Auto-move tab to in-progress group if designated
+    const { inProgressGroupId, tabGroupMode, autoGroupMovement } = usePreferencesStore.getState()
+    const tab = useSessionStore.getState().tabs.find(t => t.id === tabId)
+    if (autoGroupMovement && inProgressGroupId && tabGroupMode === 'manual' && tab && tab.groupId !== inProgressGroupId) {
+      if (tab.groupPinned) {
+        console.log(`[EngineView] auto-move suppressed: tab=${tabId.slice(0, 8)} pinned=true`)
+      } else {
+        useSessionStore.getState().moveTabToGroup(tabId, inProgressGroupId)
+      }
+    }
+
+    // Extract plan file path: tab state (engine event) > denial toolInput
+    let planFilePath: string | null = tabPlanFilePath || null
+    if (!planFilePath && permissionDenied?.tools) {
+      const exitDenial = permissionDenied.tools.find(
+        (t: { toolName: string; toolInput?: Record<string, unknown> }) =>
+          t.toolName === 'ExitPlanMode' && t.toolInput
+      )
+      if (exitDenial?.toolInput?.planFilePath) {
+        planFilePath = exitDenial.toolInput.planFilePath as string
+      }
+    }
+
+    // Read plan content
+    let planContent: string | null = null
+    if (planFilePath) {
+      try {
+        const result = await window.ion.readPlan(planFilePath)
+        planContent = result.content
+      } catch (err) {
+        console.warn('[EngineView] Failed to read plan file:', err)
+      }
+    }
+
+    // Clear the tab-level planFilePath now that we've read it
+    useSessionStore.setState((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === tabId ? { ...t, planFilePath: null } : t
+      ),
+    }))
+
+    const implementPrompt = planContent
+      ? `Implement the following plan:\n\n${planContent}`
+      : 'Implement the plan.'
+    console.log(`[EngineView] submitting implement prompt: tab=${tabId.slice(0, 8)} promptLen=${implementPrompt.length}`)
+    submitEnginePrompt(tabId, implementPrompt, undefined, undefined)
+  }, [tabId, key, clearPermissionDenied, submitEnginePrompt, tabPlanFilePath, permissionDenied])
+
+  const handleImplementAndUnpin = useCallback(async () => {
+    // Unpin first so the auto-move guard fires when handleImplement
+    // switches the tab to auto mode.
+    useSessionStore.getState().toggleTabGroupPin(tabId)
+    console.log(`[EngineView] implement-and-unpin: tab=${tabId.slice(0, 8)} — pin cleared`)
+    await handleImplement()
+  }, [tabId, handleImplement])
 
   // No instances placeholder — all hooks MUST be declared above this point
   // to satisfy React's rules of hooks (constant hook count across renders).
@@ -394,6 +461,8 @@ export function EngineView({ tabId }: EngineViewProps) {
             tabGroupPinned={tabGroupPinned}
             onDismiss={clearPermissionDenied}
             onAnswer={handleAnswerDenial}
+            onImplement={handleImplement}
+            onImplementAndUnpin={handleImplementAndUnpin}
           />
         )}
       </AnimatePresence>
