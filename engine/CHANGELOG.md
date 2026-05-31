@@ -13,6 +13,22 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.31.0](https://github.com/dsswift/ion/compare/engine-v1.30.1...engine-v1.31.0) (2026-05-31)
+
+### Features
+
+* **engine:** add ion-meta v2 with tool catalog, greeting, and three-mode dispatch ([61688af](https://github.com/dsswift/ion/commit/61688af40fb28d7b8695e5de9cf0b950e54757a4))
+* **engine:** add session context to sdk event types ([749d2c4](https://github.com/dsswift/ion/commit/749d2c4654d98c379b099f107cf2b39d08078b04))
+* **engine:** add agent dispatch lifecycle with redispatch ([f9fff27](https://github.com/dsswift/ion/commit/f9fff27fccee90c2193214071c6a96aac47d493a))
+* **engine:** persist and restore dispatch agent state ([9351d98](https://github.com/dsswift/ion/commit/9351d98f00b201bb82dd717975b62064c8037f20))
+* **engine:** add ion scope slash command support ([0d8a94b](https://github.com/dsswift/ion/commit/0d8a94b342870bc9e72f16490e8e9ad65d5d334d))
+* **engine:** add agent dispatch lifecycle hook tests ([3fb279e](https://github.com/dsswift/ion/commit/3fb279ead813f191ceb00c0b001becd64c119121))
+
+### Bug Fixes
+
+* **engine:** skip workspace watcher when cwd is ion home ([632f170](https://github.com/dsswift/ion/commit/632f170fdbc0bc5cc7be21513cfd94be9ee9dd6b))
+* **engine:** fix CI failures in integration tests and desktop test ([cbbf4a6](https://github.com/dsswift/ion/commit/cbbf4a63975f2c741fa88af0aa8d231323ac66c9))
+
 ## [1.30.1](https://github.com/dsswift/ion/compare/engine-v1.30.0...engine-v1.30.1) (2026-05-28)
 
 ### Bug Fixes

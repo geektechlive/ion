@@ -10,6 +10,29 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.43.0](https://github.com/dsswift/ion/compare/desktop-v1.42.0...desktop-v1.43.0) (2026-05-31)
+
+### Features
+
+* **desktop:** deduplicate harness messages across tabs ([3050e58](https://github.com/dsswift/ion/commit/3050e589f8fa7ea6ccb1a5ec64fb00666e77bcae))
+* **desktop:** add file rename support for remote clients ([951bf7b](https://github.com/dsswift/ion/commit/951bf7be881f5f0755c5ecf5d3e3b0de8b9fc751))
+* **desktop:** add agent conversation loading with panel refactor ([fc3ee8b](https://github.com/dsswift/ion/commit/fc3ee8b806239b38a3666ee36f5ff6745ab19aa9))
+* **engine:** add agent dispatch lifecycle with redispatch ([f9fff27](https://github.com/dsswift/ion/commit/f9fff27fccee90c2193214071c6a96aac47d493a))
+* **desktop:** add plan/auto toggle to engine tab footer ([a49d6fe](https://github.com/dsswift/ion/commit/a49d6fefd2ea9234968c356da9ba65173a4194eb))
+* **desktop:** show running indicator on engine pills ([41768a6](https://github.com/dsswift/ion/commit/41768a66bb9d1f0a4e3c85487b4f101ff62a9032))
+* **desktop:** add raw file attachment encoding to engine ([865a393](https://github.com/dsswift/ion/commit/865a393623c40762a359e2d7b2f16453adea2e7f))
+* **desktop:** add ion scope slash command support ([c5b7967](https://github.com/dsswift/ion/commit/c5b79670126249a6108c70c0207bb430f508ef50))
+
+### Bug Fixes
+
+* **desktop:** handle and render permission denied cards in engine view ([94e2178](https://github.com/dsswift/ion/commit/94e2178c15cfdaa0c4c6eb003047b7c9592afb49))
+* **desktop:** preserve sessionId when merging status fields ([a40d74c](https://github.com/dsswift/ion/commit/a40d74ce819107c4a54b27490bc3be8e6816308f))
+* **desktop:** reject stale idle events during implement flow ([b16d553](https://github.com/dsswift/ion/commit/b16d55384545db3f04b386bb2a835c98e56178ff))
+* **desktop:** prevent table overflow in message bubbles ([392d5ba](https://github.com/dsswift/ion/commit/392d5baa25d567daadee9578d7b1747fa054ee08))
+* **desktop:** keep tab right-click menus on-screen ([60de848](https://github.com/dsswift/ion/commit/60de8484ef04f0cee274e2cc87e51d22d1234b1e))
+* **desktop:** auto-move tabs to done group on task completion ([fe8b449](https://github.com/dsswift/ion/commit/fe8b44931d3dd12c07f2cf17be10211804ea5fba))
+* **engine:** fix CI failures in integration tests and desktop test ([cbbf4a6](https://github.com/dsswift/ion/commit/cbbf4a63975f2c741fa88af0aa8d231323ac66c9))
+
 ## [1.42.0](https://github.com/dsswift/ion/compare/desktop-v1.41.0...desktop-v1.42.0) (2026-05-28)
 
 ### Features

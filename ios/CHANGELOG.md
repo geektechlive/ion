@@ -10,6 +10,21 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.32.0](https://github.com/dsswift/ion/compare/ios-v1.31.0...ios-v1.32.0) (2026-05-31)
+
+### Features
+
+* **ios:** add file rename support in file explorer ([4a3a205](https://github.com/dsswift/ion/commit/4a3a2058deaf247c505c9d029a1f3f8a6c0fc145))
+* **engine:** add agent dispatch lifecycle with redispatch ([f9fff27](https://github.com/dsswift/ion/commit/f9fff27fccee90c2193214071c6a96aac47d493a))
+* **ios:** add plan/auto toggle to engine tab footer ([1ee8beb](https://github.com/dsswift/ion/commit/1ee8beba06a0217095f8e0c683bb9d1fdc3ac12f))
+* **ios:** add agent conversation support to remote ([527d63a](https://github.com/dsswift/ion/commit/527d63add02cd0ada892e8cf25303035352f9d56))
+
+### Bug Fixes
+
+* **ios:** add AskUserQuestion and permission card rendering to engine view ([72b13e0](https://github.com/dsswift/ion/commit/72b13e0af2499626eb4b764b02448c1838526807))
+* **ios:** handle malformed tabs in snapshot decode ([0564032](https://github.com/dsswift/ion/commit/0564032507f60cb1f1551680660b090373742885))
+* **ios:** prevent content overflow in message rows ([ab26367](https://github.com/dsswift/ion/commit/ab26367bed309789cef9e42cd52642784ae4f135))
+
 ## [1.31.0](https://github.com/dsswift/ion/compare/ios-v1.30.0...ios-v1.31.0) (2026-05-28)
 
 ### Features
