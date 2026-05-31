@@ -61,6 +61,12 @@ desktop/src/
 - Framer Motion for animations.
 - Narrow Zustand selectors with custom equality functions; avoid whole-store subscriptions.
 
+## PopoverLayer and pointer events
+
+The `PopoverLayer` has `pointerEvents: 'none'` so it doesn't block interaction with the page beneath it. Any element portaled into it (context menus, dialogs, tooltips) must set `pointerEvents: 'auto'` on its outermost interactive container or clicks will silently pass through.
+
+Context-menu components already do this on their `motion.div`. The `ConfirmDialog` component sets it on its backdrop. If you create a new overlay component that portals into `PopoverLayer`, add `pointerEvents: 'auto'` to its root — without it the component will render but be completely non-interactable with no visible error.
+
 ## Subprocess env
 
 - `CLAUDECODE` and similar leakage env vars are stripped before spawn (`main/cli-env.ts`). Don't bypass.
