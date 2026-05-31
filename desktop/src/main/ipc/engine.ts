@@ -4,6 +4,7 @@ import { buildClearDividerRemoteEvent } from '../../shared/clear-divider'
 import { log as _log } from '../logger'
 import { engineBridge, sessionPlane, state } from '../state'
 import { processIncomingPrompt } from '../prompt-pipeline'
+import { encodeImageAttachments } from '../remote/attachment-encoder'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -15,8 +16,19 @@ export function registerEngineIpc(): void {
     return engineBridge.startSession(key, config)
   })
 
-  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt, imageAttachments }: { key: string; text: string; model?: string; appendSystemPrompt?: string; imageAttachments?: import('../../shared/types').ImageAttachmentPayload[] }) => {
-    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${imageAttachments?.length ?? 0}`)
+  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt, imageAttachments, rawAttachments }: { key: string; text: string; model?: string; appendSystemPrompt?: string; imageAttachments?: import('../../shared/types').ImageAttachmentPayload[]; rawAttachments?: import('../../shared/types-session').FileAttachment[] }) => {
+    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${imageAttachments?.length ?? 0} rawAttachments=${rawAttachments?.length ?? 0}`)
+    // Encode raw file attachments when present (desktop InputBar path).
+    // This mirrors the remote handler pattern at handlers/engine.ts:108-114.
+    let resolvedText = text
+    let resolvedImageAttachments = imageAttachments
+    if (rawAttachments && rawAttachments.length > 0 && !imageAttachments?.length) {
+      const ctx = rawAttachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
+      resolvedText = `${ctx}\n\n${text}`
+      const { encoded, rewrittenText } = encodeImageAttachments(resolvedText, rawAttachments)
+      resolvedText = rewrittenText
+      resolvedImageAttachments = encoded
+    }
     // Route through the unified prompt pipeline so engine-tab slash commands
     // get the same precedence (extension command → .md → unknown) as CLI
     // tabs. The renderer's submitEnginePrompt already inserted the optimistic
@@ -54,14 +66,14 @@ export function registerEngineIpc(): void {
     try {
       await processIncomingPrompt({
         tabId,
-        text,
+        text: resolvedText,
         reqId,
         source: 'desktop',
         isEngineTab: true,
         instanceId,
         appendSystemPrompt,
         model,
-        imageAttachments,
+        imageAttachments: resolvedImageAttachments,
         planFilePath,
       })
       return { ok: true }

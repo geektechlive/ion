@@ -316,7 +316,7 @@ export function InputBar() {
       if (enginePane?.activeInstanceId) {
         setEngineDraftInput(`${currentTab.id}:${enginePane.activeInstanceId}`, '')
       }
-      submitEnginePrompt(currentTab.id, prompt || '')
+      submitEnginePrompt(currentTab.id, prompt || (attachments.length > 0 ? 'See attached files' : ''), undefined, undefined, attachments.length > 0 ? attachments : undefined)
       requestAnimationFrame(() => textareaRef.current?.focus())
       return
     }
