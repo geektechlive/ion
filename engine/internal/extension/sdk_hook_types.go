@@ -333,6 +333,7 @@ type LLMCallResult struct {
 // BeforeAgentStartResult holds the optional overrides a before_agent_start handler may return.
 type BeforeAgentStartResult struct {
 	SystemPrompt string `json:"systemPrompt,omitempty"`
+	AgentName    string `json:"agentName,omitempty"`
 }
 
 // BeforePromptResult holds the optional overrides a before_prompt handler may return.

@@ -22,13 +22,18 @@ extension RemoteCommand {
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
-        case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments):
+        case .resetTabSession(let tabId):
+            try container.encode(TypeKey.resetTabSession, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+
+        case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments, let implementationPhase):
             try container.encode(TypeKey.prompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(origin, forKey: .origin)
             try container.encodeIfPresent(clientMsgId, forKey: .clientMsgId)
             try container.encodeIfPresent(attachments, forKey: .attachments)
+            try container.encodeIfPresent(implementationPhase, forKey: .implementationPhase)
         case .cancel(let tabId):
             try container.encode(TypeKey.cancel, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -110,12 +115,13 @@ extension RemoteCommand {
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
             try container.encodeIfPresent(profileId, forKey: .profileId)
 
-        case .enginePrompt(let tabId, let text, let instanceId, let attachments):
+        case .enginePrompt(let tabId, let text, let instanceId, let attachments, let implementationPhase):
             try container.encode(TypeKey.enginePrompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             try container.encodeIfPresent(attachments, forKey: .attachments)
+            try container.encodeIfPresent(implementationPhase, forKey: .implementationPhase)
 
         case .engineAbort(let tabId, let instanceId):
             try container.encode(TypeKey.engineAbort, forKey: .type)
@@ -159,6 +165,10 @@ extension RemoteCommand {
             try container.encode(TypeKey.loadEngineConversation, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
+
+        case .loadAgentConversation(let conversationIds):
+            try container.encode(TypeKey.loadAgentConversation, forKey: .type)
+            try container.encode(conversationIds, forKey: .conversationIds)
 
         case .setTabGroupMode(let mode):
             try container.encode(TypeKey.setTabGroupMode, forKey: .type)
@@ -274,6 +284,11 @@ extension RemoteCommand {
             try container.encode(TypeKey.fsWriteFile, forKey: .type)
             try container.encode(filePath, forKey: .filePath)
             try container.encode(content, forKey: .content)
+
+        case .fsRename(let oldPath, let newPath):
+            try container.encode(TypeKey.fsRename, forKey: .type)
+            try container.encode(oldPath, forKey: .oldPath)
+            try container.encode(newPath, forKey: .newPath)
 
         case .discoverCommands(let directory):
             try container.encode(TypeKey.discoverCommands, forKey: .type)

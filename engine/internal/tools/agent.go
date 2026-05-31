@@ -7,6 +7,11 @@ import (
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
+// AgentToolName is the tool name used to identify the Agent tool. Other
+// packages use this to special-case Agent execution (e.g. exempting it from
+// the standard tool timeout).
+const AgentToolName = "Agent"
+
 // AgentSpawner is a function that spawns a child session with the given prompt.
 // Wired by the session manager when an API backend is available.
 // The ctx parameter carries the parent's cancellation so child agents stop
@@ -43,7 +48,7 @@ func AgentSpawnerFromContext(ctx context.Context) AgentSpawner {
 // multi-step tasks autonomously.
 func AgentTool() *types.ToolDef {
 	return &types.ToolDef{
-		Name:        "Agent",
+		Name:        AgentToolName,
 		Description: "Launch a new agent to handle complex, multi-step tasks autonomously.",
 		InputSchema: map[string]any{
 			"type": "object",

@@ -23,7 +23,7 @@ func (h *Host) FireOnError(ctx *Context, info ErrorInfo) error {
 	return h.sdk.FireOnError(ctx, info)
 }
 
-func (h *Host) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, error) {
+func (h *Host) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, string, error) {
 	return h.sdk.FireBeforeAgentStart(ctx, info)
 }
 

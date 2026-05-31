@@ -92,6 +92,9 @@ export function EngineView({ tabId }: EngineViewProps) {
   const isRunning = tabStatus === 'running' || tabStatus === 'connecting'
   const hasRunningChildren = agentStates.some(a => a.status === 'running')
   const [agentPanelFullscreen, setAgentPanelFullscreen] = useState(false)
+  // Per-instance agent panel heights — persisted only for the tab's lifetime.
+  // Key is the engine instance compound key (tabId:instanceId).
+  const [agentPanelHeights, setAgentPanelHeights] = useState<Map<string, number>>(new Map())
   const scrollRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
@@ -149,20 +152,7 @@ export function EngineView({ tabId }: EngineViewProps) {
     return () => clearTimeout(timer)
   }, [notifications.length, tabId])
 
-  // No instances placeholder
-  if (!pane || pane.instances.length === 0) {
-    return (
-      <div style={{
-        display: 'flex', flexDirection: 'column', height: '100%',
-        alignItems: 'center', justifyContent: 'center',
-        color: colors.textTertiary, fontSize: 13,
-      }}>
-        Session not started
-      </div>
-    )
-  }
-
-  const handleAbort = () => {
+  const handleAbort = useCallback(() => {
     console.log(`[EngineView] handleAbort: key=${key} isRunning=${isRunning} hasRunningChildren=${hasRunningChildren} tabStatus=${tabStatus}`)
     if (!key) return
     // Always send abort — the engine's SendAbort is safe when no run is active
@@ -187,7 +177,7 @@ export function EngineView({ tabId }: EngineViewProps) {
         )
       }
     }, 5_000)
-  }
+  }, [key, isRunning, hasRunningChildren, tabStatus, tabId])
 
   // ─── Permission-denied card handlers ───
   //
@@ -220,6 +210,20 @@ export function EngineView({ tabId }: EngineViewProps) {
     }
     submitEnginePrompt(tabId, answer, undefined, undefined)
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt])
+
+  // No instances placeholder — all hooks MUST be declared above this point
+  // to satisfy React's rules of hooks (constant hook count across renders).
+  if (!pane || pane.instances.length === 0) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', height: '100%',
+        alignItems: 'center', justifyContent: 'center',
+        color: colors.textTertiary, fontSize: 13,
+      }}>
+        Session not started
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
@@ -400,6 +404,11 @@ export function EngineView({ tabId }: EngineViewProps) {
           agents={agentStates}
           isFullscreen={agentPanelFullscreen}
           onToggleFullscreen={() => setAgentPanelFullscreen(!agentPanelFullscreen)}
+          panelHeight={key ? agentPanelHeights.get(key) : undefined}
+          onPanelHeightChange={(h) => {
+            if (!key) return
+            setAgentPanelHeights(prev => { const next = new Map(prev); next.set(key, h); return next })
+          }}
         />
       </div>
 

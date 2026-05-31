@@ -3,7 +3,6 @@ import { motion } from 'framer-motion'
 import { useColors } from '../../theme'
 import { CopyButton } from './CopyButton'
 import type { Message } from '../../../shared/types'
-import { isClearDivider } from '../../../shared/clear-divider'
 
 interface SystemMessageProps {
   message: Message
@@ -13,13 +12,16 @@ interface SystemMessageProps {
 export function SystemMessage({ message, skipMotion }: SystemMessageProps) {
   const content = message.content || ''
   const isError = content.startsWith('Error:') || content.includes('unexpectedly')
-  const isDivider = isClearDivider(content)
+  // All session-boundary dividers (clear, implement) use the `──` prefix
+  // by convention — see clear-divider.ts. Detect generically so new divider
+  // types render automatically without updating this component.
+  const isDivider = content.startsWith('──')
   const colors = useColors()
 
-  // /clear checkpoint divider: render as a full-width horizontal rule with
+  // Session-boundary divider: render as a full-width horizontal rule with
   // centered label, distinct from the normal system-message bubble. Signals
-  // a structural break in the conversation (LLM context reset) rather than
-  // a chat turn or status message.
+  // a structural break in the conversation (e.g. LLM context reset on /clear,
+  // or plan-to-implement transition) rather than a chat turn or status message.
   if (isDivider) {
     const inner = (
       <div

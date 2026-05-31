@@ -116,6 +116,16 @@
     "commands",
     "defaultValue",
     "dialogId",
+    "dispatchAgent",
+    "dispatchCost",
+    "dispatchElapsed",
+    "dispatchExitCode",
+    "dispatchInputTokens",
+    "dispatchModel",
+    "dispatchOutputTokens",
+    "dispatchSessionId",
+    "dispatchTask",
+    "dispatchToolCount",
     "earlyStopBudget",
     "earlyStopContinuationCount",
     "earlyStopCumulativeOutput",
@@ -149,6 +159,7 @@
     "message",
     "messagesAfter",
     "messagesBefore",
+    "metadata",
     "method",
     "options",
     "partialInput",
@@ -183,6 +194,7 @@
   ],
   "sharedTypes": {
     "AgentStateUpdate": [
+      "id",
       "metadata",
       "name",
       "status"
@@ -192,6 +204,7 @@
       "name"
     ],
     "EngineConfig": [
+      "claudeCompat",
       "extensions",
       "maxTokens",
       "model",

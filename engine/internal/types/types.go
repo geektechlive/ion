@@ -8,158 +8,10 @@ import "encoding/json"
 // Use this when forwarding events without parsing (e.g., socket relay).
 type RawEngineEvent = json.RawMessage
 
-// --- Stream Event Types ---
-
-// InitEvent is emitted once at the start of an engine session.
-type InitEvent struct {
-	Type              string          `json:"type"`
-	Subtype           string          `json:"subtype"`
-	Cwd               string          `json:"cwd"`
-	SessionID         string          `json:"session_id"`
-	Tools             []string        `json:"tools"`
-	McpServers        []McpServerInfo `json:"mcp_servers"`
-	Model             string          `json:"model"`
-	PermissionMode    string          `json:"permissionMode"`
-	Agents            []string        `json:"agents"`
-	Skills            []string        `json:"skills"`
-	Plugins           []string        `json:"plugins"`
-	ClaudeCodeVersion string          `json:"claude_code_version"`
-	FastModeState     string          `json:"fast_mode_state"`
-	UUID              string          `json:"uuid"`
-}
-
-// McpServerInfo describes an MCP server and its connection status.
-type McpServerInfo struct {
-	Name   string `json:"name"`
-	Status string `json:"status"`
-}
-
-// StreamEvent wraps a streaming sub-event from the Claude API.
-type StreamEvent struct {
-	Type            string         `json:"type"`
-	Event           StreamSubEvent `json:"event"`
-	SessionID       string         `json:"session_id"`
-	ParentToolUseID *string        `json:"parent_tool_use_id"`
-	UUID            string         `json:"uuid"`
-}
-
-// StreamSubEvent is a discriminated union keyed on Type.
-// Populate the fields relevant to the specific sub-event type.
-type StreamSubEvent struct {
-	Type         string                   `json:"type"`
-	Message      *AssistantMessagePayload `json:"message,omitempty"`
-	Index        *int                     `json:"index,omitempty"`
-	ContentBlock *ContentBlock            `json:"content_block,omitempty"`
-	Delta        *ContentDelta            `json:"delta,omitempty"`
-	Usage        *UsageData               `json:"usage,omitempty"`
-	// message_delta specific
-	StopReason        *string `json:"stop_reason,omitempty"`
-	ContextManagement any     `json:"context_management,omitempty"`
-}
-
-// ContentBlock is a text or tool_use block within a message.
-type ContentBlock struct {
-	Type  string         `json:"type"`
-	Text  string         `json:"text,omitempty"`
-	ID    string         `json:"id,omitempty"`
-	Name  string         `json:"name,omitempty"`
-	Input map[string]any `json:"input,omitempty"`
-}
-
-// ContentDelta carries incremental content updates.
-type ContentDelta struct {
-	Type        string `json:"type"`
-	Text        string `json:"text,omitempty"`
-	PartialJSON string `json:"partial_json,omitempty"`
-}
-
-// AssistantEvent wraps a completed assistant message.
-type AssistantEvent struct {
-	Type            string                  `json:"type"`
-	Message         AssistantMessagePayload `json:"message"`
-	ParentToolUseID *string                 `json:"parent_tool_use_id"`
-	SessionID       string                  `json:"session_id"`
-	UUID            string                  `json:"uuid"`
-}
-
-// AssistantMessagePayload is the payload of an assistant turn.
-type AssistantMessagePayload struct {
-	Model      string         `json:"model"`
-	ID         string         `json:"id"`
-	Role       string         `json:"role"`
-	Content    []ContentBlock `json:"content"`
-	StopReason *string        `json:"stop_reason"`
-	Usage      UsageData      `json:"usage"`
-}
-
-// RateLimitEvent signals a rate limit hit from the API.
-type RateLimitEvent struct {
-	Type          string        `json:"type"`
-	RateLimitInfo RateLimitInfo `json:"rate_limit_info"`
-	SessionID     string        `json:"session_id"`
-	UUID          string        `json:"uuid"`
-}
-
-// RateLimitInfo contains details about the rate limit.
-type RateLimitInfo struct {
-	Status        string `json:"status"`
-	ResetsAt      int64  `json:"resetsAt"`
-	RateLimitType string `json:"rateLimitType"`
-}
-
-// ResultEvent signals completion (success or error) of a Claude run.
-type ResultEvent struct {
-	Type              string    `json:"type"`
-	Subtype           string    `json:"subtype"`
-	IsError           bool      `json:"is_error"`
-	DurationMs        int64     `json:"duration_ms"`
-	NumTurns          int       `json:"num_turns"`
-	Result            string    `json:"result"`
-	TotalCostUsd      float64   `json:"total_cost_usd"`
-	SessionID         string    `json:"session_id"`
-	Usage             UsageData `json:"usage"`
-	PermissionDenials []PermissionDenialEntry `json:"permission_denials"`
-	UUID              string    `json:"uuid"`
-}
-
-// UsageData tracks token usage for a message or session.
-type UsageData struct {
-	InputTokens              *int   `json:"input_tokens,omitempty"`
-	OutputTokens             *int   `json:"output_tokens,omitempty"`
-	CacheReadInputTokens     *int   `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationInputTokens *int   `json:"cache_creation_input_tokens,omitempty"`
-	ServiceTier              string `json:"service_tier,omitempty"`
-}
-
-// PermissionEvent requests user approval for a tool invocation.
-type PermissionEvent struct {
-	Type       string          `json:"type"`
-	Tool       PermissionTool  `json:"tool"`
-	QuestionID string          `json:"question_id"`
-	Options    []PermissionOpt `json:"options"`
-	SessionID  string          `json:"session_id"`
-	UUID       string          `json:"uuid"`
-}
-
-// PermissionTool identifies the tool requesting permission.
-type PermissionTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Input       map[string]any `json:"input,omitempty"`
-}
-
-// PermissionOpt is one option in a permission prompt.
-type PermissionOpt struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Kind  string `json:"kind,omitempty"`
-}
-
-// UnknownEvent captures any event type not explicitly modeled.
-type UnknownEvent struct {
-	Type   string         `json:"type"`
-	Fields map[string]any `json:"-"`
-}
+// Stream-event payload shapes (InitEvent, StreamEvent, AssistantEvent,
+// ResultEvent, UsageData, PermissionEvent, etc. — everything consumed off
+// the Anthropic streaming API) live in stream_events.go. Split out so this
+// file has headroom for ongoing EngineEvent surface growth.
 
 // --- Message ---
 
@@ -205,6 +57,10 @@ type EngineConfig struct {
 	// defaults entirely -- it does not merge. Patterns use doublestar
 	// (forward-slash) syntax and are matched against repo-relative paths.
 	WorkspaceWatchIgnore []string `json:"workspaceWatchIgnore,omitempty"`
+
+	// ClaudeCompat enables Claude Code compatibility features such as loading
+	// skills from ~/.claude/skills/.
+	ClaudeCompat bool `json:"claudeCompat,omitempty"`
 }
 
 // ThinkingConfig controls extended thinking for API-backend runs.
@@ -228,6 +84,7 @@ type EnginePaneState struct {
 // AgentStateUpdate describes the current state of an agent.
 type AgentStateUpdate struct {
 	Name     string                 `json:"name"`
+	ID       string                 `json:"id,omitempty"`
 	Status   string                 `json:"status"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -313,6 +170,19 @@ type EngineEvent struct {
 
 	// engine_harness_message
 	HarnessSource string `json:"source,omitempty"`
+
+	// Metadata is an opaque harness-defined map carried verbatim by the
+	// engine to clients. The engine attaches no semantics — it forwards the
+	// map unchanged in JSON marshal/unmarshal. Clients (desktop renderer,
+	// iOS, custom harnesses) may honor specific conventions defined on the
+	// consumer side; e.g. the desktop honors `metadata.dedupKey` on
+	// `engine_harness_message` to suppress repeated emissions within an
+	// engine-instance scrollback. The convention is documented in
+	// docs/protocol/server-events.md (well-known metadata keys), not
+	// enforced here. Intended for small structured hints, not state
+	// transfer — reviewers should push back on multi-kilobyte payloads.
+	// Mirrors AgentStateUpdate.Metadata's shape and serialization.
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 
 	// engine_dialog
 	DialogID      string   `json:"dialogId,omitempty"`
@@ -533,6 +403,39 @@ type EngineEvent struct {
 	LlmCallOutputTokens int     `json:"llmCallOutputTokens,omitempty"`
 	LlmCallCost         float64 `json:"llmCallCost,omitempty"`
 	LlmCallJsonMode     bool    `json:"llmCallJsonMode,omitempty"`
+
+	// --- engine_dispatch_start / engine_dispatch_end ---
+	//
+	// Emitted on the parent session's event stream when an extension-initiated
+	// dispatch begins and ends. These are factual telemetry events — not agent
+	// state (which the harness owns via engine_agent_state). With these events,
+	// harnesses can persist dispatch records or surface dispatch status in UIs
+	// without hand-rolling plumbing.
+	//
+	// engine_dispatch_start fields:
+	//   - DispatchAgent:     the dispatched agent name
+	//   - DispatchTask:      the task string passed to the agent
+	//   - DispatchModel:     the resolved model for the dispatch
+	//   - DispatchSessionID: the child session's request ID
+	//
+	// engine_dispatch_end fields:
+	//   - DispatchAgent:       the dispatched agent name
+	//   - DispatchExitCode:    0=success, 1=error, 2=recalled
+	//   - DispatchElapsed:     wall-clock seconds
+	//   - DispatchCost:        USD cost of the dispatch
+	//   - DispatchInputTokens: total input tokens
+	//   - DispatchOutputTokens: total output tokens
+	//   - DispatchToolCount:   number of tool calls made during dispatch
+	DispatchAgent        string  `json:"dispatchAgent,omitempty"`
+	DispatchTask         string  `json:"dispatchTask,omitempty"`
+	DispatchModel        string  `json:"dispatchModel,omitempty"`
+	DispatchSessionID    string  `json:"dispatchSessionId,omitempty"`
+	DispatchExitCode     int     `json:"dispatchExitCode,omitempty"`
+	DispatchElapsed      float64 `json:"dispatchElapsed,omitempty"`
+	DispatchCost         float64 `json:"dispatchCost,omitempty"`
+	DispatchInputTokens  int     `json:"dispatchInputTokens,omitempty"`
+	DispatchOutputTokens int     `json:"dispatchOutputTokens,omitempty"`
+	DispatchToolCount    int     `json:"dispatchToolCount,omitempty"`
 }
 
 // MessageEndUsage reports token usage at the end of a message.

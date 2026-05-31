@@ -21,7 +21,10 @@ import Foundation
 /// The wire format has `name`, `status`, and a `metadata` map containing
 /// all other fields (displayName, type, visibility, invited, etc.).
 struct AgentStateUpdate: Codable, Identifiable, Sendable {
-    var id: String { name }
+    /// Engine-generated unique identifier per dispatch. Falls back to name
+    /// for extension-managed roster entries that don't carry an id.
+    var id: String { agentId ?? name }
+    let agentId: String?
     let name: String
     let displayName: String
     let type: String          // "chief", "specialist", "staff", "consultant"
@@ -36,6 +39,7 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
     let color: String?
     let model: String?
     let startTime: Double?   // Unix timestamp in seconds
+    let conversationIds: [String]
 
     /// Whether this agent should be shown in the UI based on visibility rules.
     var isVisible: Bool {
@@ -49,11 +53,13 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case name, status, metadata
+        case agentId = "id"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
+        agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
         status = try container.decode(String.self, forKey: .status)
         let meta = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata) ?? [:]
 
@@ -71,6 +77,13 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
             startTime = Double(st)
         } else {
             startTime = nil
+        }
+        if let ids = meta["conversationIds"]?.value as? [AnyCodable] {
+            conversationIds = ids.compactMap { $0.value as? String }
+        } else if let id = meta["conversationId"]?.value as? String {
+            conversationIds = [id]
+        } else {
+            conversationIds = []
         }
 
         // Bool and numeric values may arrive as various types
@@ -115,6 +128,7 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
         if let color { meta["color"] = AnyCodable(color) }
         if let model { meta["model"] = AnyCodable(model) }
         if let startTime { meta["startTime"] = AnyCodable(startTime) }
+        if !conversationIds.isEmpty { meta["conversationIds"] = AnyCodable(conversationIds.map { AnyCodable($0) }) }
         try container.encode(meta, forKey: .metadata)
     }
 }

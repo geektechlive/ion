@@ -96,13 +96,6 @@ export function useTabRestoration() {
             window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
             if (st.draftInput) console.log(`[restore] draft for tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
           } else if (st.isEngine) {
-            // Engine tab — full restoration logic is extracted to
-            // useTabRestoration-engine.ts to keep this file under the
-            // 600-line cap. Returns the new tabId (used by the
-            // historical-message loop below; engine tabs don't have
-            // historicalSessionIds so the new id appears in
-            // restoredTabIds but gets skipped by the loop's
-            // `historicalIds.length > 0` guard).
             restoreEngineTab(st, restoredTabIds, i)
           } else if (st.isTerminalOnly) {
             // Terminal-only tab

@@ -172,28 +172,39 @@ func (s *SDK) FireAgentEnd(ctx *Context, info AgentInfo) error {
 }
 
 // FireBeforeAgentStart fires the before_agent_start hook. Handlers may return
-// a BeforeAgentStartResult with a SystemPrompt field, or a map with a
-// "systemPrompt" key (for JSON-RPC subprocess extensions). The last non-empty
-// system prompt wins.
-func (s *SDK) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, error) {
+// a BeforeAgentStartResult with SystemPrompt and/or AgentName fields, or a map
+// with "systemPrompt" / "agentName" keys (for JSON-RPC subprocess extensions).
+// The last non-empty value wins for each field independently.
+func (s *SDK) FireBeforeAgentStart(ctx *Context, info AgentInfo) (systemPrompt, agentName string, err error) {
 	results := s.fire(HookBeforeAgentStart, ctx, info)
 	for i := len(results) - 1; i >= 0; i-- {
 		switch v := results[i].(type) {
 		case BeforeAgentStartResult:
-			if v.SystemPrompt != "" {
-				return v.SystemPrompt, nil
+			if v.SystemPrompt != "" && systemPrompt == "" {
+				systemPrompt = v.SystemPrompt
+			}
+			if v.AgentName != "" && agentName == "" {
+				agentName = v.AgentName
 			}
 		case *BeforeAgentStartResult:
-			if v != nil && v.SystemPrompt != "" {
-				return v.SystemPrompt, nil
+			if v != nil {
+				if v.SystemPrompt != "" && systemPrompt == "" {
+					systemPrompt = v.SystemPrompt
+				}
+				if v.AgentName != "" && agentName == "" {
+					agentName = v.AgentName
+				}
 			}
 		case map[string]interface{}:
-			if sp, ok := v["systemPrompt"].(string); ok && sp != "" {
-				return sp, nil
+			if sp, ok := v["systemPrompt"].(string); ok && sp != "" && systemPrompt == "" {
+				systemPrompt = sp
+			}
+			if an, ok := v["agentName"].(string); ok && an != "" && agentName == "" {
+				agentName = an
 			}
 		}
 	}
-	return "", nil
+	return systemPrompt, agentName, nil
 }
 
 // FireBeforeProviderRequest fires the before_provider_request hook. The

@@ -12,6 +12,7 @@ enum RemoteCommand: Codable, Sendable {
     case createTab(workingDirectory: String?, pinToGroupId: String? = nil)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
+    case resetTabSession(tabId: String)
     /// User-typed prompt routed to the desktop's prompt pipeline.
     ///
     /// iOS does NOT carry the harness-supplied EnterPlanMode tool
@@ -28,7 +29,7 @@ enum RemoteCommand: Codable, Sendable {
     /// `enterPlanModeDescription` field of its own if it ever became
     /// an independent harness — at which point it would also need its
     /// own copy of the prose. Today the wire stays minimal.
-    case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil)
+    case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil, implementationPhase: Bool? = nil)
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)
     case setPermissionMode(tabId: String, mode: PermissionMode)
@@ -45,7 +46,7 @@ enum RemoteCommand: Codable, Sendable {
     case forkFromMessage(tabId: String, messageId: String)
     case unpair
     case createEngineTab(workingDirectory: String?, profileId: String?)
-    case enginePrompt(tabId: String, text: String, instanceId: String? = nil, attachments: [CommandAttachment]? = nil)
+    case enginePrompt(tabId: String, text: String, instanceId: String? = nil, attachments: [CommandAttachment]? = nil, implementationPhase: Bool? = nil)
     case engineAbort(tabId: String, instanceId: String? = nil)
     case engineDialogResponse(tabId: String, dialogId: String, value: String, instanceId: String? = nil)
     case engineAddInstance(tabId: String)
@@ -54,6 +55,7 @@ enum RemoteCommand: Codable, Sendable {
     case engineSelectInstance(tabId: String, instanceId: String)
     case engineMoveInstance(sourceTabId: String, instanceId: String, targetTabId: String)
     case loadEngineConversation(tabId: String, instanceId: String?)
+    case loadAgentConversation(conversationIds: [String])
     case setTabGroupMode(mode: String)
     case moveTabToGroup(tabId: String, groupId: String)
     case toggleTabGroupPin(tabId: String)
@@ -78,6 +80,13 @@ enum RemoteCommand: Codable, Sendable {
     case fsReadFile(filePath: String)
     case fsReadImage(filePath: String)
     case fsWriteFile(filePath: String, content: String)
+    /// Rename a file or directory inside a project root on the paired
+    /// desktop. The desktop validates both paths via `isValidProjectPath`
+    /// and replies with `fsRenameResult`. iOS does not synthesize an
+    /// optimistic local rename — the file listing is owned by the
+    /// desktop, so we wait for the result event and re-issue
+    /// `fsListDir` on the parent directory to refresh.
+    case fsRename(oldPath: String, newPath: String)
     case discoverCommands(directory: String)
     case uploadAttachment(dataUrl: String, name: String, correlationId: String)
     case loadAttachments(tabId: String)
@@ -112,6 +121,7 @@ enum RemoteCommand: Codable, Sendable {
         case createTab = "create_tab"
         case createTerminalTab = "create_terminal_tab"
         case closeTab = "close_tab"
+        case resetTabSession = "reset_tab_session"
         case prompt
         case cancel
         case respondPermission = "respond_permission"
@@ -138,6 +148,7 @@ enum RemoteCommand: Codable, Sendable {
         case engineSelectInstance = "engine_select_instance"
         case engineMoveInstance = "engine_move_instance"
         case loadEngineConversation = "load_engine_conversation"
+        case loadAgentConversation = "load_agent_conversation"
         case setTabGroupMode = "set_tab_group_mode"
         case moveTabToGroup = "move_tab_to_group"
         case toggleTabGroupPin = "toggle_tab_group_pin"
@@ -162,6 +173,7 @@ enum RemoteCommand: Codable, Sendable {
         case fsReadFile = "fs_read_file"
         case fsReadImage = "fs_read_image"
         case fsWriteFile = "fs_write_file"
+        case fsRename = "fs_rename"
         case discoverCommands = "discover_commands"
         case uploadAttachment = "upload_attachment"
         case loadAttachments = "load_attachments"
@@ -184,7 +196,11 @@ enum RemoteCommand: Codable, Sendable {
         // that names a target group AND a separate pin source).
         case pinToGroupId
         case directory, path, staged, paths, skip, limit, message, filePath, content, includeHidden, hash
-        case attachments, dataUrl, name, correlationId, orderedIds
+        // fs_rename payload — both paths are absolute and live under a
+        // project root. New CodingKeys (no collision with existing entries);
+        // checked against the full enum above before adding.
+        case oldPath, newPath
+        case attachments, dataUrl, name, correlationId, orderedIds, implementationPhase
         case enabled, systemPrompt
         case logs, deviceId, deviceName
         case sourceTabId, targetTabId
@@ -195,6 +211,7 @@ enum RemoteCommand: Codable, Sendable {
         // we declare only `key` here and reuse the existing `value`
         // CodingKey above.
         case key
+        case conversationIds
     }
 
     init(from decoder: Decoder) throws {
@@ -218,6 +235,10 @@ enum RemoteCommand: Codable, Sendable {
         case .closeTab:
             let tabId = try container.decode(String.self, forKey: .tabId)
             self = .closeTab(tabId: tabId)
+
+        case .resetTabSession:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            self = .resetTabSession(tabId: tabId)
 
         case .prompt:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -361,6 +382,10 @@ enum RemoteCommand: Codable, Sendable {
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             self = .loadEngineConversation(tabId: tabId, instanceId: instanceId)
 
+        case .loadAgentConversation:
+            let conversationIds = try container.decode([String].self, forKey: .conversationIds)
+            self = .loadAgentConversation(conversationIds: conversationIds)
+
         case .setTabGroupMode:
             let mode = try container.decode(String.self, forKey: .mode)
             self = .setTabGroupMode(mode: mode)
@@ -473,6 +498,11 @@ enum RemoteCommand: Codable, Sendable {
             let filePath = try container.decode(String.self, forKey: .filePath)
             let content = try container.decode(String.self, forKey: .content)
             self = .fsWriteFile(filePath: filePath, content: content)
+
+        case .fsRename:
+            let oldPath = try container.decode(String.self, forKey: .oldPath)
+            let newPath = try container.decode(String.self, forKey: .newPath)
+            self = .fsRename(oldPath: oldPath, newPath: newPath)
 
         case .discoverCommands:
             let directory = try container.decode(String.self, forKey: .directory)

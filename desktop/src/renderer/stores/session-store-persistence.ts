@@ -56,18 +56,19 @@ function persistTabs(useSessionStore: Store): void {
             const k = `${t.id}:${inst.id}`
             const arr = eMsgs.get(k)
             if (arr && arr.length > 0) {
-              msgs[inst.id] = arr.map((m) => ({ role: m.role, content: m.content, toolName: m.toolName, toolId: m.toolId, toolInput: m.toolInput, toolStatus: m.toolStatus, timestamp: m.timestamp }))
+              msgs[inst.id] = arr.map((m) => ({ role: m.role, content: m.content, toolName: m.toolName, toolId: m.toolId, toolInput: m.toolInput, toolStatus: m.toolStatus, timestamp: m.timestamp, ...(m.dedupKey ? { dedupKey: m.dedupKey } : {}) }))
             }
           }
           if (Object.keys(msgs).length > 0) result.engineMessages = msgs
           const { engineAgentStates: eAgents } = useSessionStore.getState()
-          const agentStates: Record<string, Array<{ name: string; status: string; metadata?: Record<string, any> }>> = {}
+          const agentStates: Record<string, Array<{ name: string; id?: string; status: string; metadata?: Record<string, any> }>> = {}
           for (const inst of hPane.instances) {
             const k = `${t.id}:${inst.id}`
             const arr = eAgents.get(k)
             if (arr && arr.length > 0) {
               agentStates[inst.id] = arr.map((a) => ({
                 name: a.name,
+                ...(a.id ? { id: a.id } : {}),
                 status: a.status === 'running' ? 'done' : a.status,
                 ...(a.metadata ? { metadata: a.metadata } : {}),
               }))

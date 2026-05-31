@@ -30,6 +30,7 @@ import {
   handleEngineMoveInstance,
   handleEngineSelectInstance,
   handleLoadEngineConversation,
+  handleLoadAgentConversation,
   handleEngineSetModel,
   handleVoiceConfig,
 } from './handlers/engine'
@@ -67,6 +68,7 @@ import {
   handleFsReadFile,
   handleFsReadImage,
   handleFsWriteFile,
+  handleFsRename,
   handleUploadAttachment,
 } from './handlers/files'
 import {
@@ -94,7 +96,8 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'respond_permission':
       sessionPlane.respondToPermission(cmd.tabId, cmd.questionId, cmd.optionId)
       break
-    case 'set_permission_mode': handleSetPermissionMode(cmd); break
+    case 'set_permission_mode': await handleSetPermissionMode(cmd); break
+    case 'reset_tab_session': sessionPlane.resetTabSession(cmd.tabId); break
     case 'load_conversation': await handleLoadConversation(cmd, deviceId); break
     case 'engine_prompt': await handleEnginePrompt(cmd, deviceId); break
     case 'engine_abort': handleEngineAbort(cmd); break
@@ -105,6 +108,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'engine_select_instance': await handleEngineSelectInstance(cmd); break
     case 'engine_set_model': await handleEngineSetModel(cmd); break
     case 'load_engine_conversation': await handleLoadEngineConversation(cmd, deviceId); break
+    case 'load_agent_conversation': await handleLoadAgentConversation(cmd, deviceId); break
     case 'terminal_input': handleTerminalInput(cmd); break
     case 'terminal_resize': handleTerminalResize(cmd); break
     case 'terminal_add_instance': await handleTerminalAddInstance(cmd); break
@@ -135,6 +139,7 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'fs_read_file': await handleFsReadFile(cmd, deviceId); break
     case 'fs_read_image': await handleFsReadImage(cmd); break
     case 'fs_write_file': await handleFsWriteFile(cmd); break
+    case 'fs_rename': await handleFsRename(cmd); break
     case 'discover_commands': await handleDiscoverCommands(cmd, deviceId); break
     case 'upload_attachment': await handleUploadAttachment(cmd, deviceId); break
     case 'set_tab_model': await handleSetTabModel(cmd); break

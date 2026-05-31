@@ -243,8 +243,8 @@ function handleStatusEvent(
       ctx.bridge.updateSessionConversationId(tabId, event.fields.sessionId)
     }
 
-    if (tab.status === 'completed') {
-      log(`engine_status: skipping duplicate idle for completed tab ${tabId}`)
+    if (tab.status === 'completed' || tab.status === 'idle') {
+      log(`engine_status: skipping idle for ${tab.status} tab ${tabId}`)
       return
     }
 

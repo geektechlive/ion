@@ -24,6 +24,13 @@ export interface EngineConfig {
    * paths.
    */
   workspaceWatchIgnore?: string[]
+  /**
+   * Enable Claude Code compatibility features — loading skills from
+   * `~/.claude/skills/` on the engine side, and expanding `.claude/commands/`
+   * templates on the desktop side. When false or absent, only Ion-native
+   * `.ion/` paths are active.
+   */
+  claudeCompat?: boolean
 }
 
 export interface EngineInstance {
@@ -38,6 +45,7 @@ export interface EnginePaneState {
 
 export interface AgentStateUpdate {
   name: string
+  id?: string
   status: 'idle' | 'running' | 'done' | 'error'
   metadata?: Record<string, any>
 }
@@ -80,11 +88,17 @@ export interface EngineCommandListing {
 
 export type EngineEvent =
   | { type: 'engine_agent_state'; agents: AgentStateUpdate[] }
-  | { type: 'engine_status'; fields: StatusFields }
-  | { type: 'engine_working_message'; message: string }
-  | { type: 'engine_notify'; message: string; level: 'info' | 'warning' | 'error' }
+  | { type: 'engine_status'; fields: StatusFields; metadata?: Record<string, unknown> }
+  | { type: 'engine_working_message'; message: string; metadata?: Record<string, unknown> }
+  | { type: 'engine_notify'; message: string; level: 'info' | 'warning' | 'error'; metadata?: Record<string, unknown> }
   | { type: 'engine_dialog'; dialogId: string; method: 'select' | 'confirm' | 'input'; title: string; message?: string; options?: string[]; defaultValue?: string }
-  | { type: 'engine_harness_message'; message: string; source?: string }
+  // `metadata` is an opaque pass-through map the harness sets via ctx.emit
+  // that the engine forwards verbatim. The desktop renderer honors
+  // `metadata.dedupKey` (string) to suppress repeated harness messages
+  // within an engine-instance scrollback — see engine-event-slice.ts. The
+  // convention is renderer-honored, not engine-enforced; other extensions
+  // may pick their own keys (namespace as `<extensionName>:<messageKey>`).
+  | { type: 'engine_harness_message'; message: string; source?: string; metadata?: Record<string, unknown> }
   | { type: 'engine_text_delta'; text: string }
   | { type: 'engine_message_end'; usage: { inputTokens: number; outputTokens: number; contextPercent: number; cost: number } }
   | { type: 'engine_tool_start'; toolName: string; toolId: string }
@@ -207,4 +221,28 @@ export type EngineEvent =
       llmCallOutputTokens: number
       llmCallCost: number
       llmCallJsonMode?: boolean
+    }
+  // engine_dispatch_start is emitted on the parent session's event stream when
+  // an extension-initiated dispatch begins. Carries the agent name, task, model,
+  // and child session ID. Observation-only — harnesses can use this and
+  // engine_dispatch_end to persist dispatch records or surface dispatch status.
+  | {
+      type: 'engine_dispatch_start'
+      dispatchAgent: string
+      dispatchTask: string
+      dispatchModel: string
+      dispatchSessionId: string
+    }
+  // engine_dispatch_end is emitted when an extension-initiated dispatch completes
+  // (success, error, or recall). Carries telemetry: exit code, elapsed time,
+  // cost, tokens, and tool count.
+  | {
+      type: 'engine_dispatch_end'
+      dispatchAgent: string
+      dispatchExitCode: number
+      dispatchElapsed: number
+      dispatchCost: number
+      dispatchInputTokens: number
+      dispatchOutputTokens: number
+      dispatchToolCount: number
     }

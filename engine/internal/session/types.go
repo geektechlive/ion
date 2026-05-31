@@ -7,6 +7,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/permissions"
 	"github.com/dsswift/ion/engine/internal/recorder"
 	"github.com/dsswift/ion/engine/internal/session/agents"
+	"github.com/dsswift/ion/engine/internal/session/extcontext"
 	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/telemetry"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -128,6 +129,13 @@ type engineSession struct {
 	// ToolCallUpdateEvent carries ToolID: "" (content_block_delta has no toolID),
 	// so accumulation falls back to this field to key under the correct toolID.
 	cliLastToolID string
+
+	// dispatchRegistry tracks active background dispatches for this session.
+	// Used by RecallAgent to cancel running background agents, and by the
+	// dispatch completion callback to deregister finished dispatches.
+	// Initialized in StartSession, nil-safe (code that creates ext contexts
+	// passes it through variadic).
+	dispatchRegistry *extcontext.DispatchRegistry
 }
 
 

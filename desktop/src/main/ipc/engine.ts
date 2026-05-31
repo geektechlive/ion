@@ -4,6 +4,7 @@ import { buildClearDividerRemoteEvent } from '../../shared/clear-divider'
 import { log as _log } from '../logger'
 import { engineBridge, sessionPlane, state } from '../state'
 import { processIncomingPrompt } from '../prompt-pipeline'
+import { encodeImageAttachments } from '../remote/attachment-encoder'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -15,8 +16,19 @@ export function registerEngineIpc(): void {
     return engineBridge.startSession(key, config)
   })
 
-  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt, imageAttachments }: { key: string; text: string; model?: string; appendSystemPrompt?: string; imageAttachments?: import('../../shared/types').ImageAttachmentPayload[] }) => {
-    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${imageAttachments?.length ?? 0}`)
+  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt, imageAttachments, rawAttachments }: { key: string; text: string; model?: string; appendSystemPrompt?: string; imageAttachments?: import('../../shared/types').ImageAttachmentPayload[]; rawAttachments?: import('../../shared/types-session').FileAttachment[] }) => {
+    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${imageAttachments?.length ?? 0} rawAttachments=${rawAttachments?.length ?? 0}`)
+    // Encode raw file attachments when present (desktop InputBar path).
+    // This mirrors the remote handler pattern at handlers/engine.ts:108-114.
+    let resolvedText = text
+    let resolvedImageAttachments = imageAttachments
+    if (rawAttachments && rawAttachments.length > 0 && !imageAttachments?.length) {
+      const ctx = rawAttachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
+      resolvedText = `${ctx}\n\n${text}`
+      const { encoded, rewrittenText } = encodeImageAttachments(resolvedText, rawAttachments)
+      resolvedText = rewrittenText
+      resolvedImageAttachments = encoded
+    }
     // Route through the unified prompt pipeline so engine-tab slash commands
     // get the same precedence (extension command → .md → unknown) as CLI
     // tabs. The renderer's submitEnginePrompt already inserted the optimistic
@@ -30,17 +42,39 @@ export function registerEngineIpc(): void {
     // happen for engine tabs in practice).
     const [tabId, instanceId] = key.includes(':') ? key.split(':', 2) : [key, null]
     const reqId = `desktop-engine-${Date.now()}`
+
+    // Resolve planFilePath from the renderer store so the engine can
+    // restore the plan file after a desktop restart instead of
+    // allocating a fresh slug. Mirrors the projectPath resolution
+    // pattern in remote/handlers/engine.ts.
+    let planFilePath: string | undefined
+    try {
+      const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const pfp = await state.mainWindow?.webContents.executeJavaScript(`
+        (function() {
+          var store = window.__Ion_SESSION_STORE__;
+          if (!store) return null;
+          var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTab}'; });
+          return tab && tab.planFilePath ? tab.planFilePath : null;
+        })()
+      `)
+      planFilePath = pfp || undefined
+    } catch (err) {
+      log(`IPC ENGINE_PROMPT: planFilePath query failed key=${key}: ${(err as Error).message}`)
+    }
+
     try {
       await processIncomingPrompt({
         tabId,
-        text,
+        text: resolvedText,
         reqId,
         source: 'desktop',
         isEngineTab: true,
         instanceId,
         appendSystemPrompt,
         model,
-        imageAttachments,
+        imageAttachments: resolvedImageAttachments,
+        planFilePath,
       })
       return { ok: true }
     } catch (err) {
@@ -100,5 +134,10 @@ export function registerEngineIpc(): void {
     }
     log(`IPC SET_PERMISSION_MODE: tab=${tabId} mode=${mode} source=${source ?? 'unknown'}`)
     sessionPlane.setPermissionMode(tabId, mode, source)
+  })
+
+  ipcMain.on('ion:engine-set-plan-mode', (_event, key: string, enabled: boolean) => {
+    log(`IPC engine-set-plan-mode: key=${key} enabled=${enabled}`)
+    engineBridge.sendSetPlanMode(key, enabled, undefined, 'prompt_sync')
   })
 }

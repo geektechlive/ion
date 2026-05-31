@@ -188,10 +188,20 @@ extension SessionViewModel {
     /// ordered Task so the mode change is guaranteed to arrive at the desktop
     /// before the prompt. Without this, two separate `Task {}` blocks can
     /// race and the prompt may arrive while the engine is still in plan mode.
+    ///
+    /// Engine tabs route through `.enginePrompt` (which the desktop dispatches
+    /// to `handleEnginePrompt` → the engine instance), not `.prompt` (which
+    /// goes to `handlePrompt` → the CLI session plane). Without this split,
+    /// tapping "Implement" on an engine-view plan card sends a CLI prompt
+    /// that never reaches the engine instance — the card disappears but
+    /// nothing happens.
     func implementPlan(tabId: String, prompt: String) {
+        let isEngine = tabs.first(where: { $0.id == tabId })?.isEngine == true
+        let instanceId = isEngine ? activeEngineInstance[tabId] ?? engineInstances[tabId]?.first?.id : nil
         // Optimistic local update for responsive UI
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].permissionMode = .auto
+            tabs[idx].status = .connecting
         }
         guard let transport else {
             Task { @MainActor [weak self] in
@@ -201,8 +211,19 @@ extension SessionViewModel {
         }
         Task { [weak self] in
             do {
+                // 1. Reset the engine session (clears plan mode, conversation
+                //    history, and restricted tool list) so the implementation
+                //    run starts clean — matching desktop's onImplement flow.
+                try await transport.send(.resetTabSession(tabId: tabId))
+                // 2. Set permission mode to auto on the fresh session.
                 try await transport.send(.setPermissionMode(tabId: tabId, mode: .auto))
-                try await transport.send(.prompt(tabId: tabId, text: prompt))
+                // 3. Send the implementation prompt with implementationPhase
+                //    flag so the engine suppresses EnterPlanMode injection.
+                if isEngine {
+                    try await transport.send(.enginePrompt(tabId: tabId, text: prompt, instanceId: instanceId, implementationPhase: true))
+                } else {
+                    try await transport.send(.prompt(tabId: tabId, text: prompt, implementationPhase: true))
+                }
             } catch {
                 let detail = error.localizedDescription
                 await MainActor.run {
@@ -470,6 +491,14 @@ extension SessionViewModel {
 
     func requestFsWriteFile(filePath: String, content: String) {
         send(.fsWriteFile(filePath: filePath, content: content))
+    }
+
+    /// Rename a file or directory on the paired desktop. Fire-and-forget;
+    /// the result arrives as `.fsRenameResult` which the event handler
+    /// turns into a refreshed `fsListDir` on the parent directory of
+    /// `newPath` (and surfaces errors via `fileRenameResult`).
+    func requestFsRename(oldPath: String, newPath: String) {
+        send(.fsRename(oldPath: oldPath, newPath: newPath))
     }
 
     func requestLoadAttachments(tabId: String) {

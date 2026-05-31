@@ -38,6 +38,23 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		// so the model's intent (delegate work) still succeeds.
 		var spec types.AgentSpec
 		var specMatched bool
+
+		// Fallback: when the LLM didn't pass a name, fire before_agent_start
+		// so extensions can inspect the task and supply an agent name. This
+		// is the belt-and-suspenders layer behind per-specialist dispatch
+		// tools — if the generic Agent tool is called without a name, the
+		// extension still gets a chance to resolve the specialist.
+		if requestedName == "" && capturedExtGroup != nil && !capturedExtGroup.IsEmpty() {
+			basCtx := m.newExtContext(s, capturedKey)
+			_, hookName, _ := capturedExtGroup.FireBeforeAgentStart(basCtx, extension.AgentInfo{
+				Task: prompt,
+			})
+			if hookName != "" {
+				utils.Log("Session", fmt.Sprintf("before_agent_start resolved agentName=%s key=%s", hookName, capturedKey))
+				requestedName = hookName
+			}
+		}
+
 		if requestedName != "" {
 			if matched, ok := m.resolveAgentSpec(s, key, requestedName); ok {
 				spec = matched
@@ -48,11 +65,19 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			// the name was aspirational, not required.
 		}
 
+		// Naming: the engine generates a unique ID per dispatch for internal
+		// tracking (state updates, abort, child request routing). The Name
+		// field uses the spec name when matched so extensions can correlate
+		// with their roster. Extensions own naming policy; the engine
+		// provides the mechanism.
 		s.agentCounter++
-		agentName := fmt.Sprintf("agent-%d", s.agentCounter)
+		agentID := fmt.Sprintf("agent-%d", s.agentCounter)
+		agentName := agentID
 		if specMatched {
-			agentName = fmt.Sprintf("%s-%d", spec.Name, s.agentCounter)
+			agentID = fmt.Sprintf("%s-%d", spec.Name, s.agentCounter)
+			agentName = spec.Name
 		}
+
 		displayName := description
 		if displayName == "" {
 			if specMatched && spec.Description != "" {
@@ -80,22 +105,44 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		}
 
 		start := time.Now()
-		s.agents.AppendState(types.AgentStateUpdate{
-			Name:   agentName,
-			Status: "running",
-			Metadata: map[string]interface{}{
-				"displayName": displayName,
-				"type":        "agent",
-				"visibility":  "sticky",
-				"invited":     true,
-				"task":        prompt,
-				"model":       childModel,
-				"startTime":   start.Unix(),
-			},
-		})
+
+		// When re-dispatching to an existing specialist, update the
+		// existing state entry instead of appending a duplicate row.
+		// The agent row is a living conversation view that accumulates
+		// all dispatches to the same specialist.
+		existingIdx := s.agents.FindStateIndex(agentName)
+		if existingIdx >= 0 {
+			s.agents.UpdateState(agentName, func(state *types.AgentStateUpdate) {
+				state.ID = agentID
+				state.Status = "running"
+				if state.Metadata == nil {
+					state.Metadata = map[string]interface{}{}
+				}
+				state.Metadata["task"] = prompt
+				state.Metadata["model"] = childModel
+				state.Metadata["startTime"] = start.Unix()
+				state.Metadata["lastWork"] = ""
+				delete(state.Metadata, "elapsed")
+			})
+		} else {
+			s.agents.AppendState(types.AgentStateUpdate{
+				Name:   agentName,
+				ID:     agentID,
+				Status: "running",
+				Metadata: map[string]interface{}{
+					"displayName": displayName,
+					"type":        "agent",
+					"visibility":  "sticky",
+					"invited":     true,
+					"task":        prompt,
+					"model":       childModel,
+					"startTime":   start.Unix(),
+				},
+			})
+		}
 		snapshot := s.agents.MergedSnapshot()
 
-		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_start name=%s", capturedKey, len(snapshot), agentName))
+		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_start name=%s id=%s reuse=%v", capturedKey, len(snapshot), agentName, agentID, existingIdx >= 0))
 		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
 
 		// Fire agent_start on the parent extension group so user observers
@@ -103,7 +150,7 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		// dispatcher, never propagate. Guard mirrors fireBeforeAgentStart
 		// in prompt_extensions.go.
 		if capturedExtGroup != nil && !capturedExtGroup.IsEmpty() {
-			utils.Log("Session", fmt.Sprintf("firing agent_start key=%s name=%s task_len=%d", capturedKey, agentName, len(prompt)))
+			utils.Log("Session", fmt.Sprintf("firing agent_start key=%s name=%s id=%s task_len=%d", capturedKey, agentName, agentID, len(prompt)))
 			startCtx := m.newExtContext(s, capturedKey)
 			capturedExtGroup.FireAgentStart(startCtx, extension.AgentInfo{
 				Name: agentName,
@@ -119,11 +166,63 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		var childDone sync.WaitGroup
 		childDone.Add(1)
 
-		var childConvID string
+		// Live progress forwarding: accumulate child text chunks and tool
+		// calls, then throttle-emit lastWork updates so the agent pill shows
+		// real-time activity instead of a static "responding...".
+		var (
+			childConvID  string
+			progressMu   sync.Mutex
+			textAccum    string
+			lastEmitTime time.Time
+		)
+		const progressInterval = 2 * time.Second
+		const maxSnippetLen = 100
+
+		emitProgress := func(work string) {
+			if len(work) > maxSnippetLen {
+				work = work[:maxSnippetLen]
+			}
+			s.agents.UpdateStateByID(agentID, func(state *types.AgentStateUpdate) {
+				if state.Metadata == nil {
+					state.Metadata = map[string]interface{}{}
+				}
+				state.Metadata["lastWork"] = work
+			})
+			snap := s.agents.MergedSnapshot()
+			utils.Debug("Session", fmt.Sprintf("agent_progress id=%s name=%s key=%s work=%q", agentID, agentName, capturedKey, work))
+			m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snap})
+		}
+
 		child.OnNormalized(func(_ string, ev types.NormalizedEvent) {
-			if tc, ok := ev.Data.(*types.TaskCompleteEvent); ok {
-				result = tc.Result
-				childConvID = tc.SessionID
+			switch e := ev.Data.(type) {
+			case *types.TaskCompleteEvent:
+				result = e.Result
+				childConvID = e.SessionID
+
+			case *types.TextChunkEvent:
+				progressMu.Lock()
+				textAccum += e.Text
+				now := time.Now()
+				shouldEmit := now.Sub(lastEmitTime) >= progressInterval
+				snippet := textAccum
+				if shouldEmit {
+					lastEmitTime = now
+					// Keep only the tail for display
+					if len(snippet) > maxSnippetLen {
+						snippet = snippet[len(snippet)-maxSnippetLen:]
+					}
+				}
+				progressMu.Unlock()
+				if shouldEmit {
+					emitProgress(snippet)
+				}
+
+			case *types.ToolCallEvent:
+				progressMu.Lock()
+				lastEmitTime = time.Now()
+				textAccum = "" // Reset text accumulator on new tool call
+				progressMu.Unlock()
+				emitProgress(fmt.Sprintf("Using %s...", e.ToolName))
 			}
 		})
 		child.OnExit(func(_ string, _ *int, _ *string, _ string) {
@@ -133,7 +232,7 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			childErr = err
 		})
 
-		childRequestID := fmt.Sprintf("%s-%s", capturedKey, agentName)
+		childRequestID := fmt.Sprintf("%s-%s", capturedKey, agentID)
 		runOpts := types.RunOptions{
 			Prompt:      prompt,
 			Model:       childModel,
@@ -175,7 +274,7 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 		elapsed := time.Since(start).Seconds()
 
 		var terminalStatus string
-		s.agents.UpdateState(agentName, func(state *types.AgentStateUpdate) {
+		s.agents.UpdateStateByID(agentID, func(state *types.AgentStateUpdate) {
 			if state.Metadata == nil {
 				state.Metadata = map[string]interface{}{}
 			}
@@ -194,14 +293,19 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			}
 			terminalStatus = state.Status
 			state.Metadata["elapsed"] = elapsed
+			// Accumulate conversation IDs across dispatches so the
+			// desktop can load the full history for this specialist.
 			if childConvID != "" {
+				existing, _ := state.Metadata["conversationIds"].([]interface{})
+				state.Metadata["conversationIds"] = append(existing, childConvID)
+				// Keep single-value key for backward compatibility
 				state.Metadata["conversationId"] = childConvID
 			}
 		})
 		snapshot2 := s.agents.MergedSnapshot()
 
-		utils.Log("Session", fmt.Sprintf("agent_terminated name=%s status=%s reason=spawner_exit key=%s elapsed=%.2fs", agentName, terminalStatus, capturedKey, elapsed))
-		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_end name=%s", capturedKey, len(snapshot2), agentName))
+		utils.Log("Session", fmt.Sprintf("agent_terminated name=%s id=%s status=%s reason=spawner_exit key=%s elapsed=%.2fs", agentName, agentID, terminalStatus, capturedKey, elapsed))
+		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_end name=%s id=%s", capturedKey, len(snapshot2), agentName, agentID))
 		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot2})
 
 		// Fire agent_end on the parent extension group. Must fire on every

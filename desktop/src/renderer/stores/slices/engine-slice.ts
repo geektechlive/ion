@@ -28,6 +28,13 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         hasChosenDirectory: !!(dir || defaultBase),
         pillIcon: 'lightning',
         groupId,
+        // Engine tabs start in auto mode regardless of the desktop default.
+        // Extensions control plan mode via ctx.SetPlanMode — the user's
+        // default permission mode preference applies to CLI tabs only.
+        permissionMode: 'auto',
+        // Clear the plan-model override that makeLocalTab may have set
+        // (it applies the split model when defaultPermissionMode is 'plan').
+        modelOverride: null,
       }
 
       set((state) => ({
@@ -294,24 +301,40 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       set({ engineModelOverrides: overrides })
     },
 
-    submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments) => {
+    submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments, rawAttachments) => {
       const pane = get().enginePanes.get(tabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
+      // Sync plan mode to the engine session via compound key before
+      // submitting the prompt. The engine session is keyed by
+      // `tabId:instanceId`; the generic setPermissionMode path uses
+      // bare tabId which silently misses the engine session.
+      const currentTab = get().tabs.find(t => t.id === tabId)
+      if (currentTab?.permissionMode === 'plan') {
+        window.ion.engineSetPlanMode(key, true)
+      }
       // Build a FileAttachment list from the encoded image attachments so
       // the user-message bubble can render images inline. The path is the
       // only field needed at render time; main-side READ_IMAGE_DATA_URL
       // turns it into a data URL for <img>.
-      const userAttachments = (imageAttachments || [])
-        .filter((a) => !!a.path)
-        .map((a) => ({
-          id: crypto.randomUUID(),
-          type: 'image' as const,
-          name: (a.path?.split('/').pop() || 'image'),
-          path: a.path!,
-          mimeType: a.mediaType,
+      const userAttachments = rawAttachments && rawAttachments.length > 0
+        ? rawAttachments.map((a) => ({
+          id: a.id,
+          type: a.type,
+          name: a.name,
+          path: a.path,
+          mimeType: a.mimeType,
         }))
+        : (imageAttachments || [])
+          .filter((a) => !!a.path)
+          .map((a) => ({
+            id: crypto.randomUUID(),
+            type: 'image' as const,
+            name: (a.path?.split('/').pop() || 'image'),
+            path: a.path!,
+            mimeType: a.mediaType,
+          }))
       set((state) => {
         const pinnedPrompt = new Map(state.enginePinnedPrompt)
         pinnedPrompt.set(key, text)
@@ -325,7 +348,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
           ...(userAttachments.length > 0 ? { attachments: userAttachments } : {}),
         })
         messages.set(key, msgs)
-        const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const } : t)
+        const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const, attachments: [] } : t)
         // Clear any pending engine-instance denial — submitting a new
         // prompt is the user moving past the question/plan card. Mirrors
         // the engine-side clearing in `prompt_dispatch.go`.
@@ -335,7 +358,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       })
       const prefs = usePreferencesStore.getState()
       const modelOverride = get().engineModelOverrides.get(key) || prefs.engineDefaultModel || prefs.preferredModel || undefined
-      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt, imageAttachments).then((result) => {
+      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt, imageAttachments, rawAttachments).then((result) => {
         if (result && !result.ok) {
           set((state) => {
             const messages = new Map(state.engineMessages)

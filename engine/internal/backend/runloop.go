@@ -52,6 +52,15 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	}
 
 	provider := b.resolveProvider(model)
+	if provider == nil && run.cfg != nil && run.cfg.DefaultModel != "" && run.cfg.DefaultModel != model {
+		// Graceful degradation: the requested model (e.g. an unrecognized
+		// tier alias like "standard") didn't resolve. Fall back to the
+		// engine's default model instead of hard-failing.
+		utils.Warn("ApiBackend", fmt.Sprintf("model %q not found, falling back to default %q", model, run.cfg.DefaultModel))
+		model = run.cfg.DefaultModel
+		opts.Model = model
+		provider = b.resolveProvider(model)
+	}
 	if provider == nil {
 		utils.Error("ApiBackend", fmt.Sprintf("no provider for model %q", model))
 		b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{
@@ -64,8 +73,28 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	}
 
 	// Load or create conversation
-	conv := loadOrCreateConversation(opts, model)
+	conv, convErr := loadOrCreateConversation(opts, model)
+	if convErr != nil {
+		msg := fmt.Sprintf("Failed to load conversation %s: %v. Your conversation history is safe on disk — please retry.", opts.SessionID, convErr)
+		utils.Error("ApiBackend", msg)
+		b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{
+			ErrorMessage: msg,
+			ErrorCode:    "conversation_load_failed",
+		}})
+		b.emitError(run, fmt.Errorf("%s", msg))
+		b.emitExit(run.requestID, intPtr(1), nil, opts.SessionID)
+		return
+	}
 	run.conv = conv
+
+	// Emit the conversation/session ID early so the session manager can
+	// capture it before the first tool call or dispatch completes. Without
+	// this, s.conversationID is empty during the first run until
+	// handleRunExit fires, which causes dispatch persistence to silently
+	// skip writing agent_dispatch entries.
+	b.emit(run, types.NormalizedEvent{Data: &types.SessionInitEvent{
+		SessionID: conv.ID,
+	}})
 
 	// Persist the working directory so migrated conversations carry the project context.
 	if opts.ProjectPath != "" && conv.WorkingDirectory == "" {

@@ -4,6 +4,7 @@ import { EngineBridge } from './engine-bridge'
 import { engineIsRemote, getEngineHostInfo, listEngineDirectory } from './engine-bridge-fs'
 import { log as _log, warn as _warn, error as _error } from './logger'
 import { handleEngineEvent, type TabEntry, type EventEmitterContext } from './engine-control-plane-events'
+import { readSettings, SETTINGS_DEFAULTS } from './settings-store'
 import type {
   EngineConfig,
   EngineEvent,
@@ -94,6 +95,9 @@ export class EngineControlPlane extends EventEmitter {
     tab.conversationId = null
     tab.engineSessionStarted = false
     tab.promptCount = 0
+    tab.activeRequestId = null
+    tab.status = 'idle'         // Prevent stale events from the dying session
+    tab.startedAt = 0           // from triggering task_complete synthesis
   }
 
   closeTab(tabId: string): void {
@@ -145,6 +149,10 @@ export class EngineControlPlane extends EventEmitter {
       sessionId: options.sessionId || tab.conversationId || undefined,
       maxTokens: options.maxTokens,
       thinking: options.thinking,
+      claudeCompat: (() => {
+        try { return readSettings().enableClaudeCompat ?? SETTINGS_DEFAULTS.enableClaudeCompat }
+        catch { return SETTINGS_DEFAULTS.enableClaudeCompat }
+      })(),
     }
 
     // When the engine is remote, the workingDirectory must exist on the engine

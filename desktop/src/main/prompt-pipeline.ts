@@ -280,6 +280,8 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
         text: p.text,
         appendSystemPrompt: p.appendSystemPrompt,
         imageAttachments: p.imageAttachments,
+        implementationPhase: p.implementationPhase,
+        planFilePath: p.planFilePath,
       })
       return
     }
@@ -319,6 +321,7 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
       prompt: rewrittenText,
       timestamp: Date.now(),
       imageAttachments: encoded.length > 0 ? encoded : undefined,
+      implementationPhase: p.implementationPhase,
     })
     return
   }

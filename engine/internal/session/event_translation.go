@@ -32,6 +32,21 @@ func (m *Manager) handleNormalizedEvent(runID string, event types.NormalizedEven
 	// check below, but it is the signal for turn_end.
 	m.fireCliTurnHooks(s, key, sOk, event)
 
+	// Capture the conversation/session ID as early as possible. The API
+	// backend emits a SessionInitEvent right after loadOrCreateConversation
+	// so the session manager learns the ID before any tool call or dispatch
+	// completes. Without this, s.conversationID is empty during the first
+	// run, which causes dispatch persistence (appendConversationEntry) to
+	// silently skip writing agent_dispatch entries.
+	if init, ok := event.Data.(*types.SessionInitEvent); ok && init.SessionID != "" {
+		m.mu.Lock()
+		if s2, ok2 := m.sessions[key]; ok2 && s2.conversationID == "" {
+			s2.conversationID = init.SessionID
+			utils.Log("Session", fmt.Sprintf("captured conversationID=%s from SessionInitEvent key=%s", init.SessionID, key))
+		}
+		m.mu.Unlock()
+	}
+
 	contextWindow := conversation.DefaultContext
 	m.mu.RLock()
 	if s, sOk2 := m.sessions[key]; sOk2 && s.lastContextWindow > 0 {
@@ -228,7 +243,10 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 	m.mu.Lock()
 	if s, ok := m.sessions[key]; ok {
 		s.requestID = ""
-		s.agents.ClearStates()
+		// Preserve completed agent states (done/error/cancelled) so their
+		// conversation history survives for post-run inspection and tab
+		// persistence. Only clear agents still stuck at "running" (stale).
+		s.agents.ClearRunningStates()
 		if sessionID != "" {
 			s.conversationID = sessionID
 		}
@@ -240,29 +258,32 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 	}
 	m.mu.Unlock()
 
-	// Clear engine-managed agent state (Agent tool sub-agents).
-	// Only emit if the session had built-in agent states; extension-managed
-	// agents are owned by the extension and must not be wiped on run exit.
+	// Persist any terminal dispatch entries to the conversation file.
+	// This runs AFTER the backend's final save (which fires before OnExit)
+	// so the load-append-save cycle won't be overwritten by a subsequent
+	// backend save. Only terminal states (done/error/cancelled) with
+	// dispatch metadata (task, agent type) are persisted.
+	m.persistTerminalDispatches(key, sessionID)
+
+	// Emit updated agent state snapshot after clearing running agents.
+	// Completed agents (done/error/cancelled) are preserved so their
+	// conversation history survives for post-run inspection. The merged
+	// snapshot includes both extension-managed roster entries and any
+	// retained engine-managed agents.
 	//
-	// Engine contract: `engine_agent_state` is a complete snapshot. After
-	// ClearStates() above, the registry has no engine-managed states left,
-	// so we emit the empty array as the authoritative "no engine-managed
-	// agents are live" signal. See docs/architecture/agent-state.md.
+	// Engine contract: `engine_agent_state` is a complete snapshot.
+	// See docs/architecture/agent-state.md.
 	m.mu.RLock()
-	hasExtGroup := false
+	var runExitSnapshot []types.AgentStateUpdate
 	if s, ok := m.sessions[key]; ok {
-		hasExtGroup = s.extGroup != nil && !s.extGroup.IsEmpty()
+		runExitSnapshot = s.agents.MergedSnapshot()
 	}
 	m.mu.RUnlock()
-	if !hasExtGroup {
-		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=0 reason=run_exit", key))
-		m.emit(key, types.EngineEvent{
-			Type:   "engine_agent_state",
-			Agents: []types.AgentStateUpdate{},
-		})
-	} else {
-		utils.Debug("Session", fmt.Sprintf("handleRunExit: skipping engine agent_state — extension owns registry key=%s", key))
-	}
+	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=run_exit", key, len(runExitSnapshot)))
+	m.emit(key, types.EngineEvent{
+		Type:   "engine_agent_state",
+		Agents: runExitSnapshot,
+	})
 
 	// Clear any stale working message before transitioning to idle
 	m.emit(key, types.EngineEvent{Type: "engine_working_message", EventMessage: ""})

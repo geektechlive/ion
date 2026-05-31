@@ -67,6 +67,9 @@ func (a *llmCallTestAccessor) TranslateEvent(_ types.NormalizedEvent, _ int) typ
 }
 func (a *llmCallTestAccessor) SetPlanMode(_ bool, _ string)        {}
 func (a *llmCallTestAccessor) GetPlanModeState() (bool, string)    { return false, "" }
+func (a *llmCallTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string { return "" }
+func (a *llmCallTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate))  {}
+func (a *llmCallTestAccessor) EmitAgentSnapshot(_ string) {}
 
 // registerMockProvider registers a MockProvider for the given model under
 // a fixed provider id. Returns the mock so the test can inspect recorded

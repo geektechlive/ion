@@ -174,10 +174,34 @@ func (a *sessionAccessor) GetPlanModeState() (bool, string) {
 	return a.m.GetPlanModeState(a.key)
 }
 
+func (a *sessionAccessor) AppendOrUpdateAgentState(state types.AgentStateUpdate) string {
+	idx := a.s.agents.FindStateIndex(state.Name)
+	if idx >= 0 {
+		a.s.agents.UpdateState(state.Name, func(existing *types.AgentStateUpdate) {
+			existing.ID = state.ID
+			existing.Status = state.Status
+			existing.Metadata = state.Metadata
+		})
+		return state.ID
+	}
+	a.s.agents.AppendState(state)
+	return state.ID
+}
+
+func (a *sessionAccessor) UpdateAgentStateByID(id string, updater func(*types.AgentStateUpdate)) {
+	a.s.agents.UpdateStateByID(id, updater)
+}
+
+func (a *sessionAccessor) EmitAgentSnapshot(reason string) {
+	snapshot := a.s.agents.MergedSnapshot()
+	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=%s", a.key, len(snapshot), reason))
+	a.m.emit(a.key, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
+}
+
 // newExtContext builds a fully-populated extension Context for the given session.
 // All functional callbacks are wired through the extcontext.SessionAccessor interface.
 func (m *Manager) newExtContext(s *engineSession, key string) *extension.Context {
-	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key})
+	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key}, s.dispatchRegistry)
 }
 
 // StartSession creates a new session with the given config.
@@ -202,13 +226,14 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	}
 
 	s := &engineSession{
-		key:            key,
-		config:         config,
-		conversationID:  config.SessionID,
-		agents:         agents.NewRegistry(),
-		childPIDs:      make(map[int]struct{}),
-		pending:        pending.New(),
-		maxQueueDepth:  32,
+		key:              key,
+		config:           config,
+		conversationID:   config.SessionID,
+		agents:           agents.NewRegistry(),
+		childPIDs:        make(map[int]struct{}),
+		pending:          pending.New(),
+		maxQueueDepth:    32,
+		dispatchRegistry: extcontext.NewDispatchRegistry(),
 	}
 
 	// Initialize process registry for extension-spawned subprocesses.
@@ -245,6 +270,16 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 
 	m.mu.Unlock()
 
+	// Rehydrate agent dispatch state from the conversation file if the
+	// session is resuming an existing conversation. This runs before
+	// extensions fire session_start so the agent registry is pre-populated
+	// with completed dispatches. When the extension later emits its fresh
+	// roster, MergedSnapshot deduplicates: engine-managed entries (with
+	// task, conversationId, elapsed) win over the extension's idle entries.
+	if s.conversationID != "" {
+		m.rehydrateDispatchState(s, key)
+	}
+
 	// Signal that session startup is in progress so consumers can mirror
 	// loading state. Events flow through the socket broadcast independently
 	// of the request-response ACK, so consumers receive these before
@@ -270,15 +305,17 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		}
 	}
 	// Load Claude Code–style skills from ~/.claude/skills (one subdir per
-	// skill, each with a SKILL.md file). These are discovered when
-	// enableClaudeCompat is configured; the loader is always attempted so
-	// that users who install Claude-style skills without a compatibility flag
-	// still get model-invocable skill awareness. A missing directory is a
-	// silent no-op (returns nil, nil).
-	if claudeSkills, err := skills.LoadClaudeSkillsDirectory(skillPaths.ClaudeUser); err == nil {
-		for _, sk := range claudeSkills {
-			skills.RegisterSkill(sk)
+	// skill, each with a SKILL.md file). Only attempted when the ClaudeCompat
+	// flag is set on the engine config. A missing directory is a silent no-op
+	// (returns nil, nil).
+	if config.ClaudeCompat {
+		if claudeSkills, err := skills.LoadClaudeSkillsDirectory(skillPaths.ClaudeUser); err == nil {
+			for _, sk := range claudeSkills {
+				skills.RegisterSkill(sk)
+			}
 		}
+	} else {
+		utils.Debug("Session", "skipping ~/.claude/skills/ (claudeCompat not set)")
 	}
 	if names := skills.ListSkillNames(); len(names) > 0 {
 		utils.Log("Session", fmt.Sprintf("loaded %d skills: %v", len(names), names))
@@ -397,7 +434,16 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 		})
 		host.SetPersistentEmit(func(ev types.EngineEvent) {
 			if ev.Type == "engine_agent_state" {
+				// Cache the extension's roster, then re-emit a merged snapshot
+				// that includes engine-managed entries (dispatch state with
+				// task, conversationId, progress). Forwarding the extension's
+				// raw event would overwrite engine-managed entries on the
+				// desktop due to the complete-snapshot contract.
 				s.agents.CacheExtStates(ev.Agents)
+				merged := s.agents.MergedSnapshot()
+				utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=ext_emit_merged", capturedKey, len(merged)))
+				m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: merged})
+				return
 			}
 			if ev.Type == "engine_status" && ev.Fields != nil && ev.Fields.ExtensionName != "" {
 				m.mu.Lock()

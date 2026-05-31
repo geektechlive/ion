@@ -1,5 +1,7 @@
 import { useSessionStore } from '../../stores/sessionStore'
 import { usePreferencesStore } from '../../preferences'
+import { nextMsgId } from '../../stores/session-store-helpers'
+import { formatImplementDivider } from '../../../shared/clear-divider'
 import type { TabState, Attachment } from '../../../shared/types'
 
 interface Handlers {
@@ -16,8 +18,9 @@ interface Handlers {
  * onImplement starts a fresh engine session (to exit plan mode cleanly),
  * reads the plan file, and sends "Implement the following plan:\n\n<content>"
  * as the first message of the new session. The planning conversation history
- * is not re-injected — the plan file is the complete artifact of the planning
- * session and is all the model needs to implement it.
+ * is preserved visually with a divider inserted between the planning and
+ * implementation phases — the plan file is the complete artifact of the
+ * planning session and is all the model needs to implement it.
  */
 export function buildPermissionDeniedHandlers(
   tab: TabState,
@@ -98,20 +101,29 @@ export function buildPermissionDeniedHandlers(
     // and the restricted tool list) so the implementation run starts clean.
     window.ion.resetTabSession(tab.id)
 
-    // Clear UI messages and reset conversation state so the implementation
-    // conversation starts visually fresh.
+    // Preserve conversation history and insert a visual divider so the user
+    // can see where planning ended and implementation began.
     useSessionStore.setState((s) => ({
       tabs: s.tabs.map((t) =>
         t.id === tab.id
           ? {
               ...t,
-              messages: [],
+              messages: [
+                ...t.messages,
+                {
+                  id: nextMsgId(),
+                  role: 'system' as const,
+                  content: formatImplementDivider(new Date()),
+                  timestamp: Date.now(),
+                },
+              ],
               historicalSessionIds: [
                 ...t.historicalSessionIds,
                 ...(t.conversationId && !t.historicalSessionIds.includes(t.conversationId)
                   ? [t.conversationId] : []),
               ],
               conversationId: null,
+              planFilePath: null,
               lastResult: null,
               currentActivity: '',
               permissionQueue: [],

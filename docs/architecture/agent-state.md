@@ -151,6 +151,7 @@ Consumers drop every entry. There is no "soft clear" vs "hard clear" distinction
 - Run lifecycle that drives the engine's emissions: [Session Lifecycle](../sessions/lifecycle.md)
 - Extension emission API: [TypeScript SDK](../extensions/sdk-typescript.md)
 - Engine internals: [Engine](engine.md)
+- Pass-through hints on other engine events: [Well-known metadata keys for engine_harness_message](../protocol/server-events.md#well-known-metadata-keys-for-engine_harness_message) — the same opaque-metadata pattern applied to harness messages (e.g. `dedupKey` for renderer-side dedup).
 
 ## Related contracts
 

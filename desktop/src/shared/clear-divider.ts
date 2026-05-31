@@ -27,6 +27,16 @@ export function isClearDivider(content: string): boolean {
 }
 
 /**
+ * Format the divider system message inserted into scrollback when the user
+ * clicks "Implement" on a plan. Mirrors `formatClearDivider` but signals an
+ * implementation-phase transition rather than a `/clear` checkpoint.
+ */
+export function formatImplementDivider(at: Date): string {
+  const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  return `── Implementing plan at ${time} ──`
+}
+
+/**
  * Build the `RemoteEvent` envelope used to mirror a `/clear` divider to
  * connected remote (iOS) clients. The envelope kind depends on the engine
  * session key shape:

@@ -1,12 +1,12 @@
 ---
 title: Hook Reference
-description: Complete reference for all 63 Ion Engine hooks with payloads, return types, and behavior.
+description: Complete reference for all 66 Ion Engine hooks with payloads, return types, and behavior.
 sidebar_position: 2
 ---
 
 # Hook Reference
 
-All 64 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
+All 66 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
 
 ## Lifecycle (13)
 
@@ -133,7 +133,7 @@ type ForkInfo struct {
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
-| `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt}` | Last non-nil wins. Injects system prompt into the sub-agent. |
+| `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt, AgentName}` | Last non-empty wins per field independently. Injects system prompt and/or resolves agent name. |
 | `before_provider_request` | Immediately before each outbound LLM provider call from the agent loop. Fires once per turn (including fallback hops). | `BeforeProviderRequestInfo{Provider, Model, TurnNumber, MessageCount, ToolCount, HasSystemPrompt, MaxTokens}` | ignored | Observe only |
 
 ### Payload Types
@@ -141,7 +141,8 @@ type ForkInfo struct {
 **BeforeAgentStartResult**
 ```go
 type BeforeAgentStartResult struct {
-    SystemPrompt string
+    SystemPrompt string `json:"systemPrompt,omitempty"` // injected system prompt; empty = no change
+    AgentName    string `json:"agentName,omitempty"`    // override agent name; empty = no change
 }
 ```
 
@@ -668,35 +669,3 @@ type PeerExtensionInfo struct {
 }
 ```
 
-## Async Registration Lifecycle (4)
-
-Fire when an extension registers or deregisters a webhook route or schedule job via the async-trigger subsystem. The `*_registered` variants are veto-capable: a handler that returns `AsyncRegistrationVeto{Block: true}` refuses the registration. The `*_deregistered` variants are observation-only — return values are ignored. Deregistration cannot be blocked because a veto there would let one extension permanently trap another extension's resources.
-
-| Hook | When | Payload | Return | Effect |
-|------|------|---------|--------|--------|
-| `webhook_registered` | Extension registers a webhook route (init or runtime) | `AsyncRegistrationInfo` | `AsyncRegistrationVeto` | Return `Block: true` to refuse registration. Last explicit opinion wins. |
-| `webhook_deregistered` | Webhook route removed (runtime deregister or session teardown) | `AsyncRegistrationInfo` | ignored | Observe only |
-| `schedule_registered` | Extension registers a schedule job (init or runtime) | `AsyncRegistrationInfo` | `AsyncRegistrationVeto` | Return `Block: true` to refuse registration. Last explicit opinion wins. |
-| `schedule_deregistered` | Schedule job removed (runtime deregister or session teardown) | `AsyncRegistrationInfo` | ignored | Observe only |
-
-### Payload Types
-
-**AsyncRegistrationInfo**
-```go
-type AsyncRegistrationInfo struct {
-    Kind   string      `json:"kind"`           // "webhook" or "schedule"
-    ID     string      `json:"id"`             // webhook path or schedule job id
-    Origin string      `json:"origin"`         // "init" or "runtime"
-    Decl   interface{} `json:"decl,omitempty"` // typed declaration (WebhookRoute or ScheduleJob)
-}
-```
-
-**AsyncRegistrationVeto**
-```go
-type AsyncRegistrationVeto struct {
-    Block  bool   `json:"block"`
-    Reason string `json:"reason,omitempty"`
-}
-```
-
-Veto semantics match `before_plan_mode_enter`: last handler that expresses an explicit opinion wins. A handler returning nil, a zero-value veto, or any non-veto value abstains. JSON-RPC subprocess extensions return `{block: true, reason: "..."}` map equivalents.

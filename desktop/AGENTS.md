@@ -13,6 +13,8 @@ npm run doctor      # bash scripts/doctor.sh
 
 Don't kill the user's running dev server. If a restart is needed, tell the user.
 
+**Never run `make desktop`.** It replaces the running Ion.app binary and relaunches the engine, which kills any active Ion session, including the one you are running in. Conversation state is often lost. The user runs `make desktop` manually. If the packaged app needs rebuilding, tell the user.
+
 ## Layout
 
 ```

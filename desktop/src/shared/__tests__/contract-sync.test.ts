@@ -105,6 +105,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'totalCostUsd',
   ],
   EngineConfig: [
+    'claudeCompat',
     'extensions',
     'maxTokens',
     'model',
@@ -125,7 +126,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'output_tokens',
     'service_tier',
   ],
-  AgentStateUpdate: ['metadata', 'name', 'status'],
+  AgentStateUpdate: ['id', 'metadata', 'name', 'status'],
   ModelEntry: [
     'contextWindow',
     'costPer1kInput',

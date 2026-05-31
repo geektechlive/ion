@@ -111,6 +111,31 @@ func (h *Host) callWithTimeout(method string, params interface{}, timeout time.D
 		return nil, fmt.Errorf("send %s: %w", method, err)
 	}
 
+	// When timeout <= 0, wait indefinitely (cancellable only by subprocess
+	// death or channel close). The engine does not impose duration opinions
+	// on extension tool calls or dispatches.
+	if timeout <= 0 {
+		select {
+		case resp, ok := <-ch:
+			if !ok {
+				return nil, fmt.Errorf("extension subprocess died during %s call", method)
+			}
+			if resp.Error != nil {
+				he := &hookError{Code: resp.Error.Code, Message: resp.Error.Message}
+				if resp.Error.Data != nil {
+					he.Stack = resp.Error.Data.Stack
+				}
+				return nil, he
+			}
+			return resp.Result, nil
+		case <-deadCh:
+			h.pendMu.Lock()
+			delete(h.pending, id)
+			h.pendMu.Unlock()
+			return nil, fmt.Errorf("extension subprocess died during %s call", method)
+		}
+	}
+
 	select {
 	case resp, ok := <-ch:
 		if !ok {

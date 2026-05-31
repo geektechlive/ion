@@ -145,6 +145,24 @@ struct EngineView: View {
         return tab?.status == .running || tab?.status == .connecting
     }
 
+    /// First pending permission request for this engine tab.
+    /// Engine tabs don't need the restored-card logic from ConversationView —
+    /// the desktop forwards engine denials via the per-instance Map into
+    /// `permissionQueue` on the tab snapshot, so the queue is the single
+    /// source of truth.
+    private var pendingPermission: PermissionRequest? {
+        let tab = viewModel.tab(for: tabId)
+        let queue = tab?.permissionQueue ?? []
+        let status = tab?.status
+        if let request = queue.first {
+            let inputKeys = request.toolInput?.keys.sorted() ?? []
+            DiagnosticLog.log("ENGINE-PERM: pendingPermission: from queue — toolName=\(request.toolName) questionId=\(request.questionId) inputKeys=\(inputKeys) status=\(status?.rawValue ?? "nil")")
+            return request
+        }
+        DiagnosticLog.log("ENGINE-PERM: pendingPermission: nil (queueSize=\(queue.count) status=\(status?.rawValue ?? "nil") tabId=\(tabId.prefix(8)))")
+        return nil
+    }
+
     // MARK: - Extracted sub-views
 
     private var chatItems: [ChatItem<GroupedItem>] {
@@ -238,7 +256,12 @@ struct EngineView: View {
                 let agentList = ScrollView {
                     VStack(spacing: 4) {
                         ForEach(visibleAgents) { agent in
-                            AgentBarRow(agent: agent)
+                            AgentBarRow(
+                                agent: agent,
+                                messages: viewModel.agentConversationMessages[agent.name],
+                                isLoadingMessages: viewModel.agentConversationLoading.contains(agent.name),
+                                onExpand: { viewModel.loadAgentConversation(agent: agent) }
+                            )
                         }
                     }
                     .padding(.horizontal, 8)
@@ -320,7 +343,13 @@ struct EngineView: View {
                         viewModel.setEngineModel(tabId: tabId, model: model)
                     },
                     availableModels: viewModel.availableModels,
-                    selectedModel: viewModel.engineModelOverrides[compoundKey] ?? ""
+                    selectedModel: viewModel.engineModelOverrides[compoundKey] ?? "",
+                    permissionMode: viewModel.tab(for: tabId)?.permissionMode,
+                    onToggleMode: {
+                        guard let current = viewModel.tab(for: tabId)?.permissionMode else { return }
+                        let newMode: PermissionMode = current == .plan ? .auto : .plan
+                        viewModel.setPermissionMode(tabId: tabId, mode: newMode)
+                    }
                 )
             }
             Divider()
@@ -351,6 +380,13 @@ struct EngineView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
+            }
+
+            if let request = pendingPermission {
+                PermissionCardView(tabId: tabId, request: request)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             if !visibleAgents.isEmpty {
@@ -461,6 +497,7 @@ struct EngineView: View {
             Button("Browse Desktop Files") { showFilePicker = true }
             Button("Cancel", role: .cancel) {}
         }
+        .animation(.default, value: pendingPermission?.id)
     }
 
     // MARK: - Engine input bar

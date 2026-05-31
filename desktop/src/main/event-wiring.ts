@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { IPC } from '../shared/types'
 import type { NormalizedEvent, EnrichedError } from '../shared/types'
 import { log as _log } from './logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry, forwardedEnginePermissionDenials } from './state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry, forwardedEnginePermissionDenials, lastForwardedEngineTabStatus } from './state'
 import { broadcast } from './broadcast'
 import { currentBackend } from './settings-store'
 import { normalizedToRemote } from './remote/protocol'
@@ -55,6 +55,26 @@ export function wireEngineBridgeEvents(): void {
     }
 
     broadcast(IPC.ENGINE_EVENT, key, event)
+
+    // Trace agent_state so we can correlate engine→desktop→iOS flow when
+    // diagnosing stuck-row, stale-snapshot, or missing-conversation reports.
+    // Pairs with the engine's `agent_snapshot_emitted` utils.Log line.
+    // Always log — not gated on remoteTransport — so desktop.log is
+    // sufficient for diagnosis even without an iOS device connected.
+    if (event.type === 'engine_agent_state') {
+      const agents = Array.isArray(event.agents) ? event.agents : []
+      const statuses = agents.map((a: any) => `${a.name}:${a.status}`).join(',')
+      log(`engineBridge: agent_state key=${key} count=${agents.length} statuses=[${statuses}]`)
+      // Log dispatch metadata for terminal agents so we can verify
+      // conversationId survives the engine→desktop pipeline.
+      for (const a of agents) {
+        if ((a.status === 'done' || a.status === 'error') && a.metadata?.task) {
+          const meta = a.metadata
+          log(`engineBridge: dispatch_agent name=${a.name} status=${a.status} convId=${meta.conversationId ?? 'MISSING'} convIds=${JSON.stringify(meta.conversationIds ?? 'MISSING')} convIdsType=${typeof meta.conversationIds}`)
+        }
+      }
+    }
+
     if (state.remoteTransport) {
       const tabId = key.split(':')[0]
       const instanceId = key.split(':')[1] || null
@@ -66,16 +86,6 @@ export function wireEngineBridgeEvents(): void {
       // the event for diagnostic visibility only — the desktop is the
       // authoritative responder via early-stop-policy.ts — but the wire
       // protocol is now uniform across consumers.
-      //
-      // Trace agent_state forwarding so we can correlate engine→desktop→iOS
-      // flow when diagnosing stuck-row or stale-snapshot reports. Pairs
-      // with the iOS-side `ENGINE: agent_state` DiagnosticLog line and the
-      // engine's `agent_snapshot_emitted` utils.Log.
-      if (event.type === 'engine_agent_state') {
-        const agents = Array.isArray(event.agents) ? event.agents : []
-        const statuses = agents.map((a: any) => `${a.name}:${a.status}`).join(',')
-        log(`engineBridge: agent_state forwarded key=${key} count=${agents.length} statuses=[${statuses}]`)
-      }
       state.remoteTransport.send({ type: `engine_${event.type.replace('engine_', '')}`, tabId, instanceId, ...event })
 
       // Synthesize a `permission_request` envelope for iOS when an
@@ -116,6 +126,41 @@ export function wireEngineBridgeEvents(): void {
             toolInput: denial.toolInput,
             options: [],
           }, true, { title: 'Ion needs your attention', body: pushBody })
+        }
+      }
+
+      // Synthesize a `tab_status` event for iOS when an engine-view
+      // `engine_status` reports a state transition. Engine-view events
+      // bypass EngineControlPlane (compound-key mismatch), so no
+      // `tab-status-change` fires on the sessionPlane — iOS never learns
+      // the tab moved from 'running' to 'idle'/'completed'. The desktop
+      // renderer handles this locally in engine-event-slice.ts, but iOS
+      // depends on explicit `tab_status` messages.
+      //
+      // Mirrors engine-control-plane-events.ts:handleStatusEvent logic:
+      //   - idle + AskUserQuestion/ExitPlanMode denials → 'completed'
+      //   - idle (no denials) → 'idle'
+      //   - running → 'running'
+      //
+      // Deduped via lastForwardedEngineTabStatus to avoid flooding on
+      // cost-only ticks (engine_status fires repeatedly with the same
+      // state while the run is in progress or idling).
+      if (event.type === 'engine_status' && event.fields?.state && instanceId) {
+        const fieldState = event.fields.state as string
+        let derivedStatus: string | null = null
+        if (fieldState === 'idle') {
+          const hasInteresting = Array.isArray(event.fields.permissionDenials) &&
+            event.fields.permissionDenials.some(
+              (d: { toolName: string }) => d.toolName === 'ExitPlanMode' || d.toolName === 'AskUserQuestion',
+            )
+          derivedStatus = hasInteresting ? 'completed' : 'idle'
+        } else if (fieldState === 'running') {
+          derivedStatus = 'running'
+        }
+        if (derivedStatus && lastForwardedEngineTabStatus.get(tabId) !== derivedStatus) {
+          lastForwardedEngineTabStatus.set(tabId, derivedStatus)
+          log(`engine_status: synthesizing tab_status for remote tabId=${tabId} instance=${instanceId} derivedStatus=${derivedStatus}`)
+          state.remoteTransport.send({ type: 'tab_status', tabId, status: derivedStatus as any })
         }
       }
 
