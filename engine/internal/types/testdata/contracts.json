@@ -204,6 +204,7 @@
       "name"
     ],
     "EngineConfig": [
+      "claudeCompat",
       "extensions",
       "maxTokens",
       "model",

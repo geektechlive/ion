@@ -57,6 +57,10 @@ type EngineConfig struct {
 	// defaults entirely -- it does not merge. Patterns use doublestar
 	// (forward-slash) syntax and are matched against repo-relative paths.
 	WorkspaceWatchIgnore []string `json:"workspaceWatchIgnore,omitempty"`
+
+	// ClaudeCompat enables Claude Code compatibility features such as loading
+	// skills from ~/.claude/skills/.
+	ClaudeCompat bool `json:"claudeCompat,omitempty"`
 }
 
 // ThinkingConfig controls extended thinking for API-backend runs.

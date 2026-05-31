@@ -305,15 +305,17 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		}
 	}
 	// Load Claude Code–style skills from ~/.claude/skills (one subdir per
-	// skill, each with a SKILL.md file). These are discovered when
-	// enableClaudeCompat is configured; the loader is always attempted so
-	// that users who install Claude-style skills without a compatibility flag
-	// still get model-invocable skill awareness. A missing directory is a
-	// silent no-op (returns nil, nil).
-	if claudeSkills, err := skills.LoadClaudeSkillsDirectory(skillPaths.ClaudeUser); err == nil {
-		for _, sk := range claudeSkills {
-			skills.RegisterSkill(sk)
+	// skill, each with a SKILL.md file). Only attempted when the ClaudeCompat
+	// flag is set on the engine config. A missing directory is a silent no-op
+	// (returns nil, nil).
+	if config.ClaudeCompat {
+		if claudeSkills, err := skills.LoadClaudeSkillsDirectory(skillPaths.ClaudeUser); err == nil {
+			for _, sk := range claudeSkills {
+				skills.RegisterSkill(sk)
+			}
 		}
+	} else {
+		utils.Debug("Session", "skipping ~/.claude/skills/ (claudeCompat not set)")
 	}
 	if names := skills.ListSkillNames(); len(names) > 0 {
 		utils.Log("Session", fmt.Sprintf("loaded %d skills: %v", len(names), names))
