@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.31.1](https://github.com/dsswift/ion/compare/engine-v1.31.0...engine-v1.31.1) (2026-05-31)
+
+### Bug Fixes
+
+* **engine:** extract rlimit init to platform-specific files for windows cross-compilation ([d2003cd](https://github.com/dsswift/ion/commit/d2003cd6a5508a2acb73ebc161f1b71df1893117))
+
 ## [1.31.0](https://github.com/dsswift/ion/compare/engine-v1.30.1...engine-v1.31.0) (2026-05-31)
 
 ### Features

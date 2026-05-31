@@ -10,6 +10,12 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.44.0](https://github.com/dsswift/ion/compare/desktop-v1.43.0...desktop-v1.44.0) (2026-05-31)
+
+### Features
+
+* **desktop:** add plan approval flow to engine tabs ([8f06f74](https://github.com/dsswift/ion/commit/8f06f74e58694e2e687614bbaf0d8fa72f051eec))
+
 ## [1.43.0](https://github.com/dsswift/ion/compare/desktop-v1.42.0...desktop-v1.43.0) (2026-05-31)
 
 ### Features
