@@ -92,7 +92,7 @@ func GetContextUsage(conv *Conversation, contextWindow int) ContextUsageInfo {
 	}
 
 	reported := conv.LastInputTokens
-	if reported > 0 {
+	if reported > 0 && (conv.LastInputTokensMsgCount <= 0 || len(conv.Messages) >= conv.LastInputTokensMsgCount) {
 		total := reported
 		if conv.LastInputTokensMsgCount > 0 && len(conv.Messages) > conv.LastInputTokensMsgCount {
 			for _, msg := range conv.Messages[conv.LastInputTokensMsgCount:] {
@@ -102,6 +102,9 @@ func GetContextUsage(conv *Conversation, contextWindow int) ContextUsageInfo {
 		pct := int(math.Min(100, math.Round(float64(total)/float64(limit)*100)))
 		utils.Debug("Compaction", fmt.Sprintf("GetContextUsage: branch=api-cached reported=%d msgCount=%d currentMsgs=%d total=%d limit=%d pct=%d", reported, conv.LastInputTokensMsgCount, len(conv.Messages), total, limit, pct))
 		return ContextUsageInfo{Percent: pct, Tokens: total, Limit: limit, Estimated: false}
+	}
+	if reported > 0 {
+		utils.Debug("Compaction", fmt.Sprintf("GetContextUsage: branch=stale-cache-invalidated reported=%d lastMsgCount=%d currentMsgs=%d — falling through to heuristic", reported, conv.LastInputTokensMsgCount, len(conv.Messages)))
 	}
 
 	estimated := EstimateTokens(conv.Messages)

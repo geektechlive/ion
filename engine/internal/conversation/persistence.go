@@ -231,6 +231,19 @@ func saveSplit(conv *Conversation, dir string) error {
 		}
 	}
 
+	// When BuildContextPath reduces the message count below the cached
+	// token count's message baseline, the cache is stale (covers messages
+	// that are no longer in the LLM file). Zero it so the next load uses
+	// heuristic estimation instead of the inflated cached value.
+	if messagesToWrite != nil && conv.LastInputTokensMsgCount > 0 && len(messagesToWrite) < conv.LastInputTokensMsgCount {
+		utils.Log("Conversation", fmt.Sprintf("saveSplit: id=%s invalidating stale token cache: lastInputTokens=%d lastInputTokensMsgCount=%d but only %d messages after BuildContextPath",
+			conv.ID, conv.LastInputTokens, conv.LastInputTokensMsgCount, len(messagesToWrite)))
+		conv.LastInputTokens = 0
+		conv.LastInputTokensMsgCount = 0
+		llmHeader["lastInputTokens"] = 0
+		llmHeader["lastInputTokensMsgCount"] = 0
+	}
+
 	for _, msg := range messagesToWrite {
 		msgBytes, err := json.Marshal(msg)
 		if err != nil {
