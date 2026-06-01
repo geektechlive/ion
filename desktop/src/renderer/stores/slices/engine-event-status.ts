@@ -176,6 +176,11 @@ export function handleEngineStatusEvent(
           // CLI-only. Engine tabs use the per-instance map.
           if (hasInterestingDenials) {
             updates.status = 'completed' as const
+          } else if ((event.fields?.backgroundAgents ?? 0) > 0) {
+            // Parent LLM is idle but background dispatch agents are
+            // still running. Keep tab status as 'running' so the tab
+            // pill stays active and the interrupt button remains visible.
+            updates.status = 'running' as const
           } else {
             updates.status = 'idle' as const
           }

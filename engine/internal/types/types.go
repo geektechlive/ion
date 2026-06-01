@@ -144,6 +144,11 @@ type StatusFields struct {
 	// transitions so clients can show "Chief of Staff [idle]" instead of a
 	// GUID compound key. Empty means no extension name was broadcast.
 	ExtensionName string `json:"extensionName,omitempty"`
+	// BackgroundAgents is the number of background dispatch agents still running
+	// when the parent LLM turn ends. When > 0, the engine is "idle" (the parent
+	// isn't running) but background work is in progress. Clients use this to keep
+	// the tab status active and the interrupt button visible.
+	BackgroundAgents int `json:"backgroundAgents,omitempty"`
 }
 
 // --- Engine Events ---

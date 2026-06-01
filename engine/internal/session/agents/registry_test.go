@@ -219,3 +219,64 @@ func TestRegistry_AppendOrUpdate_ConcurrentDifferentNames(t *testing.T) {
 		t.Errorf("expected %d entries for %d unique names, got %d", goroutines, goroutines, len(snap))
 	}
 }
+
+// --- ClearRunningStatesExcept ---
+
+// TestRegistry_ClearRunningStatesExcept verifies that the dispatch-aware
+// variant of ClearRunningStates preserves running states whose names are
+// in the keep set while clearing all other running states. Terminal states
+// (done/error/cancelled) are always preserved regardless of the keep set.
+func TestRegistry_ClearRunningStatesExcept(t *testing.T) {
+	r := NewRegistry()
+
+	// Mix of running, done, and error states.
+	r.AppendState(types.AgentStateUpdate{Name: "bg-agent-1", Status: "running"})
+	r.AppendState(types.AgentStateUpdate{Name: "bg-agent-2", Status: "running"})
+	r.AppendState(types.AgentStateUpdate{Name: "orphan", Status: "running"})
+	r.AppendState(types.AgentStateUpdate{Name: "completed-agent", Status: "done"})
+	r.AppendState(types.AgentStateUpdate{Name: "failed-agent", Status: "error"})
+
+	// Keep only bg-agent-1 and bg-agent-2 (active dispatches).
+	keep := map[string]bool{"bg-agent-1": true, "bg-agent-2": true}
+	r.ClearRunningStatesExcept(keep)
+
+	snap := r.MergedSnapshot()
+	// Expected: bg-agent-1 (kept), bg-agent-2 (kept), completed-agent (terminal),
+	// failed-agent (terminal). orphan should be removed.
+	if len(snap) != 4 {
+		t.Fatalf("expected 4 entries, got %d: %v", len(snap), snap)
+	}
+
+	names := make(map[string]bool)
+	for _, s := range snap {
+		names[s.Name] = true
+	}
+	if names["orphan"] {
+		t.Error("orphan running state should have been cleared")
+	}
+	if !names["bg-agent-1"] || !names["bg-agent-2"] {
+		t.Error("kept background agents should be preserved")
+	}
+	if !names["completed-agent"] || !names["failed-agent"] {
+		t.Error("terminal states should always be preserved")
+	}
+}
+
+// TestRegistry_ClearRunningStatesExcept_EmptyKeep verifies that an empty
+// keep set behaves identically to ClearRunningStates (removes all running).
+func TestRegistry_ClearRunningStatesExcept_EmptyKeep(t *testing.T) {
+	r := NewRegistry()
+
+	r.AppendState(types.AgentStateUpdate{Name: "agent-a", Status: "running"})
+	r.AppendState(types.AgentStateUpdate{Name: "agent-b", Status: "done"})
+
+	r.ClearRunningStatesExcept(map[string]bool{})
+
+	snap := r.MergedSnapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 entry (only terminal), got %d", len(snap))
+	}
+	if snap[0].Name != "agent-b" {
+		t.Errorf("expected agent-b (done), got %s", snap[0].Name)
+	}
+}

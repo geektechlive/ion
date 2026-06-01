@@ -209,6 +209,22 @@ func (r *Registry) ClearRunningStates() {
 	r.states = kept
 }
 
+// ClearRunningStatesExcept removes states with status "running" UNLESS their
+// name appears in the keepNames set. This is the dispatch-aware variant of
+// ClearRunningStates: background dispatch agents that are still legitimately
+// running are preserved while stale/orphaned running states are cleared.
+func (r *Registry) ClearRunningStatesExcept(keepNames map[string]bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.states[:0] // reuse backing array
+	for _, s := range r.states {
+		if s.Status != "running" || keepNames[s.Name] {
+			kept = append(kept, s)
+		}
+	}
+	r.states = kept
+}
+
 // MergedSnapshot returns a combined slice of extension-managed states and
 // engine-managed states. When both contain an entry with the same name,
 // the engine-managed entry wins (it carries richer metadata: task,

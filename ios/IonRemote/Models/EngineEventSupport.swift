@@ -149,6 +149,11 @@ struct StatusFields: Codable, Sendable {
     let permissionDenials: [PermissionDenialEntry]?
     /// Friendly display name broadcast by the extension (e.g. "Chief of Staff").
     let extensionName: String?
+    /// Number of background dispatch agents still running when the parent LLM
+    /// turn ends. When > 0, the engine is "idle" but background work is in
+    /// progress. Clients use this to keep the tab status active and the
+    /// interrupt button visible.
+    let backgroundAgents: Int?
 
     /// Returns a copy with the label replaced.
     func withLabel(_ newLabel: String) -> StatusFields {
