@@ -297,6 +297,30 @@ func ApplyConfig(configs map[string]types.ProviderConfig) {
 			RegisterProvider(NewOpenAIProvider(opts))
 		case "google":
 			RegisterProvider(NewGoogleProvider(opts))
+		default:
+			// Re-register known OpenAI-compatible providers when config overrides exist.
+			// Check defaultBaseURLs to confirm this is a known compatible provider
+			// (the three first-class providers are already handled above).
+			if dflt, known := defaultBaseURLs[name]; known {
+				baseURL := cfg.BaseURL
+				if baseURL == "" {
+					baseURL = dflt
+				}
+				RegisterProvider(NewOpenAICompatibleProvider(CompatibleProviderOptions{
+					ID:      name,
+					APIKey:  cfg.APIKey,
+					BaseURL: baseURL,
+				}))
+			} else if cfg.BaseURL != "" {
+				// Unknown provider name with a baseURL — register as a new compatible provider.
+				RegisterProvider(NewOpenAICompatibleProvider(CompatibleProviderOptions{
+					ID:      name,
+					APIKey:  cfg.APIKey,
+					BaseURL: cfg.BaseURL,
+				}))
+			} else {
+				utils.Log("Providers", fmt.Sprintf("ApplyConfig: skipping unknown provider %s (no baseURL)", name))
+			}
 		}
 	}
 }
