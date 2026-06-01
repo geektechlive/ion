@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { CaretRight, SpinnerGap, ArrowsOutSimple, ArrowsInSimple, ArrowCircleRight } from '@phosphor-icons/react'
 import { useColors } from '../theme'
+import { usePreferencesStore } from '../preferences'
 import { groupMessages, ToolGroup, AssistantMessage, MessageBubble } from './conversation'
 import { meta, isAgentVisible, sortAgents, getLabelBg, getStatusSuffix, formatDuration, getDispatches, sliceMessagesForDispatch } from './agent-panel-helpers'
 import { DispatchPager } from './DispatchPager'
@@ -228,6 +229,7 @@ interface Props {
 
 export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeight, onPanelHeightChange }: Props) {
   const colors = useColors()
+  const agentPanelDefaultOpen = usePreferencesStore((s) => s.agentPanelDefaultOpen)
   const [agentExpanded, setAgentExpanded] = useState<Map<string, boolean>>(new Map())
   const [panelCollapsed, setPanelCollapsed] = useState(true)
   // Keyed by conversationId — each dispatch's conversation is loaded independently
@@ -236,17 +238,31 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
   // Track which dispatch index is selected per agent name
   const [selectedDispatch, setSelectedDispatch] = useState<Map<string, number>>(new Map())
   const prevVisibleCount = useRef(0)
+  // Tracks whether the user manually toggled the panel this "session"
+  // (since agents last appeared). Reset when agents go from 0→N so the
+  // default-open preference drives the initial state on each fresh batch.
+  const userToggled = useRef(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
   const visible = sortAgents(agents.filter(isAgentVisible))
 
-  // Auto-expand panel when first agent becomes visible
+  // When agents transition from none→some, apply the user's default
+  // preference (open or collapsed). When they go back to none, reset
+  // the manual-toggle flag so the next batch gets the preference again.
   useEffect(() => {
     if (prevVisibleCount.current === 0 && visible.length > 0) {
-      setPanelCollapsed(false)
+      // Fresh batch of agents appeared — apply the default preference
+      // unless the user already manually toggled this mount.
+      if (!userToggled.current) {
+        setPanelCollapsed(!agentPanelDefaultOpen)
+      }
+    }
+    if (visible.length === 0) {
+      // All agents gone — reset so the next batch gets the default.
+      userToggled.current = false
     }
     prevVisibleCount.current = visible.length
-  }, [visible.length])
+  }, [visible.length, agentPanelDefaultOpen])
 
   const loadSingleConversation = useCallback(async (convId: string) => {
     if (!convId || convMessages.has(convId)) return
@@ -403,7 +419,7 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
       {/* Collapsible header */}
       <div
         data-ion-ui
-        onClick={() => setPanelCollapsed(!panelCollapsed)}
+        onClick={() => { userToggled.current = true; setPanelCollapsed(!panelCollapsed) }}
         style={{
           display: 'flex',
           alignItems: 'center',

@@ -43,6 +43,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   enableClaudeCompat: saved.enableClaudeCompat ?? true,
   enableEarlyStopContinuation: saved.enableEarlyStopContinuation ?? false,
   showTodoList: saved.showTodoList,
+  agentPanelDefaultOpen: saved.agentPanelDefaultOpen,
   aiGeneratedTitles: saved.aiGeneratedTitles,
   hideOnExternalLaunch: saved.hideOnExternalLaunch,
   keepExplorerOnCollapse: saved.keepExplorerOnCollapse,
@@ -252,6 +253,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   setShowTodoList: (enabled) => {
     set({ showTodoList: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setAgentPanelDefaultOpen: (enabled) => {
+    set({ agentPanelDefaultOpen: enabled })
     saveSettings(getAllSettings(get))
   },
   setAiGeneratedTitles: (enabled) => {
@@ -477,6 +482,17 @@ loadPersistedSettings(
   () => usePreferencesStore.getState(),
   applyTheme,
 )
+
+// Listen for settings changes pushed from the main process (e.g. iOS
+// `set_desktop_setting` writes). Without this, iOS-originated changes
+// only land on disk — the renderer Zustand store keeps the stale
+// in-memory value until the next restart.
+window.ion?.on?.('ion:settings-changed', (_e: unknown, key: string, value: unknown) => {
+  const current = usePreferencesStore.getState()
+  if (key in current && (current as unknown as Record<string, unknown>)[key] !== value) {
+    usePreferencesStore.setState({ [key]: value })
+  }
+})
 
 /** Reactive hook — returns the active color palette */
 export function useColors(): ColorPalette {
