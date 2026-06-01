@@ -13,6 +13,7 @@ struct AgentBarRow: View {
     let onLoadDispatch: ((String) -> Void)?
     /// Called after the initial dispatch loads to preload the rest.
     let onPreloadDispatches: ((String) -> Void)?
+    @Environment(\.appTheme) private var theme
     @State private var isExpanded = false
     @State private var now = Date()
     @State private var selectedDispatchIndex: Int?
@@ -86,7 +87,7 @@ struct AgentBarRow: View {
                 }
             if isExpanded { expandedBody }
         }
-        .background(Color(.systemGray6).opacity(0.5))
+        .background(theme.surfaceElevated.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { t in
             if agent.status == "running" { now = t }
@@ -118,7 +119,7 @@ struct AgentBarRow: View {
             if let secs = elapsedSeconds {
                 Text(formatDuration(secs))
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(theme.textSecondary.opacity(0.5))
                     .fixedSize()
             }
 
@@ -126,7 +127,7 @@ struct AgentBarRow: View {
             if let activity = activityText, !activity.isEmpty {
                 Text(activity)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -136,7 +137,7 @@ struct AgentBarRow: View {
             // Expand caret
             Image(systemName: "chevron.right")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(theme.textSecondary.opacity(0.5))
                 .rotationEffect(isExpanded ? .degrees(90) : .zero)
         }
         .padding(.horizontal, 10)
@@ -174,7 +175,7 @@ struct AgentBarRow: View {
                             Text(modelLabel(model))
                                 .font(.caption2)
                         }
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(theme.textSecondary.opacity(0.5))
                         .padding(.horizontal, 12)
                     }
 
@@ -202,7 +203,7 @@ struct AgentBarRow: View {
                             ProgressView().scaleEffect(0.6)
                             Text("Loading conversation…")
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(theme.textSecondary.opacity(0.5))
                         }
                         .padding(.horizontal, 12)
                     } else if let fullOutput = agent.fullOutput, !fullOutput.isEmpty {
@@ -217,7 +218,7 @@ struct AgentBarRow: View {
                             ProgressView().scaleEffect(0.6)
                             Text("Working…")
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(theme.textSecondary.opacity(0.5))
                         }
                         .padding(.horizontal, 12)
                     }
@@ -234,7 +235,7 @@ struct AgentBarRow: View {
             HStack(spacing: 4) {
                 Text("Dispatches:")
                     .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(theme.textSecondary.opacity(0.5))
                 ForEach(Array(agent.dispatches.enumerated().reversed()), id: \.element.id) { idx, d in
                     // Display number = chronological position (1 = first, N = most recent)
                     let displayNum = idx + 1
@@ -247,10 +248,10 @@ struct AgentBarRow: View {
                     } label: {
                         Text("#\(displayNum)")
                             .font(.system(size: 10, weight: isActive ? .semibold : .regular))
-                            .foregroundStyle(isActive ? .primary : .tertiary)
+                            .foregroundStyle(isActive ? theme.textPrimary : theme.textSecondary.opacity(0.5))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(isActive ? Color(.systemGray4) : Color(.systemGray6))
+                            .background(isActive ? theme.surfaceElevated.opacity(0.7) : theme.surfaceElevated.opacity(0.3))
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                     .buttonStyle(.plain)
@@ -265,16 +266,16 @@ struct AgentBarRow: View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "arrow.right.circle.fill")
                 .font(.caption)
-                .foregroundStyle(.orange.opacity(0.7))
+                .foregroundStyle(theme.accent.opacity(0.7))
                 .padding(.top, 2)
             Text(task)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.06))
+        .background(theme.accent.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 10)
     }
@@ -303,16 +304,16 @@ struct AgentBarRow: View {
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "person.fill")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.textSecondary)
                     .padding(.top, 2)
                 Text(msg.content)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.systemGray5).opacity(0.5))
+            .background(theme.surfaceElevated.opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .padding(.horizontal, 10)
         } else {
@@ -330,20 +331,20 @@ struct AgentBarRow: View {
     private var agentColor: Color {
         if let hex = agent.color { return Color(hex: hex) }
         switch agent.type {
-        case "chief": return .orange
-        case "specialist": return .blue
+        case "chief": return theme.statusRunning
+        case "specialist": return theme.statusPending
         case "staff": return .purple
-        case "consultant": return .green
-        default: return .gray
+        case "consultant": return theme.statusDone
+        default: return theme.textSecondary
         }
     }
 
     private var statusColor: Color {
         switch agent.status {
-        case "running": return .orange
-        case "done": return .green
-        case "error": return .red
-        default: return .gray
+        case "running": return theme.statusRunning
+        case "done": return theme.statusDone
+        case "error": return theme.statusError
+        default: return theme.textSecondary.opacity(0.5)
         }
     }
 

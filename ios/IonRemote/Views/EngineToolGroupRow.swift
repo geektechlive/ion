@@ -6,6 +6,7 @@ import SwiftUI
 struct EngineToolGroupRow: View {
     let tools: [Message]
     @State private var isExpanded = false
+    @Environment(\.appTheme) private var theme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,11 +19,11 @@ struct EngineToolGroupRow: View {
                         .foregroundStyle(compositeColor)
                     Text(summaryText)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.textSecondary)
                     Spacer()
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(theme.textSecondary.opacity(0.5))
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
@@ -36,7 +37,7 @@ struct EngineToolGroupRow: View {
                             toolIcon(for: tool)
                             Text(tool.toolName ?? "tool")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(theme.textSecondary)
                             Spacer()
                         }
                         .padding(.horizontal, 12)
@@ -45,7 +46,7 @@ struct EngineToolGroupRow: View {
                 }
             }
         }
-        .background(Color(.secondarySystemBackground))
+        .background(theme.surfaceElevated.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
@@ -56,9 +57,9 @@ struct EngineToolGroupRow: View {
     }
 
     private var compositeColor: Color {
-        if tools.contains(where: { $0.toolStatus == .running }) { return .orange }
-        if tools.contains(where: { $0.toolStatus == .error }) { return .red }
-        return .green
+        if tools.contains(where: { $0.toolStatus == .running }) { return theme.statusRunning }
+        if tools.contains(where: { $0.toolStatus == .error }) { return theme.statusError }
+        return theme.statusDone
     }
 
     private var summaryText: String {
@@ -73,11 +74,11 @@ struct EngineToolGroupRow: View {
         case .running:
             ProgressView().scaleEffect(0.6)
         case .completed:
-            Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(.green)
+            Image(systemName: "checkmark.circle.fill").font(.caption2).foregroundStyle(theme.statusDone)
         case .error:
-            Image(systemName: "xmark.circle.fill").font(.caption2).foregroundStyle(.red)
+            Image(systemName: "xmark.circle.fill").font(.caption2).foregroundStyle(theme.statusError)
         case nil:
-            Image(systemName: "wrench").font(.caption2).foregroundStyle(.secondary)
+            Image(systemName: "wrench").font(.caption2).foregroundStyle(theme.textSecondary)
         }
     }
 }
