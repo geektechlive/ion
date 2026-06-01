@@ -90,6 +90,19 @@ struct EngineInstanceBar: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            // -- Clipboard actions --
+            let instanceKey = "\(tabId):\(instance.id)"
+            if let sessionId = viewModel.engineStatusFields[instanceKey]?.sessionId {
+                Button {
+                    UIPasteboard.general.string = sessionId
+                    viewModel.showToast(ToastMessage(style: .success, title: "Session ID copied"))
+                } label: {
+                    Label("Copy Session ID", systemImage: "doc.on.doc")
+                }
+                Divider()
+            }
+
+            // -- Instance management --
             Button {
                 renamingInstance = instance
                 renameText = instance.label

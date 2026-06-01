@@ -33,6 +33,8 @@ export interface RemoteTabState {
   groupId?: string | null
   /** When true, auto-group movement is suppressed for this tab. */
   groupPinned?: boolean
+  /** The current conversation/session ID for this tab. Engine tabs use StatusFields.sessionId instead. */
+  conversationId?: string | null
   /** Unix ms timestamp of the last status-changing activity (message, status change). */
   lastActivityAt?: number
 }

@@ -348,69 +348,13 @@ struct TabListView: View {
                             }
                             .tint(.orange)
                         }
-                        .contextMenu {
-                            Button {
-                                renameText = tab.displayTitle
-                                renamingTabId = tab.id
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
-                            }
-                            // Pin/unpin and move-to-group-and-pin are irrelevant for
-                            // engine tabs — they are multiplexed (multiple sub-conversations)
-                            // and shouldn't auto-move between groups.
-                            if viewModel.tabGroupMode == "manual" && tab.isEngine != true {
-                                Button {
-                                    viewModel.toggleTabGroupPin(tabId: tab.id)
-                                } label: {
-                                    Label(
-                                        tab.groupPinned == true ? "Unpin from Group" : "Pin to Group",
-                                        systemImage: tab.groupPinned == true ? "pin.slash" : "pin"
-                                    )
-                                }
-                                let targets = viewModel.tabGroups.filter { $0.id != tab.groupId }
-                                if !targets.isEmpty {
-                                    Menu {
-                                        ForEach(targets) { target in
-                                            Button(target.label) {
-                                                viewModel.moveTabToGroup(tabId: tab.id, groupId: target.id)
-                                            }
-                                        }
-                                    } label: {
-                                        Label("Move to Group", systemImage: "arrow.right.arrow.left")
-                                    }
-                                    // Combined "Move to Group AND Pin": same target list as the
-                                    // plain "Move to Group" submenu above, but each selection
-                                    // routes through moveTabToGroupAndPin which also sets
-                                    // groupPinned=true so the destination tab is protected from
-                                    // any subsequent auto-group-movement. Mirrors the desktop
-                                    // pattern (TabStripTabContextMenu's PushPin row).
-                                    Menu {
-                                        ForEach(targets) { target in
-                                            Button(target.label) {
-                                                viewModel.moveTabToGroupAndPin(tabId: tab.id, groupId: target.id)
-                                            }
-                                        }
-                                    } label: {
-                                        Label("Move to Group and Pin", systemImage: "pin")
-                                    }
-                                }
-                            } else if viewModel.tabGroupMode == "manual" && tab.isEngine == true {
-                                // Engine tabs: allow plain move-to-group (manual
-                                // organization) but skip pin/unpin and move-and-pin.
-                                let targets = viewModel.tabGroups.filter { $0.id != tab.groupId }
-                                if !targets.isEmpty {
-                                    Menu {
-                                        ForEach(targets) { target in
-                                            Button(target.label) {
-                                                viewModel.moveTabToGroup(tabId: tab.id, groupId: target.id)
-                                            }
-                                        }
-                                    } label: {
-                                        Label("Move to Group", systemImage: "arrow.right.arrow.left")
-                                    }
-                                }
-                            }
-                        }
+                        // Context menu extracted to TabRowContextMenu.swift to keep
+                        // this file under the Swift 600-line cap.
+                        .modifier(TabRowContextMenu(
+                            tab: tab,
+                            renamingTabId: $renamingTabId,
+                            renameText: $renameText
+                        ))
                     }
                     .onDelete { offsets in
                         let ids = offsets.map { group.tabs[$0].id }
