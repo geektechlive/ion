@@ -456,6 +456,23 @@ struct SettingsView: View {
                                 }
                             }
                             Spacer()
+                            if !isActive {
+                                Button {
+                                    DiagnosticLog.log("[SettingsView] Connect tapped for device: \(device.id)")
+                                    viewModel.switchToDevice(id: device.id)
+                                    Haptic.success()
+                                    dismiss()
+                                } label: {
+                                    Text("Connect")
+                                        .font(.caption.weight(.medium))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(theme.accent.opacity(0.15))
+                                        .foregroundStyle(theme.accent)
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.borderless)
+                            }
                             Image(systemName: "chevron.right")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
@@ -471,6 +488,7 @@ struct SettingsView: View {
                             Button {
                                 viewModel.switchToDevice(id: device.id)
                                 Haptic.success()
+                                dismiss()
                             } label: {
                                 Label("Switch to", systemImage: "arrow.right.arrow.left")
                             }
