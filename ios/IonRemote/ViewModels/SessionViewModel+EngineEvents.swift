@@ -66,7 +66,7 @@ extension SessionViewModel {
     func handleEngineTextDelta(tabId: String, instanceId: String?, text: String) {
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
         var msgs = engineMessages[key] ?? []
-        if let last = msgs.last, last.role == .assistant {
+        if let last = msgs.last, last.role == .assistant, !last.sealed {
             msgs[msgs.count - 1].content += text
         } else {
             msgs.append(Message(id: UUID().uuidString, role: .assistant, content: text, timestamp: Date().timeIntervalSince1970 * 1000))
@@ -93,6 +93,13 @@ extension SessionViewModel {
         if isActive, let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].contextTokens = inputTokens
             tabs[idx].contextPercent = contextPercent
+        }
+
+        // Seal the last assistant message so the next text delta starts fresh.
+        var engineMsgs = engineMessages[key] ?? []
+        if let lastIdx = engineMsgs.indices.last, engineMsgs[lastIdx].role == .assistant {
+            engineMsgs[lastIdx].sealed = true
+            engineMessages[key] = engineMsgs
         }
 
         engineTurnHasText.remove(key)
