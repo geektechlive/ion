@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.33.0](https://github.com/dsswift/ion/compare/engine-v1.32.0...engine-v1.33.0) (2026-06-01)
+
+### Features
+
+* **engine:** add session memory and compaction system ([993a5f2](https://github.com/dsswift/ion/commit/993a5f241985dcb8cad819b31c82c76780088107))
+
 ## [1.32.0](https://github.com/dsswift/ion/compare/engine-v1.31.2...engine-v1.32.0) (2026-06-01)
 
 ### Features
