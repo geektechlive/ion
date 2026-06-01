@@ -299,11 +299,46 @@ func (sm *SessionMemory) OnTurnEnd(conv *conversation.Conversation, turnNumber i
 			return
 		}
 
-		// Prefix with instruction for a memory-style summary.
-		prompt := fmt.Sprintf(
-			"[Instructions: Generate a structured session memory summarizing the entire conversation so far. "+
-				"This will be used to restore context after compaction. Be thorough but concise — max %d tokens.]\n\n%s",
-			sm.maxTokens, text)
+		// Build a structured prompt that guides the LLM to extract substance,
+		// not noise. The explicit exclusion rules prevent the model from echoing
+		// system prompt fragments, agent task descriptions, or repeated
+		// instructions that dominate tool_result blocks.
+		prompt := fmt.Sprintf(`[Session Memory Instructions]
+
+Extract a structured session memory from the conversation below. This memory will be injected into the system prompt after context window compaction to restore important context.
+
+RULES:
+- Focus on USER messages and ASSISTANT actions/decisions. Tool results provide context but are not the substance.
+- Do NOT include text from system prompts, AGENTS.md/CLAUDE.md content, agent task descriptions, or repeated instructions. These are already injected automatically and do not need to be preserved in memory.
+- Do NOT include boilerplate like "Do not run git push", "Start writing code immediately", or other instruction fragments.
+- Be concise and information-dense. Each section has a budget — stay within it.
+
+SECTIONS (skip any with no content):
+
+## Current Task (max ~500 words)
+What is actively being worked on. Specific file names, function names, exact state of progress.
+
+## Key Decisions (max ~400 words)
+Important choices made — technologies selected, approaches chosen, trade-offs accepted. Include the reasoning.
+
+## Files Modified (max ~400 words)
+Files created, modified, or deleted with paths and brief notes on what changed.
+
+## Errors & Fixes (max ~300 words)
+Problems encountered and how they were resolved. Include error messages that might recur.
+
+## User Preferences & Instructions (max ~300 words)
+Explicit user preferences, project conventions, or constraints mentioned that should inform future work. Only include things the user actually said, not system prompt content.
+
+## Pending Work (max ~200 words)
+Tasks explicitly requested but not yet completed.
+
+Total budget: %d tokens maximum. Prioritize recency — recent decisions and changes matter more than early-conversation context.
+
+---
+
+CONVERSATION:
+%s`, sm.maxTokens, text)
 
 		summary, _ := compaction.Summarize(sm.ctx, prompt, sm.model, sm.maxTokens)
 		if summary == "" {

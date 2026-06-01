@@ -68,6 +68,24 @@ export function handleEngineStatusEvent(
       merged.sessionId = prev.sessionId
     }
     statusFields.set(key, merged)
+
+    // Capture model from engine status into the persistent model
+    // override map so it survives desktop restarts. The engine is
+    // authoritative about which model the conversation is actually
+    // using; this back-populates engineModelOverrides from the
+    // engine's live state. Without this, a desktop restart between
+    // sessions would lose the model and fall back to the hardcoded
+    // sonnet default.
+    let engineModelOverridesUpdate = state.engineModelOverrides
+    if (event.fields?.model && event.fields.model.length > 0) {
+      const currentOverride = state.engineModelOverrides.get(key)
+      if (currentOverride !== event.fields.model) {
+        engineModelOverridesUpdate = new Map(state.engineModelOverrides)
+        engineModelOverridesUpdate.set(key, event.fields.model)
+        console.log(`[engine_status] engineModelOverrides.set key=${key} model=${event.fields.model} (was ${currentOverride || 'unset'})`)
+      }
+    }
+
     const sessionId = event.fields?.sessionId
     const pane = state.enginePanes.get(tabId)
     const isActive = !pane || pane.activeInstanceId === key.split(':')[1]
@@ -152,7 +170,7 @@ export function handleEngineStatusEvent(
     // Fold conversationId / status updates into the same tabs.map pass
     // when applicable. The `enginePermissionDenied` map is returned
     // separately — it lives outside the per-tab struct.
-    const returnPatch: Partial<typeof state> = { engineStatusFields: statusFields, engineConversationIds }
+    const returnPatch: Partial<typeof state> = { engineStatusFields: statusFields, engineConversationIds, engineModelOverrides: engineModelOverridesUpdate }
     if (enginePermissionDeniedUpdate) {
       returnPatch.enginePermissionDenied = enginePermissionDeniedUpdate
     }

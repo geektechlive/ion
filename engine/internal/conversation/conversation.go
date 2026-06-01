@@ -239,6 +239,20 @@ func AddToolResults(conv *Conversation, results []ToolResultEntry) {
 	}
 }
 
+// AddToolResultsWithSizeCheck appends tool results with an automatic size cap.
+// Results exceeding maxChars are persisted to disk and replaced with a preview
+// containing the first 2K characters plus a file path the model can Read.
+// When maxChars <= 0, DefaultMaxToolResultChars is used.
+func AddToolResultsWithSizeCheck(conv *Conversation, results []ToolResultEntry, convDir string, maxChars int) {
+	for i := range results {
+		replaced, persisted := PersistAndPreview(results[i].Content, results[i].ToolUseID, convDir, conv.ID, maxChars)
+		if persisted {
+			results[i].Content = replaced
+		}
+	}
+	AddToolResults(conv, results)
+}
+
 // UpdateCost adds to the running cost total.
 func UpdateCost(conv *Conversation, costUsd float64) {
 	conv.TotalCost += costUsd

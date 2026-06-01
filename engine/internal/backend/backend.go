@@ -242,4 +242,10 @@ type RunConfig struct {
 	// ResetMemoryTracking resets the session memory debounce baselines
 	// to the given token count after compaction reduces the message count.
 	ResetMemoryTracking func(tokens int)
+
+	// MaxToolResultChars caps the character count of any single tool result
+	// added to the conversation. Threaded from engine.json compaction config.
+	// Zero means "use built-in default" (conversation.DefaultMaxToolResultChars).
+	// Per-run RunOptions.MaxToolResultChars takes precedence when non-zero.
+	MaxToolResultChars int
 }

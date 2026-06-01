@@ -550,6 +550,11 @@ type RunOptions struct {
 	CompactMemoryUpdateThreshold int      `json:"compactMemoryUpdateThreshold,omitempty"`
 	CompactMemoryUpdateMinTurns  int      `json:"compactMemoryUpdateMinTurns,omitempty"`
 	CompactMemoryMaxTokens       int      `json:"compactMemoryMaxTokens,omitempty"`
+	// MaxToolResultChars caps the character count of any single tool result
+	// for this run. Results exceeding this limit are persisted to disk and
+	// replaced with a preview. Zero means "inherit from engine.json or
+	// built-in default". Negative disables the cap entirely for this run.
+	MaxToolResultChars           int      `json:"maxToolResultChars,omitempty"`
 	SuppressSystemMessages  bool         `json:"suppressSystemMessages,omitempty"`
 	DisablePlanModeReminder bool         `json:"disablePlanModeReminder,omitempty"`
 	DisableTurnLimitWarning bool         `json:"disableTurnLimitWarning,omitempty"`

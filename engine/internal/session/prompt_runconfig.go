@@ -53,6 +53,12 @@ func (m *Manager) buildRunConfig(
 		runCfg.EarlyStopContinue = m.config.EarlyStopContinue
 	}
 
+	// Thread tool-result size cap from engine.json compaction config so the
+	// runloop can persist oversized tool results to disk.
+	if m.config != nil && m.config.Compaction != nil && m.config.Compaction.MaxToolResultChars > 0 {
+		runCfg.MaxToolResultChars = m.config.Compaction.MaxToolResultChars
+	}
+
 	if permEng != nil {
 		runCfg.PermEngine = permEng
 	}

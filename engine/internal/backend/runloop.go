@@ -631,8 +631,19 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				return
 			}
 
-			// Add tool results to conversation
-			conversation.AddToolResults(conv, results)
+			// Apply system-wide tool result size cap. Oversized results
+			// (dispatch transcripts, large file reads, verbose command
+			// output) are persisted to disk with a preview so the LLM
+			// retains access without consuming context window tokens.
+			maxToolResultChars := opts.MaxToolResultChars
+			if maxToolResultChars == 0 && run.cfg != nil && run.cfg.MaxToolResultChars > 0 {
+				maxToolResultChars = run.cfg.MaxToolResultChars
+			}
+			if convDir != "" && maxToolResultChars >= 0 {
+				conversation.AddToolResultsWithSizeCheck(conv, results, convDir, maxToolResultChars)
+			} else {
+				conversation.AddToolResults(conv, results)
+			}
 			// Persist immediately so tool history survives mid-multi-turn crashes.
 			if err := conversation.Save(conv, ""); err != nil {
 				utils.Log("ApiBackend", "failed to save conversation after AddToolResults: "+err.Error())
