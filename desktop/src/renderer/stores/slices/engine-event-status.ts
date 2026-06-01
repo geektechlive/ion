@@ -76,13 +76,20 @@ export function handleEngineStatusEvent(
     // engine's live state. Without this, a desktop restart between
     // sessions would lose the model and fall back to the hardcoded
     // sonnet default.
+    //
+    // Guard: reject known-invalid values like "unknown" (which can
+    // enter the system from stale state or an engine that hasn't
+    // resolved its model yet) to prevent a feedback loop where the
+    // desktop captures "unknown" and re-sends it on every prompt.
     let engineModelOverridesUpdate = state.engineModelOverrides
-    if (event.fields?.model && event.fields.model.length > 0) {
+    const incomingModel = event.fields?.model
+    const isValidModel = incomingModel && incomingModel.length > 0 && incomingModel !== 'unknown'
+    if (isValidModel) {
       const currentOverride = state.engineModelOverrides.get(key)
-      if (currentOverride !== event.fields.model) {
+      if (currentOverride !== incomingModel) {
         engineModelOverridesUpdate = new Map(state.engineModelOverrides)
-        engineModelOverridesUpdate.set(key, event.fields.model)
-        console.log(`[engine_status] engineModelOverrides.set key=${key} model=${event.fields.model} (was ${currentOverride || 'unset'})`)
+        engineModelOverridesUpdate.set(key, incomingModel)
+        console.log(`[engine_status] engineModelOverrides.set key=${key} model=${incomingModel} (was ${currentOverride || 'unset'})`)
       }
     }
 

@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
 	"github.com/dsswift/ion/engine/internal/modelconfig"
 	"github.com/dsswift/ion/engine/internal/permissions"
+	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/session/agents"
 	"github.com/dsswift/ion/engine/internal/session/extcontext"
 	"github.com/dsswift/ion/engine/internal/session/pending"
@@ -294,6 +296,26 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	// task, conversationId, elapsed) win over the extension's idle entries.
 	if s.conversationID != "" {
 		m.rehydrateDispatchState(s, key)
+
+		// Seed lastModel from the conversation file so ReconcileState emits
+		// the correct model before any prompt dispatches. Without this, a
+		// resumed session emits model="" on reconcile, causing the desktop to
+		// fall back to its preference default (which may differ from the
+		// conversation's actual model). This also seeds lastContextWindow so
+		// the context-percent denominator is correct from the first status.
+		if convModel, err := conversation.LoadLlmHeaderModel(s.conversationID, ""); err == nil && convModel != "" {
+			ctxWindow := conversation.DefaultContext
+			if info := providers.GetModelInfo(convModel); info != nil {
+				ctxWindow = info.ContextWindow
+			}
+			m.mu.Lock()
+			s.lastModel = convModel
+			s.lastContextWindow = ctxWindow
+			m.mu.Unlock()
+			utils.Log("Session", fmt.Sprintf("StartSession: key=%s seeded lastModel=%s contextWindow=%d from conversation=%s", key, convModel, ctxWindow, s.conversationID))
+		} else if err != nil {
+			utils.Debug("Session", fmt.Sprintf("StartSession: key=%s could not load conversation model conv=%s err=%v", key, s.conversationID, err))
+		}
 
 		// Initialize session memory for resumed conversations. The memory
 		// file (if it exists) is loaded from disk so the first compaction
