@@ -8,7 +8,7 @@ struct EngineView: View {
     let tabId: String
     @Environment(SessionViewModel.self) var viewModel
     @FocusState private var isInputFocused: Bool
-    @State private var agentsPanelExpanded = true
+    @State private var agentsPanelExpanded: Bool? = nil
     @State private var agentPanelFullscreen = false
     @State private var isNearBottom = true
     @State private var forceScrollCounter = 0
@@ -47,6 +47,19 @@ struct EngineView: View {
     private var promptText: String { viewModel.engineDraft(tabId: tabId, instanceId: activeInstanceId) }
     private var compoundKey: String {
         viewModel.engineCompoundKey(tabId: tabId)
+    }
+
+    /// Whether the agent panel is expanded. `nil` means the user hasn't
+    /// toggled it manually this session — fall back to the desktop setting
+    /// `agentPanelDefaultOpen` (default `true` when setting is absent).
+    private var isAgentsPanelExpanded: Bool {
+        if let explicit = agentsPanelExpanded { return explicit }
+        if let settings = viewModel.desktopSettings,
+           let val = settings.currentValue(for: "agentPanelDefaultOpen"),
+           let flag = val.value as? Bool {
+            return flag
+        }
+        return true
     }
 
     private var visibleAgents: [AgentStateUpdate] {
@@ -227,11 +240,11 @@ struct EngineView: View {
             HStack(spacing: 4) {
                 Button {
                     withAnimation(IonTheme.snappySpring) {
-                        agentsPanelExpanded.toggle()
+                        agentsPanelExpanded = !isAgentsPanelExpanded
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: agentsPanelExpanded ? "chevron.down" : "chevron.right")
+                        Image(systemName: isAgentsPanelExpanded ? "chevron.down" : "chevron.right")
                             .font(.caption2)
                         Text("Agents")
                             .font(.caption.weight(.semibold))
@@ -266,7 +279,7 @@ struct EngineView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
 
-            if agentsPanelExpanded {
+            if isAgentsPanelExpanded {
                 let agentList = ScrollView {
                     VStack(spacing: 4) {
                         ForEach(visibleAgents) { agent in
