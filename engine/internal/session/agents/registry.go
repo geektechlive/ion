@@ -108,6 +108,25 @@ func (r *Registry) LookupSpec(name string) (types.AgentSpec, bool) {
 	return spec, ok
 }
 
+// LookupExtDisplayName searches the cached extension roster states for the
+// given agent name and returns the displayName metadata value. Returns ""
+// if no match or no displayName is set. This lets engine-managed code
+// (dispatch_agent) inherit the human-friendly name the extension provides
+// via its roster, even when no AgentSpec is registered.
+func (r *Registry) LookupExtDisplayName(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, ext := range r.lastExtStates {
+		if ext.Name == name {
+			if dn, ok := ext.Metadata["displayName"].(string); ok && dn != "" {
+				return dn
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 // AllSpecNames returns the names of all registered specs.
 func (r *Registry) AllSpecNames() []string {
 	r.mu.RLock()

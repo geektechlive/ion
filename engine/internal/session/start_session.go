@@ -86,6 +86,10 @@ func (a *sessionAccessor) LookupAgentSpec(name string) (types.AgentSpec, bool) {
 	return a.s.agents.LookupSpec(name)
 }
 
+func (a *sessionAccessor) LookupExtDisplayName(name string) string {
+	return a.s.agents.LookupExtDisplayName(name)
+}
+
 func (a *sessionAccessor) ExtGroup() *extension.ExtensionGroup { return a.s.extGroup }
 
 func (a *sessionAccessor) ExtConfig() *extension.ExtensionConfig {

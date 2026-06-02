@@ -65,6 +65,13 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 		if spec, ok := sa.LookupAgentSpec(agentName); ok && spec.Description != "" {
 			displayName = spec.Description
 		}
+		// Fallback: inherit the display name from the extension's cached roster.
+		// Extensions provide displayName via roster metadata, not via AgentSpec.
+		if displayName == agentName {
+			if dn := sa.LookupExtDisplayName(agentName); dn != "" {
+				displayName = dn
+			}
+		}
 
 		newDispatch := map[string]interface{}{
 			"id":        agentID,
