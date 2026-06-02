@@ -8,6 +8,7 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
+	"github.com/dsswift/ion/engine/internal/session/agents"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -396,19 +397,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 					state.Metadata["conversationId"] = childSessionID
 				}
 				// Update the current dispatch entry in the structured dispatches array.
-				if dispatches, ok := state.Metadata["dispatches"].([]interface{}); ok {
-					for i, d := range dispatches {
-						if dm, ok := d.(map[string]interface{}); ok && dm["id"] == agentID {
-							dm["status"] = state.Status
-							dm["elapsed"] = elapsed
-							if childSessionID != "" {
-								dm["conversationId"] = childSessionID
-							}
-							dispatches[i] = dm
-							break
-						}
-					}
-				}
+				agents.UpdateDispatchEntry(state.Metadata, agentID, state.Status, elapsed, childSessionID)
 			})
 			sa.EmitAgentSnapshot("dispatch_end")
 

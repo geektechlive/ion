@@ -280,3 +280,59 @@ func TestRegistry_ClearRunningStatesExcept_EmptyKeep(t *testing.T) {
 		t.Errorf("expected agent-b (done), got %s", snap[0].Name)
 	}
 }
+
+// --- LookupExtDisplayName ---
+
+// TestRegistry_LookupExtDisplayName verifies that LookupExtDisplayName
+// searches the cached extension roster states and returns the displayName
+// metadata value when present.
+func TestRegistry_LookupExtDisplayName(t *testing.T) {
+	t.Run("returns display name when present", func(t *testing.T) {
+		r := NewRegistry()
+		r.CacheExtStates([]types.AgentStateUpdate{
+			{
+				Name: "cloud-architect",
+				Metadata: map[string]interface{}{
+					"displayName": "Cloud Architect",
+				},
+			},
+		})
+
+		got := r.LookupExtDisplayName("cloud-architect")
+		if got != "Cloud Architect" {
+			t.Errorf("expected %q, got %q", "Cloud Architect", got)
+		}
+	})
+
+	t.Run("returns empty when no displayName key", func(t *testing.T) {
+		r := NewRegistry()
+		r.CacheExtStates([]types.AgentStateUpdate{
+			{
+				Name:     "dev-lead",
+				Metadata: map[string]interface{}{"type": "agent"},
+			},
+		})
+
+		got := r.LookupExtDisplayName("dev-lead")
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("returns empty when name not found", func(t *testing.T) {
+		r := NewRegistry()
+		r.CacheExtStates([]types.AgentStateUpdate{
+			{
+				Name: "cloud-architect",
+				Metadata: map[string]interface{}{
+					"displayName": "Cloud Architect",
+				},
+			},
+		})
+
+		got := r.LookupExtDisplayName("nonexistent")
+		if got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+}

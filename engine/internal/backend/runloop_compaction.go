@@ -123,6 +123,34 @@ func isMemoryCurrent(conv *conversation.Conversation, boundaryEntryID string) bo
 	return isCurrent
 }
 
+// resolveSessionMemory checks whether the session memory is available and
+// covers the current conversation state. Returns the memory content and
+// a log reason string. Returns ("", "") when memory should not be used.
+func (cp *compactParams) resolveSessionMemory(conv *conversation.Conversation, label string) (summary string, logReason string) {
+	if cp.getSessionMemory == nil {
+		return "", ""
+	}
+	mem := cp.getSessionMemory()
+	if mem == "" {
+		return "", ""
+	}
+	// Validate that the memory actually covers the messages being
+	// dropped. If the boundary entry is stale (deep in already-
+	// dropped content), fall through to a fresh LLM summary.
+	if cp.getLastSummarizedEntryID != nil {
+		entryID := cp.getLastSummarizedEntryID()
+		if entryID != "" && isMemoryCurrent(conv, entryID) {
+			return mem, fmt.Sprintf("%s compact: using session memory as summary (boundary=%s)", label, entryID)
+		}
+		utils.Log("ApiBackend", fmt.Sprintf("%s compact: session memory exists but doesn't cover recent messages (boundary=%q), falling through to LLM summary", label, entryID))
+		return "", ""
+	}
+	// No boundary tracking available — use memory as-is for
+	// backward compatibility with sessions that predate the
+	// boundary tracking feature.
+	return mem, fmt.Sprintf("%s compact: using session memory as summary (no boundary tracking)", label)
+}
+
 // compactIfNeeded performs proactive compaction when context usage exceeds
 // the absolute token limit. Honours the session_before_compact hook (which
 // can cancel the operation) and emits CompactingEvent edges so consumers
@@ -202,32 +230,10 @@ func (b *ApiBackend) compactIfNeeded(ctx context.Context, run *activeRun, conv *
 
 		// Three-tier summary fallback: session memory → LLM → regex.
 		// Must generate summary BEFORE truncation drops the messages.
-		if cp.getSessionMemory != nil {
-			if mem := cp.getSessionMemory(); mem != "" {
-				// Validate that the memory actually covers the messages being
-				// dropped. If the boundary entry is stale (deep in already-
-				// dropped content), fall through to a fresh LLM summary.
-				useMem := false
-				if cp.getLastSummarizedEntryID != nil {
-					entryID := cp.getLastSummarizedEntryID()
-					if entryID != "" && isMemoryCurrent(conv, entryID) {
-						useMem = true
-						utils.Log("ApiBackend", fmt.Sprintf("proactive compact: using session memory as summary (boundary=%s)", entryID))
-					} else {
-						utils.Log("ApiBackend", fmt.Sprintf("proactive compact: session memory exists but doesn't cover recent messages (boundary=%q), falling through to LLM summary", entryID))
-					}
-				} else {
-					// No boundary tracking available — use memory as-is for
-					// backward compatibility with sessions that predate the
-					// boundary tracking feature.
-					useMem = true
-					utils.Log("ApiBackend", "proactive compact: using session memory as summary (no boundary tracking)")
-				}
-				if useMem {
-					summary = mem
-					sessionMemory = mem
-				}
-			}
+		if mem, reason := cp.resolveSessionMemory(conv, "proactive"); mem != "" {
+			summary = mem
+			sessionMemory = mem
+			utils.Log("ApiBackend", reason)
 		}
 		if summary == "" && cp.summaryEnabled {
 			droppedText := compaction.FormatMessagesForSummary(conv.Messages)
@@ -399,27 +405,10 @@ func (b *ApiBackend) compactReactive(ctx context.Context, run *activeRun, conv *
 	// Must generate summary BEFORE step 3 truncation drops the messages.
 	var summary string
 	var sessionMemory string
-	if cp.getSessionMemory != nil {
-		if mem := cp.getSessionMemory(); mem != "" {
-			// Validate coverage before using session memory.
-			useMem := false
-			if cp.getLastSummarizedEntryID != nil {
-				entryID := cp.getLastSummarizedEntryID()
-				if entryID != "" && isMemoryCurrent(conv, entryID) {
-					useMem = true
-					utils.Log("ApiBackend", fmt.Sprintf("reactive compact: using session memory as summary (boundary=%s)", entryID))
-				} else {
-					utils.Log("ApiBackend", fmt.Sprintf("reactive compact: session memory exists but doesn't cover recent messages (boundary=%q), falling through to LLM summary", entryID))
-				}
-			} else {
-				useMem = true
-				utils.Log("ApiBackend", "reactive compact: using session memory as summary (no boundary tracking)")
-			}
-			if useMem {
-				summary = mem
-				sessionMemory = mem
-			}
-		}
+	if mem, reason := cp.resolveSessionMemory(conv, "reactive"); mem != "" {
+		summary = mem
+		sessionMemory = mem
+		utils.Log("ApiBackend", reason)
 	}
 	if summary == "" && cp.summaryEnabled {
 		droppedText := compaction.FormatMessagesForSummary(conv.Messages)
