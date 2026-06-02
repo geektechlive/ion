@@ -178,26 +178,6 @@ func FormatFactsSummary(facts []Fact) string {
 	return strings.TrimSpace(sb.String())
 }
 
-// BuildCompactBoundaryMessage is a thin re-export of
-// conversation.BuildCompactBoundaryMessage so the compaction package
-// stays a one-stop shop for runloop callers that already import it
-// without forcing them to also import conversation. The argument shape
-// (CompactMeta) is the conversation-package type; the alias exists for
-// convenience only — both call sites produce byte-identical wire output.
-//
-// The constructor itself lives in the conversation package to break a
-// would-be import cycle: tree.go's BuildContextPath needs to reconstruct
-// boundary blocks from CompactionData and lives in conversation; the
-// compaction package depends on conversation, never the reverse.
-func BuildCompactBoundaryMessage(meta conversation.CompactMeta) types.LlmMessage {
-	return conversation.BuildCompactBoundaryMessage(meta)
-}
-
-// CompactMeta is re-exported from conversation for the same reason as
-// BuildCompactBoundaryMessage above — callers that already import
-// compaction can construct boundary metadata without a second import.
-type CompactMeta = conversation.CompactMeta
-
 // CompactPartial removes entries from a conversation tree, keeping everything
 // after pivotEntryID. Direction is "before" (remove older) or "after" (remove newer).
 func CompactPartial(conv *conversation.Conversation, pivotEntryID string, direction string) error {

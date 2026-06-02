@@ -16,7 +16,7 @@ import (
 // runloop, the tree-rebuild path, the manual CompactWithSummary path)
 // depends on: identical wire shape regardless of trigger.
 func TestBuildCompactBoundaryMessage(t *testing.T) {
-	meta := CompactMeta{
+	meta := conversation.CompactMeta{
 		Trigger:            "auto",
 		MessagesSummarized: 12,
 		MessagesBefore:     30,
@@ -28,7 +28,7 @@ func TestBuildCompactBoundaryMessage(t *testing.T) {
 		RecentFiles:        []string{"/a.go", "/b.go"},
 	}
 
-	msg := BuildCompactBoundaryMessage(meta)
+	msg := conversation.BuildCompactBoundaryMessage(meta)
 	if msg.Role != "user" {
 		t.Errorf("Role = %q, want user", msg.Role)
 	}
@@ -73,7 +73,7 @@ func TestBuildCompactBoundaryMessage(t *testing.T) {
 // because persistence stores messages as NDJSON and the next session
 // load round-trips them through json.Unmarshal into LlmMessage.
 func TestBuildCompactBoundaryMessage_JSONRoundTrip(t *testing.T) {
-	meta := CompactMeta{
+	meta := conversation.CompactMeta{
 		Trigger:        "reactive",
 		MessagesBefore: 50,
 		MessagesAfter:  20,
@@ -82,7 +82,7 @@ func TestBuildCompactBoundaryMessage_JSONRoundTrip(t *testing.T) {
 		FactCount:      2,
 		RecentFiles:    []string{"/x.ts"},
 	}
-	msg := BuildCompactBoundaryMessage(meta)
+	msg := conversation.BuildCompactBoundaryMessage(meta)
 
 	data, err := json.Marshal(msg)
 	if err != nil {

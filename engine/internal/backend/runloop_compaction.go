@@ -262,18 +262,16 @@ func (b *ApiBackend) compactIfNeeded(ctx context.Context, run *activeRun, conv *
 				utils.Debug("ApiBackend", "proactive compact: no text content for LLM summary")
 			}
 		}
-		if summary == "" && hooks.OnRequestCompactSummary != nil {
-			if hookSummary, ok := hooks.OnRequestCompactSummary(run.requestID, "auto", scanSlice); ok && hookSummary != "" {
-				summary = hookSummary
-				utils.Log("ApiBackend", fmt.Sprintf("proactive compact: hook summary strategy=auto (%d chars)", len(summary)))
-			}
-		}
-		if summary == "" && len(facts) > 0 {
-			summary = compaction.FormatFactsSummary(facts)
-			utils.Log("ApiBackend", fmt.Sprintf("proactive compact: regex fact summary (%d facts)", len(facts)))
-		}
+		// Tiers 3+4 (hook → regex) live in renderCompactSummary so both
+		// compactIfNeeded and compactReactive route through the same
+		// decision point. Tiers 1+2 (session memory, LLM) stay above
+		// because each has its own engine-internal side effects.
 		if summary == "" {
-			utils.Log("ApiBackend", "proactive compact: all three summary tiers produced nothing (session memory, LLM, regex)")
+			var path string
+			summary, path = renderCompactSummary(run.requestID, hooks, "auto", scanSlice, facts)
+			if summary == "" {
+				utils.Log("ApiBackend", fmt.Sprintf("proactive compact: all four summary tiers produced nothing (session memory, LLM, hook, regex) path=%s", path))
+			}
 		}
 
 		// Now truncate.
@@ -435,17 +433,16 @@ func (b *ApiBackend) compactReactive(ctx context.Context, run *activeRun, conv *
 			utils.Debug("ApiBackend", "reactive compact: no text content for LLM summary")
 		}
 	}
-	if summary == "" && hooks.OnRequestCompactSummary != nil {
-		if hookSummary, ok := hooks.OnRequestCompactSummary(run.requestID, "reactive", scanSlice); ok && hookSummary != "" {
-			summary = hookSummary
-			utils.Log("ApiBackend", fmt.Sprintf("reactive compact: hook summary strategy=reactive (%d chars)", len(summary)))
+	// Tiers 3+4 (hook → regex) live in renderCompactSummary so both
+	// compactIfNeeded and compactReactive route through the same
+	// decision point. Tiers 1+2 (session memory, LLM) stay above
+	// because each has its own engine-internal side effects.
+	if summary == "" {
+		var path string
+		summary, path = renderCompactSummary(run.requestID, hooks, "reactive", scanSlice, facts)
+		if summary == "" {
+			utils.Debug("ApiBackend", fmt.Sprintf("reactive compact: no summary generated (no facts, no LLM, no hook, no session memory) path=%s", path))
 		}
-	}
-	if summary == "" && len(facts) > 0 {
-		summary = compaction.FormatFactsSummary(facts)
-		utils.Log("ApiBackend", fmt.Sprintf("reactive compact: regex fact summary (%d facts)", len(facts)))
-	} else if summary == "" {
-		utils.Debug("ApiBackend", "reactive compact: no summary generated (no facts, no LLM, no hook, no session memory)")
 	}
 
 	// Step 3: hard truncate using progressively smaller token budget on each retry.
@@ -536,10 +533,16 @@ func (b *ApiBackend) compactReactive(ctx context.Context, run *activeRun, conv *
 }
 
 // renderCompactSummary picks the rendering path for the boundary block's
-// Summary field. When the harness wired RunHooks.OnRequestCompactSummary
-// and that hook returned a non-empty string, the hook's output wins. Else
-// the engine falls back to its regex pipeline:
-// FormatFactsSummary(facts).
+// Summary field. It handles only the hook → regex tail of the four-tier
+// summary fallback ladder (session memory → LLM → hook → regex): the
+// session-memory and LLM tiers run in the runloop above this call site
+// because they have their own engine-internal side effects (memory
+// lookup, provider usage event emission) that don't belong inside a
+// pure-decision helper.
+//
+// When the harness wired RunHooks.OnRequestCompactSummary and that hook
+// returned a non-empty string, the hook's output wins. Else the engine
+// falls back to its regex pipeline: FormatFactsSummary(facts).
 //
 // Returns (summary, path) where path is "hook" | "regex" | "empty" for
 // log correlation. An empty summary is a valid return — the caller still
@@ -548,7 +551,7 @@ func (b *ApiBackend) compactReactive(ctx context.Context, run *activeRun, conv *
 func renderCompactSummary(runID string, hooks RunHooks, strategy string, scanSlice []types.LlmMessage, facts []compaction.Fact) (string, string) {
 	if hooks.OnRequestCompactSummary != nil {
 		if hookSummary, ok := hooks.OnRequestCompactSummary(runID, strategy, scanSlice); ok && hookSummary != "" {
-			utils.Debug("ApiBackend", fmt.Sprintf("renderCompactSummary: strategy=%s path=hook summaryLen=%d msgCount=%d", strategy, len(hookSummary), len(scanSlice)))
+			utils.Log("ApiBackend", fmt.Sprintf("renderCompactSummary: strategy=%s path=hook summaryLen=%d msgCount=%d", strategy, len(hookSummary), len(scanSlice)))
 			return hookSummary, "hook"
 		}
 		utils.Debug("ApiBackend", fmt.Sprintf("renderCompactSummary: strategy=%s hook present but returned empty, falling back to regex", strategy))
@@ -558,7 +561,7 @@ func renderCompactSummary(runID string, hooks RunHooks, strategy string, scanSli
 		return "", "empty"
 	}
 	regex := compaction.FormatFactsSummary(facts)
-	utils.Debug("ApiBackend", fmt.Sprintf("renderCompactSummary: strategy=%s path=regex summaryLen=%d factCount=%d", strategy, len(regex), len(facts)))
+	utils.Log("ApiBackend", fmt.Sprintf("renderCompactSummary: strategy=%s path=regex summaryLen=%d factCount=%d", strategy, len(regex), len(facts)))
 	return regex, "regex"
 }
 
