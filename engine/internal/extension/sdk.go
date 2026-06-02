@@ -195,10 +195,18 @@ func (s *SDK) PrependHook(event string, handler HookHandler) {
 	s.hooks[event] = append([]HookHandler{handler}, s.hooks[event]...)
 }
 
-// RegisterTool adds a tool definition to the registry.
+// RegisterTool adds a tool definition to the registry. If a tool with the
+// same name already exists it is replaced, preventing duplicates when the
+// extension subprocess is respawned and re-registers during init.
 func (s *SDK) RegisterTool(def ToolDefinition) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for i, t := range s.tools {
+		if t.Name == def.Name {
+			s.tools[i] = def
+			return
+		}
+	}
 	s.tools = append(s.tools, def)
 }
 

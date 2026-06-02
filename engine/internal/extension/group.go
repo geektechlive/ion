@@ -39,11 +39,21 @@ func (g *ExtensionGroup) Close() {
 	}
 }
 
-// Tools merges tool definitions from all hosts.
+// Tools merges tool definitions from all hosts. Last-registered wins when
+// multiple hosts register the same tool name.
 func (g *ExtensionGroup) Tools() []ToolDefinition {
+	seen := make(map[string]int) // name -> index in all
 	var all []ToolDefinition
 	for _, h := range g.hosts {
-		all = append(all, h.Tools()...)
+		for _, t := range h.Tools() {
+			if idx, ok := seen[t.Name]; ok {
+				all[idx] = t
+				utils.Debug("ExtensionGroup", fmt.Sprintf("duplicate tool %q from host %q, last-registered wins", t.Name, h.Name()))
+			} else {
+				seen[t.Name] = len(all)
+				all = append(all, t)
+			}
+		}
 	}
 	return all
 }
