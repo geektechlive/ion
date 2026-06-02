@@ -6,7 +6,7 @@ sidebar_position: 2
 
 # Hook Reference
 
-All 66 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
+All 67 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
 
 ## Lifecycle (13)
 
@@ -88,12 +88,13 @@ type BeforePromptResult struct {
 }
 ```
 
-## Session Management (5)
+## Session Management (6)
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
 | `session_before_compact` | Before context compaction | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter}` | `bool` | Return `true` to cancel compaction. |
 | `session_compact` | After compaction completes | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter, Facts}` | ignored | Observe only. `Facts` carries structured snippets extracted from the pre-compaction messages — useful for persisting to external memory before they're discarded. May be empty. |
+| `compact_summary_request` | Inside proactive / reactive compaction, after session-memory and LLM tiers and before the regex fallback | `CompactSummaryRequestInfo{Strategy, MessageCount, Messages}` | `CompactSummaryRequestResult{Summary}` or bare `string` | First non-empty `Summary` becomes the new `compact_boundary` block's `Summary` field, short-circuiting the engine's regex fact extractor. Empty/nil return falls through to the regex pipeline. Use this to wire a harness-side summariser (LLM-based, vector-store-backed, domain-specific) that produces higher-quality summaries than the engine's regex pipeline. |
 | `session_before_fork` | Before session fork | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | `bool` | Return `true` to cancel fork. |
 | `session_fork` | After fork completes | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | ignored | Observe only |
 | `session_before_switch` | Before session switch | `nil` | ignored | Observe only |
@@ -127,6 +128,24 @@ type CompactionFact struct {
 `Facts` is populated on `session_compact` only (not on `session_before_compact`), and may be empty when step-1 micro-compaction alone is sufficient and no fact patterns matched. Message indices are intentionally not exposed — by the time the hook fires, the source messages have been mutated or truncated.
 
 `SessionMemory` contains the background session memory content when it was used as the summary source (tier 1 of the three-tier fallback). Empty when session memory was not available and the summary came from LLM or regex extraction.
+
+**CompactSummaryRequestInfo**
+```go
+type CompactSummaryRequestInfo struct {
+    Strategy     string             // "auto" (proactive) or "reactive" (prompt_too_long retry)
+    MessageCount int                // len(Messages); supplied so handlers can log without re-counting
+    Messages     []types.LlmMessage // pre-compaction slice, already filtered through MessagesAfterLastCompactBoundary so prior summaries are not in scope
+}
+```
+
+**CompactSummaryRequestResult**
+```go
+type CompactSummaryRequestResult struct {
+    Summary string // when non-empty, replaces the engine's regex-built summary text; empty means "no opinion — fall back to regex"
+}
+```
+
+The `compact_summary_request` handler may return a `CompactSummaryRequestResult` value, a `*CompactSummaryRequestResult` pointer, or a bare `string`. All three shapes flow through the same first-non-empty selection. The engine never blocks on this handler; harness implementations that call an LLM must do so with a bounded timeout and surface failures by returning `("", false)` rather than blocking the run. Branch on `Strategy` to tune the summariser to the trigger — e.g. a reactive summary may want to be more aggressive (fewer tokens) because the provider just rejected the prompt, while an auto summary can afford a richer rendering.
 
 **ForkInfo**
 ```go

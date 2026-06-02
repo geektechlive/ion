@@ -145,6 +145,23 @@ sdk.FireSessionCompact(ctx, CompactionInfo{
     },
 })
 
+// compact_summary_request fires inside proactive (auto) and reactive
+// (prompt_too_long) compaction, after the session-memory and LLM tiers
+// and before the regex fallback. Substitute a harness-side summariser
+// for the engine's regex fact extractor by registering a handler that
+// returns a non-empty string; an empty return falls through to the
+// regex path. Branch on Strategy ("auto" | "reactive") to tune the
+// summariser to the trigger — reactive summaries should be aggressive
+// (fewer tokens) because the provider just rejected the prompt; auto
+// summaries can afford a richer rendering. The engine never blocks on
+// the handler; wrap LLM calls in a bounded timeout and return ("",
+// false) on failure rather than blocking the run.
+summary, ok := sdk.FireCompactSummaryRequest(ctx, CompactSummaryRequestInfo{
+    Strategy:     "auto",
+    MessageCount: len(messages),
+    Messages:     messages,
+}) // returns (summary string, ok bool); ok=false means "fall back to regex"
+
 sdk.FireSessionBeforeFork(ctx, ForkInfo{...})           // returns (cancelled bool, error)
 sdk.FireSessionFork(ctx, ForkInfo{...})
 sdk.FireSessionBeforeSwitch(ctx)
