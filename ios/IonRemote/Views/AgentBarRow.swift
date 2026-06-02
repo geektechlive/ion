@@ -14,9 +14,9 @@ struct AgentBarRow: View {
     /// Called after the initial dispatch loads to preload the rest.
     let onPreloadDispatches: ((String) -> Void)?
     @Environment(\.appTheme) private var theme
+    let onTap: (() -> Void)?
     @State private var isExpanded = false
     @State private var now = Date()
-    @State private var selectedDispatchIndex: Int?
 
     init(
         agent: AgentStateUpdate,
@@ -25,7 +25,8 @@ struct AgentBarRow: View {
         isLoadingMessages: Bool,
         onExpand: (() -> Void)? = nil,
         onLoadDispatch: ((String) -> Void)? = nil,
-        onPreloadDispatches: ((String) -> Void)? = nil
+        onPreloadDispatches: ((String) -> Void)? = nil,
+        onTap: (() -> Void)? = nil
     ) {
         self.agent = agent
         self.messages = messages
@@ -34,28 +35,7 @@ struct AgentBarRow: View {
         self.onExpand = onExpand
         self.onLoadDispatch = onLoadDispatch
         self.onPreloadDispatches = onPreloadDispatches
-    }
-
-    /// Messages for the currently selected dispatch, or the legacy agent-name lookup.
-    private var activeMessages: [Message]? {
-        if let dispatch = activeDispatch, !dispatch.conversationId.isEmpty {
-            return convMessageCache[dispatch.conversationId]
-        }
-        // Single dispatch: try conversationId key first, fall back to agent name
-        if let convId = agent.dispatches.first?.conversationId, !convId.isEmpty {
-            return convMessageCache[convId]
-        }
-        return messages
-    }
-
-    /// Whether the active dispatch's conversation is currently loading.
-    private var isActiveLoading: Bool {
-        if isLoadingMessages { return true }
-        guard let dispatch = activeDispatch ?? agent.dispatches.last else { return false }
-        guard !dispatch.conversationId.isEmpty else { return false }
-        // Check if the conversationId is in the loading set — passed via isLoadingMessages
-        // from the parent. For dispatch pager, we rely on the parent checking the right key.
-        return false
+        self.onTap = onTap
     }
 
     // Live elapsed seconds from startTime (running) or final elapsed (done).
@@ -73,6 +53,10 @@ struct AgentBarRow: View {
             headerRow
                 .contentShape(Rectangle())
                 .onTapGesture {
+                    if let onTap {
+                        onTap()
+                        return
+                    }
                     // If already expanded and loading, ignore tap to prevent
                     // the user from collapsing and restarting the same fetch.
                     if isExpanded && isLoadingMessages { return }
@@ -152,177 +136,21 @@ struct AgentBarRow: View {
 
     // MARK: - Expanded body
 
-    /// The active dispatch (if multiple dispatches exist).
-    private var activeDispatch: DispatchInfo? {
-        guard agent.dispatches.count > 1 else { return nil }
-        let idx = selectedDispatchIndex ?? agent.dispatches.count - 1
-        guard idx >= 0 && idx < agent.dispatches.count else { return nil }
-        return agent.dispatches[idx]
-    }
-
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             Divider().padding(.horizontal, 8)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
-                    // Model tag
-                    let activeModel = activeDispatch?.model ?? agent.model
-                    if let model = activeModel, !model.isEmpty {
-                        HStack(spacing: 4) {
-                            Image(systemName: "cpu")
-                                .font(.caption2)
-                            Text(modelLabel(model))
-                                .font(.caption2)
-                        }
-                        .foregroundStyle(theme.textSecondary.opacity(0.5))
-                        .padding(.horizontal, 12)
-                    }
-
-                    // Dispatch picker (shown when multiple dispatches exist)
-                    if agent.dispatches.count > 1 {
-                        dispatchPicker
-                    }
-
-                    // Dispatch task (the orchestrator's instruction to the agent)
-                    let activeTask = activeDispatch?.task ?? agent.task
-                    if let task = activeTask, !task.isEmpty {
-                        dispatchBubble(task)
-                    }
-
-                    // Agent conversation history (loaded on expand).
-                    // When loaded, replaces fullOutput (matches desktop behavior).
-                    // Skips user messages whose content matches the dispatch task
-                    // already shown in the bubble above.
-                    if let msgs = activeMessages, !msgs.isEmpty {
-                        ForEach(conversationMessages(msgs)) { msg in
-                            conversationBubble(msg)
-                        }
-                    } else if isLoadingMessages {
-                        HStack(spacing: 6) {
-                            ProgressView().scaleEffect(0.6)
-                            Text("Loading conversation…")
-                                .font(.caption2)
-                                .foregroundStyle(theme.textSecondary.opacity(0.5))
-                        }
-                        .padding(.horizontal, 12)
-                    } else if let fullOutput = agent.fullOutput, !fullOutput.isEmpty {
-                        // Fallback: show fullOutput only when no conversation loaded
-                        MarkdownContentView(
-                            blocks: MarkdownBlockCache.shared.blocks(for: fullOutput)
-                        )
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                    } else if agent.status == "running" {
-                        HStack(spacing: 6) {
-                            ProgressView().scaleEffect(0.6)
-                            Text("Working…")
-                                .font(.caption2)
-                                .foregroundStyle(theme.textSecondary.opacity(0.5))
-                        }
-                        .padding(.horizontal, 12)
-                    }
-                }
-                .padding(.vertical, 6)
+                AgentExpandedContent(
+                    agent: agent,
+                    messages: messages,
+                    convMessageCache: convMessageCache,
+                    isLoadingMessages: isLoadingMessages,
+                    onLoadDispatch: onLoadDispatch,
+                    onPreloadDispatches: onPreloadDispatches
+                )
             }
             .frame(maxHeight: 240)
-        }
-    }
-
-    /// Horizontal pill row for switching between dispatches (newest first).
-    private var dispatchPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                Text("Dispatches:")
-                    .font(.system(size: 9))
-                    .foregroundStyle(theme.textSecondary.opacity(0.5))
-                ForEach(Array(agent.dispatches.enumerated().reversed()), id: \.element.id) { idx, d in
-                    // Display number = chronological position (1 = first, N = most recent)
-                    let displayNum = idx + 1
-                    let isActive = idx == (selectedDispatchIndex ?? agent.dispatches.count - 1)
-                    Button {
-                        selectedDispatchIndex = idx
-                        if !d.conversationId.isEmpty {
-                            onLoadDispatch?(d.conversationId)
-                        }
-                    } label: {
-                        Text("#\(displayNum)")
-                            .font(.system(size: 10, weight: isActive ? .semibold : .regular))
-                            .foregroundStyle(isActive ? theme.textPrimary : theme.textSecondary.opacity(0.5))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(isActive ? theme.surfaceElevated.opacity(0.7) : theme.surfaceElevated.opacity(0.3))
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 12)
-        }
-    }
-
-    /// A visually distinct bubble for the orchestrator's dispatch instruction.
-    private func dispatchBubble(_ task: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "arrow.right.circle.fill")
-                .font(.caption)
-                .foregroundStyle(theme.accent.opacity(0.7))
-                .padding(.top, 2)
-            Text(task)
-                .font(.caption2)
-                .foregroundStyle(theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.accent.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 10)
-    }
-
-    // MARK: - Conversation rendering
-
-    /// Filters conversation messages: drops user messages whose content
-    /// matches the dispatch task (already shown in the bubble) and drops
-    /// tool/system messages (matches desktop's groupMessages behavior).
-    private func conversationMessages(_ msgs: [Message]) -> [Message] {
-        let task = activeDispatch?.task ?? agent.task ?? ""
-        return msgs.filter { msg in
-            guard msg.role == .assistant || msg.role == .user else { return false }
-            if msg.role == .user && !task.isEmpty && msg.content.trimmingCharacters(in: .whitespacesAndNewlines) == task.trimmingCharacters(in: .whitespacesAndNewlines) {
-                return false
-            }
-            return !msg.content.isEmpty
-        }
-    }
-
-    /// Renders a single conversation message with role-appropriate styling.
-    @ViewBuilder
-    private func conversationBubble(_ msg: Message) -> some View {
-        if msg.role == .user {
-            // User messages as a subtle bubble (distinct from dispatch)
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "person.fill")
-                    .font(.caption2)
-                    .foregroundStyle(theme.textSecondary)
-                    .padding(.top, 2)
-                Text(msg.content)
-                    .font(.caption2)
-                    .foregroundStyle(theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.surfaceElevated.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .padding(.horizontal, 10)
-        } else {
-            // Assistant messages as markdown
-            MarkdownContentView(
-                blocks: MarkdownBlockCache.shared.blocks(for: msg.content)
-            )
-            .textSelection(.enabled)
-            .padding(.horizontal, 12)
         }
     }
 
@@ -346,13 +174,6 @@ struct AgentBarRow: View {
         case "error": return theme.statusError
         default: return theme.textSecondary.opacity(0.5)
         }
-    }
-
-    private func modelLabel(_ model: String) -> String {
-        if model.contains("opus") { return "Opus" }
-        if model.contains("sonnet") { return "Sonnet" }
-        if model.contains("haiku") { return "Haiku" }
-        return model
     }
 
     private func formatDuration(_ secs: Int) -> String {

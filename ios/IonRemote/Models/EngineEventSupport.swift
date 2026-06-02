@@ -66,7 +66,15 @@ struct AgentStateUpdate: Codable, Identifiable, Sendable {
     let model: String?
     let startTime: Double?   // Unix timestamp in seconds
     /// Derived from `dispatches[]` — single source of truth for conversation IDs.
-    var conversationIds: [String] { dispatches.compactMap { $0.conversationId.isEmpty ? nil : $0.conversationId } }
+    /// Deduplicated: when multiple dispatches share a session, the ID appears once.
+    var conversationIds: [String] {
+        var seen = Set<String>()
+        return dispatches.compactMap { d in
+            guard !d.conversationId.isEmpty, !seen.contains(d.conversationId) else { return nil }
+            seen.insert(d.conversationId)
+            return d.conversationId
+        }
+    }
     let dispatches: [DispatchInfo]
 
     /// Whether this agent should be shown in the UI based on visibility rules.

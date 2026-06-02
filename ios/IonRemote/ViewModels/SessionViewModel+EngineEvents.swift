@@ -201,6 +201,33 @@ extension SessionViewModel {
         }
     }
 
+    // MARK: - Agent conversation refresh (force re-fetch)
+
+    /// Invalidates the cached conversation for a dispatch and re-fetches.
+    /// Used by the full-screen agent popup to get fresh data when the
+    /// agent's state changes while the popup is open.
+    @MainActor
+    func refreshAgentDispatchConversation(agent: AgentStateUpdate, conversationId: String) {
+        guard !conversationId.isEmpty else { return }
+        guard !agentConversationLoading.contains(conversationId) else { return }
+        DiagnosticLog.log("ENGINE: refresh dispatch conversation agent=\(agent.name) convId=\(conversationId)")
+        // Invalidate cache so the response handler replaces it
+        agentConversationMessages.removeValue(forKey: conversationId)
+        agentConversationLoading.insert(conversationId)
+        send(.loadAgentConversation(conversationIds: [conversationId]))
+    }
+
+    /// Invalidates and re-fetches all conversation data for an agent.
+    @MainActor
+    func refreshAgentConversation(agent: AgentStateUpdate) {
+        guard !agent.conversationIds.isEmpty else { return }
+        guard !agentConversationLoading.contains(agent.name) else { return }
+        DiagnosticLog.log("ENGINE: refresh agent conversation agent=\(agent.name) convIds=\(agent.conversationIds)")
+        agentConversationMessages.removeValue(forKey: agent.name)
+        agentConversationLoading.insert(agent.name)
+        send(.loadAgentConversation(conversationIds: agent.conversationIds))
+    }
+
     // MARK: - Diagnostic log request
 
     @MainActor

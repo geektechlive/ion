@@ -23,6 +23,7 @@ struct SettingsView: View {
                 diagnosticsSection
                 newTabSection
                 tabListSection
+                agentPanelSection
                 modelsSection
                 tabGroupsSection
                 pairedDevicesSection
@@ -332,6 +333,21 @@ struct SettingsView: View {
             Text("Tab List")
         } footer: {
             Text("Shows the current branch and commit counts on each tab.")
+        }
+    }
+
+    private var agentPanelSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { viewModel.agentPanelFullScreenPopup },
+                set: { viewModel.agentPanelFullScreenPopup = $0 }
+            )) {
+                Label("Full-Screen Agent Detail", systemImage: "rectangle.expand.vertical")
+            }
+        } header: {
+            Text("Agent Panel")
+        } footer: {
+            Text("When enabled, tapping an agent opens a full-screen detail view instead of expanding inline.")
         }
     }
 

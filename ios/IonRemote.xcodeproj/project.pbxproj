@@ -49,6 +49,8 @@
 		A1B2C3D4E5F600010000D0AA /* EngineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000D1AA /* EngineView.swift */; };
 		A1B2C3D4E5F600010000D2AA /* AnsiParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000D3AA /* AnsiParser.swift */; };
 		A1B2C3D4E5F600010000E0AA /* AgentBarRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */; };
+		A1B2C3D4E5F600010000E2AA /* AgentExpandedContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000E3AA /* AgentExpandedContent.swift */; };
+		A1B2C3D4E5F600010000E4AA /* AgentDetailFullScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000E5AA /* AgentDetailFullScreenView.swift */; };
 
 		A1B2C3D4E5F6000100400FAA /* ConversationStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100400EAA /* ConversationStatusBar.swift */; };
 		A1B2C3D4E5F60001004011AA /* ConversationTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004010AA /* ConversationTerminalView.swift */; };
@@ -208,6 +210,8 @@
 		A1B2C3D4E5F600010000D1AA /* EngineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000D3AA /* AnsiParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnsiParser.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBarRow.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F600010000E3AA /* AgentExpandedContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentExpandedContent.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F600010000E5AA /* AgentDetailFullScreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDetailFullScreenView.swift; sourceTree = "<group>"; };
 
 		A1B2C3D4E5F6000100400EAA /* ConversationStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatusBar.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001004010AA /* ConversationTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTerminalView.swift; sourceTree = "<group>"; };
@@ -447,6 +451,8 @@
 				A1B2C3D4E5F600010000D1AA /* EngineView.swift */,
 				A1B2C3D4E5F600010000F5AA /* EngineInstanceBar.swift */,
 				A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */,
+				A1B2C3D4E5F600010000E3AA /* AgentExpandedContent.swift */,
+				A1B2C3D4E5F600010000E5AA /* AgentDetailFullScreenView.swift */,
 				A1B2C3D4E5F6000100400EAA /* ConversationStatusBar.swift */,
 				A1B2C3D4E5F60001000304AA /* GitPaneView.swift */,
 				A1B2C3D4E5F60001000306AA /* GitChangesListView.swift */,
@@ -768,6 +774,8 @@
 				A1B2C3D4E5F600010000F4AA /* EngineInstanceBar.swift in Sources */,
 				A1B2C3D4E5F600010000D2AA /* AnsiParser.swift in Sources */,
 				A1B2C3D4E5F600010000E0AA /* AgentBarRow.swift in Sources */,
+				A1B2C3D4E5F600010000E2AA /* AgentExpandedContent.swift in Sources */,
+				A1B2C3D4E5F600010000E4AA /* AgentDetailFullScreenView.swift in Sources */,
 				A1B2C3D4E5F6000100400FAA /* ConversationStatusBar.swift in Sources */,
 				A1B2C3D4E5F600010000F0AA /* EngineProfile.swift in Sources */,
 				A1B2C3D4E5F600010000F2AA /* KeyboardUtilityBar.swift in Sources */,

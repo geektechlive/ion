@@ -10,6 +10,7 @@ struct EngineView: View {
     @FocusState private var isInputFocused: Bool
     @State private var agentsPanelExpanded: Bool? = nil
     @State private var agentPanelFullscreen = false
+    @State private var selectedAgentId: String?
     @State private var isNearBottom = true
     @State private var forceScrollCounter = 0
     @State private var showFileExplorer = false
@@ -280,6 +281,7 @@ struct EngineView: View {
             .padding(.vertical, 4)
 
             if isAgentsPanelExpanded {
+                let usePopup = viewModel.agentPanelFullScreenPopup
                 let agentList = ScrollView {
                     VStack(spacing: 4) {
                         ForEach(visibleAgents) { agent in
@@ -290,9 +292,6 @@ struct EngineView: View {
                                 isLoadingMessages: viewModel.agentConversationLoading.contains(agent.name)
                                     || agent.dispatches.contains { viewModel.agentConversationLoading.contains($0.conversationId) },
                                 onExpand: {
-                                    // When multiple dispatches exist, load only the most
-                                    // recent one (last in array) instead of concatenating
-                                    // all conversations into one flat stream.
                                     if let lastDispatch = agent.dispatches.last,
                                        !lastDispatch.conversationId.isEmpty {
                                         viewModel.loadAgentDispatchConversation(
@@ -308,7 +307,25 @@ struct EngineView: View {
                                 },
                                 onPreloadDispatches: { excludingConvId in
                                     viewModel.preloadAgentDispatches(agent: agent, excluding: excludingConvId)
-                                }
+                                },
+                                onTap: usePopup ? {
+                                    // No-op when agent has no content to display
+                                    guard !agent.dispatches.isEmpty || agent.fullOutput != nil || agent.status == "running" else { return }
+                                    // Load conversation data before presenting
+                                    if let lastDispatch = agent.dispatches.last,
+                                       !lastDispatch.conversationId.isEmpty {
+                                        viewModel.loadAgentDispatchConversation(
+                                            agent: agent,
+                                            conversationId: lastDispatch.conversationId
+                                        )
+                                    } else {
+                                        viewModel.loadAgentConversation(agent: agent)
+                                    }
+                                    if let lastConvId = agent.dispatches.last?.conversationId, !lastConvId.isEmpty {
+                                        viewModel.preloadAgentDispatches(agent: agent, excluding: lastConvId)
+                                    }
+                                    selectedAgentId = agent.id
+                                } : nil
                             )
                         }
                     }
@@ -552,6 +569,18 @@ struct EngineView: View {
         .fullScreenCover(isPresented: $showFileExplorer) {
             FileExplorerView(tabId: tabId)
                 .environment(viewModel)
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { selectedAgentId != nil },
+            set: { if !$0 { selectedAgentId = nil } }
+        )) {
+            if let agentId = selectedAgentId {
+                AgentDetailFullScreenView(
+                    agentId: agentId,
+                    compoundKey: compoundKey
+                )
+                .environment(viewModel)
+            }
         }
         .sheet(isPresented: $showFilePicker) {
             FilePickerSheet(initialDirectory: workingDirectory) { path, name in
