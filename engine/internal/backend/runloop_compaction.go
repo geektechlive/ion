@@ -263,9 +263,9 @@ func (b *ApiBackend) compactIfNeeded(ctx context.Context, run *activeRun, conv *
 			}
 		}
 		if summary == "" && hooks.OnRequestCompactSummary != nil {
-			if hookSummary, ok := hooks.OnRequestCompactSummary(run.requestID, scanSlice); ok && hookSummary != "" {
+			if hookSummary, ok := hooks.OnRequestCompactSummary(run.requestID, "auto", scanSlice); ok && hookSummary != "" {
 				summary = hookSummary
-				utils.Log("ApiBackend", fmt.Sprintf("proactive compact: hook summary (%d chars)", len(summary)))
+				utils.Log("ApiBackend", fmt.Sprintf("proactive compact: hook summary strategy=auto (%d chars)", len(summary)))
 			}
 		}
 		if summary == "" && len(facts) > 0 {
@@ -436,9 +436,9 @@ func (b *ApiBackend) compactReactive(ctx context.Context, run *activeRun, conv *
 		}
 	}
 	if summary == "" && hooks.OnRequestCompactSummary != nil {
-		if hookSummary, ok := hooks.OnRequestCompactSummary(run.requestID, scanSlice); ok && hookSummary != "" {
+		if hookSummary, ok := hooks.OnRequestCompactSummary(run.requestID, "reactive", scanSlice); ok && hookSummary != "" {
 			summary = hookSummary
-			utils.Log("ApiBackend", fmt.Sprintf("reactive compact: hook summary (%d chars)", len(summary)))
+			utils.Log("ApiBackend", fmt.Sprintf("reactive compact: hook summary strategy=reactive (%d chars)", len(summary)))
 		}
 	}
 	if summary == "" && len(facts) > 0 {
@@ -547,7 +547,7 @@ func (b *ApiBackend) compactReactive(ctx context.Context, run *activeRun, conv *
 // to slice at on the next pass.
 func renderCompactSummary(runID string, hooks RunHooks, strategy string, scanSlice []types.LlmMessage, facts []compaction.Fact) (string, string) {
 	if hooks.OnRequestCompactSummary != nil {
-		if hookSummary, ok := hooks.OnRequestCompactSummary(runID, scanSlice); ok && hookSummary != "" {
+		if hookSummary, ok := hooks.OnRequestCompactSummary(runID, strategy, scanSlice); ok && hookSummary != "" {
 			utils.Debug("ApiBackend", fmt.Sprintf("renderCompactSummary: strategy=%s path=hook summaryLen=%d msgCount=%d", strategy, len(hookSummary), len(scanSlice)))
 			return hookSummary, "hook"
 		}

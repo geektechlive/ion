@@ -291,19 +291,20 @@ func (m *Manager) wireExtensionHooks(s *engineSession, key string, requestID str
 		cancel, _ := extGroup.FireSessionBeforeCompact(ctx, extension.CompactionInfo{})
 		return cancel
 	}
-	runCfg.Hooks.OnRequestCompactSummary = func(_ string, messages []types.LlmMessage) (string, bool) {
+	runCfg.Hooks.OnRequestCompactSummary = func(_ string, strategy string, messages []types.LlmMessage) (string, bool) {
 		// Fan out to the extension group. The hook is observe+respond:
 		// returning ("", false) means "no opinion", which the runloop
 		// reads as a signal to fall back to the regex fact extractor.
-		// Strategy is not currently known at this bridge layer (the
-		// runloop chooses auto vs reactive); leaving it empty is fine
-		// for the contract — handlers that need to differentiate can
-		// look at MessageCount or branch on conversation patterns.
+		// Strategy is "auto" (proactive token-limit driven) or "reactive"
+		// (prompt_too_long retry) — handlers branch on it to tune their
+		// summariser to the trigger (e.g. shorter output on reactive
+		// because the provider just rejected the prompt).
 		summary, ok := extGroup.FireCompactSummaryRequest(ctx, extension.CompactSummaryRequestInfo{
+			Strategy:     strategy,
 			MessageCount: len(messages),
 			Messages:     messages,
 		})
-		utils.Debug("Session", fmt.Sprintf("compact_summary_request bridge: msgCount=%d hookProvided=%v summaryLen=%d", len(messages), ok, len(summary)))
+		utils.Debug("Session", fmt.Sprintf("compact_summary_request bridge: strategy=%s msgCount=%d hookProvided=%v summaryLen=%d", strategy, len(messages), ok, len(summary)))
 		return summary, ok
 	}
 	runCfg.Hooks.OnSessionCompact = func(_ string, info interface{}) {

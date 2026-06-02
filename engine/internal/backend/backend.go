@@ -199,12 +199,19 @@ type RunHooks struct {
 	// OnRequestCompactSummary is an optional harness-owned summariser
 	// invoked during proactive / reactive compaction in place of the
 	// engine's built-in regex fact extractor. The handler receives the
-	// pre-compaction message slice (already filtered through
+	// compaction strategy ("auto" for proactive token-limit driven,
+	// "reactive" for prompt_too_long retry) along with the pre-compaction
+	// message slice (already filtered through
 	// MessagesAfterLastCompactBoundary so prior summaries are not in
 	// scope) and returns (summary, ok). When ok is true, summary is
 	// used verbatim as the boundary block's Summary field. When ok is
 	// false (or the field is nil), the engine falls back to its
 	// FormatFactsSummary(ExtractFacts(...)) pipeline.
+	//
+	// The strategy parameter lets harness summarisers tune their output
+	// to the trigger — e.g. a reactive summary may want to be more
+	// aggressive (fewer tokens) because the provider just rejected the
+	// prompt, while an auto summary can afford a richer rendering.
 	//
 	// The engine never blocks on this callback; the runloop dispatches
 	// synchronously. Harness implementations that want to call an LLM
@@ -215,7 +222,7 @@ type RunHooks struct {
 	// "compact_summary_request" hook on the extension SDK. See
 	// docs/hooks/reference.md and the runloop_compaction.go logging for
 	// the "path=hook" / "path=regex" markers.
-	OnRequestCompactSummary func(runID string, messages []types.LlmMessage) (summary string, ok bool)
+	OnRequestCompactSummary func(runID string, strategy string, messages []types.LlmMessage) (summary string, ok bool)
 
 	OnFileChanged func(runID string, path string, action string)
 

@@ -129,10 +129,12 @@ func TestCompactReactive_HookPathShortCircuitsRegex(t *testing.T) {
 	}
 
 	hookCalls := 0
+	gotStrategy := ""
 	const hookSummary = "harness-generated summary"
 	hooks := RunHooks{
-		OnRequestCompactSummary: func(_ string, _ []types.LlmMessage) (string, bool) {
+		OnRequestCompactSummary: func(_ string, strategy string, _ []types.LlmMessage) (string, bool) {
 			hookCalls++
+			gotStrategy = strategy
 			return hookSummary, true
 		},
 	}
@@ -140,6 +142,10 @@ func TestCompactReactive_HookPathShortCircuitsRegex(t *testing.T) {
 	run := &activeRun{requestID: "reactive-hook", conv: conv}
 	if !b.compactReactive(context.Background(), run, conv, hooks, testContextWindow, 1, testCP()) {
 		t.Fatalf("compactReactive returned false")
+	}
+
+	if gotStrategy != "reactive" {
+		t.Errorf("hook received strategy=%q, want %q (compactReactive must always pass \"reactive\")", gotStrategy, "reactive")
 	}
 
 	if hookCalls != 1 {
@@ -180,9 +186,11 @@ func TestCompactReactive_HookEmptyReturnFallsBackToRegex(t *testing.T) {
 	}
 
 	hookCalls := 0
+	gotStrategy := ""
 	hooks := RunHooks{
-		OnRequestCompactSummary: func(_ string, _ []types.LlmMessage) (string, bool) {
+		OnRequestCompactSummary: func(_ string, strategy string, _ []types.LlmMessage) (string, bool) {
 			hookCalls++
+			gotStrategy = strategy
 			return "", false
 		},
 	}
@@ -190,6 +198,10 @@ func TestCompactReactive_HookEmptyReturnFallsBackToRegex(t *testing.T) {
 	run := &activeRun{requestID: "reactive-hook-empty", conv: conv}
 	if !b.compactReactive(context.Background(), run, conv, hooks, testContextWindow, 1, testCP()) {
 		t.Fatalf("compactReactive returned false")
+	}
+
+	if gotStrategy != "reactive" {
+		t.Errorf("hook received strategy=%q, want %q", gotStrategy, "reactive")
 	}
 
 	if hookCalls != 1 {
