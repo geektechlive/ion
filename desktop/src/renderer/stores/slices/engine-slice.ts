@@ -2,6 +2,7 @@ import type { TabStatus, TabState, EngineInstance } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { makeLocalTab, nextMsgId } from '../session-store-helpers'
+import { formatSessionStartDivider } from '../../../shared/clear-divider'
 
 export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -73,6 +74,21 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         ),
       }))
       const key = `${tabId}:${id}`
+      // Seed the session-start divider as the first message for this instance.
+      // This is the only place it is created — on tab restoration,
+      // addEngineInstance is skipped (instances already exist and
+      // engineMessages is pre-populated from persisted data), so no
+      // duplicate is produced.
+      set((state) => {
+        const messages = new Map(state.engineMessages)
+        messages.set(key, [{
+          id: nextMsgId(),
+          role: 'system' as const,
+          content: formatSessionStartDivider(new Date()),
+          timestamp: Date.now(),
+        }])
+        return { engineMessages: messages }
+      })
       // Eagerly set the model override so it's available for iOS sync
       const prefs = usePreferencesStore.getState()
       const initialModel = prefs.engineDefaultModel || prefs.preferredModel || ''

@@ -179,6 +179,15 @@ export const PROJECTABLE_SETTINGS: readonly ProjectableSetting[] = [
     defaultValue: true,
   },
   {
+    key: 'showImplementClearContext',
+    type: 'boolean',
+    group: 'workflow',
+    label: 'Show "Implement, clear context" button',
+    description:
+      'Reveal a second button on the plan-approval card that starts a fresh conversation for the implementation phase. The regular Implement button always preserves the conversation so the model retains what it learned during planning. Use /clear to clear context manually at any time.',
+    defaultValue: false,
+  },
+  {
     key: 'bashCommandEntry',
     type: 'boolean',
     group: 'workflow',

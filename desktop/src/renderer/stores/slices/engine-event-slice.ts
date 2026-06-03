@@ -1,6 +1,6 @@
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
-import { formatClearDivider } from '../../../shared/clear-divider'
+import { formatClearDivider, formatPlanCreatedDivider } from '../../../shared/clear-divider'
 import { handleEngineStatusEvent } from './engine-event-status'
 
 /**
@@ -474,6 +474,29 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
               })
               messages.set(key, msgs)
               return { engineWorkingMessages: workingMessages, engineMessages: messages }
+            })
+          }
+          break
+        }
+        case 'engine_plan_mode_changed': {
+          // Insert a "Plan created" divider into the engine conversation
+          // each time plan mode is entered. This fires on every entry
+          // (including re-entry after implementation), producing the
+          // repeating cycle: Session started → Plan created → Implementing
+          // → Plan created → Implementing → …
+          if (event.planModeEnabled) {
+            set((state) => {
+              const messages = new Map(state.engineMessages)
+              const msgs = [...(messages.get(key) || [])]
+              msgs.push({
+                id: nextMsgId(),
+                role: 'system' as const,
+                content: formatPlanCreatedDivider(new Date(), event.planSlug),
+                timestamp: Date.now(),
+                planFilePath: event.planFilePath,
+              })
+              messages.set(key, msgs)
+              return { engineMessages: messages }
             })
           }
           break

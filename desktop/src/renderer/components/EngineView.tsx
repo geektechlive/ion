@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { useColors } from '../theme'
+import { formatImplementDivider } from '../../shared/clear-divider'
 import { EngineDialog } from './EngineDialog'
 import { EngineStatusBar } from './EngineStatusBar'
 import { AgentPanel } from './AgentPanel'
@@ -208,13 +209,36 @@ export function EngineView({ tabId }: EngineViewProps) {
     submitEnginePrompt(tabId, answer, undefined, undefined)
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt])
 
-  const handleImplement = useCallback(async () => {
-    console.log(`[EngineView] handleImplement: tab=${tabId.slice(0, 8)} key=${key}`)
+  const handleImplement = useCallback(async (clearContext: boolean = false) => {
+    console.log(`[EngineView] handleImplement: tab=${tabId.slice(0, 8)} key=${key} clearContext=${clearContext}`)
     clearPermissionDenied()
+
+    // Insert an "Implementing plan" divider so the user can see the
+    // boundary between planning and implementation phases — mirrors the
+    // CLI tab path in usePermissionDeniedHandlers.ts.
+    if (key) {
+      useSessionStore.getState().addEngineSystemMessage(key, formatImplementDivider(new Date()))
+    }
 
     // Switch to auto mode — for engine tabs this calls
     // engineSetPlanMode(compoundKey, false) internally (tab-slice.ts:38-43).
+    // This drops the plan-mode system prompt and restricted tool list on
+    // the engine side without destroying the conversation, regardless of
+    // whether we follow the clear-context path below.
     useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
+
+    // Honor the per-click `clearContext` argument. Engine tabs do not yet
+    // have a per-instance reset IPC (no `engineResetSession` exists), so
+    // when clearContext=true the renderer logs a warning and falls
+    // through to the default no-reset behavior. The CLI-tab and iOS
+    // paths fully honor the flag. The "Implement, clear context" button
+    // is revealed in PermissionDeniedCard by the
+    // `showImplementClearContext` preference.
+    if (clearContext) {
+      console.warn(`[EngineView] handleImplement: clearContext=true is not yet supported for engine tabs — staying in the same engine-instance conversation. CLI tabs and iOS CLI tabs honor this action. Tracking engine API gap as a follow-up (no engineResetSession IPC).`)
+    } else {
+      console.log(`[EngineView] handleImplement: clearContext=false — preserving engine-instance conversation`)
+    }
 
     // Auto-switch to the implementation model if the split feature is enabled
     const { planModelSplitEnabled, implementModeModel } = usePreferencesStore.getState()
@@ -270,12 +294,12 @@ export function EngineView({ tabId }: EngineViewProps) {
     submitEnginePrompt(tabId, implementPrompt, undefined, undefined, undefined, true)
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt, tabPlanFilePath, permissionDenied])
 
-  const handleImplementAndUnpin = useCallback(async () => {
+  const handleImplementAndUnpin = useCallback(async (clearContext: boolean = false) => {
     // Unpin first so the auto-move guard fires when handleImplement
     // switches the tab to auto mode.
     useSessionStore.getState().toggleTabGroupPin(tabId)
-    console.log(`[EngineView] implement-and-unpin: tab=${tabId.slice(0, 8)} — pin cleared`)
-    await handleImplement()
+    console.log(`[EngineView] implement-and-unpin: tab=${tabId.slice(0, 8)} clearContext=${clearContext} — pin cleared`)
+    await handleImplement(clearContext)
   }, [tabId, handleImplement])
 
   // No instances placeholder — all hooks MUST be declared above this point
