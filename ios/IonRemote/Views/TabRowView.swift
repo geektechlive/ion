@@ -18,12 +18,14 @@ struct TabRowView: View {
         let _ = DiagnosticLog.log("[TabRowView] rendering with accent: \(theme.accent), theme id: \(theme.id)")
         HStack(spacing: 12) {
             // Status indicator: show a custom SF Symbol icon when pillIcon is set,
-            // otherwise fall back to the default Circle. Apply pillColor as a tint
-            // override when set, otherwise use the status-derived color.
-            let dotColor = pillColorOverride ?? statusInfo.color
-            pillIndicator(color: dotColor)
+            // otherwise fall back to the default Circle. Status dot color always
+            // tracks the semantic status (running=orange, idle=gray, etc.) —
+            // the pill color is expressed as a row background tint, not as a
+            // dot color override. This matches the desktop model where pillColor
+            // tints the pill background/border while the status dot remains semantic.
+            pillIndicator(color: statusInfo.color)
                 .opacity(statusInfo.pulse ? pulseOpacity : 1.0)
-                .shadow(color: statusInfo.pulse ? dotColor.opacity(0.6) : .clear, radius: 3)
+                .shadow(color: statusInfo.pulse ? statusInfo.color.opacity(0.6) : .clear, radius: 3)
                 .onChange(of: statusInfo.pulse) { _, shouldPulse in
                     if shouldPulse {
                         withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
@@ -239,7 +241,8 @@ struct TabRowView: View {
 
     /// Resolve the custom pill color to a SwiftUI Color. Returns nil when
     /// `tab.pillColor` is nil or cannot be parsed as a hex string.
-    private var pillColorOverride: Color? {
+    /// Used by TabListView to apply listRowBackground on the cell.
+    var pillColorValue: Color? {
         guard let hex = tab.pillColor, !hex.isEmpty else { return nil }
         return Color(hex: hex)
     }
