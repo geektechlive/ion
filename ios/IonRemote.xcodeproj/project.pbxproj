@@ -143,6 +143,7 @@
 		A1B2C3D4E5F60001004004AA /* FilePickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */; };
 		A1B2C3D4E5F60001006000AA /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001006001AA /* ToastView.swift */; };
 		A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */; };
+		A1B2C3D4E5F60001F00020AA /* EngineMessageRow+SlashBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001F00021AA /* EngineMessageRow+SlashBubble.swift */; };
 		A1B2C3D4E5F60001005100AA /* VoiceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005101AA /* VoiceService.swift */; };
 		A1B2C3D4E5F60001005110AA /* SpeechEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005111AA /* SpeechEngine.swift */; };
 		A1B2C3D4E5F60001005112AA /* LegacySpeechEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001005113AA /* LegacySpeechEngine.swift */; };
@@ -312,6 +313,7 @@
 		A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentChipsView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilePickerSheet.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineMessageRow.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001F00021AA /* EngineMessageRow+SlashBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineMessageRow+SlashBubble.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001005101AA /* VoiceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceService.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001005111AA /* SpeechEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechEngine.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001005113AA /* LegacySpeechEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacySpeechEngine.swift; sourceTree = "<group>"; };
@@ -509,6 +511,7 @@
 					A1B2C3D4E5F60001005303AA /* AttachmentImagePreview.swift */,
 					A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */,
 					A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */,
+					A1B2C3D4E5F60001F00021AA /* EngineMessageRow+SlashBubble.swift */,
 					A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */,
 					A1B2C3D4E5F60001006001AA /* ToastView.swift */,
 					A1B2C3D4E5F60001F10007AA /* ArcReactorBackground.swift */,
@@ -856,6 +859,7 @@
 				A1B2C3D4E5F60001005304AA /* RemoteImageFetcher.swift in Sources */,
 				A1B2C3D4E5F60001004004AA /* FilePickerSheet.swift in Sources */,
 				A1B2C3D4E5F60001004006AA /* EngineMessageRow.swift in Sources */,
+				A1B2C3D4E5F60001F00020AA /* EngineMessageRow+SlashBubble.swift in Sources */,
 				A1B2C3D4E5F60001006000AA /* ToastView.swift in Sources */,
 				A1B2C3D4E5F60001005100AA /* VoiceService.swift in Sources */,
 				A1B2C3D4E5F60001005110AA /* SpeechEngine.swift in Sources */,

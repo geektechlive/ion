@@ -1,4 +1,4 @@
-// @file-size-exception: unified rendering component absorbing MessageBubble and ToolGroupView; decomposition deferred to Workstream C
+// @file-size-exception: unified rendering component absorbing MessageBubble and ToolGroupView; slash-bubble decomposed to EngineMessageRow+SlashBubble.swift; further decomposition deferred to Workstream C
 import SwiftUI
 
 // MARK: - EngineMessageRow
@@ -10,7 +10,7 @@ import SwiftUI
 /// rendering: timestamps, copy/share/rewind context menus, voice overlays,
 /// blinking cursor, and attachment previews.
 struct EngineMessageRow: View {
-    @Environment(\.appTheme) private var theme
+    @Environment(\.appTheme) var theme
     let message: Message
 
     // Conversation-view enrichment params (nil = engine-view compact mode)
@@ -297,50 +297,12 @@ struct EngineMessageRow: View {
             )
     }
 
-    /// Slash-command variant of the user bubble: renders a command pill above
-    /// optional args text, reusing the same bubble chrome as `userBubbleContent`.
-    @ViewBuilder
-    private func userBubbleContentWithSlash(command: String, args: String, isBash: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Command badge pill
-            Text(command)
-                .font(.caption.monospaced().weight(.semibold))
-                .foregroundStyle(theme.accent)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(theme.accent.opacity(0.12))
-                .clipShape(Capsule())
-
-            // Args text (omitted when command has no arguments)
-            if !args.isEmpty {
-                Text(args)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, 12)
-        .padding(.vertical, 8)
-        .background(
-            ZStack {
-                Color(.tertiarySystemBackground)
-                theme.userBubbleTint
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.large))
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(theme.accent)
-                .frame(width: 2.5)
-                .padding(.vertical, 4)
-                .padding(.leading, 1)
-        }
-        .overlay(
-            isBash
-                ? RoundedRectangle(cornerRadius: IonTheme.Radius.large)
-                    .stroke(Color(hex: 0xF472B6, opacity: 0.5), lineWidth: 2)
-                : nil
-        )
-    }
+    /// Slash-command bubble: see EngineMessageRow+SlashBubble.swift for
+    /// the `userBubbleContentWithSlash` implementation and the
+    /// `parseSlashCommand` / `SlashCommandSegments` parser. The split
+    /// keeps this file under the size cap; the call sites above
+    /// (`conversationUserBubble`, `engineUserBubble`) invoke the
+    /// extension method by name.
 
     // MARK: - Assistant
 
@@ -715,33 +677,6 @@ struct EngineMessageRow: View {
             }
         }
     }
-}
-
-// MARK: - Slash command parsing
-
-/// Result of parsing a leading slash command from a user message.
-struct SlashCommandSegments {
-    var command: String
-    var args: String
-}
-
-private let slashCommandPattern: NSRegularExpression = {
-    return try! NSRegularExpression(pattern: #"^\/([a-zA-Z][a-zA-Z0-9_:-]*)\s*([\s\S]*)$"#)
-}()
-
-/// Parses a leading slash command from `text`.
-/// Returns `nil` when the text doesn't start with a recognisable `/command`.
-/// Requires the command name to begin with a letter so filesystem paths
-/// like `/usr/bin/foo` (multiple slash segments) never match.
-func parseSlashCommand(_ text: String) -> SlashCommandSegments? {
-    let ns = text as NSString
-    let range = NSRange(location: 0, length: ns.length)
-    guard let match = slashCommandPattern.firstMatch(in: text, range: range),
-          match.numberOfRanges >= 3
-    else { return nil }
-    let cmd = "/\(ns.substring(with: match.range(at: 1)))"
-    let args = ns.substring(with: match.range(at: 2))
-    return SlashCommandSegments(command: cmd, args: args)
 }
 
 // MARK: - Attachment marker parsing
