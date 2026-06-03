@@ -13,6 +13,19 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.34.1](https://github.com/dsswift/ion/compare/engine-v1.34.0...engine-v1.34.1) (2026-06-03)
+
+### Bug Fixes
+
+* **engine:** preserve corrected agent display names ([af89801](https://github.com/dsswift/ion/commit/af89801870f9ee3be19e87aacd116d7ca3b5923b))
+* **engine:** structurally dedupe compaction summaries ([806f298](https://github.com/dsswift/ion/commit/806f2985cccca8a8614b4f759f7a8924f6f12dfb))
+* **engine:** pin compact_boundary wire and persistence contracts ([100c9fb](https://github.com/dsswift/ion/commit/100c9fb155bd0c931dd602b22c55dff60a28cf37))
+* **engine:** thread compact strategy through OnRequestCompactSummary ([781dc72](https://github.com/dsswift/ion/commit/781dc72cf1ec031a069d84e1bdeae63c368c3736))
+* **engine:** add proactive-path compact_boundary injection test ([2466d54](https://github.com/dsswift/ion/commit/2466d5443a0670918da9206dec244607810edc5f))
+* **engine:** cover FireCompactSummaryRequest fan-out return shapes ([7703d40](https://github.com/dsswift/ion/commit/7703d40647be26f34b8d7e347ccdc3d66cac448d))
+* **engine:** unwrap _payload in SDK runtime for string hook payloads (#170) ([88231df](https://github.com/dsswift/ion/commit/88231df66d2f624c0a5d680410c90e3d88360b66))
+* **engine:** deduplicate tool names in dispatched agent sessions (#171) ([9432f13](https://github.com/dsswift/ion/commit/9432f13fba62be4a6676196ce83135ea34707b94))
+
 ## [1.34.0](https://github.com/dsswift/ion/compare/engine-v1.33.0...engine-v1.34.0) (2026-06-02)
 
 ### Features

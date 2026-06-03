@@ -10,6 +10,16 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.35.0](https://github.com/dsswift/ion/compare/ios-v1.34.0...ios-v1.35.0) (2026-06-03)
+
+### Features
+
+* **ios:** add fuzzy matching for slash commands ([b227651](https://github.com/dsswift/ion/commit/b227651a00a634eaa540b78e87d755b5ead7da92))
+
+### Bug Fixes
+
+* **ios:** replace markdown parser to fix truncation ([25a3649](https://github.com/dsswift/ion/commit/25a364914dfc002f0ffbec70677f82c9a28183e4))
+
 ## [1.34.0](https://github.com/dsswift/ion/compare/ios-v1.33.0...ios-v1.34.0) (2026-06-02)
 
 ### Features

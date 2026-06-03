@@ -10,6 +10,17 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.48.0](https://github.com/dsswift/ion/compare/desktop-v1.47.0...desktop-v1.48.0) (2026-06-03)
+
+### Features
+
+* **desktop:** add fuzzy matching for slash commands ([0fd88d0](https://github.com/dsswift/ion/commit/0fd88d06968ef427103464e2f5647c16fc04c2c2))
+* **desktop:** mirror LlmContentBlock with compact_boundary fields ([629613c](https://github.com/dsswift/ion/commit/629613c6cd65f7eabab9f077ae755a28d782493f))
+
+### Bug Fixes
+
+* **desktop:** remove silent 10 KB truncation of non-tool messages ([dd21c68](https://github.com/dsswift/ion/commit/dd21c689cb0945bdb90ad25128240076cf6081ab))
+
 ## [1.47.0](https://github.com/dsswift/ion/compare/desktop-v1.46.0...desktop-v1.47.0) (2026-06-02)
 
 ### Features
