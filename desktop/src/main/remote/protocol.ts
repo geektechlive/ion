@@ -92,6 +92,14 @@ export type RemoteCommand =
   | { type: 'respond_permission'; tabId: string; questionId: string; optionId: string }
   | { type: 'set_permission_mode'; tabId: string; mode: 'auto' | 'plan' }
   | { type: 'reset_tab_session'; tabId: string }
+  // Engine-instance counterpart to reset_tab_session: stops the engine
+  // session keyed by `${tabId}:${instanceId}` and wipes the renderer-side
+  // per-instance state (messages, status, dialogs, etc.) without removing
+  // the instance pane itself. iOS sends this for engine tabs when the
+  // user picks "Implement, clear context" on the plan-approval card —
+  // `reset_tab_session` only addresses the CLI session plane and silently
+  // misses engine instances.
+  | { type: 'reset_engine_session'; tabId: string; instanceId: string }
   | { type: 'load_conversation'; tabId: string; before?: string }
   | { type: 'terminal_input'; tabId: string; instanceId: string; data: string }
   | { type: 'terminal_resize'; tabId: string; instanceId: string; cols: number; rows: number }
