@@ -13,6 +13,13 @@ enum RemoteCommand: Codable, Sendable {
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
     case resetTabSession(tabId: String)
+    /// Engine-instance counterpart to `resetTabSession` — stops the engine
+    /// session keyed by `${tabId}:${instanceId}` and wipes the renderer-side
+    /// per-instance state (messages, status, dialogs, etc.). Used by the
+    /// "Implement, clear context" flow on engine tabs. `resetTabSession`
+    /// only addresses the CLI session plane and silently misses engine
+    /// instances, so engine tabs must send this variant instead.
+    case resetEngineSession(tabId: String, instanceId: String)
     /// User-typed prompt routed to the desktop's prompt pipeline.
     ///
     /// iOS does NOT carry the harness-supplied EnterPlanMode tool
@@ -128,6 +135,7 @@ enum RemoteCommand: Codable, Sendable {
         case createTerminalTab = "create_terminal_tab"
         case closeTab = "close_tab"
         case resetTabSession = "reset_tab_session"
+        case resetEngineSession = "reset_engine_session"
         case prompt
         case cancel
         case respondPermission = "respond_permission"
@@ -249,6 +257,11 @@ enum RemoteCommand: Codable, Sendable {
         case .resetTabSession:
             let tabId = try container.decode(String.self, forKey: .tabId)
             self = .resetTabSession(tabId: tabId)
+
+        case .resetEngineSession:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decode(String.self, forKey: .instanceId)
+            self = .resetEngineSession(tabId: tabId, instanceId: instanceId)
 
         case .prompt:
             let tabId = try container.decode(String.self, forKey: .tabId)

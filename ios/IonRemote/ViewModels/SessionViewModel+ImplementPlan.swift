@@ -40,6 +40,23 @@ extension SessionViewModel {
     /// engine-side `implementationPhase=true` flag is set regardless of
     /// `clearContext`, because the engine concern (don't let the model
     /// re-propose plan mode) applies to both branches.
+    ///
+    /// When `clearContext == true`, the reset command sent to the desktop
+    /// depends on the tab kind:
+    ///
+    ///   - CLI tabs send `.resetTabSession(tabId)`, which the desktop
+    ///     routes to `sessionPlane.resetTabSession()` → `bridge.stopSession(tabId)`.
+    ///   - Engine tabs send `.resetEngineSession(tabId, instanceId)`, which
+    ///     the desktop routes to `handleResetEngineSession` →
+    ///     `bridge.stopSession(`${tabId}:${instanceId}`)` and a renderer
+    ///     IPC that wipes per-instance state Maps.
+    ///
+    /// Both reset paths leave the tab/instance entry intact and seed a
+    /// fresh "Session started" divider so the user sees where the reset
+    /// boundary fell. CLI and engine tabs are now symmetric — earlier
+    /// versions of this file documented an "engine-tab caveat" because
+    /// `resetTabSession` only addressed the CLI plane; that gap is closed
+    /// by the dedicated `reset_engine_session` wire command.
     func implementPlan(tabId: String, prompt: String, clearContext: Bool = false) {
         let isEngine = tabs.first(where: { $0.id == tabId })?.isEngine == true
         let instanceId = isEngine ? activeEngineInstance[tabId] ?? engineInstances[tabId]?.first?.id : nil
@@ -62,16 +79,18 @@ extension SessionViewModel {
                     // history, and the restricted tool list. Matches the
                     // desktop's onImplement(true) flow.
                     //
-                    // Engine-tab caveat: the desktop side does not yet wire
-                    // up an `engineResetSession` for the engine-instance
-                    // conversation, so for engine tabs the desktop logs a
-                    // warning and falls back to no-reset. The iOS side
-                    // sends the command anyway — the desktop is the
-                    // authority on whether the engine instance can be
-                    // reset, and a future API addition will close the gap
-                    // without changing this iOS path.
-                    ionLog.info("implementPlan: tabId=\(tabId.prefix(8), privacy: .public) clearContext=true — sending resetTabSession")
-                    try await transport.send(.resetTabSession(tabId: tabId))
+                    // Engine tabs get the dedicated `reset_engine_session`
+                    // wire command which carries the instanceId and routes
+                    // to `bridge.stopSession(`${tabId}:${instanceId}`)` on
+                    // the desktop. CLI tabs continue to use `reset_tab_session`
+                    // which addresses the CLI session plane.
+                    if isEngine, let instanceId {
+                        ionLog.info("implementPlan: tabId=\(tabId.prefix(8), privacy: .public) instanceId=\(instanceId.prefix(8), privacy: .public) clearContext=true — sending resetEngineSession")
+                        try await transport.send(.resetEngineSession(tabId: tabId, instanceId: instanceId))
+                    } else {
+                        ionLog.info("implementPlan: tabId=\(tabId.prefix(8), privacy: .public) clearContext=true — sending resetTabSession")
+                        try await transport.send(.resetTabSession(tabId: tabId))
+                    }
                 } else {
                     // Default: preserve the conversation. The
                     // setPermissionMode below drops plan-mode state on the

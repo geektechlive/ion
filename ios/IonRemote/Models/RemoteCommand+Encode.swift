@@ -26,6 +26,11 @@ extension RemoteCommand {
             try container.encode(TypeKey.resetTabSession, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
+        case .resetEngineSession(let tabId, let instanceId):
+            try container.encode(TypeKey.resetEngineSession, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(instanceId, forKey: .instanceId)
+
         case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments, let implementationPhase):
             try container.encode(TypeKey.prompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)

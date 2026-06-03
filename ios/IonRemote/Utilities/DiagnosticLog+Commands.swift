@@ -22,6 +22,8 @@ extension DiagnosticLog {
 
         case .resetTabSession(let tabId):
             log("CMD: resetTabSession tabId=\(tabId.prefix(8))")
+        case .resetEngineSession(let tabId, let instanceId):
+            log("CMD: resetEngineSession tabId=\(tabId.prefix(8)) instanceId=\(instanceId.prefix(8))")
 
         case .prompt(let tabId, let text, _, let clientMsgId, let attachments, _):
             log("CMD: prompt tabId=\(tabId.prefix(8)) len=\(text.count) msgId=\(clientMsgId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
