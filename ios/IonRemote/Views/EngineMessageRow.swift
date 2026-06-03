@@ -161,11 +161,25 @@ struct EngineMessageRow: View {
 
                 if !segments.text.isEmpty {
                     let cap = UIScreen.main.bounds.width * 0.8
+                    let isBash = message.content.hasPrefix("! ")
+                    let slash = parseSlashCommand(segments.text)
                     ViewThatFits(in: .horizontal) {
-                        userBubbleContent(text: segments.text, isBash: message.content.hasPrefix("! "))
-                            .fixedSize(horizontal: true, vertical: true)
-                        userBubbleContent(text: segments.text, isBash: message.content.hasPrefix("! "))
-                            .fixedSize(horizontal: false, vertical: true)
+                        Group {
+                            if let slash {
+                                userBubbleContentWithSlash(command: slash.command, args: slash.args, isBash: isBash)
+                            } else {
+                                userBubbleContent(text: segments.text, isBash: isBash)
+                            }
+                        }
+                        .fixedSize(horizontal: true, vertical: true)
+                        Group {
+                            if let slash {
+                                userBubbleContentWithSlash(command: slash.command, args: slash.args, isBash: isBash)
+                            } else {
+                                userBubbleContent(text: segments.text, isBash: isBash)
+                            }
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: cap, alignment: .trailing)
                 }
@@ -227,11 +241,24 @@ struct EngineMessageRow: View {
 
                 if !segments.text.isEmpty {
                     let cap = UIScreen.main.bounds.width * 0.8
+                    let slash = parseSlashCommand(segments.text)
                     ViewThatFits(in: .horizontal) {
-                        userBubbleContent(text: segments.text, isBash: false)
-                            .fixedSize(horizontal: true, vertical: true)
-                        userBubbleContent(text: segments.text, isBash: false)
-                            .fixedSize(horizontal: false, vertical: true)
+                        Group {
+                            if let slash {
+                                userBubbleContentWithSlash(command: slash.command, args: slash.args, isBash: false)
+                            } else {
+                                userBubbleContent(text: segments.text, isBash: false)
+                            }
+                        }
+                        .fixedSize(horizontal: true, vertical: true)
+                        Group {
+                            if let slash {
+                                userBubbleContentWithSlash(command: slash.command, args: slash.args, isBash: false)
+                            } else {
+                                userBubbleContent(text: segments.text, isBash: false)
+                            }
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: cap, alignment: .trailing)
                 }
@@ -268,6 +295,51 @@ struct EngineMessageRow: View {
                         .stroke(Color(hex: 0xF472B6, opacity: 0.5), lineWidth: 2)
                     : nil
             )
+    }
+
+    /// Slash-command variant of the user bubble: renders a command pill above
+    /// optional args text, reusing the same bubble chrome as `userBubbleContent`.
+    @ViewBuilder
+    private func userBubbleContentWithSlash(command: String, args: String, isBash: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Command badge pill
+            Text(command)
+                .font(.caption.monospaced().weight(.semibold))
+                .foregroundStyle(theme.accent)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(theme.accent.opacity(0.12))
+                .clipShape(Capsule())
+
+            // Args text (omitted when command has no arguments)
+            if !args.isEmpty {
+                Text(args)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 12)
+        .padding(.vertical, 8)
+        .background(
+            ZStack {
+                Color(.tertiarySystemBackground)
+                theme.userBubbleTint
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.large))
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(theme.accent)
+                .frame(width: 2.5)
+                .padding(.vertical, 4)
+                .padding(.leading, 1)
+        }
+        .overlay(
+            isBash
+                ? RoundedRectangle(cornerRadius: IonTheme.Radius.large)
+                    .stroke(Color(hex: 0xF472B6, opacity: 0.5), lineWidth: 2)
+                : nil
+        )
     }
 
     // MARK: - Assistant
@@ -623,6 +695,33 @@ struct EngineMessageRow: View {
             Spacer()
         }
     }
+}
+
+// MARK: - Slash command parsing
+
+/// Result of parsing a leading slash command from a user message.
+struct SlashCommandSegments {
+    var command: String
+    var args: String
+}
+
+private let slashCommandPattern: NSRegularExpression = {
+    return try! NSRegularExpression(pattern: #"^\/([a-zA-Z][a-zA-Z0-9_:-]*)\s*([\s\S]*)$"#)
+}()
+
+/// Parses a leading slash command from `text`.
+/// Returns `nil` when the text doesn't start with a recognisable `/command`.
+/// Requires the command name to begin with a letter so filesystem paths
+/// like `/usr/bin/foo` (multiple slash segments) never match.
+func parseSlashCommand(_ text: String) -> SlashCommandSegments? {
+    let ns = text as NSString
+    let range = NSRange(location: 0, length: ns.length)
+    guard let match = slashCommandPattern.firstMatch(in: text, range: range),
+          match.numberOfRanges >= 3
+    else { return nil }
+    let cmd = "/\(ns.substring(with: match.range(at: 1)))"
+    let args = ns.substring(with: match.range(at: 2))
+    return SlashCommandSegments(command: cmd, args: args)
 }
 
 // MARK: - Attachment marker parsing
