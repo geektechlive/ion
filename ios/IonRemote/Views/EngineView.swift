@@ -83,9 +83,6 @@ struct EngineView: View {
         visibleAgents.filter { $0.status == "running" }.count
     }
 
-    private var activeToolsList: [ActiveToolInfo] {
-        (viewModel.activeTools[compoundKey] ?? [:]).values.sorted { $0.startTime < $1.startTime }
-    }
     private var engineMsgs: [Message] {
         viewModel.engineMessages[compoundKey] ?? []
     }
@@ -443,16 +440,6 @@ struct EngineView: View {
             } else {
                 conversationScroll
                     .frame(height: 100)
-            }
-
-            if !activeToolsList.isEmpty {
-                VStack(spacing: 4) {
-                    ForEach(activeToolsList) { tool in
-                        ActiveToolRow(tabId: tabId, tool: tool)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
             }
 
             if let request = pendingPermission {

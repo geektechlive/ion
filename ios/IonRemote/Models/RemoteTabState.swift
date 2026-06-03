@@ -89,8 +89,9 @@ struct PermissionRequest: Codable, Identifiable, Sendable {
 // MARK: - ActiveToolInfo
 
 /// Tracks a tool call that is currently executing on the engine.
-/// Used by the iOS app to display active tool cards with elapsed time
-/// and an abort button when the tool appears stalled.
+/// Used by ConversationView to derive the activity indicator text
+/// (e.g. "Running Bash…"). The isStalled flag is retained for potential
+/// future use in the activity indicator.
 struct ActiveToolInfo: Identifiable {
     let id: String        // toolId from the engine
     let toolName: String
