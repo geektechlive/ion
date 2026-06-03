@@ -221,6 +221,9 @@ extension SessionViewModel {
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
             activeTools[key]?[toolId]?.isStalled = true
 
+        case .engineSteerInjected(let tabId, let instanceId, let messageLength):
+            handleEngineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
+
         case .engineError(let tabId, let instanceId, let message):
             handleEngineError(tabId: tabId, instanceId: instanceId, message: message)
 

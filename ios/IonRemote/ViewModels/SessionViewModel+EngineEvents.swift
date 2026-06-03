@@ -40,6 +40,26 @@ extension SessionViewModel {
     }
 
     @MainActor
+    func handleEngineSteerInjected(tabId: String, instanceId: String?, messageLength: Int) {
+        // Engine drained a mid-turn steer into the conversation. Mirror
+        // the desktop's "Steer applied" divider so the user sees
+        // confirmation across both clients. messageLength is included so
+        // the user can tell a short nudge from a long steer at a glance.
+        // The engine may emit this multiple times per turn (between
+        // turns, before end_turn exit, after tool results); each capture
+        // produces its own divider so the count is visible.
+        let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
+        var msgs = engineMessages[key] ?? []
+        let time = Date()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        let timeStr = formatter.string(from: time)
+        let content = "── Steer applied at \(timeStr) · \(messageLength) chars ──"
+        msgs.append(Message(id: UUID().uuidString, role: .system, content: content, timestamp: time.timeIntervalSince1970 * 1000))
+        engineMessages[key] = msgs
+    }
+
+    @MainActor
     func handleEngineToolStart(tabId: String, instanceId: String?, toolName: String, toolId: String) {
         DiagnosticLog.log("ENGINE: tool-start tabId=\(tabId.prefix(8)) tool=\(toolName) toolId=\(toolId.prefix(8))")
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId

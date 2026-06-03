@@ -53,6 +53,12 @@ extension RemoteEvent {
             let elapsed = try container.decode(Double.self, forKey: .elapsed)
             return .engineToolStalled(tabId: tabId, instanceId: instanceId, toolId: toolId, toolName: toolName, elapsed: elapsed)
 
+        case .engineSteerInjected:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let messageLength = try container.decode(Int.self, forKey: .steerMessageLength)
+            return .engineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
+
         case .engineError:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
@@ -338,6 +344,13 @@ extension RemoteEvent {
             try container.encode(toolId, forKey: .toolId)
             try container.encode(toolName, forKey: .toolName)
             try container.encode(elapsed, forKey: .elapsed)
+            return true
+
+        case .engineSteerInjected(let tabId, let instanceId, let messageLength):
+            try container.encode(TypeKey.engineSteerInjected, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(messageLength, forKey: .steerMessageLength)
             return true
 
         case .engineError(let tabId, let instanceId, let message):

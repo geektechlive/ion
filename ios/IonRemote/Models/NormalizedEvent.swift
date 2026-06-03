@@ -57,6 +57,14 @@ enum RemoteEvent: Codable, Sendable {
     case engineToolStart(tabId: String, instanceId: String?, toolName: String, toolId: String)
     case engineToolEnd(tabId: String, instanceId: String?, toolId: String, result: String?, isError: Bool)
     case engineToolStalled(tabId: String, instanceId: String?, toolId: String, toolName: String, elapsed: Double)
+    /// Engine drained a mid-turn steer message into the conversation as
+    /// a user turn before the next LLM call. The desktop renders a
+    /// "Steer applied" divider into the engineMessages scrollback; iOS
+    /// mirrors the same divider so the user sees confirmation across
+    /// both clients. The body is not carried over the wire — the steer
+    /// message is already part of the conversation. See the Go-side
+    /// SteerInjectedEvent and the TS engine_steer_injected variant.
+    case engineSteerInjected(tabId: String, instanceId: String?, messageLength: Int)
     case engineError(tabId: String, instanceId: String?, message: String)
     case engineNotify(tabId: String, instanceId: String?, message: String, level: String, metadata: [String: AnyCodable]?)
     case engineDialog(tabId: String, instanceId: String?, dialogId: String, method: String, title: String, options: [String]?, defaultValue: String?)
@@ -252,6 +260,7 @@ enum RemoteEvent: Codable, Sendable {
         case engineToolStart = "engine_tool_start"
         case engineToolEnd = "engine_tool_end"
         case engineToolStalled = "engine_tool_stalled"
+        case engineSteerInjected = "engine_steer_injected"
         case engineError = "engine_error"
         case engineNotify = "engine_notify"
         case engineDialog = "engine_dialog"
@@ -323,6 +332,9 @@ enum RemoteEvent: Codable, Sendable {
         case customName, customIcon, updatedAt, remoteDisplayUpdatedAt
         // engine_plan_mode_changed — state event for plan-mode entry/exit.
         case planModeEnabled
+        // engine_steer_injected — mid-turn steer drain confirmation.
+        // Mirrors EngineEvent.SteerMessageLength's JSON tag.
+        case steerMessageLength
         // engine_plan_proposal — workflow event for plan-mode proposals.
         // The engine emits these field names (no instanceId; the proposal
         // is always at the tab level, not per-instance).
