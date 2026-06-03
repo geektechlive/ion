@@ -685,14 +685,34 @@ struct EngineMessageRow: View {
         .padding(.vertical, 6)
     }
 
-    /// Engine-view system bubble: plain centered text, no dividers.
+    /// Engine-view system bubble: divider-flanked for lifecycle markers (`──`
+    /// prefix), plain centered text for errors/notifications/death messages.
     private var engineSystemBubble: some View {
-        HStack {
-            Spacer()
-            Text(message.content)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Spacer()
+        Group {
+            if message.content.hasPrefix("──") {
+                // Lifecycle divider (session-start, plan-created, implementing)
+                // — render with horizontal rules matching conversationSystemBubble.
+                HStack(spacing: 8) {
+                    VStack { Divider() }
+                    Text(message.content)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .layoutPriority(1)
+                    VStack { Divider() }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 6)
+            } else {
+                HStack {
+                    Spacer()
+                    Text(message.content)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+            }
         }
     }
 }

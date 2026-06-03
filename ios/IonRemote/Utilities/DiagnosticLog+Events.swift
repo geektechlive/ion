@@ -154,6 +154,9 @@ extension DiagnosticLog {
         case .engineProfiles(let profiles):
             log("EVENT: engineProfiles count=\(profiles.count)")
 
+        case .enginePlanModeChanged(let tabId, let instId, let enabled, let path, let slug):
+            log("EVENT: enginePlanModeChanged tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") enabled=\(enabled) path=\(path?.suffix(40) ?? "nil") slug=\(slug ?? "nil")")
+
         case .enginePlanProposal(let tabId, let instId, let kind, let path, _):
             // Workflow event from the engine — iOS does not act on this
             // (the desktop is the authoritative consumer for plan-proposal

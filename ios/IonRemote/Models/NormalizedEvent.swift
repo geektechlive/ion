@@ -77,11 +77,17 @@ enum RemoteEvent: Codable, Sendable {
     case agentConversationHistory(agentName: String, conversationId: String?, messages: [Message])
     case engineModelOverride(tabId: String, instanceId: String?, model: String)
     case engineProfiles(profiles: [EngineProfile])
+    /// State event: the engine session has entered or exited plan mode.
+    /// `planModeEnabled: true` is authoritative (model called EnterPlanMode
+    /// and the session confirmed). iOS uses this to insert a "Plan created"
+    /// lifecycle divider into the engine conversation. `planModeEnabled: false`
+    /// is a proposal — the actual exit is gated by the user-approval
+    /// chokepoint on the desktop (the "Implement" button).
+    case enginePlanModeChanged(tabId: String, instanceId: String?, planModeEnabled: Bool, planFilePath: String?, planSlug: String?)
     /// Workflow event from the engine: the model has proposed a plan-mode
-    /// transition (currently only kind="exit"). iOS does not yet act on
-    /// this — the desktop is the authoritative consumer that renders the
-    /// approval card — but iOS decodes the variant cleanly so the wire
-    /// protocol stays uniform across consumers. See
+    /// transition (currently only kind="exit"). iOS uses this to render
+    /// plan-proposal cards — the desktop is the authoritative consumer
+    /// that gates approval. See
     /// docs/architecture/adr/003-state-events-vs-workflow-events.md.
     case enginePlanProposal(tabId: String, instanceId: String?, kind: String, planFilePath: String?, planSlug: String?)
     /// Engine ↔ harness wire-protocol request emitted when the engine wants
@@ -261,6 +267,7 @@ enum RemoteEvent: Codable, Sendable {
         case agentConversationHistory = "agent_conversation_history"
         case engineModelOverride = "engine_model_override"
         case engineProfiles = "engine_profiles"
+        case enginePlanModeChanged = "engine_plan_mode_changed"
         case enginePlanProposal = "engine_plan_proposal"
         case engineEarlyStopDecisionRequest = "engine_early_stop_decision_request"
         case engineCommandRegistry = "engine_command_registry"
@@ -314,9 +321,12 @@ enum RemoteEvent: Codable, Sendable {
         case attachments
         case sourceTabId, targetTabId
         case customName, customIcon, updatedAt, remoteDisplayUpdatedAt
+        // engine_plan_mode_changed — state event for plan-mode entry/exit.
+        case planModeEnabled
         // engine_plan_proposal — workflow event for plan-mode proposals.
         // The engine emits these field names (no instanceId; the proposal
         // is always at the tab level, not per-instance).
+        // planFilePath and planSlug are shared with engine_plan_mode_changed.
         case planProposalKind, planFilePath, planSlug
         // engine_early_stop_decision_request — wire-protocol request the
         // engine emits when it wants an external opinion on continuation.

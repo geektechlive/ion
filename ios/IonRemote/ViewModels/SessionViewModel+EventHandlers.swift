@@ -242,10 +242,10 @@ extension SessionViewModel {
             handleEngineMessageEnd(tabId: tabId, instanceId: instanceId, inputTokens: inputTokens, contextPercent: contextPercent)
 
         case .engineHarnessMessage(let tabId, let instanceId, let message, _, _):
-            let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-            var msgs = engineMessages[key] ?? []
-            msgs.append(Message(id: UUID().uuidString, role: .harness, content: message, timestamp: Date().timeIntervalSince1970 * 1000))
-            engineMessages[key] = msgs
+            handleEngineHarnessMessage(tabId: tabId, instanceId: instanceId, message: message)
+
+        case .enginePlanModeChanged(let tabId, let instanceId, let planModeEnabled, _, let planSlug):
+            handleEnginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planSlug: planSlug)
 
         case .engineConversationHistory(let tabId, let instanceId, let messages):
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
