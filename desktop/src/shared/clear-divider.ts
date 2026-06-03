@@ -63,6 +63,22 @@ export function isPlanCreatedDivider(content: string): boolean {
 }
 
 /**
+ * Format the divider system message inserted into scrollback when the
+ * engine confirms a mid-turn steer message was injected into the
+ * conversation. `messageLength` is included so the user can distinguish
+ * a one-word nudge from a multi-sentence steer at a glance.
+ */
+export function formatSteerAppliedDivider(at: Date, messageLength: number): string {
+  const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  return `── Steer applied at ${time} · ${messageLength} chars ──`
+}
+
+/** Sentinel-prefix check for steer-applied dividers. */
+export function isSteerAppliedDivider(content: string): boolean {
+  return content.startsWith('── Steer applied')
+}
+
+/**
  * Build the `RemoteEvent` envelope used to mirror a `/clear` divider to
  * connected remote (iOS) clients. The envelope kind depends on the engine
  * session key shape:

@@ -3,6 +3,7 @@
  *
  * `formatClearDivider`, `isClearDivider`, `formatSessionStartDivider`,
  * `formatPlanCreatedDivider`, `isPlanCreatedDivider`,
+ * `formatSteerAppliedDivider`, `isSteerAppliedDivider`,
  * `buildClearDividerRemoteEvent`, and `buildDividerRemoteEvent`
  * are the contract surface that keeps divider paths
  * (desktop CLI, desktop engine, iOS CLI, iOS engine) producing the same
@@ -17,6 +18,8 @@ import {
   formatSessionStartDivider,
   formatPlanCreatedDivider,
   isPlanCreatedDivider,
+  formatSteerAppliedDivider,
+  isSteerAppliedDivider,
   buildClearDividerRemoteEvent,
   buildDividerRemoteEvent,
 } from '../clear-divider'
@@ -155,6 +158,39 @@ describe('isPlanCreatedDivider', () => {
     expect(isPlanCreatedDivider(formatSessionStartDivider(new Date()))).toBe(false)
     expect(isPlanCreatedDivider('Error: something')).toBe(false)
     expect(isPlanCreatedDivider('')).toBe(false)
+  })
+})
+
+describe('formatSteerAppliedDivider', () => {
+  it('emits the `── Steer applied at <time> · <N> chars ──` shape', () => {
+    const out = formatSteerAppliedDivider(new Date('2024-01-01T15:42:00'), 27)
+    expect(out.startsWith('── Steer applied at ')).toBe(true)
+    expect(out.includes(' · 27 chars ──')).toBe(true)
+  })
+
+  it('starts with the generic `──` prefix used for divider rendering', () => {
+    expect(formatSteerAppliedDivider(new Date(), 1).startsWith('──')).toBe(true)
+  })
+
+  it('is detected by isSteerAppliedDivider', () => {
+    expect(isSteerAppliedDivider(formatSteerAppliedDivider(new Date(), 42))).toBe(true)
+  })
+
+  it('is not detected as a clear/plan-created/session-start divider', () => {
+    const out = formatSteerAppliedDivider(new Date(), 42)
+    expect(isClearDivider(out)).toBe(false)
+    expect(isPlanCreatedDivider(out)).toBe(false)
+  })
+})
+
+describe('isSteerAppliedDivider', () => {
+  it('rejects unrelated dividers and system messages', () => {
+    expect(isSteerAppliedDivider(formatClearDivider(new Date()))).toBe(false)
+    expect(isSteerAppliedDivider(formatImplementDivider(new Date()))).toBe(false)
+    expect(isSteerAppliedDivider(formatSessionStartDivider(new Date()))).toBe(false)
+    expect(isSteerAppliedDivider(formatPlanCreatedDivider(new Date()))).toBe(false)
+    expect(isSteerAppliedDivider('Error: something')).toBe(false)
+    expect(isSteerAppliedDivider('')).toBe(false)
   })
 })
 

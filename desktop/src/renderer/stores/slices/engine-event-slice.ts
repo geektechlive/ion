@@ -1,6 +1,6 @@
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
-import { formatClearDivider, formatPlanCreatedDivider } from '../../../shared/clear-divider'
+import { formatClearDivider, formatPlanCreatedDivider, formatSteerAppliedDivider } from '../../../shared/clear-divider'
 import { handleEngineStatusEvent } from './engine-event-status'
 
 /**
@@ -499,6 +499,27 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
               return { engineMessages: messages }
             })
           }
+          break
+        }
+        case 'engine_steer_injected': {
+          // The engine drained a mid-turn steer message into the
+          // conversation as a user turn. Insert a divider so the user
+          // can see where their steer landed in the scrollback. The
+          // engine emits this from three checkpoints (between turns,
+          // before end_turn exit, after tool results) — each capture
+          // gets its own divider so the user sees the count.
+          set((state) => {
+            const messages = new Map(state.engineMessages)
+            const msgs = [...(messages.get(key) || [])]
+            msgs.push({
+              id: nextMsgId(),
+              role: 'system' as const,
+              content: formatSteerAppliedDivider(new Date(), event.steerMessageLength),
+              timestamp: Date.now(),
+            })
+            messages.set(key, msgs)
+            return { engineMessages: messages }
+          })
           break
         }
       }

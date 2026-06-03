@@ -254,6 +254,18 @@ export function handleEngineEvent(
       } as NormalizedEvent)
       break
 
+    case 'engine_steer_injected':
+      // Mid-turn steer-drain confirmation. The runloop captures a steer
+      // message between turns, inside the end_turn checkpoint, or after
+      // tool execution; this event tells consumers the steer landed in
+      // the conversation as a user turn before the next LLM call.
+      log(`steer_injected: tabId=${tabId} messageLength=${event.steerMessageLength}`)
+      ctx.emit('event', tabId, {
+        type: 'steer_injected',
+        messageLength: event.steerMessageLength,
+      } as NormalizedEvent)
+      break
+
     case 'engine_agent_state':
       ctx.emit('event', tabId, event as any)
       break
