@@ -88,6 +88,69 @@ func TestSDK_RegisterTool(t *testing.T) {
 	}
 }
 
+func TestSDK_RegisterTool_DeduplicatesOnRespawn(t *testing.T) {
+	sdk := NewSDK()
+
+	// Simulate initial load: register two tools.
+	sdk.RegisterTool(ToolDefinition{
+		Name:        "alpha",
+		Description: "first version",
+	})
+	sdk.RegisterTool(ToolDefinition{
+		Name:        "beta",
+		Description: "beta tool",
+	})
+
+	// Simulate respawn: same tools re-registered.
+	sdk.RegisterTool(ToolDefinition{
+		Name:        "alpha",
+		Description: "second version",
+	})
+	sdk.RegisterTool(ToolDefinition{
+		Name:        "beta",
+		Description: "beta tool again",
+	})
+
+	tools := sdk.Tools()
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools after re-registration, got %d", len(tools))
+	}
+	if tools[0].Description != "second version" {
+		t.Fatalf("expected updated description, got %q", tools[0].Description)
+	}
+}
+
+func TestExtensionGroup_Tools_DeduplicatesAcrossHosts(t *testing.T) {
+	g := NewExtensionGroup()
+
+	h1 := NewHost()
+	h1.SDK().RegisterTool(ToolDefinition{Name: "shared_tool", Description: "from host1"})
+	h1.SDK().RegisterTool(ToolDefinition{Name: "only_h1", Description: "unique"})
+
+	h2 := NewHost()
+	h2.SDK().RegisterTool(ToolDefinition{Name: "shared_tool", Description: "from host2"})
+	h2.SDK().RegisterTool(ToolDefinition{Name: "only_h2", Description: "unique"})
+
+	g.Add(h1)
+	g.Add(h2)
+
+	tools := g.Tools()
+	if len(tools) != 3 {
+		names := make([]string, len(tools))
+		for i, tool := range tools {
+			names[i] = tool.Name
+		}
+		t.Fatalf("expected 3 unique tools, got %d: %v", len(tools), names)
+	}
+
+	// Last-registered wins for shared_tool.
+	for _, tool := range tools {
+		if tool.Name == "shared_tool" && tool.Description != "from host2" {
+			t.Fatalf("expected last-registered to win, got description=%q", tool.Description)
+		}
+	}
+}
+
 func TestSDK_RegisterCommand(t *testing.T) {
 	sdk := NewSDK()
 

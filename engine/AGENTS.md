@@ -135,7 +135,7 @@ Optional (harness opt-in): TaskCreate, TaskList, TaskGet, TaskStop.
 
 ## Hooks
 
-66 total: 13 lifecycle + 5 session + 2 pre-action + 2 early-stop + 7 content + 14 per-tool + 3 context + 3 permission + 1 file + 1 workspace + 2 task + 2 elicitation + 4 plan-mode/system-inject + 1 context-inject + 3 capability + 4 extension-lifecycle.
+67 total: 13 lifecycle + 6 session + 2 pre-action + 2 early-stop + 7 content + 14 per-tool + 3 context + 3 permission + 1 file + 1 workspace + 2 task + 2 elicitation + 4 plan-mode/system-inject + 1 context-inject + 3 capability + 4 extension-lifecycle.
 
 The `before_plan_mode_enter`, `before_plan_mode_exit`, `system_inject`, `before_early_stop_decision`, `early_stop_continued`, `before_provider_request`, and `workspace_file_changed` hooks are recent additions; consult `docs/hooks/reference.md` for the canonical breakdown and per-hook payload shapes.
 

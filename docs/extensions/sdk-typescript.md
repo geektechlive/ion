@@ -378,6 +378,27 @@ ion.hook('turn_end', async (info, ctx) => {
 
 Useful for: replacing the engine's default summarization with a custom strategy (e.g. vector-store-backed, domain-specific extraction, or multi-modal summarization).
 
+**`compact_summary_request` hook** -- substitute a harness-side summariser for the engine's regex fact extractor. The hook fires inside proactive (auto) and reactive (prompt_too_long) compaction, after the session-memory and LLM tiers and before the regex fallback. The handler receives the compaction strategy (`'auto'` or `'reactive'`) and the pre-compaction message slice (already filtered through the boundary firewall so prior summaries are not in scope). Return a non-empty string to short-circuit the regex fallback; return an empty string or skip the return to let the engine fall through to its regex pipeline.
+
+```typescript
+ion.hook('compact_summary_request', async (info, ctx) => {
+  // info.strategy is 'auto' or 'reactive' — tune the summariser to the
+  // trigger. Reactive summaries should be aggressive (fewer tokens)
+  // because the provider just rejected the prompt; auto summaries can
+  // afford a richer rendering.
+  const targetWords = info.strategy === 'reactive' ? 80 : 250
+  try {
+    const summary = await myLLMSummarizer(info.messages, { targetWords })
+    return summary // becomes the compact_boundary block's Summary field
+  } catch (err) {
+    ctx.log('warn', `compact summary failed, falling back to regex: ${err}`)
+    return '' // empty return → engine uses regex fact extractor
+  }
+})
+```
+
+Useful for: replacing the engine's regex fact extractor with an LLM-based summariser, branching summary strategy on the compaction trigger, and integrating with external summarisation services. The engine never blocks on the handler — wrap any LLM call in a bounded timeout and return an empty string on failure rather than throwing or blocking.
+
 **`elicit(opts)`** -- ask the user a structured question via the connected client. Resolves with the user's response (or a cancellation signal). The engine blocks the calling extension's hook until the user replies or the client times out.
 
 ```typescript
