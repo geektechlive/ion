@@ -275,6 +275,8 @@ describe('processIncomingPrompt — slash, engine reports unknown, .md falls bac
   })
 
   it('auto-switches permission mode to auto on .md expansion', async () => {
+    // Explicitly set first-prompt state so the guard allows the switch.
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, conversationId: null })
     mocks.expandSlashMock.mockResolvedValue({ expanded: true, systemPrompt: 'sys', userPrompt: 'expanded' })
     await processIncomingPrompt({
       tabId: 'tab-1',
@@ -286,6 +288,9 @@ describe('processIncomingPrompt — slash, engine reports unknown, .md falls bac
     })
     expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
   })
+  // Additional plan→auto guard tests (active conversation, resumed session)
+  // live in prompt-pipeline-plan-mode.test.ts to keep this file under the
+  // 600-line cap.
 })
 
 describe('processIncomingPrompt — slash, engine reports unknown, no .md', () => {

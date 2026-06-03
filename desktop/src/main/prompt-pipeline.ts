@@ -427,7 +427,7 @@ async function handleSlash(p: IncomingPrompt, slash: ParsedSlash): Promise<void>
     }
 
     log(`pipeline: engine disclaimed /${slash.command} → trying .md expansion`)
-    const expansion = await tryExpandMarkdownSlash(p.tabId, slash, p.projectPath)
+    const expansion = await tryExpandMarkdownSlash(p.tabId, slash, p.projectPath, p.runOptions?.sessionId)
     if (expansion) {
       // Rewrite the in-flight prompt and re-enter submission. The
       // expansion helper returns the new user/system prompts but does

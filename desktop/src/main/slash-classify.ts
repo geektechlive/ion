@@ -43,6 +43,42 @@ function log(msg: string): void {
 }
 
 /**
+ * Returns true when it is safe to auto-switch the tab from plan→auto mode
+ * because the slash command is the **first** prompt on a fresh tab.
+ *
+ * The guard prevents mid-conversation `.md` expansion from silently leaving
+ * plan mode: once the user has sent at least one prompt, or is resuming a
+ * prior session, the current permission mode must be preserved.
+ *
+ * Two sources of "this is a resumed session":
+ *   1. `runOptionsSessionId` — the renderer passes `runOptions.sessionId`
+ *      when submitting a prompt against a previously-saved conversation. This
+ *      is the only reliable signal for restored tabs: the engine-side
+ *      `TabEntry.conversationId` is null until the engine emits engine_status,
+ *      which happens AFTER this guard runs.
+ *   2. `tab.conversationId` — populated after engine_status fires; covers the
+ *      case where the engine has already started a session in this process
+ *      lifetime (e.g. mid-conversation on the same app boot).
+ *
+ * Edge-cases:
+ *   - `getTabStatus(tabId)` returns `undefined` → tab not yet registered,
+ *     i.e. genuinely fresh. Allow the switch.
+ *   - `promptCount > 0` → at least one prompt has already been submitted.
+ *     Preserve plan mode.
+ *
+ * @param tabId               The active tab id.
+ * @param runOptionsSessionId The `sessionId` from `RunOptions` sent by the
+ *                            renderer — non-null when resuming a saved
+ *                            conversation (the renderer stores the prior
+ *                            conversationId and forwards it to the engine).
+ */
+export function isFirstPromptForTab(tabId: string, runOptionsSessionId?: string | null): boolean {
+  if (runOptionsSessionId) return false
+  const tab = sessionPlane.getTabStatus(tabId)
+  return !tab || (tab.promptCount === 0 && !tab.conversationId)
+}
+
+/**
  * Result of a successful `.md` template expansion. The orchestrator uses
  * this to rewrite the in-flight prompt and re-enter the submission path.
  *
@@ -101,23 +137,29 @@ export async function dispatchExtensionCommand(
  * Side effects: on a successful expansion this function flips the tab's
  * permission mode to `'auto'` and broadcasts the change to remote
  * consumers, matching the legacy `applySlashExpansion` semantics. The
- * mode flip happens here (not in the orchestrator) because it is part of
- * the expansion contract: a `.md` template is conceptually "run this
- * task", which is incompatible with plan mode.
+ * mode flip is guarded by {@link isFirstPromptForTab}: it only fires
+ * when the slash is the very first prompt on a fresh tab. Mid-conversation
+ * expansions (promptCount > 0, resumed session, or conversationId already
+ * set) preserve the current permission mode.
  *
  * The orchestrator is responsible for actually re-entering the
  * submission path with the returned values — this helper does NOT
  * recurse into prompt-pipeline.ts. Keeping the call graph one-way makes
  * the test surface smaller and the dependency direction clearer.
  *
- * @param tabId   the active tab; used for the permission-mode flip
- * @param slash   the parsed slash command (name + args)
- * @param projectPath  working directory for the `.md` template lookup
+ * @param tabId               the active tab; used for the permission-mode flip
+ * @param slash               the parsed slash command (name + args)
+ * @param projectPath         working directory for the `.md` template lookup
+ * @param runOptionsSessionId the `sessionId` from RunOptions (set by the
+ *                            renderer when resuming a saved conversation);
+ *                            non-null here means the tab is continuing a
+ *                            prior session → do NOT auto-switch mode
  */
 export async function tryExpandMarkdownSlash(
   tabId: string,
   slash: ParsedSlash,
   projectPath: string | undefined,
+  runOptionsSessionId?: string | null,
 ): Promise<ExpansionResult | null> {
   const rebuilt = '/' + slash.command + (slash.args ? ' ' + slash.args : '')
 
@@ -125,8 +167,12 @@ export async function tryExpandMarkdownSlash(
   const ionExpansion = await expandSlashCommand(rebuilt, projectPath, 'ion')
   if (ionExpansion.expanded) {
     log(`pipeline: .ion/ expanded /${slash.command} → userLen=${ionExpansion.userPrompt.length} sysLen=${ionExpansion.systemPrompt.length}`)
-    sessionPlane.setPermissionMode(tabId, 'auto', 'slash_command')
-    broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId, mode: 'auto' })
+    if (isFirstPromptForTab(tabId, runOptionsSessionId)) {
+      sessionPlane.setPermissionMode(tabId, 'auto', 'slash_command')
+      broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId, mode: 'auto' })
+    } else {
+      log(`pipeline: skipping plan→auto switch for /${slash.command} — conversation already active (promptCount=${sessionPlane.getTabStatus(tabId)?.promptCount ?? '?'})`)
+    }
     return {
       userPrompt: ionExpansion.userPrompt,
       systemPrompt: ionExpansion.systemPrompt,
@@ -151,15 +197,23 @@ export async function tryExpandMarkdownSlash(
   }
   log(`pipeline: .claude/ expanded /${slash.command} → userLen=${claudeExpansion.userPrompt.length} sysLen=${claudeExpansion.systemPrompt.length}`)
 
-  // Auto-switch permission mode to 'auto' (matches legacy
-  // applySlashExpansion semantics). The flip lives here rather than in
-  // the orchestrator because it is part of the expansion contract — a
-  // `.md` template represents "run this task", which is incompatible
-  // with plan mode. Putting the side effect at the source of the
-  // expansion keeps the orchestrator's expansion-handling code branch
-  // a pure data flow.
-  sessionPlane.setPermissionMode(tabId, 'auto', 'slash_command')
-  broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId, mode: 'auto' })
+  // Auto-switch permission mode to 'auto' on the first prompt only (matches
+  // legacy applySlashExpansion semantics). The flip lives here rather than in
+  // the orchestrator because it is part of the expansion contract — a `.md`
+  // template represents "run this task", which is incompatible with plan mode.
+  // Putting the side effect at the source of the expansion keeps the
+  // orchestrator's expansion-handling code branch a pure data flow.
+  //
+  // Guard: only switch on the first prompt. If the conversation is already
+  // underway (promptCount > 0) or is a resumed session (conversationId set),
+  // preserve the current permission mode so plan-mode conversations stay in
+  // plan mode even when the user invokes a slash command mid-conversation.
+  if (isFirstPromptForTab(tabId, runOptionsSessionId)) {
+    sessionPlane.setPermissionMode(tabId, 'auto', 'slash_command')
+    broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId, mode: 'auto' })
+  } else {
+    log(`pipeline: skipping plan→auto switch for /${slash.command} — conversation already active (promptCount=${sessionPlane.getTabStatus(tabId)?.promptCount ?? '?'})`)
+  }
 
   return {
     userPrompt: claudeExpansion.userPrompt,
