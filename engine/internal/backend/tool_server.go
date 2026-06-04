@@ -147,6 +147,39 @@ func (ts *ToolServer) handleConnection(conn net.Conn) {
 		}
 
 		switch req.Method {
+		case "initialize":
+			// MCP handshake. The client sends this first; without a valid
+			// response the CLI aborts the connection and none of the extension
+			// tools load. Echo the client's protocol version (or a known default)
+			// and advertise the tools capability.
+			var p struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			version := p.ProtocolVersion
+			if version == "" {
+				version = "2024-11-05"
+			}
+			_ = encoder.Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]interface{}{
+					"protocolVersion": version,
+					"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
+					"serverInfo":      map[string]interface{}{"name": "ion-extensions", "version": "1.0.0"},
+				},
+			})
+
+		case "notifications/initialized", "initialized":
+			// JSON-RPC notification (no id, no response expected).
+
+		case "ping":
+			_ = encoder.Encode(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]interface{}{},
+			})
+
 		case "tools/list":
 			ts.mu.Lock()
 			var toolList []map[string]interface{}
