@@ -329,6 +329,24 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 			}
 		}
 	}
+	// Honor suppressed tools on the CLI path: drop any tool the harness
+	// suppressed via ctx.suppressTool() from the allowed set. ApiBackend already
+	// honors opts.SuppressTools in its run loop; this brings CliBackend to parity
+	// so SuppressTools works regardless of backend. Empty SuppressTools is a no-op
+	// (allowedTools is unchanged), so existing callers are unaffected.
+	if len(opts.SuppressTools) > 0 {
+		suppressed := make(map[string]bool, len(opts.SuppressTools))
+		for _, t := range opts.SuppressTools {
+			suppressed[t] = true
+		}
+		filtered := make([]string, 0, len(allowedTools))
+		for _, t := range allowedTools {
+			if !suppressed[t] {
+				filtered = append(filtered, t)
+			}
+		}
+		allowedTools = filtered
+	}
 	args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
 
 	if opts.McpConfig != "" {
