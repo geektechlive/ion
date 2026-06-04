@@ -10,6 +10,24 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.49.0](https://github.com/dsswift/ion/compare/desktop-v1.48.0...desktop-v1.49.0) (2026-06-04)
+
+### Features
+
+* **engine:** inject steer messages before end_turn exit ([3c5e534](https://github.com/dsswift/ion/commit/3c5e53418393f5cdacbb90ccc1e63d6b6fcd7e22))
+* **desktop:** badge slash commands in user message bubbles ([40211f2](https://github.com/dsswift/ion/commit/40211f213c6cec77e281c0a9c28d9f0db3d17442))
+* **desktop:** add pill icon presets and project iOS pill state ([d580162](https://github.com/dsswift/ion/commit/d580162478286e4199d81d6e7891332193fc46f6))
+* **desktop:** add implement divider, plan viewer, clear-context option ([b697541](https://github.com/dsswift/ion/commit/b697541d62b82c1181ee25e5c2fdcfb9ae5e487c))
+* **desktop:** add unified turn grouping, pagination, prompt guidance ([e874e60](https://github.com/dsswift/ion/commit/e874e6044b106590414fa61047f86afd98c62fb2))
+* **desktop:** add /clear command to reset conversation ([55d3214](https://github.com/dsswift/ion/commit/55d321445d3409b3972f8777956e772c3aa4a7b0))
+* **desktop:** add reset_engine_session for engine-tab clear context ([d1907bc](https://github.com/dsswift/ion/commit/d1907bcf564a3fe38065163d521755ae35db0aac))
+* **desktop:** render Steer applied divider on engine_steer_injected ([9b5c9b1](https://github.com/dsswift/ion/commit/9b5c9b13b005c4de2269853094617da5bc7b7c5f))
+
+### Bug Fixes
+
+* **desktop:** restrict slash plan→auto switch to first prompt only ([bfa0787](https://github.com/dsswift/ion/commit/bfa0787d2ee7d976aef67fbfd6f88c40ea9634d0))
+* **desktop:** no-op cmd-click on non-existent file paths ([b3ebf33](https://github.com/dsswift/ion/commit/b3ebf332df494a2bc2ca85492abe16c3e60b4163))
+
 ## [1.48.0](https://github.com/dsswift/ion/compare/desktop-v1.47.0...desktop-v1.48.0) (2026-06-03)
 
 ### Features

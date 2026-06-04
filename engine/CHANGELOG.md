@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.35.0](https://github.com/dsswift/ion/compare/engine-v1.34.1...engine-v1.35.0) (2026-06-04)
+
+### Features
+
+* **engine:** inject steer messages before end_turn exit ([3c5e534](https://github.com/dsswift/ion/commit/3c5e53418393f5cdacbb90ccc1e63d6b6fcd7e22))
+
 ## [1.34.1](https://github.com/dsswift/ion/compare/engine-v1.34.0...engine-v1.34.1) (2026-06-03)
 
 ### Bug Fixes

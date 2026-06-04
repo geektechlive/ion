@@ -10,6 +10,22 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.36.0](https://github.com/dsswift/ion/compare/ios-v1.35.0...ios-v1.36.0) (2026-06-04)
+
+### Features
+
+* **desktop:** badge slash commands in user message bubbles ([40211f2](https://github.com/dsswift/ion/commit/40211f213c6cec77e281c0a9c28d9f0db3d17442))
+* **desktop:** add pill icon presets and project iOS pill state ([d580162](https://github.com/dsswift/ion/commit/d580162478286e4199d81d6e7891332193fc46f6))
+* **ios:** add implement divider, plan events, and clear-context option ([848ee49](https://github.com/dsswift/ion/commit/848ee490c566393e98b987412547e805f932b352))
+* **ios:** implement unified turn grouping in ui ([de98622](https://github.com/dsswift/ion/commit/de9862266105bab49a09f56c8791ac7502e23abb))
+* **ios:** send reset_engine_session for engine-tab implement clear ([4bb69e5](https://github.com/dsswift/ion/commit/4bb69e5b17cb26888c5975ec26ef3198ef055d41))
+* **ios:** mirror Steer applied divider on engine_steer_injected ([bb8ba6b](https://github.com/dsswift/ion/commit/bb8ba6b6b2a0f6344724b66e99ad4d3d9fae78cd))
+
+### Bug Fixes
+
+* **ios:** remove ActiveToolRow ([3d2953f](https://github.com/dsswift/ion/commit/3d2953f816b5098007b2c42d90690978d7ed4880))
+* **ios:** tint tab rows with pill color via listRowBackground ([4ee087d](https://github.com/dsswift/ion/commit/4ee087dea34f4bcf96e02257d3f2affd9f4e8748))
+
 ## [1.35.0](https://github.com/dsswift/ion/compare/ios-v1.34.0...ios-v1.35.0) (2026-06-03)
 
 ### Features
