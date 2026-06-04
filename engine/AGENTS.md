@@ -141,6 +141,8 @@ The `before_plan_mode_enter`, `before_plan_mode_exit`, `system_inject`, `before_
 
 Extension-lifecycle hooks (`extension_respawned`, `turn_aborted`, `peer_extension_died`, `peer_extension_respawned`) fire on auto-respawn. Auto-respawn is post-run only; mid-turn deaths defer to `handleRunExit`. Strike budget: 3 in 60s, reset after 2min healthy. Payloads: `docs/hooks/reference.md`.
 
+The TypeScript SDK runtime automatically unwraps `_payload` wrappers before invoking hook handlers. The engine cannot embed bare strings (or other non-object values) directly in the JSON-RPC params map, so it wraps them as `{_payload: value}`. The SDK detects the single-key `_payload` shape and passes the unwrapped value to the handler. Extension code that handles `before_prompt` or any other hook with a string payload receives the bare string, not the wrapper object. This unwrapping is transparent to extension authors but matters when debugging raw RPC frames or writing a custom SDK implementation.
+
 ## Conventions
 
 - Logger: `utils.Log("Tag", "message")` → `~/.ion/engine.log`.
@@ -149,6 +151,7 @@ Extension-lifecycle hooks (`extension_respawned`, `turn_aborted`, `peer_extensio
 - Parallel tools: `errgroup.Group`.
 - Streaming: `<-chan types.LlmStreamEvent`.
 - TS extensions: esbuild generates inline source maps for readable stack traces in `engine_error` events.
+- `RegisterTool` uses replace-on-duplicate semantics: if a tool with the same name already exists in the SDK registry it is replaced in place, not appended. When an extension subprocess respawns and re-registers its tools during the init handshake, existing entries are updated rather than duplicated. `ExtensionGroup.Tools()` enforces the same invariant at the group level -- last-registered wins when multiple hosts declare the same tool name.
 
 ## Done criteria
 
