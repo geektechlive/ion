@@ -329,6 +329,15 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 			}
 		}
 	}
+	// Extension tools are bridged to the CLI via the ion-extensions MCP server
+	// (--mcp-config), but the CLI only OFFERS tools that appear in --allowedTools.
+	// Without this entry, none of the harness's registered tools are callable by
+	// the model on the CLI backend (they are configured but never presented).
+	// "mcp__<server>" allow-lists every tool from that server.
+	if opts.McpConfig != "" {
+		allowedTools = append(allowedTools, "mcp__ion-extensions")
+	}
+
 	// Honor suppressed tools on the CLI path: drop any tool the harness
 	// suppressed via ctx.suppressTool() from the allowed set. ApiBackend already
 	// honors opts.SuppressTools in its run loop; this brings CliBackend to parity
