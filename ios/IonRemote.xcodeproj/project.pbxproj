@@ -32,7 +32,6 @@
 		A1B2C3D4E5F60001009301AA /* SettingsAppearanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009300AA /* SettingsAppearanceView.swift */; };
 		A1B2C3D4E5F60001009303AA /* SettingsDesktopsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009302AA /* SettingsDesktopsView.swift */; };
 		A1B2C3D4E5F60001009305AA /* SettingsDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009304AA /* SettingsDiagnosticsView.swift */; };
-		A1B2C3D4E5F60001009307AA /* SettingsInterfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009306AA /* SettingsInterfaceView.swift */; };
 		A1B2C3D4E5F60001009309AA /* SettingsModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009308AA /* SettingsModelsView.swift */; };
 		A1B2C3D4E5F6000100930BAA /* SettingsVoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100930AAA /* SettingsVoiceView.swift */; };
 		A1B2C3D4E5F60001000021AA /* SessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000022AA /* SessionViewModel.swift */; };
@@ -95,6 +94,8 @@
 		A1B2C3D4E5F60001E50006AA /* EngineEventSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001E50007AA /* EngineEventSupport.swift */; };
 		A1B2C3D4E5F60001D70006AA /* DesktopSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001D70007AA /* DesktopSettingsModel.swift */; };
 		A1B2C3D4E5F60001D80006AA /* DesktopSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001D80007AA /* DesktopSettingsView.swift */; };
+		A1B2C3D4E5F60001D90006AA /* DesktopSettingsListEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001D90007AA /* DesktopSettingsListEditor.swift */; };
+		A1B2C3D4E5F60001DA0006AA /* DesktopSettingsListRecordEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001DA0007AA /* DesktopSettingsListRecordEditor.swift */; };
 		A1B2C3D4E5F60001000301AA /* GitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000300AA /* GitTypes.swift */; };
 		A1B2C3D4E5F60001000303AA /* NormalizedEvent+Git.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000302AA /* NormalizedEvent+Git.swift */; };
 		A1B2C3D4E5F60001000305AA /* GitPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000304AA /* GitPaneView.swift */; };
@@ -204,7 +205,6 @@
 		A1B2C3D4E5F60001009300AA /* SettingsAppearanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAppearanceView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009302AA /* SettingsDesktopsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDesktopsView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009304AA /* SettingsDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDiagnosticsView.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60001009306AA /* SettingsInterfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsInterfaceView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009308AA /* SettingsModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModelsView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100930AAA /* SettingsVoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsVoiceView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000022AA /* SessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViewModel.swift; sourceTree = "<group>"; };
@@ -268,6 +268,8 @@
 		A1B2C3D4E5F60001E50007AA /* EngineEventSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineEventSupport.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001D70007AA /* DesktopSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DesktopSettingsModel.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001D80007AA /* DesktopSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DesktopSettingsView.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001D90007AA /* DesktopSettingsListEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DesktopSettingsListEditor.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001DA0007AA /* DesktopSettingsListRecordEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DesktopSettingsListRecordEditor.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000300AA /* GitTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypes.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000302AA /* NormalizedEvent+Git.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NormalizedEvent+Git.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000304AA /* GitPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitPaneView.swift; sourceTree = "<group>"; };
@@ -471,10 +473,11 @@
 				A1B2C3D4E5F6000100001EAA /* PairingView.swift */,
 				A1B2C3D4E5F60001000020AA /* SettingsView.swift */,
 				A1B2C3D4E5F60001D80007AA /* DesktopSettingsView.swift */,
+				A1B2C3D4E5F60001D90007AA /* DesktopSettingsListEditor.swift */,
+				A1B2C3D4E5F60001DA0007AA /* DesktopSettingsListRecordEditor.swift */,
 				A1B2C3D4E5F60001009300AA /* SettingsAppearanceView.swift */,
 				A1B2C3D4E5F60001009302AA /* SettingsDesktopsView.swift */,
 				A1B2C3D4E5F60001009304AA /* SettingsDiagnosticsView.swift */,
-				A1B2C3D4E5F60001009306AA /* SettingsInterfaceView.swift */,
 				A1B2C3D4E5F60001009308AA /* SettingsModelsView.swift */,
 				A1B2C3D4E5F6000100930AAA /* SettingsVoiceView.swift */,
 				A1B2C3D4E5F60001000095AA /* InputBar.swift */,
@@ -775,7 +778,6 @@
 				A1B2C3D4E5F60001009301AA /* SettingsAppearanceView.swift in Sources */,
 				A1B2C3D4E5F60001009303AA /* SettingsDesktopsView.swift in Sources */,
 				A1B2C3D4E5F60001009305AA /* SettingsDiagnosticsView.swift in Sources */,
-				A1B2C3D4E5F60001009307AA /* SettingsInterfaceView.swift in Sources */,
 				A1B2C3D4E5F60001009309AA /* SettingsModelsView.swift in Sources */,
 				A1B2C3D4E5F6000100930BAA /* SettingsVoiceView.swift in Sources */,
 				A1B2C3D4E5F60001000094AA /* InputBar.swift in Sources */,
@@ -804,6 +806,8 @@
 				A1B2C3D4E5F60001E50006AA /* EngineEventSupport.swift in Sources */,
 				A1B2C3D4E5F60001D70006AA /* DesktopSettingsModel.swift in Sources */,
 				A1B2C3D4E5F60001D80006AA /* DesktopSettingsView.swift in Sources */,
+				A1B2C3D4E5F60001D90006AA /* DesktopSettingsListEditor.swift in Sources */,
+				A1B2C3D4E5F60001DA0006AA /* DesktopSettingsListRecordEditor.swift in Sources */,
 				A1B2C3D4E5F60001000303AA /* NormalizedEvent+Git.swift in Sources */,
 				A1B2C3D4E5F60001000301AA /* GitTypes.swift in Sources */,
 				A1B2C3D4E5F60001000305AA /* GitPaneView.swift in Sources */,

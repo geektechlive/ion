@@ -93,7 +93,10 @@ final class DesktopSettingsContractTests: XCTestCase {
                     group: "known",
                     label: "A",
                     description: "first",
-                    defaultValue: AnyCodable(false)
+                    defaultValue: AnyCodable(false),
+                    choices: nil,
+                    range: nil,
+                    itemSchema: nil
                 ),
                 DesktopSettingSchemaEntry(
                     key: "b",
@@ -101,7 +104,10 @@ final class DesktopSettingsContractTests: XCTestCase {
                     group: "known",
                     label: "B",
                     description: "second (omitted from values map)",
-                    defaultValue: AnyCodable(true)
+                    defaultValue: AnyCodable(true),
+                    choices: nil,
+                    range: nil,
+                    itemSchema: nil
                 ),
                 DesktopSettingSchemaEntry(
                     key: "c",
@@ -109,7 +115,10 @@ final class DesktopSettingsContractTests: XCTestCase {
                     group: "future_group",
                     label: "C",
                     description: "future-compat (unknown group)",
-                    defaultValue: AnyCodable(false)
+                    defaultValue: AnyCodable(false),
+                    choices: nil,
+                    range: nil,
+                    itemSchema: nil
                 ),
             ],
             groups: [
@@ -146,5 +155,187 @@ final class DesktopSettingsContractTests: XCTestCase {
         } else {
             XCTFail("Expected setDesktopSetting, got \(decoded)")
         }
+    }
+
+    // MARK: - New wire types: enum + list
+
+    /// Enum-typed schema entries carry a `choices` array. Each choice's
+    /// `value` is either a string or null (the "None" choice for
+    /// nullable enums like the three tab-group pointer keys). Verify
+    /// the wire round-trip preserves both the string-value and
+    /// null-value forms.
+    func testDesktopSettingsEnumDecode() throws {
+        let json = """
+        {
+            "type": "desktop_settings_snapshot",
+            "settings": {
+                "gitOpsMode": "worktree",
+                "planningGroupId": null
+            },
+            "schema": [
+                {
+                    "key": "gitOpsMode",
+                    "type": "enum",
+                    "group": "git",
+                    "label": "GitOps Mode",
+                    "description": "Manual or worktree.",
+                    "defaultValue": "manual",
+                    "choices": [
+                        { "value": "manual", "label": "Manual" },
+                        { "value": "worktree", "label": "Worktree" }
+                    ]
+                },
+                {
+                    "key": "planningGroupId",
+                    "type": "enum",
+                    "group": "tabs",
+                    "label": "Planning group",
+                    "description": "Group tabs auto-move to in plan mode.",
+                    "defaultValue": null,
+                    "choices": [
+                        { "value": null, "label": "None" },
+                        { "value": "g1", "label": "Backlog" }
+                    ]
+                }
+            ],
+            "groups": [
+                { "id": "git", "label": "Git" },
+                { "id": "tabs", "label": "Tabs & Panels" }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        guard case .desktopSettingsSnapshot(let settings, let schema, _) = event else {
+            XCTFail("expected desktopSettingsSnapshot")
+            return
+        }
+
+        // Value side: planningGroupId is null over the wire. AnyCodable
+        // preserves null as NSNull. The view treats NSNull and missing
+        // values identically (both fall through to "None").
+        XCTAssertEqual(settings["gitOpsMode"]?.value as? String, "worktree")
+        XCTAssertTrue(settings["planningGroupId"]?.value is NSNull)
+
+        // Schema side: choices decoded into Swift, including the
+        // null-valued choice.
+        let gitOps = schema.first { $0.key == "gitOpsMode" }
+        XCTAssertEqual(gitOps?.type, .enumType)
+        XCTAssertEqual(gitOps?.choices?.count, 2)
+        XCTAssertEqual(gitOps?.choices?[0].label, "Manual")
+        XCTAssertEqual(gitOps?.choices?[0].value.value as? String, "manual")
+
+        let planning = schema.first { $0.key == "planningGroupId" }
+        XCTAssertEqual(planning?.choices?.count, 2)
+        XCTAssertEqual(planning?.choices?[0].label, "None")
+        // The first choice's value is JSON null. AnyCodable decodes
+        // null as NSNull; with the non-optional `value: AnyCodable`
+        // declaration, that NSNull survives end-to-end and the view's
+        // `selectionKey` returns the empty string for it.
+        XCTAssertTrue(planning?.choices?[0].value.value is NSNull)
+        XCTAssertEqual(planning?.choices?[1].value.value as? String, "g1")
+    }
+
+    /// List-typed schema entries carry an `itemSchema` describing the
+    /// per-record fields. The editor reuses the schema entry shape
+    /// recursively for the nested rows.
+    func testDesktopSettingsListDecode() throws {
+        let json = """
+        {
+            "type": "desktop_settings_snapshot",
+            "settings": {
+                "quickTools": [
+                    { "id": "a", "name": "Build", "icon": "Hammer", "command": "make" }
+                ]
+            },
+            "schema": [
+                {
+                    "key": "quickTools",
+                    "type": "list",
+                    "group": "quicktools",
+                    "label": "Quick tools",
+                    "description": "Custom shell-command buttons.",
+                    "defaultValue": [],
+                    "itemSchema": [
+                        {
+                            "key": "id",
+                            "type": "string",
+                            "group": "quicktools",
+                            "label": "ID",
+                            "description": "Auto-assigned.",
+                            "defaultValue": ""
+                        },
+                        {
+                            "key": "name",
+                            "type": "string",
+                            "group": "quicktools",
+                            "label": "Name",
+                            "description": "Display label.",
+                            "defaultValue": ""
+                        }
+                    ]
+                }
+            ],
+            "groups": [
+                { "id": "quicktools", "label": "Quick Tools" }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        guard case .desktopSettingsSnapshot(let settings, let schema, _) = event else {
+            XCTFail("expected desktopSettingsSnapshot")
+            return
+        }
+
+        // Value side: the list is an array of dictionaries (AnyCodable
+        // decodes nested objects as [String: AnyCodable]).
+        let tools = settings["quickTools"]?.value as? [AnyCodable]
+        XCTAssertEqual(tools?.count, 1)
+        let first = tools?[0].value as? [String: AnyCodable]
+        XCTAssertEqual(first?["name"]?.value as? String, "Build")
+        XCTAssertEqual(first?["command"]?.value as? String, "make")
+
+        // Schema side: itemSchema preserved.
+        let quickTools = schema.first { $0.key == "quickTools" }
+        XCTAssertEqual(quickTools?.type, .list)
+        XCTAssertEqual(quickTools?.itemSchema?.count, 2)
+        XCTAssertEqual(quickTools?.itemSchema?[0].key, "id")
+        XCTAssertEqual(quickTools?.itemSchema?[1].key, "name")
+    }
+
+    /// Number-typed schema entries may carry a `range`. When present,
+    /// the iOS Stepper uses it to clamp +/- and pick a step. When
+    /// absent, the view falls back to a permissive default. Verify
+    /// the wire decode preserves the range when present.
+    func testDesktopSettingsNumberRangeDecode() throws {
+        let json = """
+        {
+            "type": "desktop_settings_snapshot",
+            "settings": { "uiZoom": 1.5 },
+            "schema": [
+                {
+                    "key": "uiZoom",
+                    "type": "number",
+                    "group": "appearance",
+                    "label": "UI zoom",
+                    "description": "Overall zoom level.",
+                    "defaultValue": 1,
+                    "range": { "min": 0.5, "max": 2.0, "step": 0.1 }
+                }
+            ],
+            "groups": [ { "id": "appearance", "label": "Appearance" } ]
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        guard case .desktopSettingsSnapshot(_, let schema, _) = event else {
+            XCTFail("expected desktopSettingsSnapshot")
+            return
+        }
+        let entry = schema.first { $0.key == "uiZoom" }
+        XCTAssertEqual(entry?.range?.min, 0.5)
+        XCTAssertEqual(entry?.range?.max, 2.0)
+        XCTAssertEqual(entry?.range?.step, 0.1)
     }
 }
