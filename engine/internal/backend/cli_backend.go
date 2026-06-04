@@ -333,9 +333,11 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 	// (--mcp-config), but the CLI only OFFERS tools that appear in --allowedTools.
 	// Without this entry, none of the harness's registered tools are callable by
 	// the model on the CLI backend (they are configured but never presented).
-	// "mcp__<server>" allow-lists every tool from that server.
+	// "mcp__<server>__*" allow-lists every tool from that server (the server-only
+	// "mcp__<server>" form is not recognized by the CLI -- the __* wildcard is
+	// required).
 	if opts.McpConfig != "" {
-		allowedTools = append(allowedTools, "mcp__ion-extensions")
+		allowedTools = append(allowedTools, "mcp__ion-extensions__*")
 	}
 
 	// Honor suppressed tools on the CLI path: drop any tool the harness
