@@ -349,6 +349,15 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 	}
 	args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
 
+	// --allowedTools is advisory under --permission-mode bypassPermissions, so
+	// also pass suppressed tools as an explicit --disallowedTools denylist, which
+	// the CLI honors regardless of permission mode. This is what actually makes
+	// ctx.suppressTool() effective on the CLI backend.
+	if len(opts.SuppressTools) > 0 {
+		utils.Log("CliBackend", fmt.Sprintf("disallowing suppressed tools: %s", strings.Join(opts.SuppressTools, ",")))
+		args = append(args, "--disallowedTools", strings.Join(opts.SuppressTools, ","))
+	}
+
 	if opts.McpConfig != "" {
 		args = append(args, "--mcp-config", opts.McpConfig)
 	}
