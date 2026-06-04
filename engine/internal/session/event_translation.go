@@ -444,6 +444,13 @@ func (m *Manager) fireCliTurnHooks(s *engineSession, key string, sOk bool, event
 		if !alreadyActive {
 			ctx := m.newExtContext(s, key)
 			s.extGroup.FireTurnStart(ctx, extension.TurnInfo{TurnNumber: turnNum})
+			taskID := fmt.Sprintf("%s-t%d", key, turnNum)
+			utils.Debug("Session", fmt.Sprintf("fireCliTurnHooks: task_created taskID=%s key=%s turn=%d", taskID, key, turnNum))
+			_ = s.extGroup.FireTaskCreated(ctx, extension.TaskLifecycleInfo{
+				TaskID: taskID,
+				Name:   fmt.Sprintf("turn-%d", turnNum),
+				Status: "running",
+			})
 		}
 
 	case *types.ToolCallEvent:
@@ -460,6 +467,13 @@ func (m *Manager) fireCliTurnHooks(s *engineSession, key string, sOk bool, event
 		if !alreadyActive {
 			ctx := m.newExtContext(s, key)
 			s.extGroup.FireTurnStart(ctx, extension.TurnInfo{TurnNumber: turnNum})
+			taskID := fmt.Sprintf("%s-t%d", key, turnNum)
+			utils.Debug("Session", fmt.Sprintf("fireCliTurnHooks: task_created taskID=%s key=%s turn=%d", taskID, key, turnNum))
+			_ = s.extGroup.FireTaskCreated(ctx, extension.TaskLifecycleInfo{
+				TaskID: taskID,
+				Name:   fmt.Sprintf("turn-%d", turnNum),
+				Status: "running",
+			})
 		}
 
 	case *types.TaskUpdateEvent:
@@ -502,6 +516,18 @@ func (m *Manager) fireCliTurnHooks(s *engineSession, key string, sOk bool, event
 				})
 			}
 			s.extGroup.FireTurnEnd(ctx, extension.TurnInfo{TurnNumber: turnNum})
+		}
+		// task_completed fires when at least one turn occurred during this run.
+		// turnNum > 0 guarantees a prior task_created with the same TaskID.
+		if turnNum > 0 {
+			ctx := m.newExtContext(s, key)
+			taskID := fmt.Sprintf("%s-t%d", key, turnNum)
+			utils.Debug("Session", fmt.Sprintf("fireCliTurnHooks: task_completed taskID=%s key=%s turn=%d", taskID, key, turnNum))
+			_ = s.extGroup.FireTaskCompleted(ctx, extension.TaskLifecycleInfo{
+				TaskID: taskID,
+				Name:   fmt.Sprintf("turn-%d", turnNum),
+				Status: "completed",
+			})
 		}
 	}
 }
