@@ -29,6 +29,10 @@ struct EngineView: View {
     @State private var showPermissionDeniedAlert = false
     /// Draft text snapshot taken when recording starts, used to restore on cancel.
     @State private var draftBeforeRecording = ""
+    /// Tracks keyboard visibility so the `KeyboardUtilityBar` can be shown
+    /// above the engine input bar — matches the `InputBar` (conversation view)
+    /// pattern so engine and conversation tabs have parity.
+    @State private var keyboardVisible = false
 
     private var instances: [EngineInstanceInfo] {
         viewModel.engineInstances[tabId] ?? []
@@ -466,6 +470,17 @@ struct EngineView: View {
 
     private var footerSection: some View {
         VStack(spacing: 0) {
+            // Keyboard accessory toolbar — paste / select all / tab / new line /
+            // undo / redo / collapse-keyboard. Shown only while the keyboard is
+            // up so it sits flush against the top of the keyboard, mirroring
+            // the InputBar (conversation view) placement exactly.
+            if keyboardVisible && viewModel.showKeyboardUtilityBarInEngine {
+                KeyboardUtilityBar(
+                    onDismiss: { isInputFocused = false },
+                    promptText: promptTextBinding
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             Divider()
             if let fields = viewModel.engineStatusFields[compoundKey] {
                 ConversationStatusBar(
@@ -498,6 +513,13 @@ struct EngineView: View {
                 }
             }
             engineInputBar
+        }
+        .animation(IonTheme.snappySpring, value: keyboardVisible)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardVisible = false
         }
     }
 

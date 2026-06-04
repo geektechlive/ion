@@ -51,6 +51,25 @@ struct SettingsInterfaceView: View {
             }
 
             Section {
+                Toggle(isOn: Binding(
+                    get: { viewModel.showKeyboardUtilityBarInCLI },
+                    set: { viewModel.showKeyboardUtilityBarInCLI = $0 }
+                )) {
+                    Label("Show in Conversation View", systemImage: "keyboard")
+                }
+                Toggle(isOn: Binding(
+                    get: { viewModel.showKeyboardUtilityBarInEngine },
+                    set: { viewModel.showKeyboardUtilityBarInEngine = $0 }
+                )) {
+                    Label("Show in Engine View", systemImage: "keyboard")
+                }
+            } header: {
+                Text("Keyboard Utility Bar")
+            } footer: {
+                Text("Adds a toolbar above the keyboard with paste, select all, tab, new line, undo, redo, and dismiss-keyboard buttons. Toggle independently per view.")
+            }
+
+            Section {
                 Picker("Grouping", selection: Binding<String>(
                     get: { viewModel.tabGroupMode == "manual" ? "manual" : "auto" },
                     set: { newValue in viewModel.setTabGroupMode(newValue) }
