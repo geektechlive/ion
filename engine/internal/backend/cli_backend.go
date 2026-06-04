@@ -255,6 +255,13 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 		"--include-partial-messages",
 	}
 
+	// Diagnostic: when CLAUDE_CODE_DEBUG_LOGS_DIR is set, enable the CLI's debug
+	// logging (MCP handshake, tools/list, etc.) so operators can inspect why a
+	// configured MCP server's tools are or are not offered. Off in normal runs.
+	if os.Getenv("CLAUDE_CODE_DEBUG_LOGS_DIR") != "" {
+		args = append(args, "--debug")
+	}
+
 	// Permission mode: respect caller override, default to "bypassPermissions".
 	// The engine is security-free by design — the harness is responsible for
 	// implementing whatever approval layer it needs via hooks.  Defaulting to
