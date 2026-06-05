@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// A single agent bar row matching the desktop OvalOffice layout.
-/// Shows a colored label, status indicator, and last work preview.
+/// A single agent bar row: compact header + expandable conversation body.
 struct AgentBarRow: View {
     let agent: AgentStateUpdate
     /// Legacy: messages looked up by agent name (single-dispatch agents).
@@ -17,6 +16,7 @@ struct AgentBarRow: View {
     @Environment(\.appTheme) private var theme
     let onTap: (() -> Void)?
     @State private var isExpanded = false
+    @State private var now = Date()
 
     init(
         agent: AgentStateUpdate,
@@ -78,6 +78,8 @@ struct AgentBarRow: View {
         }
     }
 
+    // MARK: - Compact header (always visible)
+
     private var headerRow: some View {
         HStack(spacing: 6) {
             // Agent name pill — never wraps
@@ -124,10 +126,6 @@ struct AgentBarRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(isRunning ? JarvisTheme.accentGlow : Color(.systemGray6).opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .contentShape(Rectangle())
-        .onTapGesture { isExpanded.toggle() }
     }
 
     /// Text shown in the header activity area. For running agents this is
@@ -159,9 +157,7 @@ struct AgentBarRow: View {
     // MARK: - Helpers
 
     private var agentColor: Color {
-        if let hex = agent.color {
-            return Color(hex: hex)
-        }
+        if let hex = agent.color { return Color(hex: hex) }
         switch agent.type {
         case "chief": return theme.statusRunning
         case "specialist": return theme.statusPending

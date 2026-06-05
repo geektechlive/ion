@@ -4,11 +4,9 @@ import SwiftUI
 struct TabListView: View {
     @Environment(\.appTheme) private var theme
     @Environment(SessionViewModel.self) private var viewModel
-    @Environment(BriefingsStore.self) private var briefingsStore
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var showSettings = false
-    @State private var showBriefings = false
     @State private var showNewTab = false
     // When the new-tab sheet was opened from a group header's `+` button,
     // this holds the target group's id so we can stamp `pinToGroupId` on
@@ -27,7 +25,6 @@ struct TabListView: View {
         Set(UserDefaults.standard.stringArray(forKey: "collapsedGroupIds") ?? [])
     }()
     @State private var searchText: String = ""
-    @State private var flickerOpacity: Double = 1.0
 
     // iPad: selection-based navigation
     @State private var selectedTabId: String?
@@ -36,8 +33,6 @@ struct TabListView: View {
     // iPhone: path-based navigation
     @State private var navigationPath = NavigationPath()
     @State private var flickerOpacity: Double = 1.0
-
-    private let jarvisDir = "/Users/cfavero/Jarvis"
 
     var body: some View {
         Group {
@@ -84,9 +79,6 @@ struct TabListView: View {
                     requestEngineTab(directory: dir)
                 }
             )
-        }
-        .sheet(isPresented: $showBriefings) {
-            BriefingsView()
         }
         .confirmationDialog(
             "Select Engine Profile",
@@ -367,7 +359,7 @@ struct TabListView: View {
                             } label: {
                                 Label("Rename", systemImage: "pencil")
                             }
-                            .tint(JarvisTheme.accent)
+                            .tint(.orange)
                         }
                         // Context menu extracted to TabRowContextMenu.swift to keep
                         // this file under the Swift 600-line cap.
@@ -525,6 +517,9 @@ struct TabListView: View {
 
     // MARK: - Filtered Display Groups
 
+    /// Returns `viewModel.displayGroups` filtered by `searchText`.
+    /// When search is empty, returns the full list unchanged (zero cost).
+    /// Groups with zero matching tabs are dropped entirely.
     private var filteredDisplayGroups: [(label: String, id: String, icon: String, directory: String?, tabs: [RemoteTabState])] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return viewModel.displayGroups }
@@ -552,6 +547,7 @@ struct TabListView: View {
 
     // MARK: - Helpers
 
+    /// Toggle a group's collapsed state and persist to UserDefaults.
     private func toggleGroupCollapsed(_ groupId: String) {
         if collapsedGroupIds.contains(groupId) {
             collapsedGroupIds.remove(groupId)
@@ -565,6 +561,10 @@ struct TabListView: View {
         UserDefaults.standard.set(Array(collapsedGroupIds), forKey: "collapsedGroupIds")
     }
 
+    /// Handle engine tab creation with profile selection.
+    /// - 0 profiles: auto-create without a profileId (engine uses default)
+    /// - 1 profile: auto-select the only profile
+    /// - 2+ profiles: show a confirmation dialog picker
     private func requestEngineTab(directory: String) {
         let profiles = viewModel.engineProfiles
         switch profiles.count {
@@ -577,6 +577,7 @@ struct TabListView: View {
         }
     }
 
+    /// Ordered list of directories: default base directory first, then recent directories (deduplicated).
     private var allDirectories: [(label: String, fullPath: String)] {
         var seen = Set<String>()
         var result: [(label: String, fullPath: String)] = []

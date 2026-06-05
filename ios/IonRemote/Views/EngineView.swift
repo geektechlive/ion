@@ -428,8 +428,6 @@ struct EngineView: View {
                 )
             }
 
-            ThinkingScanLine(isActive: isRunning)
-
             if let working = viewModel.engineWorkingMessages[compoundKey], !working.isEmpty {
                 HStack {
                     ProgressView()
@@ -540,28 +538,11 @@ struct EngineView: View {
 
     private var toolbarButtons: some View {
         HStack(spacing: 12) {
-            Button {
-                showTranscript = true
-            } label: {
-                Image(systemName: "quote.bubble")
-                    .font(.subheadline)
-                    .foregroundStyle(JarvisTheme.accent)
-            }
-            .accessibilityLabel("Conversations")
-            Button {
-                showStatusDrawer = true
-            } label: {
-                Image(systemName: "info.circle")
-                    .font(.subheadline)
-                    .foregroundStyle(JarvisTheme.accent)
-            }
-            .accessibilityLabel("Info")
             Button { showFileExplorer = true } label: {
                 Image(systemName: "folder")
                     .font(.subheadline)
                     .foregroundStyle(theme.accent)
             }
-            .accessibilityLabel("Files")
             Button { showGitPane = true } label: {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.subheadline)
@@ -572,12 +553,10 @@ struct EngineView: View {
                     .font(.subheadline)
                     .foregroundStyle(theme.accent)
             }
-            .accessibilityLabel("Branches")
             Button { viewModel.addEngineInstance(tabId: tabId) } label: {
                 Image(systemName: "plus.rectangle")
                     .foregroundStyle(theme.accent)
             }
-            .accessibilityLabel("New tab")
         }
     }
 
@@ -602,8 +581,6 @@ struct EngineView: View {
         styledMainContent
         .navigationTitle(viewModel.tab(for: tabId)?.displayTitle ?? "Engine")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(JarvisTheme.background.opacity(0.95), for: .navigationBar)
-        .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 if theme.backgroundView != nil {
@@ -627,18 +604,6 @@ struct EngineView: View {
             if engineMsgs.isEmpty {
                 viewModel.loadEngineConversation(tabId: tabId)
             }
-        }
-        .sheet(isPresented: $showStatusDrawer) {
-            StatusDrawerView(
-                tabId: tabId,
-                compoundKey: compoundKey,
-                fields: viewModel.engineStatusFields[compoundKey],
-                agents: visibleAgents,
-                activeTools: activeToolsList
-            )
-        }
-        .sheet(isPresented: $showTranscript) {
-            TranscriptFlyout(messages: engineMsgs)
         }
         .sheet(item: Binding(
             get: { viewModel.engineDialogs[compoundKey] ?? nil },

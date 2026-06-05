@@ -1,6 +1,11 @@
 import SwiftUI
 import Markdown
 
+/// Column alignment parsed from a markdown table.
+enum TableColumnAlignment {
+    case left, center, right
+}
+
 /// A parsed markdown block produced by `MarkdownFormatter.parse`.
 enum MarkdownBlock: Identifiable {
     case heading(level: Int, text: AttributedString)
@@ -8,8 +13,12 @@ enum MarkdownBlock: Identifiable {
     case code(language: String?, text: String)
     case blockQuote(text: AttributedString)
     case listItem(ordinal: Int, ordered: Bool, text: AttributedString)
-    case thematicBreak(id: Int)
-    case image(url: URL)
+    case thematicBreak
+    case table(
+        headers: [AttributedString],
+        rows: [[AttributedString]],
+        alignments: [TableColumnAlignment]
+    )
 
     var id: String {
         switch self {
@@ -24,10 +33,13 @@ enum MarkdownBlock: Identifiable {
         case .listItem(let o, let ord, let t):
             let k = "li\(ord ? "o" : "u")\(o)"
             return "\(k)-\(String(t.characters).hashValue)"
-        case .thematicBreak(let id):
-            return "hr-\(id)"
-        case .image(let url):
-            return "img-\(url.absoluteString.hashValue)"
+        case .thematicBreak:
+            return "hr-\(Int.random(in: 0...Int.max))"
+        case .table(let h, let r, _):
+            let hh = h.map { String($0.characters) }.joined()
+            let rr = r.flatMap { $0.map { String($0.characters) } }
+                .joined()
+            return "tbl-\((hh + rr).hashValue)"
         }
     }
 }
@@ -122,14 +134,20 @@ enum MarkdownFormatter {
             case .listItem(let o, let ord, let t):
                 result.append(AttributedString(ord ? "\(o). " : "• "))
                 result.append(t)
-            case .thematicBreak(_):
+            case .thematicBreak:
                 var hr = AttributedString("───")
                 hr.foregroundColor = .secondary
                 result.append(hr)
-            case .image:
-                var img = AttributedString("🖼 [image]")
-                img.foregroundColor = .secondary
-                result.append(img)
+            case .table(let headers, let rows, _):
+                let headerLine = headers
+                    .map { String($0.characters) }.joined(separator: " | ")
+                result.append(AttributedString(headerLine))
+                for row in rows {
+                    result.append(AttributedString("\n"))
+                    let line = row.map { String($0.characters) }
+                        .joined(separator: " | ")
+                    result.append(AttributedString(line))
+                }
             }
         }
         return result

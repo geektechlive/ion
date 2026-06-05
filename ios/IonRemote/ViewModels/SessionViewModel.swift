@@ -319,9 +319,6 @@ final class SessionViewModel {
     /// APNs device token (set by AppDelegate on registration success).
     var apnsToken: String?
 
-    /// Jarvis morning briefings received via push notification.
-    var briefingsStore = BriefingsStore()
-
     // MARK: - Settings (persisted via paired device)
 
     var relayURL: String = ""

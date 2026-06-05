@@ -3,6 +3,7 @@ import SwiftUI
 struct PairingView: View {
     @Environment(\.appTheme) private var theme
     @Environment(SessionViewModel.self) private var viewModel
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var browser = BonjourBrowser()
 
@@ -14,6 +15,15 @@ struct PairingView: View {
     // Whether a codeless recovery attempt is in progress or has been tried
     @State private var attemptingRecovery = false
     @State private var recoveryAttempted = false
+
+    // Discovery pulse animation
+    @State private var pulseScale: CGFloat = 1.0
+
+    // Code field focus
+    @FocusState private var codeFieldFocused: Bool
+
+    // Clipboard paste detection
+    @State private var clipboardHasCode = false
 
     var body: some View {
         NavigationStack {
@@ -122,6 +132,14 @@ struct PairingView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if viewModel.pairedDevices.contains(where: { $0.name == service.name }) {
+                    Text("Paired")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.15), in: Capsule())
+                }
                 Image(systemName: "chevron.right")
                     .foregroundStyle(.tertiary)
             }
@@ -166,7 +184,7 @@ struct PairingView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: - Ion Direct Pairing Sheet
@@ -254,6 +272,7 @@ struct PairingView: View {
                             .tint(theme.accent)
                         }
                     }
+                    .onTapGesture { codeFieldFocused = true }
                     .padding(.horizontal)
 
                     Button {
@@ -267,7 +286,7 @@ struct PairingView: View {
                         Text("Pair")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                            .padding(.vertical, 14)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(theme.accent)
@@ -290,8 +309,11 @@ struct PairingView: View {
                     }
                 }
             }
-            .onChange(of: viewModel.pairedDevices.count) { _, count in
-                if count > 0 { selectedService = nil }
+            .onChange(of: viewModel.pairedDevices.count) { oldCount, newCount in
+                if newCount > oldCount {
+                    Haptic.success()
+                    selectedService = nil
+                }
             }
             .task {
                 // Auto-attempt codeless recovery before showing code entry.
@@ -313,7 +335,16 @@ struct PairingView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
+        .onAppear {
+            if let clip = UIPasteboard.general.string,
+               clip.count == 6, clip.allSatisfy(\.isNumber) {
+                clipboardHasCode = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if !attemptingRecovery { codeFieldFocused = true }
+            }
+        }
     }
 
     // MARK: - Status Indicator

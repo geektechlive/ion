@@ -52,14 +52,6 @@ final class RelayClient {
         self.messages = AsyncStream { continuation = $0 }
         self.messageContinuation = continuation
 
-        NotificationCenter.default.addObserver(
-            forName: .apnsTokenRefreshed,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self, !self.intentionallyClosed else { return }
-            Task { await self.doConnect() }
-        }
     }
 
     deinit {

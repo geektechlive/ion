@@ -3,15 +3,9 @@ import SwiftUI
 /// Renders an array of `MarkdownBlock` values with GitHub-inspired styling.
 /// Each block becomes its own SwiftUI view, enabling backgrounds on code blocks,
 /// dividers under headers, accent bars on blockquotes, and proper list indentation.
-private struct ImageItem: Identifiable, Sendable {
-    let url: URL
-    var id: String { url.absoluteString }
-}
-
 struct MarkdownContentView: View {
     @Environment(\.appTheme) private var theme
     let blocks: [MarkdownBlock]
-    @State private var fullscreenImage: ImageItem?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -37,10 +31,13 @@ struct MarkdownContentView: View {
             blockQuoteView(text: text)
         case .listItem(let ordinal, let ordered, let text):
             listItemView(ordinal: ordinal, ordered: ordered, text: text)
-        case .thematicBreak(_):
+        case .thematicBreak:
             thematicBreakView
-        case .image(let url):
-            imageView(url: url)
+        case .table(let headers, let rows, let alignments):
+            tableView(
+                headers: headers, rows: rows,
+                alignments: alignments
+            )
         }
     }
 
@@ -56,7 +53,15 @@ struct MarkdownContentView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if level <= 2 {
-                Divider()
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(.separator), Color(.separator).opacity(0)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(height: 0.5)
             }
         }
     }
@@ -84,26 +89,30 @@ struct MarkdownContentView: View {
         code: String
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let lang = language, !lang.isEmpty {
-                Text(lang)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 10)
-                    .padding(.bottom, 4)
+            HStack {
+                if let lang = language, !lang.isEmpty {
+                    Text(lang)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                CodeBlockCopyButton(code: code)
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code)
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
                     .padding(.horizontal, 12)
-                    .padding(.vertical, language != nil ? 6 : 10)
+                    .padding(.vertical, 6)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.tertiarySystemFill))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .background(Color(.secondarySystemFill).opacity(0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Block quote
@@ -249,87 +258,29 @@ struct MarkdownContentView: View {
         Divider()
             .padding(.vertical, 4)
     }
-
-    // MARK: - Image
-
-    private func imageView(url: URL) -> some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .empty:
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(.tertiarySystemFill))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 120)
-                    ProgressView()
-                }
-            case .success(let image):
-                image
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .frame(maxHeight: 300)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .onTapGesture { fullscreenImage = ImageItem(url: url) }
-            case .failure:
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(.tertiarySystemFill))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 80)
-                    Label("Image unavailable", systemImage: "photo.slash")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                }
-            @unknown default:
-                EmptyView()
-            }
-        }
-    }
 }
 
-private struct FullscreenImageView: View {
-    let url: URL
-    @Environment(\.dismiss) private var dismiss
-    @State private var scale: CGFloat = 1.0
-    @GestureState private var magnifyBy: CGFloat = 1.0
+// MARK: - Code block copy button
+
+private struct CodeBlockCopyButton: View {
+    let code: String
+    @State private var copied = false
 
     var body: some View {
-        NavigationStack {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .scaleEffect(scale * magnifyBy)
-                        .gesture(
-                            MagnificationGesture()
-                                .updating($magnifyBy) { value, state, _ in state = value }
-                                .onEnded { value in
-                                    scale = max(1.0, min(scale * value, 5.0))
-                                }
-                        )
-                        .onTapGesture(count: 2) { scale = 1.0 }
-                case .empty:
-                    ProgressView()
-                case .failure:
-                    Label("Image unavailable", systemImage: "photo.slash")
-                        .foregroundStyle(.secondary)
-                @unknown default:
-                    EmptyView()
-                }
+        Button {
+            UIPasteboard.general.string = code
+            copied = true
+            Haptic.light()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                copied = false
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .foregroundStyle(.white)
-                }
-            }
-            .toolbarBackground(Color.black, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.caption2)
+                .foregroundStyle(copied ? Color.green : Color(.tertiaryLabel))
+                .frame(width: 24, height: 24)
+                .contentTransition(.symbolEffect(.replace))
         }
+        .buttonStyle(.plain)
     }
 }

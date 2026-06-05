@@ -116,7 +116,7 @@ struct ContentView: View {
                 .controlSize(.large)
             Text(viewModel.connectionState.label)
                 .font(.headline)
-            Text("Waiting for Jarvis...")
+            Text("Waiting for Ion desktop...")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             if viewModel.connectionState == .connecting && connectingElapsed > 0 {
@@ -133,7 +133,7 @@ struct ContentView: View {
             if connectingElapsed > 10 {
                 DisclosureGroup("Troubleshooting", isExpanded: $showTroubleshooting) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Make sure Jarvis desktop is running", systemImage: "desktopcomputer")
+                        Label("Make sure Ion desktop is running", systemImage: "desktopcomputer")
                         Label("Check you're on the same network", systemImage: "wifi")
                         Label("Try tapping Retry", systemImage: "arrow.clockwise")
                     }

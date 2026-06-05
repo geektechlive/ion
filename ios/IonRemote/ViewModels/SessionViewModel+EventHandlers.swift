@@ -516,16 +516,7 @@ extension SessionViewModel {
             if let existingIdx = existing.firstIndex(where: { $0.id == message.id }) {
                 existing[existingIdx] = message
             } else {
-                // New message: stamp agentName for running tool calls
-                var messageToAdd = message
-                if message.role == .tool, message.toolStatus == .running, message.agentName == nil {
-                    let runningAgent = engineAgentStates
-                        .first { $0.key == tabId || $0.key.hasPrefix("\(tabId):") }?
-                        .value
-                        .first { $0.status == "running" && $0.type != "chief" }
-                    messageToAdd.agentName = runningAgent?.displayName
-                }
-                existing.append(messageToAdd)
+                existing.append(message)
             }
             messages[tabId] = existing
         } else {

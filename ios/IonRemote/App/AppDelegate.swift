@@ -1,9 +1,14 @@
-import SwiftUI
-import UserNotifications
-#if canImport(UIKit)
 import UIKit
+import UserNotifications
 
-class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+/// Handles push notification registration and delivery.
+///
+/// This is intentionally minimal — push notifications are an
+/// enhancement, not a requirement. All app functionality works
+/// via WebSocket regardless of push status.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+
+    /// Shared reference set by IonRemoteApp so we can forward the device token.
     weak var sessionViewModel: SessionViewModel?
 
     func application(
@@ -11,27 +16,27 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        requestNotificationPermission()
         return true
     }
+
+    // MARK: - Registration
 
     func application(
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        let hex = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        let previous = UserDefaults.standard.string(forKey: "apnsDeviceToken")
-        UserDefaults.standard.set(hex, forKey: "apnsDeviceToken")
-        print("[Ion] APNs device token registered: \(hex)")
-        if previous != hex {
-            NotificationCenter.default.post(name: .apnsTokenRefreshed, object: nil)
-        }
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        print("[push] registered with token: \(token.prefix(8))...")
+        sessionViewModel?.apnsToken = token
     }
 
     func application(
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        print("[Ion] APNs registration failed: \(error)")
+        // Graceful degradation: push is optional.
+        print("[push] registration failed: \(error.localizedDescription)")
     }
 
     /// Called when iOS wakes the app in the background for a content-available:1 push.
@@ -58,6 +63,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         completionHandler([])
     }
 
+    /// Handle notification taps (app was in background or closed).
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
