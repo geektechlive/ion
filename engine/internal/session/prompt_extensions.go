@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
@@ -87,17 +86,21 @@ func (m *Manager) fireBeforeAgentStart(s *engineSession, key string, extGroup *e
 	}
 }
 
-// fireBeforePromptCli fires the before_prompt hook for CliBackend runs.
-// ApiBackend wires this hook inside buildRunConfig; CliBackend skips that path,
-// so we fire the hook here and materialise the result into RunOptions before
-// the subprocess is launched. No-op when the backend is not CliBackend.
+// fireBeforePromptCli fires the before_prompt hook for subprocess backend runs
+// (CliBackend and CodexCliBackend). ApiBackend wires this hook inside
+// buildRunConfig; subprocess backends skip that path, so we fire the hook here
+// and materialise the result into RunOptions before the subprocess launches.
+// No-op when the backend is not a subprocess backend.
 //
-// Under HybridBackend, this only fires when the model resolves to the
-// inner *CliBackend (Anthropic models). API-routed hybrid runs use the
+// Under HybridBackend, this fires for Anthropic models (→ *CliBackend) and
+// OpenAI models (→ *CodexCliBackend). API-routed hybrid runs use the
 // ApiBackend's buildRunConfig path for before_prompt, identical to plain
 // "backend": "api".
+//
+// For CodexCliBackend, opts.SystemPrompt is prepended to the user prompt
+// text inside the subprocess (Codex has no --system-prompt flag).
 func (m *Manager) fireBeforePromptCli(s *engineSession, key string, extGroup *extension.ExtensionGroup, skipExtensions bool, opts *types.RunOptions) {
-	if _, isCli := m.resolvedBackend(opts.Model).(*backend.CliBackend); !isCli {
+	if !isSubprocessBackend(m.resolvedBackend(opts.Model)) {
 		return
 	}
 	if extGroup == nil || extGroup.IsEmpty() || skipExtensions {

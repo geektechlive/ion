@@ -11,11 +11,10 @@ import (
 // or any test mock), it returns m.backend unchanged so existing type-
 // assertion call sites continue to work without modification.
 //
-// For HybridBackend, it asks providers.GetModelInfo about the model and
-// returns the inner *CliBackend when the resolved provider ID is
-// "anthropic", or the inner *ApiBackend otherwise (including for
-// unregistered models — those route to the API path where a clean
-// provider error can surface).
+// For HybridBackend, it routes by resolved provider ID:
+//   - "anthropic" → inner *CliBackend (Claude subscription)
+//   - "openai"    → inner *CodexCliBackend (Codex CLI subprocess)
+//   - everything else → inner *ApiBackend (HTTP provider keys)
 //
 // This is the single helper that localizes hybrid awareness inside the
 // session package. Every former m.backend.(*backend.CliBackend) /
@@ -25,20 +24,39 @@ func (m *Manager) resolvedBackend(model string) backend.RunBackend {
 	if !ok {
 		return m.backend
 	}
-	if info := providers.GetModelInfo(model); info != nil && info.ProviderID == "anthropic" {
-		utils.Debug("Session", "resolvedBackend: model="+model+" providerID=anthropic → inner CliBackend")
-		return h.InnerCli()
+	info := providers.GetModelInfo(model)
+	if info != nil {
+		switch info.ProviderID {
+		case "anthropic":
+			utils.Debug("Session", "resolvedBackend: model="+model+" providerID=anthropic → inner CliBackend")
+			return h.InnerCli()
+		case "openai":
+			utils.Debug("Session", "resolvedBackend: model="+model+" providerID=openai → inner CodexCliBackend")
+			return h.InnerCodex()
+		}
 	}
 	utils.Debug("Session", "resolvedBackend: model="+model+" → inner ApiBackend (default)")
 	return h.InnerApi()
 }
 
+// isSubprocessBackend reports whether b is a CLI subprocess backend (either
+// *CliBackend or *CodexCliBackend). Session-layer functions that should fire
+// for any subprocess backend — notably fireBeforePromptCli and
+// fireCliTurnHooks — use this instead of a single *CliBackend type assertion.
+func isSubprocessBackend(b backend.RunBackend) bool {
+	switch b.(type) {
+	case *backend.CliBackend, *backend.CodexCliBackend:
+		return true
+	}
+	return false
+}
+
 // newChildBackend returns a fresh RunBackend of the same kind as the
 // Manager's parent backend. All child-agent dispatch paths must use this
 // instead of calling NewApiBackend()/NewCliBackend() directly, so that
-// backend: "cli" sessions produce CLI children and backend: "hybrid"
-// sessions produce hybrid children whose inner *ApiBackend inherits the
-// parent's auth resolver.
+// backend: "cli" sessions produce CLI children, backend: "codex" produces
+// Codex children, and backend: "hybrid" sessions produce hybrid children
+// whose inner *ApiBackend inherits the parent's auth resolver.
 //
 // When m.childBackendOverride is set (test-only), the override factory
 // runs instead. This is the only injection point unit tests have to
@@ -50,11 +68,13 @@ func (m *Manager) newChildBackend() backend.RunBackend {
 	switch b := m.backend.(type) {
 	case *backend.CliBackend:
 		return backend.NewCliBackend()
+	case *backend.CodexCliBackend:
+		return backend.NewCodexCliBackend()
 	case *backend.HybridBackend:
 		// HybridBackend.NewChild propagates the auth resolver from the
-		// parent's inner *ApiBackend so non-Claude child runs can resolve
-		// provider credentials. Without this, dispatching ion_agent with
-		// model: "gpt-4.1" under hybrid would fail silently.
+		// parent's inner *ApiBackend so non-Claude, non-Codex child runs can
+		// resolve provider credentials. Without this, dispatching ion_agent
+		// with model: "gpt-4.1" under hybrid would fail silently.
 		return b.NewChild()
 	default:
 		return backend.NewApiBackend()

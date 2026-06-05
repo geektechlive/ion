@@ -107,9 +107,11 @@ func cmdServe() {
 	switch cfg.Backend {
 	case "cli":
 		b = backend.NewCliBackend()
+	case "codex":
+		b = backend.NewCodexCliBackend()
 	case "hybrid":
-		// Hybrid backend wraps both CLI (Claude subscription) and API
-		// (provider keys) and routes each run by resolved provider ID at
+		// Hybrid backend wraps CLI (Claude subscription), Codex (OpenAI CLI),
+		// and API (provider keys) and routes each run by resolved provider ID at
 		// dispatch time. See engine/internal/backend/hybrid_backend.go.
 		b = backend.NewHybridBackend()
 	default:
@@ -118,7 +120,7 @@ func cmdServe() {
 
 	// Attach the auth resolver to whatever backend implementation we built.
 	// HybridBackend forwards the resolver to its inner *ApiBackend; plain
-	// CliBackend does not need a resolver (subscription path).
+	// CliBackend and CodexCliBackend do not need a resolver (subscription path).
 	switch v := b.(type) {
 	case *backend.ApiBackend:
 		v.SetAuthResolver(resolver)
