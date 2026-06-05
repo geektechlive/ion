@@ -5,7 +5,7 @@ import { log as _log } from '../../logger'
 import { state, sessionPlane, engineBridge } from '../../state'
 import { broadcast } from '../../broadcast'
 import { terminalManager } from '../../terminal-manager-instance'
-import { readSettings } from '../../settings-store'
+import { readSettings, SETTINGS_DEFAULTS } from '../../settings-store'
 import { getRemoteTabStates } from '../snapshot'
 import { discoverCommands } from '../../cli-compat/command-discovery'
 import { autoPullDiagnosticLogs } from './diagnostics'
@@ -410,7 +410,26 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
 export async function handleDiscoverCommands(cmd: Extract<RemoteCommand, { type: 'discover_commands' }>, deviceId: string): Promise<void> {
   const { directory } = cmd
   try {
-    const commands = await discoverCommands(directory)
+    const all = await discoverCommands(directory)
+    // Mirror the desktop IPC handler's enableClaudeCompat filter so the iOS
+    // autocomplete shows the same list the desktop does. Ion-native
+    // commands are always returned; .claude/* entries are gated by the
+    // user's Claude Code Compatibility setting. See
+    // `desktop/src/main/ipc/sessions-list.ts` for the matching filter and
+    // `desktop/src/main/slash-classify.ts` for the expansion-time gate.
+    let claudeCompat = SETTINGS_DEFAULTS.enableClaudeCompat
+    try {
+      const s = readSettings()
+      claudeCompat = s.enableClaudeCompat ?? claudeCompat
+    } catch (err) {
+      log(`discover_commands: readSettings failed reading enableClaudeCompat; defaulting to ${claudeCompat}: ${err}`)
+    }
+    const commands = claudeCompat ? all : all.filter((c) => c.origin === 'ion')
+    if (!claudeCompat) {
+      log(`discover_commands: claudeCompat=false, returning ${commands.length} ion entries, filtered ${all.length - commands.length} claude entries (device=${deviceId})`)
+    } else {
+      log(`discover_commands: claudeCompat=true, returning ${commands.length} entries (device=${deviceId})`)
+    }
     state.remoteTransport?.sendToDevice(deviceId, { type: 'discover_commands_response', directory, commands })
   } catch (err) {
     log(`discover_commands error: ${(err as Error).message}`)

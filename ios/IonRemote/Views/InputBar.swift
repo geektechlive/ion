@@ -62,9 +62,11 @@ struct InputBar: View {
         var cmds = viewModel.discoveredCommands[workingDirectory] ?? []
 
         // Inject the /clear builtin (matches desktop's SLASH_COMMANDS constant).
+        // `origin` is nil for synthetic local entries — the filter only applies
+        // to disk-discovered commands the desktop server sent us.
         let clearCmd = DiscoveredSlashCommand(
             name: "clear", description: "Clear conversation history",
-            scope: "builtin", source: "builtin"
+            scope: "builtin", source: "builtin", origin: nil
         )
         if !cmds.contains(where: { $0.name == "clear" }) {
             cmds.insert(clearCmd, at: 0)
@@ -82,7 +84,8 @@ struct InputBar: View {
                     name: ec.name,
                     description: ec.description ?? ec.name,
                     scope: "extension",
-                    source: "extension"
+                    source: "extension",
+                    origin: nil
                 ))
             }
         }

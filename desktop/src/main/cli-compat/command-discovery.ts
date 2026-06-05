@@ -14,6 +14,11 @@ export type { DiscoveredCommand }
  * compat gate lives at expansion time in slash-classify.ts, not at
  * discovery time. This keeps the autocomplete list complete regardless
  * of the gate setting.
+ *
+ * Each returned `DiscoveredCommand` carries an `origin` field
+ * (`'ion' | 'claude'`) so the autocomplete IPC handler can filter out
+ * Claude-compat entries when `enableClaudeCompat` is disabled without
+ * having to re-derive the directory family from the command name.
  */
 export async function discoverCommands(projectPath: string): Promise<DiscoveredCommand[]> {
   const home = homedir()
@@ -25,11 +30,11 @@ export async function discoverCommands(projectPath: string): Promise<DiscoveredC
     userSkills,
     projectCommands,
   ] = await Promise.all([
-    scanCommandDir(join(home, '.ion', 'commands'), 'user'),
-    scanCommandDir(join(projectPath, '.ion', 'commands'), 'project'),
-    scanCommandDir(join(home, '.claude', 'commands'), 'user'),
+    scanCommandDir(join(home, '.ion', 'commands'), 'user', 'ion'),
+    scanCommandDir(join(projectPath, '.ion', 'commands'), 'project', 'ion'),
+    scanCommandDir(join(home, '.claude', 'commands'), 'user', 'claude'),
     scanSkillsDir(join(home, '.claude', 'skills')),
-    scanCommandDir(join(projectPath, '.claude', 'commands'), 'project'),
+    scanCommandDir(join(projectPath, '.claude', 'commands'), 'project', 'claude'),
   ])
 
   return [
@@ -97,11 +102,12 @@ function parseFrontmatterDescription(content: string): string {
 async function scanCommandDir(
   dirPath: string,
   scope: 'user' | 'project',
+  origin: 'ion' | 'claude',
 ): Promise<DiscoveredCommand[]> {
   if (!(await dirExists(dirPath))) return []
 
   const commands: DiscoveredCommand[] = []
-  await walkCommandDir(dirPath, dirPath, scope, commands)
+  await walkCommandDir(dirPath, dirPath, scope, origin, commands)
   return commands
 }
 
@@ -109,6 +115,7 @@ async function walkCommandDir(
   baseDir: string,
   currentDir: string,
   scope: 'user' | 'project',
+  origin: 'ion' | 'claude',
   results: DiscoveredCommand[],
 ): Promise<void> {
   let entries
@@ -126,7 +133,7 @@ async function walkCommandDir(
     const fullPath = join(currentDir, entry.name)
 
     if (entry.isDirectory()) {
-      tasks.push(walkCommandDir(baseDir, fullPath, scope, results))
+      tasks.push(walkCommandDir(baseDir, fullPath, scope, origin, results))
     } else if (entry.isFile() && extname(entry.name) === '.md') {
       tasks.push(
         readFile(fullPath, 'utf-8').then((content) => {
@@ -138,6 +145,7 @@ async function walkCommandDir(
             description: extractCommandDescription(content),
             scope,
             source: 'command',
+            origin,
           })
         }).catch(() => {
           // Skip files that can't be read
@@ -151,6 +159,11 @@ async function walkCommandDir(
 
 /**
  * Scan ~/.claude/skills/ for directories containing SKILL.md.
+ *
+ * Skills are inherently a Claude-compat artifact (Ion does not have a
+ * `~/.ion/skills/` directory) so every result is tagged
+ * `origin: 'claude'`. The IPC handler filters these out when
+ * `enableClaudeCompat` is disabled.
  */
 async function scanSkillsDir(skillsDir: string): Promise<DiscoveredCommand[]> {
   if (!(await dirExists(skillsDir))) return []
@@ -173,6 +186,7 @@ async function scanSkillsDir(skillsDir: string): Promise<DiscoveredCommand[]> {
           description: parseFrontmatterDescription(content),
           scope: 'user',
           source: 'skill',
+          origin: 'claude',
         }
       } catch {
         return null
