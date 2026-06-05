@@ -515,9 +515,7 @@ window.ion?.on?.('ion:settings-changed', (_e: unknown, key: string, value: unkno
 
 /** Reactive hook — returns the active color palette */
 export function useColors(): ColorPalette {
-  const themeMode = usePreferencesStore((s) => s.themeMode)
   const isDark = usePreferencesStore((s) => s.isDark)
-  if (themeMode === 'hud') return hudColors
   return isDark ? darkColors : lightColors
 }
 
