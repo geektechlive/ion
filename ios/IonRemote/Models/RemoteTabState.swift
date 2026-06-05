@@ -50,6 +50,30 @@ struct TerminalInstanceInfo: Codable, Identifiable, Sendable {
     var cwd: String
 }
 
+// MARK: - EngineInstanceModelFallback
+
+/// Per-engine-instance model-fallback indicator carried on
+/// EngineInstanceInfo. Populated by the desktop snapshot when the engine
+/// emitted a ModelFallbackEvent for the corresponding run — i.e. the
+/// requested model didn't resolve to a provider and the engine fell
+/// back to its configured `defaultModel`.
+///
+/// iOS receives this via the snapshot path, not via a live RemoteEvent,
+/// because the engine's ModelFallbackEvent is a workflow signal (fires
+/// once at the swap site) — to give iOS a sticky-across-reconnect
+/// indicator without a new RemoteEvent variant, the desktop projects
+/// the fact onto the snapshot. See CLAUDE.md § "Common parity surfaces"
+/// row for model fallback indicator and § "The typed-event corollary"
+/// for the broader rule that the engine's typed event is the complete
+/// signaling surface.
+struct EngineInstanceModelFallback: Codable, Sendable, Equatable {
+    /// The model string the run was started with (e.g. an unconfigured
+    /// tier alias like "standard").
+    let requestedModel: String
+    /// The engine's configured `defaultModel` that the run actually used.
+    let fallbackModel: String
+}
+
 // MARK: - EngineInstanceInfo
 
 struct EngineInstanceInfo: Codable, Identifiable, Sendable {
@@ -71,6 +95,13 @@ struct EngineInstanceInfo: Codable, Identifiable, Sendable {
     /// status is aggregated by the snapshot — if any instance is running,
     /// `RemoteTabState.status` is promoted to `.running`.
     var isRunning: Bool? = nil
+    /// Per-engine-instance model-fallback indicator. Non-nil when the
+    /// desktop's engineModelFallbacks map holds an entry for this
+    /// `tabId:instanceId` — i.e. the engine emitted ModelFallbackEvent
+    /// for the current/most recent run and the run hasn't yet gone
+    /// idle. `EngineInstanceBar` renders a ⚠ glyph when non-nil; tap
+    /// to reveal the requested + fallback model names.
+    var modelFallback: EngineInstanceModelFallback? = nil
 }
 
 // MARK: - PermissionMode

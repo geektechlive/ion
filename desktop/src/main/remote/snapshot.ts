@@ -139,7 +139,26 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                     instRunning = st === 'running' || st === 'connecting' || st === 'starting';
                   }
                 }
-                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined };
+                // Per-instance model-fallback indicator. Projects the
+                // renderer's engineModelFallbacks map onto each instance
+                // so iOS can render a matching ⚠ glyph on its
+                // EngineInstanceBar. The desktop populates the source
+                // map from engine_model_fallback events; we forward only
+                // the requested + fallback model strings (no timestamp,
+                // no reason — iOS doesn't need them to render the
+                // indicator). When iOS's snapshot pull arrives with the
+                // field omitted, the iOS indicator clears — matching the
+                // desktop's clear-on-idle behaviour via the snapshot tick.
+                // See CLAUDE.md § "Common parity surfaces" row for model
+                // fallback indicator.
+                var mfOut = undefined;
+                if (s.engineModelFallbacks && s.engineModelFallbacks.get) {
+                  var mf = s.engineModelFallbacks.get(t.id + ':' + inst.id);
+                  if (mf) {
+                    mfOut = { requestedModel: mf.requestedModel, fallbackModel: mf.fallbackModel };
+                  }
+                }
+                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, modelFallback: mfOut };
               });
               activeEngineInstanceId = ePaneForList.activeInstanceId || ePaneForList.instances[0].id;
             }

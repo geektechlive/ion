@@ -61,6 +61,25 @@ export interface State {
   engineModelOverrides: Map<string, string>
   engineDraftInputs: Map<string, string>
   /**
+   * Pending model-fallback notice per engine instance, keyed by the
+   * compound `${tabId}:${instanceId}` key. Populated when the engine
+   * emits a `model_fallback` NormalizedEvent — typically because a
+   * dispatched agent requested an unconfigured tier alias and the
+   * runloop swapped to the engine's configured `defaultModel`.
+   *
+   * This client's policy: display a small ⚠ glyph on the affected
+   * EngineStatusBar pill with a tooltip naming the requested and
+   * fallback models. Clear on the next `task_complete` for that
+   * instance (no wall-clock timer — clients don't invent retention
+   * rules per `docs/architecture/agent-state.md`).
+   *
+   * The engine event is workflow, not state — it fires once at the
+   * swap site and is not retained in any snapshot. Persisting the
+   * fact in renderer state turns it into a sticky-until-cleared UI
+   * indicator. See CLAUDE.md § "The typed-event corollary".
+   */
+  engineModelFallbacks: Map<string, { requestedModel: string; fallbackModel: string; reason: string; at: number }>
+  /**
    * Pending AskUserQuestion / ExitPlanMode denials per engine instance,
    * keyed by the compound `${tabId}:${instanceId}` key. A `null` slot is
    * the explicit "no pending denial" marker for an instance (preserved

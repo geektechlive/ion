@@ -180,6 +180,7 @@ Desktop and iOS are co-equal clients. When a desktop change touches a feature th
 | Thinking indicator / interrupt button | Activity indicator / interrupt button | Real-time events (`engineTextDelta`, `tabStatus`) |
 | Tab context menu (TabStripTabContextMenu) | Tab context menu (TabRowContextMenu) | Actions operate on `RemoteTabState` fields; session identity via `snapshot.ts` → `RemoteTabState.conversationId` (CLI) and `StatusFields.sessionId` (engine) |
 | Desktop Settings dialog (SettingsDialog categories) | Desktop Settings detail (DesktopSettingsView sections) | `projectable-settings.ts` allowlist → `desktop_settings_snapshot` event (settings + schema + groups) → `DesktopSettingsView` auto-renders sections. iOS group IDs **must** match the desktop's `CATEGORIES` array; renaming a desktop category requires updating `PROJECTABLE_GROUP_LABELS` and the test in `projectable-settings.test.ts`. Adding a new user-editable desktop preference requires a parallel entry in `PROJECTABLE_SETTINGS_DATA` unless the setting is local-machine-only (font, path, secret). |
+| Model fallback indicator (EngineStatusBar per-instance ⚠) | Model fallback indicator (EngineInstanceBar per-instance ⚠) | `snapshot.ts` → `RemoteTabState.engineInstances[i].modelFallback`. Desktop populates `engineModelFallbacks` from the `engine_model_fallback` event; the snapshot poller projects each entry onto the corresponding `engineInstances[i]` and iOS reads it from the snapshot. Cleared on the next idle transition (per-instance). |
 
 ### When to skip iOS
 

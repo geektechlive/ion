@@ -1,11 +1,12 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
-import { Plus, X } from '@phosphor-icons/react'
+import { Plus, X, Warning } from '@phosphor-icons/react'
 import { Reorder } from 'framer-motion'
 import { useShallow } from 'zustand/shallow'
 import { useColors } from '../theme'
 import { useSessionStore } from '../stores/sessionStore'
 import type { EngineInstance } from '../../shared/types'
 import { getEngineInstanceWaitingState } from './TabStripShared'
+import { Tooltip } from './git/Tooltip'
 
 interface Props {
   tabId: string
@@ -35,6 +36,23 @@ export function EngineStatusBar({ tabId }: Props) {
       for (const inst of pane?.instances || []) {
         const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
         if (state) out.set(inst.id, state)
+      }
+      return out
+    }),
+  )
+  // Subscribe to engineModelFallbacks scoped to this tab's instances.
+  // The slice writes per `${tabId}:${instanceId}` so we project by
+  // instance id, mirroring the engineStateByInstance pattern above.
+  // useShallow keeps render cost low — we only re-render when the
+  // {id, info} pairs actually change, not on unrelated session-store
+  // writes. See engine-event-slice.ts case 'engine_model_fallback' for
+  // the writer and engine-event-status.ts (idle branch) for the clear.
+  const modelFallbackByInstance = useSessionStore(
+    useShallow((s) => {
+      const out = new Map<string, { requestedModel: string; fallbackModel: string }>()
+      for (const inst of pane?.instances || []) {
+        const fb = s.engineModelFallbacks.get(`${tabId}:${inst.id}`)
+        if (fb) out.set(inst.id, { requestedModel: fb.requestedModel, fallbackModel: fb.fallbackModel })
       }
       return out
     }),
@@ -181,6 +199,34 @@ export function EngineStatusBar({ tabId }: Props) {
         ) : (
           <span>{inst.label}</span>
         )}
+        {/* Model-fallback indicator. The engine emits engine_model_fallback
+            when a dispatched run's requested model didn't resolve to a
+            provider and the runloop fell back to the engine's configured
+            defaultModel. This client's policy is to display a small ⚠
+            glyph on the affected instance pill until the next idle
+            transition. Per CLAUDE.md § "The typed-event corollary", that
+            policy is one consumer's choice — headless harnesses are
+            free to react differently or ignore the event. */}
+        {(() => {
+          const fb = modelFallbackByInstance.get(inst.id)
+          if (!fb) return null
+          return (
+            <Tooltip text={`Requested model "${fb.requestedModel}" not configured; running with default "${fb.fallbackModel}"`}>
+              <span
+                data-ion-ui
+                data-testid={`model-fallback-warning-${inst.id}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  color: colors.infoText,
+                  flexShrink: 0,
+                }}
+              >
+                <Warning size={11} weight="fill" />
+              </span>
+            </Tooltip>
+          )
+        })()}
         {/* Close button */}
         <button
           data-ion-ui

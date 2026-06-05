@@ -86,6 +86,7 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   compacting: ['active', 'clearedBlocks', 'messagesAfter', 'messagesBefore', 'strategy', 'summary'],
   tool_stalled: ['elapsed', 'toolId', 'toolName'],
   steer_injected: ['messageLength'],
+  model_fallback: ['fallbackModel', 'reason', 'requestedModel'],
 }
 
 // ─── TS SharedTypes field map ───

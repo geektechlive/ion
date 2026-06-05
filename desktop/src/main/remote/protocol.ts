@@ -53,7 +53,7 @@ export interface RemoteTabState {
   isTerminalOnly?: boolean
   isEngine?: boolean
   engineProfileId?: string | null
-  engineInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null; isRunning?: boolean }>
+  engineInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null; isRunning?: boolean; modelFallback?: { requestedModel: string; fallbackModel: string } }>
   activeEngineInstanceId?: string | null
   terminalInstances?: TerminalInstanceInfo[]
   activeTerminalInstanceId?: string | null

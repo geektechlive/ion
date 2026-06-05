@@ -117,6 +117,7 @@
 		A1B2C3D4E5F60001000240AA /* NormalizedEventStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000241AA /* NormalizedEventStreamTests.swift */; };
 		A1B2C3D4E5F60001000242AA /* NormalizedEventPermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000243AA /* NormalizedEventPermissionTests.swift */; };
 		A1B2C3D4E5F60001000244AA /* NormalizedEventLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */; };
+		A1B2C3D4E5F60003000201AA /* ModelFallbackSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60003000202AA /* ModelFallbackSnapshotTests.swift */; };
 		A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */; };
 		A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */; };
 		A1B2C3D4E5F60001E80006AA /* DesktopSettingsContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */; };
@@ -294,6 +295,7 @@
 		A1B2C3D4E5F60001000241AA /* NormalizedEventStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventStreamTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000243AA /* NormalizedEventPermissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventPermissionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventLifecycleTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60003000202AA /* ModelFallbackSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelFallbackSnapshotTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventTerminalTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractSyncTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopSettingsContractTests.swift; sourceTree = "<group>"; };
@@ -564,6 +566,7 @@
 				A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */,
 				A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */,
 				A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */,
+				A1B2C3D4E5F60003000202AA /* ModelFallbackSnapshotTests.swift */,
 				A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */,
 				A1B2C3D4E5F60001F00007AA /* ContractSyncEngineEventsTests.swift */,
 				A1B2C3D4E5F60001F00013AA /* RemoteCommandPillTests.swift */,
@@ -908,6 +911,7 @@
 				A1B2C3D4E5F60001000242AA /* NormalizedEventPermissionTests.swift in Sources */,
 				A1B2C3D4E5F60001000244AA /* NormalizedEventLifecycleTests.swift in Sources */,
 				A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */,
+				A1B2C3D4E5F60003000201AA /* ModelFallbackSnapshotTests.swift in Sources */,
 				A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */,
 				A1B2C3D4E5F60001E80006AA /* DesktopSettingsContractTests.swift in Sources */,
 				A1B2C3D4E5F60001F00006AA /* ContractSyncEngineEventsTests.swift in Sources */,

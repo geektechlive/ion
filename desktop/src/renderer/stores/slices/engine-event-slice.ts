@@ -522,6 +522,33 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           })
           break
         }
+        case 'engine_model_fallback': {
+          // The engine fell back to its configured defaultModel because
+          // the requested model didn't resolve to a provider. This
+          // client's policy: show a small ⚠ glyph on the affected
+          // engine instance pill via the EngineStatusBar. The fact is
+          // stored per-instance (compound key) and cleared on the next
+          // engine_status state=idle for that same instance (see the
+          // `state === 'idle'` branch in engine-event-status.ts).
+          //
+          // Engine event semantics: ModelFallbackEvent is a workflow
+          // signal, not a state snapshot — it fires once at the swap
+          // site. Persisting it in renderer state is renderer policy,
+          // not engine policy; another consumer (headless harness,
+          // future CLI client) is free to ignore the event entirely.
+          // See CLAUDE.md § "The typed-event corollary".
+          set((state) => {
+            const fallbacks = new Map(state.engineModelFallbacks)
+            fallbacks.set(key, {
+              requestedModel: event.fallbackRequestedModel,
+              fallbackModel: event.fallbackModel,
+              reason: event.fallbackReason,
+              at: Date.now(),
+            })
+            return { engineModelFallbacks: fallbacks }
+          })
+          break
+        }
       }
     },
   }

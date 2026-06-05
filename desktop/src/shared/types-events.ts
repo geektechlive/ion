@@ -147,3 +147,4 @@ export type NormalizedEvent =
   | { type: 'compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
   | { type: 'tool_stalled'; toolId: string; toolName: string; elapsed: number }
   | { type: 'steer_injected'; messageLength: number }
+  | { type: 'model_fallback'; requestedModel: string; fallbackModel: string; reason: string }
