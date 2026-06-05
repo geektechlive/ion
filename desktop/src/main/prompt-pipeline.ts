@@ -99,7 +99,6 @@ import { dispatchExtensionCommand, tryExpandMarkdownSlash } from './slash-classi
 import { handleLocalClearShortCircuit } from './slash-clear'
 import { encodeImageAttachments } from './remote/attachment-encoder'
 import type { ImageAttachmentPayload } from '../shared/types'
-import { resolveBashAllowlistFromSettings } from './plan-mode-bash-allowlist'
 import { ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER } from './prompt-pipeline-prose'
 import { emitRemoteMessageAdded, insertRendererSystemMessage, clearConnectingStatus } from './prompt-pipeline-renderer'
 import { TURN_GROUPING_GUIDANCE } from './turn-grouping-guidance'
@@ -167,6 +166,17 @@ export interface IncomingPrompt {
    * instead of allocating a fresh slug.
    */
   planFilePath?: string
+  /**
+   * Per-prompt bash-allowlist additions, unioned with the session allowlist
+   * for this one run only. Populated by the slash-classify path when a
+   * slash command's YAML frontmatter declares `allowed_bash_commands` —
+   * the additions are forwarded to engineBridge.sendPrompt so the engine
+   * grants the permissions transiently without persisting them on the
+   * engineSession allowlist (which would leak across subsequent prompts
+   * in the same session). See docs/protocol/client-commands.md
+   * § set_plan_mode for the three-layer configuration model.
+   */
+  bashAllowlistAdditionsForThisPrompt?: string[]
 }
 
 /**
@@ -310,6 +320,11 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
         imageAttachments: p.imageAttachments,
         implementationPhase: p.implementationPhase,
         planFilePath: p.planFilePath,
+        // Per-prompt bash-allowlist additions ride the broadcast so the
+        // renderer's engine-slice can attach them to its subsequent
+        // ENGINE_PROMPT IPC, which lands back in this file via
+        // processIncomingPrompt → submitAsPrompt → engineBridge.sendPrompt.
+        bashAllowlistAdditionsForThisPrompt: p.bashAllowlistAdditionsForThisPrompt,
       })
       return
     }
@@ -326,7 +341,7 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
     // case and the description value goes unused) so the call site stays
     // simple — no branching. Also forward the sparse-reminder override so
     // the per-turn reminder is consistent with the full prompt framing.
-    await engineBridge.sendPrompt(key, p.text, p.model, p.appendSystemPrompt, p.imageAttachments, p.implementationPhase, ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER, p.planFilePath)
+    await engineBridge.sendPrompt(key, p.text, p.model, p.appendSystemPrompt, p.imageAttachments, p.implementationPhase, ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER, p.planFilePath, p.bashAllowlistAdditionsForThisPrompt)
     return
   }
 
@@ -440,20 +455,24 @@ async function handleSlash(p: IncomingPrompt, slash: ParsedSlash): Promise<void>
       p.appendSystemPrompt = p.appendSystemPrompt
         ? p.appendSystemPrompt + '\n\n' + expansion.systemPrompt
         : expansion.systemPrompt
-      // If the expansion specifies allowed bash commands, merge with global
-      // preference and update the engine's plan-mode bash allowlist.
+      // If the expansion specifies allowed bash commands, attach them as
+      // per-prompt additions on the IncomingPrompt. The engine unions them
+      // with the session-scoped allowlist for this one run only — no
+      // session-state mutation, no leak into subsequent prompts. This
+      // replaces a previous engineBridge.sendSetPlanMode call that
+      // persisted slash-command additions on engineSession.planModeAllowedBashCommands
+      // and leaked them across the rest of the session.
+      //
+      // No need to read the user's persisted global allowlist here — the
+      // engine already has it on the session (via the desktop's prior
+      // setPermissionMode → set_plan_mode call) and will union it with
+      // these additions at run-build time. See
+      // docs/protocol/client-commands.md § set_plan_mode for the
+      // three-layer configuration model.
       if (expansion.allowedBashCommands && expansion.allowedBashCommands.length > 0) {
-        // Resolve the user's persisted allowlist via the shared helper so
-        // the read-failure / missing-key fallback path is consistent with
-        // engine-control-plane.ts:setPermissionMode. We only need the
-        // non-empty case here (slash-frontmatter additions are unioned with
-        // whatever the user has; "no global preference" is just an empty
-        // global set), so collapse undefined → [] at this call site.
-        const globalCmds = resolveBashAllowlistFromSettings() ?? []
-        const merged = [...new Set([...globalCmds, ...expansion.allowedBashCommands])]
         const key = engineKey(p)
-        log(`pipeline: frontmatter bash allowlist merged=${merged.length} key=${key}`)
-        engineBridge.sendSetPlanMode(key, true, undefined, 'slash_frontmatter', merged)
+        log(`pipeline: frontmatter bash allowlist additions=${expansion.allowedBashCommands.length} key=${key} (per-prompt, no session mutation)`)
+        p.bashAllowlistAdditionsForThisPrompt = expansion.allowedBashCommands
       }
       await submitAsPrompt(p)
       return

@@ -45,6 +45,17 @@ type RunOptions struct {
 	PlanModeSparseReminder      string   `json:"planModeSparseReminder,omitempty"`
 	PlanModeReentry             bool     `json:"planModeReentry,omitempty"`
 	PlanModeAllowedBashCommands []string `json:"planModeAllowedBashCommands,omitempty"`
+	// BashAllowlistAdditionsForThisPrompt are per-prompt additions
+	// unioned with PlanModeAllowedBashCommands when the engine builds
+	// the run-time tool list. The additions live only for this run;
+	// the engine does NOT mutate the session-level allowlist with
+	// them. Intended carrier: slash-command frontmatter (e.g.
+	// `/ion--review-changes` declares `gh pr diff` in its
+	// `allowed_bash_commands` list and wants the permission for one
+	// turn). The engine de-duplicates the union and preserves the
+	// session-side entries' positions. Mirrors
+	// ClientCommand.BashAllowlistAdditionsForThisPrompt one-for-one.
+	BashAllowlistAdditionsForThisPrompt []string `json:"bashAllowlistAdditionsForThisPrompt,omitempty"`
 	// ImplementationPhase tells the engine that this run is the "implement"
 	// half of a plan-then-implement flow — the user has already approved a
 	// plan and the model should execute it directly without proposing

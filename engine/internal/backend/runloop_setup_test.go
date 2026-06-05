@@ -825,3 +825,149 @@ func TestBuildPlanModePrompt_BashRestrictionLineChanges(t *testing.T) {
 		t.Error("should still ban NotebookEdit when bash is allowed")
 	}
 }
+
+// --- per-prompt bash allowlist additions ---
+
+// TestEffectiveBashAllowlist_NoAdditions returns the session allowlist
+// untouched (hot path, no allocation when there are no per-prompt
+// additions).
+func TestEffectiveBashAllowlist_NoAdditions(t *testing.T) {
+	opts := types.RunOptions{
+		PlanModeAllowedBashCommands: []string{"gh", "git log"},
+	}
+	got := effectiveBashAllowlist(opts)
+	want := []string{"gh", "git log"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d entries, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestEffectiveBashAllowlist_AdditionsOnly returns just the additions when
+// the session allowlist is empty. Pins that a fresh slash command (no
+// session allowlist set) can still grant per-prompt permissions.
+func TestEffectiveBashAllowlist_AdditionsOnly(t *testing.T) {
+	opts := types.RunOptions{
+		BashAllowlistAdditionsForThisPrompt: []string{"gh pr diff"},
+	}
+	got := effectiveBashAllowlist(opts)
+	if len(got) != 1 || got[0] != "gh pr diff" {
+		t.Errorf("expected [\"gh pr diff\"], got %v", got)
+	}
+}
+
+// TestEffectiveBashAllowlist_UnionDedupe pins the session-first ordering
+// and the de-duplication rule: entries present in both lists appear once,
+// in the session-allowlist position. New entries appear in the order they
+// were declared in the per-prompt additions list.
+func TestEffectiveBashAllowlist_UnionDedupe(t *testing.T) {
+	opts := types.RunOptions{
+		PlanModeAllowedBashCommands:         []string{"gh", "git log"},
+		BashAllowlistAdditionsForThisPrompt: []string{"git log", "gh pr diff", "gh"},
+	}
+	got := effectiveBashAllowlist(opts)
+	want := []string{"gh", "git log", "gh pr diff"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d entries, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %q want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// TestBuildToolDefs_PerPromptBashAdditionsAppearInRunState verifies that
+// per-prompt additions land on `activeRun.planModeAllowedBashCommands`
+// alongside (after de-dup) the session-level entries. This is the gate
+// state consulted by applyPlanModeBashGate per-tool-call, so without
+// this assertion the per-prompt additions would be silently denied at
+// runtime even though they appeared in the system prompt.
+func TestBuildToolDefs_PerPromptBashAdditionsAppearInRunState(t *testing.T) {
+	b := NewApiBackend()
+	run := &activeRun{requestID: "per-prompt", planMode: true, planFilePath: "/tmp/plan.md"}
+	opts := types.RunOptions{
+		PlanMode:                            true,
+		PlanFilePath:                        "/tmp/plan.md",
+		PlanModeAllowedBashCommands:         []string{"gh"},
+		BashAllowlistAdditionsForThisPrompt: []string{"git diff"},
+	}
+	provider := &mockLlmProvider{id: "anthropic"}
+
+	toolDefs, _ := b.buildToolDefs(run, opts, provider)
+	hasBash := false
+	for _, td := range toolDefs {
+		if td.Name == "Bash" {
+			hasBash = true
+			break
+		}
+	}
+	if !hasBash {
+		t.Error("expected Bash in tool list when per-prompt additions extend the session allowlist")
+	}
+	// Effective allowlist on the run: ["gh", "git diff"], de-duplicated and
+	// session-first.
+	got := run.planModeAllowedBashCommands
+	want := []string{"gh", "git diff"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %v on run, got %v", want, got)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestBuildToolDefs_PerPromptBashAdditionsDoNotPersist pins the BLOCKER
+// contract from Fix 7: per-prompt additions live only for one run and
+// MUST NOT mutate the session-level engineSession.planModeAllowedBashCommands.
+// We simulate two consecutive runs in the same session by reusing the
+// same activeRun and inspecting opts.PlanModeAllowedBashCommands (the
+// session-level source) across the boundary.
+//
+// The buildToolDefs path is the engine surface this test exercises;
+// the activeRun.planModeAllowedBashCommands change is run-local. The
+// real persistence check is done at the session layer (Fix 7's session
+// allowlist remains the source of truth across prompts).
+func TestBuildToolDefs_PerPromptBashAdditionsDoNotPersist(t *testing.T) {
+	b := NewApiBackend()
+
+	// Prompt 1: session allowlist ["gh"], per-prompt additions ["git diff"].
+	// The effective allowlist for this run is ["gh", "git diff"]. Crucially,
+	// the input opts.PlanModeAllowedBashCommands is NOT mutated — the per-
+	// prompt additions live on the activeRun, not on the session source.
+	run1 := &activeRun{requestID: "run-1", planMode: true, planFilePath: "/tmp/plan.md"}
+	opts1 := types.RunOptions{
+		PlanMode:                            true,
+		PlanFilePath:                        "/tmp/plan.md",
+		PlanModeAllowedBashCommands:         []string{"gh"},
+		BashAllowlistAdditionsForThisPrompt: []string{"git diff"},
+	}
+	provider := &mockLlmProvider{id: "anthropic"}
+	_, _ = b.buildToolDefs(run1, opts1, provider)
+
+	if len(opts1.PlanModeAllowedBashCommands) != 1 || opts1.PlanModeAllowedBashCommands[0] != "gh" {
+		t.Errorf("session-level allowlist mutated by per-prompt additions: got %v, want [gh]", opts1.PlanModeAllowedBashCommands)
+	}
+
+	// Prompt 2: same session allowlist ["gh"], no per-prompt additions.
+	// The effective allowlist must be ["gh"] only — "git diff" from the
+	// prior prompt must NOT carry over.
+	run2 := &activeRun{requestID: "run-2", planMode: true, planFilePath: "/tmp/plan.md"}
+	opts2 := types.RunOptions{
+		PlanMode:                    true,
+		PlanFilePath:                "/tmp/plan.md",
+		PlanModeAllowedBashCommands: []string{"gh"},
+	}
+	_, _ = b.buildToolDefs(run2, opts2, provider)
+
+	got := run2.planModeAllowedBashCommands
+	if len(got) != 1 || got[0] != "gh" {
+		t.Errorf("per-prompt additions leaked into a subsequent run: got %v, want [gh]", got)
+	}
+}

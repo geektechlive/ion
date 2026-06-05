@@ -60,6 +60,16 @@ func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) 
 		if overrides.PlanModeSparseReminder != "" {
 			opts.PlanModeSparseReminder = overrides.PlanModeSparseReminder
 		}
+		// Forward the per-prompt bash-allowlist additions. The field is
+		// transient by design: opts.BashAllowlistAdditionsForThisPrompt is
+		// unioned with the session allowlist when runloop_setup builds the
+		// run-time tool list (see buildToolDefs). The session-level
+		// engineSession.planModeAllowedBashCommands is NOT mutated by this
+		// field — that invariant is the point of having a separate field
+		// rather than a session-scoped mutation here.
+		if len(overrides.BashAllowlistAdditionsForThisPrompt) > 0 {
+			opts.BashAllowlistAdditionsForThisPrompt = overrides.BashAllowlistAdditionsForThisPrompt
+		}
 		// Compaction overrides — per-prompt tuning of context compaction.
 		if overrides.CompactTargetPercent > 0 {
 			opts.CompactTargetPercent = overrides.CompactTargetPercent
