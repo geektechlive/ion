@@ -49,12 +49,12 @@ func TestHybrid_ChooseFor_AnthropicGoesCli(t *testing.T) {
 	}
 }
 
-func TestHybrid_ChooseFor_OpenAIGoesApi(t *testing.T) {
+func TestHybrid_ChooseFor_OpenAIGoesCodex(t *testing.T) {
 	registerHybridTestModels(t)
 	h := NewHybridBackend()
 	got := h.chooseFor("gpt-test-4o")
-	if got != h.api {
-		t.Fatalf("expected inner ApiBackend for gpt-* model, got %T", got)
+	if got != h.codex {
+		t.Fatalf("expected inner CodexCliBackend for openai model, got %T", got)
 	}
 }
 
