@@ -247,7 +247,11 @@ func (b *CodexCliBackend) runProcess(ctx context.Context, run *codexRun, opts ty
 
 	args := []string{"exec", "--json", "--skip-git-repo-check"}
 
-	if opts.Model != "" {
+	// Pass -m only for specific model IDs. Generic aliases like "codex" or
+	// "codex-mini-latest" are registered in models.json to route to this
+	// backend but should use Codex's configured default model, not be passed
+	// verbatim to the CLI (Codex would reject the alias as an unknown model ID).
+	if opts.Model != "" && opts.Model != "codex" && opts.Model != "codex-mini-latest" {
 		args = append(args, "-m", opts.Model)
 	}
 
