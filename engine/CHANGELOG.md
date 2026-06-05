@@ -13,6 +13,20 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.36.0](https://github.com/dsswift/ion/compare/engine-v1.35.0...engine-v1.36.0) (2026-06-05)
+
+### Features
+
+* **engine:** wire task_created/completed for Cli and Api backends (#175) ([4d4bd26](https://github.com/dsswift/ion/commit/4d4bd2683849b2d8b271b7787c1a0266b4c001fb))
+* **engine:** configurable bash commands in plan mode ([d7e6c5f](https://github.com/dsswift/ion/commit/d7e6c5f7fa0dd2695e54a7f96809db586c0217b2))
+* **engine:** per-prompt bash allowlist additions (no session-state mutation) ([184a16f](https://github.com/dsswift/ion/commit/184a16f5b33f4add261be0f02f9a870efa2ed132))
+
+### Bug Fixes
+
+* **engine:** resolve tier aliases in agent spawner (#174) ([0d1425f](https://github.com/dsswift/ion/commit/0d1425f86353033a2fae8e1ad74422d6af7f0cb7))
+* **engine:** implement MCP compliance for CliBackend (#182) ([2cf94ea](https://github.com/dsswift/ion/commit/2cf94ea26c531e1bbfdfb6be789710af5744c5f4))
+* **engine:** replace single-slot currentCtx with ctxStack (#183) ([e5c4dbe](https://github.com/dsswift/ion/commit/e5c4dbe4e1e760fc195c915de279571ea26cc582))
+
 ## [1.35.0](https://github.com/dsswift/ion/compare/engine-v1.34.1...engine-v1.35.0) (2026-06-04)
 
 ### Features

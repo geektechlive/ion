@@ -10,6 +10,20 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.37.0](https://github.com/dsswift/ion/compare/ios-v1.36.0...ios-v1.37.0) (2026-06-05)
+
+### Features
+
+* **ios:** add keyboard utility bar with per-view toggles ([acee173](https://github.com/dsswift/ion/commit/acee1738c57ef0806d1d1aec7970cd830f3d2fd0))
+* **ios:** mirror desktop categories + full settings projection ([b248eaf](https://github.com/dsswift/ion/commit/b248eafde082a4611d9f8b786e25804e2c609be6))
+* **engine:** configurable bash commands in plan mode ([d7e6c5f](https://github.com/dsswift/ion/commit/d7e6c5f7fa0dd2695e54a7f96809db586c0217b2))
+
+### Bug Fixes
+
+* **ios:** shrink oversized system toast notifications ([7588303](https://github.com/dsswift/ion/commit/75883033d7809609bac5490ebf896e383590c12c))
+* **ios:** render attached images on engine prompt without reload ([2fcd2d4](https://github.com/dsswift/ion/commit/2fcd2d40fa9878fbc6b960358cfedb20ea2bdb5b))
+* **ios:** restore keyboard utility bar toggles in Appearance ([a9d454d](https://github.com/dsswift/ion/commit/a9d454da7c926fa5575cbefdc5af4debc3fb9ae7))
+
 ## [1.36.0](https://github.com/dsswift/ion/compare/ios-v1.35.0...ios-v1.36.0) (2026-06-04)
 
 ### Features

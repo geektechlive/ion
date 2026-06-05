@@ -10,6 +10,21 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.50.0](https://github.com/dsswift/ion/compare/desktop-v1.49.0...desktop-v1.50.0) (2026-06-05)
+
+### Features
+
+* **ios:** mirror desktop categories + full settings projection ([b248eaf](https://github.com/dsswift/ion/commit/b248eafde082a4611d9f8b786e25804e2c609be6))
+* **engine:** configurable bash commands in plan mode ([d7e6c5f](https://github.com/dsswift/ion/commit/d7e6c5f7fa0dd2695e54a7f96809db586c0217b2))
+* **engine:** per-prompt bash allowlist additions (no session-state mutation) ([184a16f](https://github.com/dsswift/ion/commit/184a16f5b33f4add261be0f02f9a870efa2ed132))
+
+### Bug Fixes
+
+* **desktop:** use static import for engineBridge in engine-bridge-fs ([b92f8e7](https://github.com/dsswift/ion/commit/b92f8e76e474605f279c4158b46d7fc30adbb0a2))
+* **desktop:** forward all renderer console logs to desktop.log ([07225fa](https://github.com/dsswift/ion/commit/07225faae6c8ec43feb2b19a31505d28229ed0b4))
+* **desktop:** show parent dir in engine profile extension paths ([f46e203](https://github.com/dsswift/ion/commit/f46e203b08e708c6d84904ba9b3c2dd8d440d376))
+* **desktop:** replace hand-rolled YAML frontmatter parser with js-yaml ([7e08ab6](https://github.com/dsswift/ion/commit/7e08ab63486c46a88a2ebfcca19a56d1ecaabf76))
+
 ## [1.49.0](https://github.com/dsswift/ion/compare/desktop-v1.48.0...desktop-v1.49.0) (2026-06-04)
 
 ### Features
