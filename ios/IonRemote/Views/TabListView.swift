@@ -1,7 +1,8 @@
-// @file-size-exception: merge of HEAD (336 lines) + upstream/main (560 lines); extract in follow-up
+// @file-size-exception: single-screen view; split deferred per file-organization.md decomposition phase
 import SwiftUI
 
 struct TabListView: View {
+    @Environment(\.appTheme) private var theme
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(BriefingsStore.self) private var briefingsStore
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -34,6 +35,7 @@ struct TabListView: View {
 
     // iPhone: path-based navigation
     @State private var navigationPath = NavigationPath()
+    @State private var flickerOpacity: Double = 1.0
 
     private let jarvisDir = "/Users/cfavero/Jarvis"
 
@@ -160,11 +162,13 @@ struct TabListView: View {
 
     private var iPhoneLayout: some View {
         ZStack {
-            JarvisTheme.background.ignoresSafeArea()
-            ArcReactorBackground()
-                .ignoresSafeArea()
-                .opacity(0.9)
-
+            if theme.backgroundView != nil {
+                Color(red: 4/255, green: 14/255, blue: 28/255).ignoresSafeArea()
+            }
+            if let bg = theme.backgroundView {
+                bg.ignoresSafeArea().opacity(0.9)
+                let _ = DiagnosticLog.log("THEME-BG: rendering backgroundView for theme \(theme.id)")
+            }
             NavigationStack(path: $navigationPath) {
                 List {
                     tabGroupSections(selectionStyle: .navigation)
@@ -173,6 +177,22 @@ struct TabListView: View {
                 .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search tabs…")
                 .navigationTitle("")
                 .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        if theme.backgroundView != nil {
+                            Text("J A R V I S")
+                                .font(.headline.weight(.black))
+                                .kerning(4)
+                                .foregroundStyle(theme.accent)
+                                .shadow(color: theme.accent.opacity(0.9), radius: 4)
+                                .shadow(color: theme.accent.opacity(0.6), radius: 10)
+                                .shadow(color: theme.accent.opacity(0.3), radius: 20)
+                                .opacity(flickerOpacity)
+                        } else {
+                            DesktopPickerMenu(showPairingSheet: $showPairingSheet)
+                        }
+                    }
+                }
+                .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
                         HStack(spacing: 12) {
                             Button {
@@ -180,41 +200,13 @@ struct TabListView: View {
                             } label: {
                                 Image(systemName: "gearshape")
                             }
-                            Button {
-                                showBriefings = true
-                            } label: {
-                                Image(systemName: "newspaper.fill")
-                                    .overlay(alignment: .topTrailing) {
-                                        if briefingsStore.unreadCount > 0 {
-                                            Text("\(min(briefingsStore.unreadCount, 9))")
-                                                .font(.system(size: 9, weight: .bold))
-                                                .foregroundStyle(.black)
-                                                .padding(3)
-                                                .background(JarvisTheme.accent, in: Circle())
-                                                .offset(x: 6, y: -6)
-                                        }
-                                    }
-                            }
-                            .tint(briefingsStore.unreadCount > 0 ? JarvisTheme.accent : .secondary)
                             ConnectionQualityView(compact: true)
                         }
-                    }
-                    ToolbarItem(placement: .principal) {
-                        Text("J A R V I S")
-                            .font(.headline.weight(.black))
-                            .kerning(4)
-                            .foregroundStyle(JarvisTheme.accent)
-                            .shadow(color: JarvisTheme.accent.opacity(0.9), radius: 4)
-                            .shadow(color: JarvisTheme.accent.opacity(0.6), radius: 10)
-                            .shadow(color: JarvisTheme.accent.opacity(0.3), radius: 20)
-                            .opacity(flickerOpacity)
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         newTabButton
                     }
                 }
-                .toolbarBackground(JarvisTheme.background.opacity(0.95), for: .navigationBar)
-                .toolbarColorScheme(.dark, for: .navigationBar)
                 .navigationDestination(for: String.self) { tabId in
                     destinationView(for: tabId)
                 }
@@ -222,29 +214,10 @@ struct TabListView: View {
                     Haptic.light()
                     viewModel.sync()
                 }
-                .onChange(of: viewModel.connectionState) { oldState, newState in
-                    if newState == .disconnected && oldState != .reconnecting {
-                        navigationPath = NavigationPath()
-                    } else if newState == .connected && oldState != .reconnecting && navigationPath.isEmpty {
-                        if let engineTab = viewModel.tabs.first(where: { $0.isEngine == true }) {
-                            navigationPath.append(engineTab.id)
-                        }
-                    }
-                }
                 .onChange(of: viewModel.pendingNavigationTabId) { _, tabId in
                     if let tabId {
                         navigationPath.append(tabId)
                         viewModel.pendingNavigationTabId = nil
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .briefingFromPush)) { note in
-                    guard let info = note.userInfo,
-                          let briefingId = info["briefingId"] as? String,
-                          let title = info["title"] as? String,
-                          let text = info["briefingText"] as? String else { return }
-                    briefingsStore.receive(briefingId: briefingId, title: title, text: text)
-                    if info["openSheet"] as? Bool == true {
-                        showBriefings = true
                     }
                 }
                 .overlay {
@@ -264,6 +237,16 @@ struct TabListView: View {
                         .animation(IonTheme.snappySpring, value: viewModel.voiceService.isSpeaking)
                     }
                 }
+                .toolbarBackground(
+                    theme.backgroundView != nil
+                        ? Color(red: 4/255, green: 14/255, blue: 28/255).opacity(0.95)
+                        : Color.clear,
+                    for: .navigationBar
+                )
+                .toolbarColorScheme(
+                    theme.backgroundView != nil ? .dark : nil,
+                    for: .navigationBar
+                )
                 .task {
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .seconds(Double.random(in: 3.0...9.0)))
@@ -297,6 +280,7 @@ struct TabListView: View {
             List(selection: $selectedTabId) {
                 tabGroupSections(selectionStyle: .selection)
             }
+            .scrollContentBackground(.hidden)
             .refreshable {
                 Haptic.light()
                 viewModel.sync()
@@ -363,6 +347,19 @@ struct TabListView: View {
                                 .tag(tab.id)
                             }
                         }
+                        // Apply a tinted cell background only when this tab has a
+                        // pill color and the setting is enabled. We resolve the color
+                        // before calling .listRowBackground so we never pass nil/EmptyView
+                        // to it — doing so would strip the List's default cell material
+                        // from uncolored rows, leaving them solid black.
+                        .ifLet(activePillColor(for: tab)) { view, color in
+                            view.listRowBackground(
+                                color.opacity(0.12)
+                                    .overlay(alignment: .leading) {
+                                        color.opacity(0.65).frame(width: 3)
+                                    }
+                            )
+                        }
                         .swipeActions(edge: .leading, allowsFullSwipe: false) {
                             Button {
                                 renameText = tab.displayTitle
@@ -372,51 +369,13 @@ struct TabListView: View {
                             }
                             .tint(JarvisTheme.accent)
                         }
-                        .contextMenu {
-                            Button {
-                                renameText = tab.displayTitle
-                                renamingTabId = tab.id
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
-                            }
-                            if viewModel.tabGroupMode == "manual" {
-                                Button {
-                                    viewModel.toggleTabGroupPin(tabId: tab.id)
-                                } label: {
-                                    Label(
-                                        tab.groupPinned == true ? "Unpin from Group" : "Pin to Group",
-                                        systemImage: tab.groupPinned == true ? "pin.slash" : "pin"
-                                    )
-                                }
-                                let targets = viewModel.tabGroups.filter { $0.id != tab.groupId }
-                                if !targets.isEmpty {
-                                    Menu {
-                                        ForEach(targets) { target in
-                                            Button(target.label) {
-                                                viewModel.moveTabToGroup(tabId: tab.id, groupId: target.id)
-                                            }
-                                        }
-                                    } label: {
-                                        Label("Move to Group", systemImage: "arrow.right.arrow.left")
-                                    }
-                                    // Combined "Move to Group AND Pin": same target list as the
-                                    // plain "Move to Group" submenu above, but each selection
-                                    // routes through moveTabToGroupAndPin which also sets
-                                    // groupPinned=true so the destination tab is protected from
-                                    // any subsequent auto-group-movement. Mirrors the desktop
-                                    // pattern (TabStripTabContextMenu's PushPin row).
-                                    Menu {
-                                        ForEach(targets) { target in
-                                            Button(target.label) {
-                                                viewModel.moveTabToGroupAndPin(tabId: tab.id, groupId: target.id)
-                                            }
-                                        }
-                                    } label: {
-                                        Label("Move to Group and Pin", systemImage: "pin")
-                                    }
-                                }
-                            }
-                        }
+                        // Context menu extracted to TabRowContextMenu.swift to keep
+                        // this file under the Swift 600-line cap.
+                        .modifier(TabRowContextMenu(
+                            tab: tab,
+                            renamingTabId: $renamingTabId,
+                            renameText: $renameText
+                        ))
                     }
                     .onDelete { offsets in
                         let ids = offsets.map { group.tabs[$0].id }
@@ -431,8 +390,17 @@ struct TabListView: View {
         }
     }
 
+    /// Returns the resolved Color for a tab's pill color when the Show Tab Colors
+    /// setting is enabled and the tab has a non-empty pillColor string. Returns nil
+    /// otherwise so the caller can skip applying listRowBackground entirely (passing
+    /// nil or EmptyView to listRowBackground strips the default cell material).
+    private func activePillColor(for tab: RemoteTabState) -> Color? {
+        guard viewModel.showTabColorInTabList,
+              let hex = tab.pillColor, !hex.isEmpty else { return nil }
+        return Color(hex: hex)
+    }
+
     private func groupHeader(_ group: (label: String, id: String, icon: String, directory: String?, tabs: [RemoteTabState])) -> some View {
-        // Body extracted to TabListGroupHeader.swift to keep this file
         // under the Swift 600-line cap. See CLAUDE.md → "When a file
         // exceeds the cap". The wrapper function is kept so existing
         // callers (the List's `header:` parameter) don't need to change.
@@ -523,7 +491,7 @@ struct TabListView: View {
             VStack(spacing: 12) {
                 Image(systemName: "terminal")
                     .font(.system(size: 40))
-                    .foregroundStyle(JarvisTheme.accent)
+                    .foregroundStyle(theme.accent)
                 Text("No Tabs")
                     .font(.title3.weight(.semibold))
                 Text("Tap + to create a new tab or pull to refresh.")

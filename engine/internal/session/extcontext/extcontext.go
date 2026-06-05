@@ -29,6 +29,7 @@ type SessionAccessor interface {
 	RegisterAgentSpec(spec types.AgentSpec)
 	DeregisterAgentSpec(name string)
 	LookupAgentSpec(name string) (types.AgentSpec, bool)
+	LookupExtDisplayName(name string) string
 	ExtGroup() *extension.ExtensionGroup
 	ExtConfig() *extension.ExtensionConfig
 	ProcRegistry() *extension.ProcessRegistry
@@ -42,6 +43,15 @@ type SessionAccessor interface {
 	// that may have been compacted. Returns nil when no conversation is active.
 	SearchHistory(query string, maxResults int) []extension.HistoryMatch
 
+	// GetSessionMemory returns the current session memory content.
+	// Returns empty string when session memory is not active.
+	GetSessionMemory() string
+
+	// SetSessionMemory replaces the session memory with custom content
+	// and persists it to disk. Extensions can use this to provide their
+	// own summarization strategies.
+	SetSessionMemory(content string)
+
 	// TranslateEvent converts a NormalizedEvent to an EngineEvent. The
 	// implementation lives in the session package (translateToEngineEvent)
 	// so test coverage is unchanged.
@@ -53,19 +63,43 @@ type SessionAccessor interface {
 
 	// GetPlanModeState returns (planModeEnabled, planFilePath) for the session.
 	GetPlanModeState() (bool, string)
+
+	// AppendOrUpdateAgentState creates a new agent state entry or updates
+	// an existing one (matched by name). Returns the entry's ID.
+	AppendOrUpdateAgentState(state types.AgentStateUpdate) string
+
+	// UpdateAgentStateByID finds an agent state entry by its ID and applies
+	// the updater function.
+	UpdateAgentStateByID(id string, updater func(*types.AgentStateUpdate))
+
+	// EmitAgentSnapshot emits the current merged agent state snapshot as
+	// an engine_agent_state event.
+	EmitAgentSnapshot(reason string)
 }
 
 // NewExtContext builds a fully-populated extension.Context by delegating all
-// callbacks to the provided SessionAccessor.
-func NewExtContext(sa SessionAccessor) *extension.Context {
+// callbacks to the provided SessionAccessor. The optional DispatchRegistry
+// enables background dispatch and recall support; pass nil to disable.
+func NewExtContext(sa SessionAccessor, registries ...*DispatchRegistry) *extension.Context {
+	// Accept an optional registry via variadic to avoid breaking existing callers.
+	var registry *DispatchRegistry
+	if len(registries) > 0 {
+		registry = registries[0]
+	}
+
 	ctx := &extension.Context{
 		SessionKey: sa.SessionKey(),
 		Cwd:        sa.WorkingDirectory(),
 		Emit: func(ev types.EngineEvent) {
-			// Cache extension-emitted agent states so the built-in Agent tool
-			// spawner can merge them into its own snapshots.
 			if ev.Type == "engine_agent_state" {
+				// Cache extension-emitted agent states, then re-emit a merged
+				// snapshot that includes engine-managed entries (dispatch state
+				// with task, conversationId, progress). Forwarding the raw
+				// extension event would overwrite engine-managed entries on
+				// the desktop due to the complete-snapshot contract.
 				sa.CacheExtAgentStates(ev.Agents)
+				sa.EmitAgentSnapshot("ext_emit_merged")
+				return
 			}
 			sa.Emit(ev)
 		},
@@ -116,6 +150,13 @@ func NewExtContext(sa SessionAccessor) *extension.Context {
 			matches := sa.SearchHistory(query, maxResults)
 			return matches, nil
 		},
+		GetSessionMemory: func() (string, error) {
+			return sa.GetSessionMemory(), nil
+		},
+		SetSessionMemory: func(content string) error {
+			sa.SetSessionMemory(content)
+			return nil
+		},
 		SetPlanMode: func(enabled bool, source string) {
 			sa.SetPlanMode(enabled, source)
 		},
@@ -144,7 +185,19 @@ func NewExtContext(sa SessionAccessor) *extension.Context {
 	}
 
 	// Wire engine-native agent dispatch.
-	ctx.DispatchAgent = BuildDispatchAgentFunc(sa)
+	ctx.DispatchAgent = BuildDispatchAgentFunc(sa, registry)
+
+	// Wire recall support for background dispatches.
+	if registry != nil {
+		ctx.RecallAgent = func(name string, opts extension.RecallAgentOpts) (bool, error) {
+			reason := opts.Reason
+			if reason == "" {
+				reason = "recall_agent"
+			}
+			found := registry.Recall(name, reason)
+			return found, nil
+		}
+	}
 
 	// Wire the lightweight one-shot inference primitive. Always available
 	// (no nil check needed at call sites) because the closure itself

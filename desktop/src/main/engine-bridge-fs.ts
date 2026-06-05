@@ -3,12 +3,18 @@ import { engineBridge } from './state'
 import { log } from './logger'
 import type { EngineDirListing, EngineHostInfo } from '../shared/types'
 
-/** Lookup of the bridge singleton. The import cycle (state -> control-plane ->
- *  engine-bridge-fs -> state) is safe because the binding is only read inside
- *  this function at call time (the first picker open, long after boot), never
- *  at module-eval time. A runtime `require('./state')` does not survive
- *  esbuild's single-file bundle (no sibling state.js exists), so it must be a
- *  static import. */
+/** Returns the bridge singleton.
+ *
+ *  The import cycle (state → control-plane → engine-bridge-fs → state) is
+ *  safe because the binding is read inside a function body, never at
+ *  module-eval time. The first call is when the directory picker opens — long
+ *  after all modules have finished initialising.
+ *
+ *  A runtime `require('./state')` would work in a multi-file Electron build
+ *  (Node resolves siblings at runtime), but it silently breaks when esbuild
+ *  produces a single-file bundle: there is no sibling `state.js` to require.
+ *  A static `import` is resolved by esbuild at bundle time and is safe for
+ *  both build modes. */
 function bridge(): import('./engine-bridge').EngineBridge {
   return engineBridge
 }

@@ -24,6 +24,13 @@ export interface EngineConfig {
    * paths.
    */
   workspaceWatchIgnore?: string[]
+  /**
+   * Enable Claude Code compatibility features — loading skills from
+   * `~/.claude/skills/` on the engine side, and expanding `.claude/commands/`
+   * templates on the desktop side. When false or absent, only Ion-native
+   * `.ion/` paths are active.
+   */
+  claudeCompat?: boolean
 }
 
 export interface EngineInstance {
@@ -38,6 +45,7 @@ export interface EnginePaneState {
 
 export interface AgentStateUpdate {
   name: string
+  id?: string
   status: 'idle' | 'running' | 'done' | 'error'
   metadata?: Record<string, any>
 }
@@ -63,6 +71,11 @@ export interface StatusFields {
   permissionDenials?: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }>
   /** Friendly display name broadcast by the extension (e.g. "Chief of Staff"). */
   extensionName?: string
+  /** Number of background dispatch agents still running when the parent LLM
+   *  turn ends. When > 0, the engine is "idle" but background work is in
+   *  progress. Clients use this to keep the tab status active and the
+   *  interrupt button visible. */
+  backgroundAgents?: number
 }
 
 /**
@@ -78,13 +91,66 @@ export interface EngineCommandListing {
   description?: string
 }
 
+/**
+ * Mirror of Go's `types.LlmContentBlock`. This is the wire shape for
+ * every block carried inside an `LlmMessage` — providers, persistence,
+ * and the conversation history all serialize through it.
+ *
+ * The desktop does NOT currently render `LlmMessage` payloads directly
+ * (the engine emits normalized events instead), but the type is mirrored
+ * for two reasons:
+ *
+ *   1. Cross-language contract sync — the Go side adds field-level
+ *      coverage via `contract_test.go`, and this mirror keeps drift
+ *      detectable. The `compact_boundary` variant added in the
+ *      gentle-knitting-cup plan ships with several optional metadata
+ *      fields (`trigger`, `summary`, `clearedBlocks`, etc.) that future
+ *      desktop work may want to render in a compaction marker UI; the
+ *      type being already mirrored avoids a churn-PR when that lands.
+ *
+ *   2. Unknown block types must not crash a renderer. Any future
+ *      renderer that walks an `LlmContentBlock[]` should fall through
+ *      `type` it doesn't recognise — the field is open-string by design
+ *      because the engine ships new block variants additively.
+ */
+export interface LlmContentBlock {
+  type: string
+  text?: string
+  id?: string
+  name?: string
+  input?: Record<string, unknown>
+  tool_use_id?: string
+  content?: string
+  is_error?: boolean
+  thinking?: string
+  source?: { type: string; media_type: string; data: string }
+  // compact_boundary structured fields. All optional; only populated
+  // when `type === 'compact_boundary'`. See Go-side llm.go for canonical
+  // semantics.
+  trigger?: string
+  messagesSummarized?: number
+  messagesBefore?: number
+  messagesAfter?: number
+  clearedBlocks?: number
+  tokensBefore?: number
+  summary?: string
+  factCount?: number
+  recentFiles?: string[]
+}
+
 export type EngineEvent =
   | { type: 'engine_agent_state'; agents: AgentStateUpdate[] }
-  | { type: 'engine_status'; fields: StatusFields }
-  | { type: 'engine_working_message'; message: string }
-  | { type: 'engine_notify'; message: string; level: 'info' | 'warning' | 'error' }
+  | { type: 'engine_status'; fields: StatusFields; metadata?: Record<string, unknown> }
+  | { type: 'engine_working_message'; message: string; metadata?: Record<string, unknown> }
+  | { type: 'engine_notify'; message: string; level: 'info' | 'warning' | 'error'; metadata?: Record<string, unknown> }
   | { type: 'engine_dialog'; dialogId: string; method: 'select' | 'confirm' | 'input'; title: string; message?: string; options?: string[]; defaultValue?: string }
-  | { type: 'engine_harness_message'; message: string; source?: string }
+  // `metadata` is an opaque pass-through map the harness sets via ctx.emit
+  // that the engine forwards verbatim. The desktop renderer honors
+  // `metadata.dedupKey` (string) to suppress repeated harness messages
+  // within an engine-instance scrollback — see engine-event-slice.ts. The
+  // convention is renderer-honored, not engine-enforced; other extensions
+  // may pick their own keys (namespace as `<extensionName>:<messageKey>`).
+  | { type: 'engine_harness_message'; message: string; source?: string; metadata?: Record<string, unknown> }
   | { type: 'engine_text_delta'; text: string }
   | { type: 'engine_message_end'; usage: { inputTokens: number; outputTokens: number; contextPercent: number; cost: number } }
   | { type: 'engine_tool_start'; toolName: string; toolId: string }
@@ -110,6 +176,24 @@ export type EngineEvent =
   | { type: 'engine_stream_reset' }
   | { type: 'engine_compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
   | { type: 'engine_tool_stalled'; toolId: string; toolName: string; toolElapsed: number }
+  // Mid-turn steer-drain confirmation. Engine emits this after the
+  // runloop drainSteer helper captures a steer message (queued via the
+  // steer channel) and injects it into the conversation as a user turn
+  // before the next LLM call. `steerMessageLength` is the character
+  // count; the body is not echoed back over the wire because it is
+  // already part of the conversation. See
+  // engine/internal/types/normalized_event.go (SteerInjectedEvent).
+  | { type: 'engine_steer_injected'; steerMessageLength: number }
+  // engine_model_fallback — workflow signal emitted by the engine when
+  // it fell back to its configured defaultModel because the requested
+  // model didn't resolve to a provider. Mirrors the underlying
+  // ModelFallbackEvent NormalizedEvent variant. The desktop renders a
+  // small ⚠ glyph on the affected engine instance pill via the
+  // engineModelFallbacks store map; iOS receives the fact through the
+  // snapshot path (RemoteTabState.engineInstances[i].modelFallback)
+  // rather than as a live RemoteEvent. See CLAUDE.md §
+  // "The typed-event corollary" for the broader rule.
+  | { type: 'engine_model_fallback'; fallbackRequestedModel: string; fallbackModel: string; fallbackReason: string }
   | { type: 'engine_extension_died'; extensionName: string; exitCode: number | null; signal: string | null }
   | { type: 'engine_extension_respawned'; extensionName: string; attemptNumber: number }
   | { type: 'engine_events_dropped'; count: number }
@@ -207,4 +291,28 @@ export type EngineEvent =
       llmCallOutputTokens: number
       llmCallCost: number
       llmCallJsonMode?: boolean
+    }
+  // engine_dispatch_start is emitted on the parent session's event stream when
+  // an extension-initiated dispatch begins. Carries the agent name, task, model,
+  // and child session ID. Observation-only — harnesses can use this and
+  // engine_dispatch_end to persist dispatch records or surface dispatch status.
+  | {
+      type: 'engine_dispatch_start'
+      dispatchAgent: string
+      dispatchTask: string
+      dispatchModel: string
+      dispatchSessionId: string
+    }
+  // engine_dispatch_end is emitted when an extension-initiated dispatch completes
+  // (success, error, or recall). Carries telemetry: exit code, elapsed time,
+  // cost, tokens, and tool count.
+  | {
+      type: 'engine_dispatch_end'
+      dispatchAgent: string
+      dispatchExitCode: number
+      dispatchElapsed: number
+      dispatchCost: number
+      dispatchInputTokens: number
+      dispatchOutputTokens: number
+      dispatchToolCount: number
     }

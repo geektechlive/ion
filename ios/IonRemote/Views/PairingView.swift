@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PairingView: View {
+    @Environment(\.appTheme) private var theme
     @Environment(SessionViewModel.self) private var viewModel
 
     @State private var browser = BonjourBrowser()
@@ -46,8 +47,25 @@ struct PairingView: View {
         Group {
             if browser.discoveredHosts.isEmpty {
                 VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.2)
+                    ZStack {
+                        Circle()
+                            .stroke(theme.accent.opacity(0.3), lineWidth: 2)
+                            .frame(width: 80, height: 80)
+                            .scaleEffect(pulseScale)
+                            .opacity(2 - pulseScale)
+                        Circle()
+                            .stroke(theme.accent.opacity(0.15), lineWidth: 2)
+                            .frame(width: 80, height: 80)
+                            .scaleEffect(pulseScale * 0.7 + 0.3)
+                            .opacity(2 - pulseScale)
+                        ProgressView()
+                            .scaleEffect(1.2)
+                    }
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: false)) {
+                            pulseScale = 1.8
+                        }
+                    }
                     Text("Searching your network...")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -92,8 +110,10 @@ struct PairingView: View {
         } label: {
             HStack {
                 Image(systemName: icon)
-                    .foregroundStyle(Color(hex: 0x4ECDC4))
-                    .frame(width: 24)
+                    .font(.caption)
+                    .foregroundStyle(theme.accent)
+                    .frame(width: 28, height: 28)
+                    .background(theme.accent.opacity(0.12), in: Circle())
                 VStack(alignment: .leading, spacing: 2) {
                     Text(service.name)
                         .font(.headline)
@@ -116,7 +136,7 @@ struct PairingView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "server.rack")
                         .font(.system(size: 40))
-                        .foregroundStyle(Color(hex: 0x4ECDC4))
+                        .foregroundStyle(theme.accent)
                     Text(service.name)
                         .font(.title2.bold())
                     Text("\(service.host):\(service.port)")
@@ -157,7 +177,7 @@ struct PairingView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "desktopcomputer")
                         .font(.system(size: 40))
-                        .foregroundStyle(Color(hex: 0x4ECDC4))
+                        .foregroundStyle(theme.accent)
                     Text(service.name)
                         .font(.title2.bold())
                     Text("\(service.host):\(service.port)")
@@ -182,12 +202,57 @@ struct PairingView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
-                        TextField("000000", text: $pairingCodeInput)
-                            .keyboardType(.numberPad)
-                            .font(.system(.largeTitle, design: .monospaced))
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 200)
-                            .textFieldStyle(.roundedBorder)
+                        let isRegular = sizeClass == .regular
+                        let boxWidth: CGFloat = isRegular ? 52 : 40
+                        let boxHeight: CGFloat = isRegular ? 64 : 52
+                        let boxFont: Font = isRegular
+                            ? .system(.largeTitle, design: .monospaced)
+                            : .system(.title, design: .monospaced)
+
+                        ZStack {
+                            HStack(spacing: 8) {
+                                ForEach(0..<6, id: \.self) { index in
+                                    let char = index < pairingCodeInput.count
+                                        ? String(pairingCodeInput[pairingCodeInput.index(pairingCodeInput.startIndex, offsetBy: index)])
+                                        : ""
+                                    Text(char)
+                                        .font(boxFont)
+                                        .frame(width: boxWidth, height: boxHeight)
+                                        .background(Color(.tertiarySystemFill))
+                                        .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.small))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: IonTheme.Radius.small)
+                                                .stroke(index == pairingCodeInput.count ? theme.accent : Color(.separator), lineWidth: index == pairingCodeInput.count ? 2 : 1)
+                                        )
+                                }
+                            }
+                            .allowsHitTesting(false)
+
+                            // Full-sized transparent TextField for reliable keyboard activation on iPad
+                            TextField("", text: $pairingCodeInput)
+                                .keyboardType(.numberPad)
+                                .focused($codeFieldFocused)
+                                .foregroundColor(.clear)
+                                .tint(.clear)
+                                .frame(width: boxWidth * 6 + 8 * 5, height: boxHeight)
+                                .onChange(of: pairingCodeInput) { _, newValue in
+                                    // Limit to 6 digits
+                                    let filtered = String(newValue.prefix(6).filter(\.isNumber))
+                                    if filtered != newValue { pairingCodeInput = filtered }
+                                }
+                        }
+
+                        if clipboardHasCode, let clip = UIPasteboard.general.string {
+                            Button {
+                                pairingCodeInput = String(clip.prefix(6))
+                                clipboardHasCode = false
+                            } label: {
+                                Label("Paste \(clip.prefix(6))", systemImage: "doc.on.clipboard")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(theme.accent)
+                        }
                     }
                     .padding(.horizontal)
 
@@ -205,7 +270,7 @@ struct PairingView: View {
                             .padding(.vertical, 12)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(Color(hex: 0x4ECDC4))
+                    .tint(theme.accent)
                     .disabled(pairingCodeInput.count != 6 || viewModel.pairingState.isConnecting)
                     .padding(.horizontal, 40)
 

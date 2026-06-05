@@ -2,7 +2,10 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -38,6 +41,11 @@ type childStubBackend struct {
 	// resultText is emitted as TaskCompleteEvent.Result before exit
 	// (when releaseGate is nil, i.e. immediate completion).
 	resultText string
+	// emitModelFallback, when true, causes the stub to emit a synthetic
+	// ModelFallbackEvent before the TaskCompleteEvent. Used by lifecycle
+	// tests to verify the parent's agent_state snapshot sequence isn't
+	// perturbed by intermediate workflow events from the child run.
+	emitModelFallback bool
 	// childErr, when non-nil, is delivered via onError after StartRun
 	// returns control.
 	childErr error
@@ -48,16 +56,24 @@ type childStubBackend struct {
 	releaseGate chan struct{}
 
 	startedRequestID string
-	cancelCalled     bool
+	startedOpts      types.RunOptions
+	// startedCfg captures the RunConfig passed to StartRunWithConfig.
+	// nil when the caller used plain StartRun (the pre-fix path) — that
+	// distinction matters for tests that verify DefaultModel was actually
+	// threaded into the child run.
+	startedCfg   *backend.RunConfig
+	cancelCalled bool
 }
 
-func (c *childStubBackend) StartRun(requestID string, _ types.RunOptions) {
+func (c *childStubBackend) StartRun(requestID string, opts types.RunOptions) {
 	c.mu.Lock()
 	c.startedRequestID = requestID
+	c.startedOpts = opts
 	onNorm := c.onNorm
 	onExit := c.onExit
 	gate := c.releaseGate
 	result := c.resultText
+	emitFallback := c.emitModelFallback
 	errToEmit := c.childErr
 	c.mu.Unlock()
 
@@ -67,6 +83,18 @@ func (c *childStubBackend) StartRun(requestID string, _ types.RunOptions) {
 		// and child-error path).
 		if gate != nil {
 			<-gate
+		}
+		// Emit a synthetic ModelFallbackEvent before the task-complete so
+		// lifecycle tests can verify it doesn't perturb the parent's
+		// engine_agent_state snapshot sequence.
+		if emitFallback && onNorm != nil {
+			onNorm(requestID, types.NormalizedEvent{
+				Data: &types.ModelFallbackEvent{
+					RequestedModel: "standard",
+					FallbackModel:  "claude-sonnet-4-6",
+					Reason:         "no_provider_found",
+				},
+			})
 		}
 		if onNorm != nil && result != "" {
 			onNorm(requestID, types.NormalizedEvent{
@@ -89,6 +117,17 @@ func (c *childStubBackend) StartRun(requestID string, _ types.RunOptions) {
 			onExit(requestID, &zero, nil, "child-conv-id")
 		}
 	}()
+}
+
+// StartRunWithConfig implements the configurableBackend interface so the
+// session-package startChildRun helper routes through this method when the
+// spawner passes a non-nil RunConfig (the post-fix path). Captures cfg
+// alongside opts so tests can assert DefaultModel was threaded through.
+func (c *childStubBackend) StartRunWithConfig(requestID string, opts types.RunOptions, cfg *backend.RunConfig) {
+	c.mu.Lock()
+	c.startedCfg = cfg
+	c.mu.Unlock()
+	c.StartRun(requestID, opts)
 }
 
 func (c *childStubBackend) Cancel(_ string) bool {
@@ -310,5 +349,229 @@ func TestWireAgentSpawner_NilExtGroup_DoesNotPanic(t *testing.T) {
 	}
 	if result != "ok" {
 		t.Fatalf("expected ok, got %q", result)
+	}
+}
+
+// TestWireAgentSpawner_ResolvesTierAlias verifies that model tier aliases
+// (e.g. "standard") from agent specs are resolved to concrete model IDs
+// before the child backend receives them. This pins the fix for #174:
+// prior to this fix, tier aliases passed through as literal strings and
+// the child backend failed with "no provider found for model …".
+func TestWireAgentSpawner_ResolvesTierAlias(t *testing.T) {
+	// Set up a temp HOME with a models.json that maps "standard" to a
+	// concrete model with fallbacks. ResolveTierChain reads from
+	// ~/.ion/models.json on every call, so redirecting HOME is sufficient.
+	dir := t.TempDir()
+	ionDir := filepath.Join(dir, ".ion")
+	if err := os.MkdirAll(ionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := map[string]any{
+		"tiers": map[string]any{
+			"standard": map[string]any{
+				"model":     "claude-sonnet-4-6",
+				"fallbacks": []any{"claude-haiku-4-5"},
+			},
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ionDir, "models.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", dir)
+
+	stub := &childStubBackend{resultText: "tier resolved"}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	if _, err := mgr.StartSession("tier-test", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["tier-test"]
+	mgr.mu.Unlock()
+
+	// Register an agent spec with a tier alias as its model.
+	s.agents.RegisterSpec(types.AgentSpec{
+		Name:  "test-specialist",
+		Model: "standard",
+	})
+
+	group, _ := installHookCapturingGroup(t)
+	mgr.mu.Lock()
+	s.extGroup = group
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "tier-test", "claude-opus-4-7", group, runCfg)
+	if runCfg.AgentSpawner == nil {
+		t.Fatal("AgentSpawner not installed")
+	}
+
+	// Dispatch with a named specialist whose spec has model: "standard".
+	// The LLM passes the name; the spawner resolves the spec, gets
+	// "standard", and should resolve it to "claude-sonnet-4-6".
+	result, spawnErr := runCfg.AgentSpawner(
+		context.Background(),
+		"test-specialist", // requestedName
+		"audit the extension",
+		"",    // description
+		"/tmp",
+		"",    // model (empty — falls back to spec)
+	)
+	if spawnErr != nil {
+		t.Fatalf("spawner returned error: %v", spawnErr)
+	}
+	if result != "tier resolved" {
+		t.Fatalf("expected %q, got %q", "tier resolved", result)
+	}
+
+	// Verify the child backend received the resolved concrete model,
+	// not the raw tier alias.
+	stub.mu.Lock()
+	gotModel := stub.startedOpts.Model
+	gotFallbacks := stub.startedOpts.FallbackChain
+	stub.mu.Unlock()
+
+	if gotModel != "claude-sonnet-4-6" {
+		t.Errorf("child model = %q, want %q (tier alias should be resolved)", gotModel, "claude-sonnet-4-6")
+	}
+	if len(gotFallbacks) != 1 || gotFallbacks[0] != "claude-haiku-4-5" {
+		t.Errorf("child fallbacks = %v, want [claude-haiku-4-5]", gotFallbacks)
+	}
+}
+
+// TestWireAgentSpawner_ConcreteModelPassesThrough verifies that a concrete
+// model ID (not a tier alias) passes through the tier resolution step
+// unchanged. This is the no-op path — the spawner should not mangle a
+// model that is already a concrete ID.
+func TestWireAgentSpawner_ConcreteModelPassesThrough(t *testing.T) {
+	// No models.json — all tier lookups pass through unchanged.
+	t.Setenv("HOME", t.TempDir())
+
+	stub := &childStubBackend{resultText: "ok"}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	if _, err := mgr.StartSession("passthrough-test", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["passthrough-test"]
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "passthrough-test", "claude-opus-4-7", nil, runCfg)
+
+	// Dispatch with an explicit concrete model from the call site.
+	_, err := runCfg.AgentSpawner(
+		context.Background(),
+		"", "task", "", "/tmp",
+		"claude-sonnet-4-6", // explicit concrete model
+	)
+	if err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	stub.mu.Lock()
+	gotModel := stub.startedOpts.Model
+	gotFallbacks := stub.startedOpts.FallbackChain
+	stub.mu.Unlock()
+
+	if gotModel != "claude-sonnet-4-6" {
+		t.Errorf("child model = %q, want %q (concrete model should pass through)", gotModel, "claude-sonnet-4-6")
+	}
+	if len(gotFallbacks) != 0 {
+		t.Errorf("child fallbacks = %v, want empty (no tier config)", gotFallbacks)
+	}
+}
+
+// TestWireAgentSpawner_ThreadsDefaultModelToChild locks in the fix for the
+// "child agent dispatched with unresolved tier alias" bug. When the agent
+// spec declares `model: standard` but the user has no models.json (so
+// ResolveTierChain returns "standard" verbatim), the spawner must still
+// pass the engine's DefaultModel into the child's RunConfig so that the
+// runloop fallback at runloop.go:57 can fire when the child's "standard"
+// model doesn't resolve to a provider.
+//
+// Without this fix, the spawner called child.StartRun (no RunConfig), the
+// runloop guard short-circuited (run.cfg == nil), and the child hard-failed
+// with "no provider found for model standard". See the grand-surfing-moth
+// plan §1.
+func TestWireAgentSpawner_ThreadsDefaultModelToChild(t *testing.T) {
+	// No ~/.ion/models.json — ResolveTierChain passes "standard" through
+	// unchanged. This is the exact production case the bug surfaces in.
+	t.Setenv("HOME", t.TempDir())
+
+	stub := &childStubBackend{resultText: "ok"}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	// Configure the engine with a DefaultModel — this is what should
+	// propagate into the child's RunConfig so the runloop fallback can
+	// fire. The fallback itself is exercised in
+	// runloop_model_fallback_test.go; here we only assert the thread-through.
+	mgr.SetConfig(&types.EngineRuntimeConfig{
+		DefaultModel: "claude-sonnet-4-6",
+	})
+
+	if _, err := mgr.StartSession("threadthrough-test", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["threadthrough-test"]
+	mgr.mu.Unlock()
+
+	// Register an agent spec with a tier alias as its model. Without a
+	// models.json mapping for "standard", ResolveTierChain returns the
+	// input verbatim and the literal string "standard" reaches the
+	// child run as the requested Model.
+	s.agents.RegisterSpec(types.AgentSpec{
+		Name:  "test-specialist",
+		Model: "standard",
+	})
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "threadthrough-test", "claude-opus-4-7", nil, runCfg)
+	if runCfg.AgentSpawner == nil {
+		t.Fatal("AgentSpawner not installed")
+	}
+
+	_, spawnErr := runCfg.AgentSpawner(
+		context.Background(),
+		"test-specialist",
+		"audit the extension",
+		"",    // description
+		"/tmp",
+		"",    // model (empty — falls back to spec → "standard")
+	)
+	if spawnErr != nil {
+		t.Fatalf("spawner returned error: %v", spawnErr)
+	}
+
+	// Guarantee: the child received a RunConfig via StartRunWithConfig
+	// (not the bare StartRun path that loses RunConfig).
+	stub.mu.Lock()
+	gotCfg := stub.startedCfg
+	gotModel := stub.startedOpts.Model
+	stub.mu.Unlock()
+
+	if gotCfg == nil {
+		t.Fatal("child started with no RunConfig — startChildRun must dispatch to StartRunWithConfig so DefaultModel reaches the runloop fallback")
+	}
+	if gotCfg.DefaultModel != "claude-sonnet-4-6" {
+		t.Errorf("child RunConfig.DefaultModel = %q, want %q (engine default must be threaded through)", gotCfg.DefaultModel, "claude-sonnet-4-6")
+	}
+	// The child still received the unresolved tier alias as its Model —
+	// that's deliberate. The runloop is the layer that performs the swap
+	// (see runloop_model_fallback_test.go).
+	if gotModel != "standard" {
+		t.Errorf("child opts.Model = %q, want %q (tier passthrough — runloop performs the swap)", gotModel, "standard")
 	}
 }

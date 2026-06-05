@@ -20,13 +20,15 @@ extension RemoteEvent {
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             let fields = try container.decode(StatusFields.self, forKey: .fields)
-            return .engineStatus(tabId: tabId, instanceId: instanceId, fields: fields)
+            let metadata = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata)
+            return .engineStatus(tabId: tabId, instanceId: instanceId, fields: fields, metadata: metadata)
 
         case .engineWorkingMessage:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             let message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
-            return .engineWorkingMessage(tabId: tabId, instanceId: instanceId, message: message)
+            let metadata = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata)
+            return .engineWorkingMessage(tabId: tabId, instanceId: instanceId, message: message, metadata: metadata)
 
         case .engineToolStart:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -51,6 +53,12 @@ extension RemoteEvent {
             let elapsed = try container.decode(Double.self, forKey: .elapsed)
             return .engineToolStalled(tabId: tabId, instanceId: instanceId, toolId: toolId, toolName: toolName, elapsed: elapsed)
 
+        case .engineSteerInjected:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let messageLength = try container.decode(Int.self, forKey: .steerMessageLength)
+            return .engineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
+
         case .engineError:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
@@ -62,7 +70,8 @@ extension RemoteEvent {
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             let message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
             let level = try container.decodeIfPresent(String.self, forKey: .level) ?? "info"
-            return .engineNotify(tabId: tabId, instanceId: instanceId, message: message, level: level)
+            let metadata = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata)
+            return .engineNotify(tabId: tabId, instanceId: instanceId, message: message, level: level, metadata: metadata)
 
         case .engineDialog:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -122,13 +131,25 @@ extension RemoteEvent {
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             let message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
             let source = try container.decodeIfPresent(String.self, forKey: .source)
-            return .engineHarnessMessage(tabId: tabId, instanceId: instanceId, message: message, source: source)
+            // `metadata` is an opaque hint map (e.g. dedupKey) the harness
+            // sets via ctx.emit and the engine forwards verbatim. Decoded
+            // as [String: AnyCodable] so future iOS-side handlers can read
+            // typed values without a contract change. iOS does not yet
+            // honor any specific key — desktop is the only consumer today.
+            let metadata = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata)
+            return .engineHarnessMessage(tabId: tabId, instanceId: instanceId, message: message, source: source, metadata: metadata)
 
         case .engineConversationHistory:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
-            let messages = try container.decode([EngineMessage].self, forKey: .messages)
+            let messages = try Message.decodeEngineArray(from: container, forKey: .messages)
             return .engineConversationHistory(tabId: tabId, instanceId: instanceId, messages: messages)
+
+        case .agentConversationHistory:
+            let agentName = try container.decode(String.self, forKey: .agentName)
+            let convId = try container.decodeIfPresent(String.self, forKey: .conversationId)
+            let messages = try Message.decodeEngineArray(from: container, forKey: .messages)
+            return .agentConversationHistory(agentName: agentName, conversationId: convId, messages: messages)
 
         case .engineModelOverride:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -139,6 +160,20 @@ extension RemoteEvent {
         case .engineProfiles:
             let profiles = try container.decode([EngineProfile].self, forKey: .profiles)
             return .engineProfiles(profiles: profiles)
+
+        case .enginePlanModeChanged:
+            // State event: the engine session has entered or exited plan mode.
+            // iOS uses planModeEnabled=true to insert a "Plan created" lifecycle
+            // divider into engineMessages. planModeEnabled=false is a proposal
+            // (ExitPlanMode) — the actual exit is gated by the desktop's
+            // user-approval chokepoint. Fields mirror the Go-side
+            // PlanModeChangedEvent: planModeEnabled, planFilePath, planSlug.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let planModeEnabled = try container.decodeIfPresent(Bool.self, forKey: .planModeEnabled) ?? false
+            let planFilePath = try container.decodeIfPresent(String.self, forKey: .planFilePath)
+            let planSlug = try container.decodeIfPresent(String.self, forKey: .planSlug)
+            return .enginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planFilePath: planFilePath, planSlug: planSlug)
 
         case .enginePlanProposal:
             // Workflow event: the model has proposed a plan-mode transition.
@@ -269,18 +304,20 @@ extension RemoteEvent {
             try container.encode(agents, forKey: .agents)
             return true
 
-        case .engineStatus(let tabId, let instanceId, let fields):
+        case .engineStatus(let tabId, let instanceId, let fields, let metadata):
             try container.encode(TypeKey.engineStatus, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             try container.encode(fields, forKey: .fields)
+            try container.encodeIfPresent(metadata, forKey: .metadata)
             return true
 
-        case .engineWorkingMessage(let tabId, let instanceId, let message):
+        case .engineWorkingMessage(let tabId, let instanceId, let message, let metadata):
             try container.encode(TypeKey.engineWorkingMessage, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             try container.encode(message, forKey: .message)
+            try container.encodeIfPresent(metadata, forKey: .metadata)
             return true
 
         case .engineToolStart(let tabId, let instanceId, let toolName, let toolId):
@@ -309,6 +346,13 @@ extension RemoteEvent {
             try container.encode(elapsed, forKey: .elapsed)
             return true
 
+        case .engineSteerInjected(let tabId, let instanceId, let messageLength):
+            try container.encode(TypeKey.engineSteerInjected, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(messageLength, forKey: .steerMessageLength)
+            return true
+
         case .engineError(let tabId, let instanceId, let message):
             try container.encode(TypeKey.engineError, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -316,12 +360,13 @@ extension RemoteEvent {
             try container.encode(message, forKey: .message)
             return true
 
-        case .engineNotify(let tabId, let instanceId, let message, let level):
+        case .engineNotify(let tabId, let instanceId, let message, let level, let metadata):
             try container.encode(TypeKey.engineNotify, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             try container.encode(message, forKey: .message)
             try container.encode(level, forKey: .level)
+            try container.encodeIfPresent(metadata, forKey: .metadata)
             return true
 
         case .engineDialog(let tabId, let instanceId, let dialogId, let method, let title, let options, let defaultValue):
@@ -384,18 +429,26 @@ extension RemoteEvent {
             try container.encode(targetTabId, forKey: .targetTabId)
             return true
 
-        case .engineHarnessMessage(let tabId, let instanceId, let message, let source):
+        case .engineHarnessMessage(let tabId, let instanceId, let message, let source, let metadata):
             try container.encode(TypeKey.engineHarnessMessage, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             try container.encode(message, forKey: .message)
             try container.encodeIfPresent(source, forKey: .source)
+            try container.encodeIfPresent(metadata, forKey: .metadata)
             return true
 
         case .engineConversationHistory(let tabId, let instanceId, let messages):
             try container.encode(TypeKey.engineConversationHistory, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(messages, forKey: .messages)
+            return true
+
+        case .agentConversationHistory(let agentName, let conversationId, let messages):
+            try container.encode(TypeKey.agentConversationHistory, forKey: .type)
+            try container.encode(agentName, forKey: .agentName)
+            try container.encodeIfPresent(conversationId, forKey: .conversationId)
             try container.encode(messages, forKey: .messages)
             return true
 
@@ -409,6 +462,15 @@ extension RemoteEvent {
         case .engineProfiles(let profiles):
             try container.encode(TypeKey.engineProfiles, forKey: .type)
             try container.encode(profiles, forKey: .profiles)
+            return true
+
+        case .enginePlanModeChanged(let tabId, let instanceId, let planModeEnabled, let planFilePath, let planSlug):
+            try container.encode(TypeKey.enginePlanModeChanged, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(planModeEnabled, forKey: .planModeEnabled)
+            try container.encodeIfPresent(planFilePath, forKey: .planFilePath)
+            try container.encodeIfPresent(planSlug, forKey: .planSlug)
             return true
 
         case .enginePlanProposal(let tabId, let instanceId, let kind, let planFilePath, let planSlug):

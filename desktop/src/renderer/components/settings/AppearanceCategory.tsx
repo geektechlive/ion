@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useColors } from '../../theme'
 import { usePreferencesStore } from '../../preferences'
+import { themes, getTheme } from '../../theme-tokens'
 import { SettingToggle } from './SettingToggle'
 import { SettingSection } from './SettingSection'
 import { SettingHeading } from './SettingHeading'
@@ -16,8 +17,12 @@ export function AppearanceCategory() {
   const setUltraWide = usePreferencesStore((s) => s.setUltraWide)
   const themeMode = usePreferencesStore((s) => s.themeMode)
   const setThemeMode = usePreferencesStore((s) => s.setThemeMode)
+  const selectedTheme = usePreferencesStore((s) => s.selectedTheme)
+  const setSelectedTheme = usePreferencesStore((s) => s.setSelectedTheme)
   const expandToolResults = usePreferencesStore((s) => s.expandToolResults)
   const setExpandToolResults = usePreferencesStore((s) => s.setExpandToolResults)
+  const unifiedTurnView = usePreferencesStore((s) => s.unifiedTurnView)
+  const setUnifiedTurnView = usePreferencesStore((s) => s.setUnifiedTurnView)
   const defaultTallConversation = usePreferencesStore((s) => s.defaultTallConversation)
   const setDefaultTallConversation = usePreferencesStore((s) => s.setDefaultTallConversation)
   const defaultTallTerminal = usePreferencesStore((s) => s.defaultTallTerminal)
@@ -86,12 +91,38 @@ export function AppearanceCategory() {
 
       <SettingHeading>Theme</SettingHeading>
 
-      <SettingToggle
-        label="Dark Theme"
-        description="Toggle between light and dark theme."
-        checked={themeMode === 'dark' || themeMode === 'hud'}
-        onChange={(next) => setThemeMode(next ? 'dark' : 'light')}
-      />
+      <SettingSection label="Color Theme" description="Choose a visual theme for the app.">
+        <select
+          value={selectedTheme}
+          onChange={(e) => setSelectedTheme(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '6px 10px',
+            fontSize: 13,
+            fontFamily: 'inherit',
+            color: colors.textPrimary,
+            background: colors.surfacePrimary,
+            border: `1px solid ${colors.inputBorder}`,
+            borderRadius: 8,
+            outline: 'none',
+            boxSizing: 'border-box' as const,
+            cursor: 'pointer',
+          }}
+        >
+          {themes.map((t) => (
+            <option key={t.id} value={t.id}>{t.displayName}</option>
+          ))}
+        </select>
+      </SettingSection>
+
+      {!getTheme(selectedTheme).forcedColorScheme && (
+        <SettingToggle
+          label="Dark Theme"
+          description="Toggle between light and dark theme."
+          checked={themeMode === 'dark'}
+          onChange={(next) => setThemeMode(next ? 'dark' : 'light')}
+        />
+      )}
 
       <SettingToggle
         label="Jarvis HUD"
@@ -105,6 +136,13 @@ export function AppearanceCategory() {
         description="Auto-expand file write and edit results inline."
         checked={expandToolResults}
         onChange={setExpandToolResults}
+      />
+
+      <SettingToggle
+        label="Unified Turn View"
+        description="Group tool calls into a collapsible panel and show assistant text as a continuous block, instead of interleaving tool calls with text."
+        checked={unifiedTurnView}
+        onChange={setUnifiedTurnView}
       />
 
       <SettingHeading>File Explorer</SettingHeading>

@@ -39,6 +39,10 @@ Cohesion of change: a feature lives in one folder. Full reference: `docs/archite
 
 Run `make hooks` once per clone to point git at `.githooks/`. The pre-push hook runs `make check-file-sizes` so cap violations fail locally before reaching CI. Bypass with `--no-verify` only when intentional.
 
+## Forbidden commands
+
+**Never run `make desktop`.** It builds, packages, installs to `/Applications`, and relaunches the desktop app. If you are running inside an Ion session, this kills the engine process hosting your conversation and often loses conversation state. The user runs `make desktop` manually when they are ready. If a desktop rebuild is needed, tell the user to run it.
+
 ## Quality gates (must pass before merge)
 
 | Gate | Command |
@@ -104,6 +108,94 @@ CI: `.github/workflows/build.yml` (release), `.github/workflows/quality.yml` (pe
 Engine executes, harness decides. Engine never blocks for user input, never persists memory, never decides policy.
 
 When labeling work: engine, harness, or client. If a harness gap is caused by missing engine capability, note both.
+
+## Engine consumers
+
+> **The Ion Engine is the product. The desktop, iOS, and relay applications in this repo are reference implementations — opinionated demonstrations of how to consume the engine. They are not the canonical consumer set. The canonical consumer is every external developer building against the wire protocol and SDK.**
+
+### Who the real consumers are
+
+- **TypeScript SDK consumers** — extensions installed at `~/.ion/extensions/` and third-party extension authors.
+- **Go SDK consumers** — third-party harnesses, custom backends, server-side integrations.
+- **Wire-protocol consumers** — anyone building a custom client (CLI, web app, mobile app, IDE plugin, automation pipeline, shell script) directly against the NDJSON socket.
+- **The desktop, iOS, and relay applications in this repo** — one reference implementation, not the only one. **Reference implementations consume the engine; they do not define its surface.**
+- **Future consumers we have not met yet** — every public release of the engine ships with the expectation that someone we have never spoken to will build something on top of it tomorrow.
+
+### Reframe 1 — "No in-repo caller" is the expected default for new engine surface, not evidence of accidental addition
+
+When the engine ships a new hook, protocol field, SDK type, normalized event variant, tool, or config option, the expected steady state is that the in-repo reference implementations do **not** consume it. They consume *some* engine features to be useful as references; they do not consume *every* engine feature, and they should not.
+
+When you find a piece of engine surface with no desktop/iOS caller, the questions to ask are:
+
+- Is this surface useful to a plausible external consumer? (If yes → ship it.)
+- Does it have tests pinning its behavior? (If yes → ship it.)
+- Does it have documentation explaining how external consumers should use it? (If no → that's the gap to fix, not the engine surface itself.)
+
+The question to **never** ask: *"Does desktop use this yet?"* That framing is forbidden. A reviewer who anchors a recommendation on it is reviewing the wrong codebase.
+
+### Reframe 2 — Reference implementations carry a reputational quality bar, not a coverage bar
+
+External developers learn how to consume the engine by looking at the desktop and iOS apps. So those apps must be exemplary — idiomatic, well-architected, well-tested, observable, free of anti-patterns. But "exemplary" is about *how* the references consume the engine, not *how much* they consume. A desktop that demonstrates 30% of engine features at the highest quality bar is a better reference than a desktop that demonstrates 100% of engine features sloppily. The desktop is not the SDK contract; it is one careful interpretation.
+
+### The forbidden review question
+
+**Do not ask "does desktop use this?" when reviewing engine changes.** That question presupposes the reference implementation is the canonical consumer. It is not. Ask instead: *would any plausible external consumer want this?* If yes, the engine should ship it. The absence of an in-repo caller is not a smell; it is the expected default for a healthy engine that ships ahead of its reference implementations.
+
+### The external-consumer simulation (use this instead of in-repo caller search)
+
+Before flagging an engine change as a contract violation, ask: *would this break a hypothetical external consumer who built against the previously-published surface?*
+
+- If the answer is "they would have to ignore a new optional return value" or "they would have to add a new optional field" — that's **not** a break. It's good evolution.
+- If the answer is "their existing struct decode would fail" or "their existing argument list would no longer match" — that **is** a break.
+
+Use the external-consumer simulation, not the in-repo caller search, to decide.
+
+### The typed-event corollary
+
+When the engine has signal to communicate, it emits a typed `NormalizedEvent` variant. That emission is the engine's *complete* fulfillment of its signaling obligation for that signal. The engine does not also owe a parallel surface in stream content (no appending to `TaskCompleteEvent.Result`, no mutating `TextChunkEvent`, no synthetic system messages, no log-line-as-source-of-truth). Doing any of that would force every consumer through one specific UI-shaped interpretation and would corrupt headless pipelines that parse stream content as the LLM's verbatim output.
+
+Consequence: when a reviewer asks *"but a headless user who isn't subscribed to event X wouldn't notice Y"* — that is the engine working as designed. The headless user receives the JSON event stream; the typed event is in it. Their orchestration may abort, retry, notify, ignore, or do anything else. The engine has no opinion. Reference implementations in this repo (desktop, iOS) choose their own opinionated rendering; that is **one consumer's policy**, not the engine's recommendation.
+
+This applies equally to warnings (model fallback, deprecation notices), advisories (rate limits, retries, context compaction), and state transitions (agent lifecycle, plan-mode changes). Pick the right event shape, emit it once, and stop. Do not double-surface.
+
+### Consequences (the operational rules that flow from the framing above)
+
+- **Do not require an in-repo consumer before adding engine API surface.** If a hook, protocol field, or SDK method is useful to external consumers, it belongs in the engine — even if desktop and iOS don't use it yet. The absence of desktop/iOS usage is not evidence of premature code; it is evidence that the reference implementations haven't caught up.
+- **Engine API surface should be generous.** Every configurable behavior should be exposed: as an `engine.json` config field, as a per-prompt `ClientCommand` override, and (where applicable) as an SDK context method. External consumers want every hook we can imagine.
+- **Desktop and iOS are not gatekeepers.** They consume the engine; they do not define its surface. When reviewing engine changes, do not ask "does desktop use this?" — ask "would an external consumer want this?"
+
+## Cross-platform parity (desktop ↔ iOS)
+
+> **Scope of this table.** The parity rules below apply when a feature *exists* on both desktop and iOS today and a change to one demands a change to the other. They do not require every new engine feature to ship simultaneously on desktop and iOS — engine surface ships ahead of reference implementations by design (see § "Engine consumers"). Use this section as a sync checklist for already-paired surfaces, not as a coverage mandate for new ones.
+
+Desktop and iOS are co-equal clients. When a desktop change touches a feature that also exists on iOS, **you must assess the iOS impact before considering the work complete.**
+
+### Checklist for every desktop UI/state change
+
+1. **Does this feature exist on iOS?** Check `ios/IonRemote/Views/` and `ios/IonRemote/ViewModels/` for the iOS counterpart.
+2. **If yes:** update the iOS side in the same PR, or document why it's deferred.
+3. **If the feature can't translate to iOS** (no physical space, no interaction model): document the trade-off. Consider an alternate iOS-appropriate rendering before deciding to skip.
+4. **If state flows through the snapshot** (`desktop/src/main/remote/snapshot.ts`): check whether the snapshot projection needs updating. The snapshot is the bridge — iOS can only see what the snapshot sends.
+
+### Common parity surfaces
+
+| Desktop | iOS counterpart | Sync path |
+|---------|----------------|-----------|
+| Tab status dot (TabStripTabPill, StatusDot) | Tab list dot (TabRowView.statusInfo) | `snapshot.ts` → `RemoteTabState.status` |
+| Engine instance bar (EngineStatusBar) | Engine instance bar (EngineInstanceBar) | `snapshot.ts` → `RemoteTabState.engineInstances` |
+| Permission denials / waiting state | Permission queue / waiting state | `snapshot.ts` promotes denials into `permissionQueue`; per-instance `waitingState` on `engineInstances` |
+| Tab group pills | Tab group sections | `snapshot.ts` → group fields on `RemoteTabState` |
+| Thinking indicator / interrupt button | Activity indicator / interrupt button | Real-time events (`engineTextDelta`, `tabStatus`) |
+| Tab context menu (TabStripTabContextMenu) | Tab context menu (TabRowContextMenu) | Actions operate on `RemoteTabState` fields; session identity via `snapshot.ts` → `RemoteTabState.conversationId` (CLI) and `StatusFields.sessionId` (engine) |
+| Desktop Settings dialog (SettingsDialog categories) | Desktop Settings detail (DesktopSettingsView sections) | `projectable-settings.ts` allowlist → `desktop_settings_snapshot` event (settings + schema + groups) → `DesktopSettingsView` auto-renders sections. iOS group IDs **must** match the desktop's `CATEGORIES` array; renaming a desktop category requires updating `PROJECTABLE_GROUP_LABELS` and the test in `projectable-settings.test.ts`. Adding a new user-editable desktop preference requires a parallel entry in `PROJECTABLE_SETTINGS_DATA` unless the setting is local-machine-only (font, path, secret). |
+| Model fallback indicator (EngineStatusBar per-instance ⚠) | Model fallback indicator (EngineInstanceBar per-instance ⚠) | `snapshot.ts` → `RemoteTabState.engineInstances[i].modelFallback`. Desktop populates `engineModelFallbacks` from the `engine_model_fallback` event; the snapshot poller projects each entry onto the corresponding `engineInstances[i]` and iOS reads it from the snapshot. Cleared on the next idle transition (per-instance). |
+
+### When to skip iOS
+
+Only when the interface physically cannot work on iOS (e.g. a keyboard-only interaction, a desktop window management feature, or a rendering surface that doesn't exist on mobile). In that case:
+- Note in the PR description why iOS was skipped.
+- Consider whether an alternate mobile-appropriate rendering exists.
+- At minimum, ensure the iOS app doesn't break or show stale data because of the desktop change.
 
 ## Contract stability (never break the client)
 
@@ -183,3 +275,172 @@ Caution: These files are large >20KB. Use intelligent searching when looking thr
 - Adding a single log line per investigation cycle and hoping it's enough. **Instrument the entire code path in one pass.**
 - Logging only the error case. **Log the success case too** — "operation X completed with result Y" is as valuable as "operation X failed with error Z".
 - Using opaque messages like "failed" or "error occurred". **Include the what, the why, and the relevant IDs.**
+
+## Aspirational comments
+
+When a comment describes behavior that the code does not implement (e.g. "This is exposed to extensions via the SDK" on a method with no SDK wiring), the default assumption is that the **implementation is incomplete**, not that the comment is wrong.
+
+1. **Investigate first.** Check whether the described behavior was partially implemented, planned in a related issue, or left behind by an incomplete PR.
+2. **Implement the feature** if the comment describes a legitimate capability gap. The comment is documentation of intent — honor it.
+3. **Remove the comment only** if investigation confirms the described behavior is explicitly unwanted or was superseded by a different design decision. Document why in the commit message.
+
+Never silently delete an aspirational comment. A comment that describes unimplemented functionality is a bug report, not a false statement.
+
+### The rule applies to plans, not just code
+
+The Aspirational-comments rule extends to **planning artifacts**: any fix-plan, design doc, ADR draft, or PR description that resolves a finding by *documenting* the defect instead of fixing it is itself an aspirational artifact and is subject to the same rule.
+
+Specifically forbidden as plan resolutions for *any* finding you can fix in the same branch:
+
+- "Add a `TODO` / `FIXME` / `HACK` / `XXX` comment" — the repository forbids these markers in code; planning them is the same anti-pattern with extra steps.
+- "Add a narrative comment establishing the intentional scope of a known fragility" — same anti-pattern as the TODO marker, with the marker stripped.
+- "Open a follow-up issue / file a tracking ticket" as the resolution — deferring the work without doing it.
+- "Add a `console.warn` / `log.Warn` when the bad case happens" without preventing the bad case.
+- "Mark this for the next decomposition phase" / "address in Phase N" without doing the phase work.
+- "Flag this in the PR description so reviewers know" as the only resolution.
+
+A valid plan resolution is one of: change code, change a contract, delete code, add a test that pins behavior, or explicitly decide to do nothing with a stated rationale. "Document the problem" is not a resolution.
+
+The `ion--review-changes.md` and `ion--align.md` commands enforce this rule at plan-generation time. Reviewers should reject any plan that violates it.
+
+## Operator premises — verify before acting
+
+Operator requests routinely contain **factual premises about the codebase** — "we only support X", "the only place that happens is Y", "this field is unused", "feature Z doesn't exist yet". These premises are frequently wrong. The author of this repository is wrong about them sometimes; new contributors are wrong about them more often. **Treat every premise as a claim to be verified, not as ground truth.**
+
+The failure mode this rule prevents: the operator states a premise, the agent silently accepts it, and the agent then refactors, deletes, restricts, or "fixes" code based on a misunderstanding the operator would have corrected if asked. By the time the operator sees the change, the wrong work is done.
+
+### When this rule fires
+
+Any operator request that asserts a concrete fact about the codebase. Common signals:
+
+- "we only support …" / "the only … is …" / "X is the only place that …"
+- "we don't have …" / "there's no …" / "X doesn't exist yet"
+- "X always does Y" / "X never does Y"
+- "the file picker only accepts …" / "the engine only emits …" / "the SDK only exposes …"
+- Any naming, shape, count, or scope claim about events, fields, hooks, tools, file types, config keys, protocol messages, or supported inputs.
+
+The trigger is **the presence of a factual claim**, not the operator's tone or confidence. A confidently stated wrong premise is the most dangerous kind.
+
+### What verification looks like
+
+Before designing or implementing anything that depends on the premise:
+
+1. **Locate the ground-truth source.** Find the code, contract, or doc that proves or disproves the claim — the actual file filter, the actual event variant list, the actual SDK surface, the actual permission list.
+2. **Compare the premise to ground truth.** Be specific: "the operator said *only* `index.ts` and `extension.ts`; the manifest loader at `engine/internal/extension/manifest.go` accepts `<actual list>`."
+3. **Decide based on the comparison, not the premise.**
+
+This step is not "extra rigor." It is the first step of the work. Skipping it is a defect.
+
+### What to do when the premise is wrong
+
+**Stop and surface the discrepancy to the operator before doing any of the requested work.** Do not:
+
+- Silently implement what was asked, hoping the operator was right.
+- Silently implement the "corrected" version you think they meant.
+- Refactor, narrow, delete, or restrict existing functionality to match the (wrong) premise.
+
+Instead, respond with a short message that contains:
+
+1. **The premise as stated.** ("You said we only support `index.ts` and `extension.ts`.")
+2. **The ground truth.** ("The engine actually accepts `<list>`, loaded via `<path>`.")
+3. **A direct question.** ("Do you still want the picker restricted to the two filenames, or should it match the engine's full set?")
+
+Only proceed once the operator confirms which version of reality the change should target.
+
+### What this rule is not
+
+- It is **not** an excuse to pepper the operator with questions about every adjective in their request. The trigger is a verifiable factual claim about the codebase, not stylistic ambiguity ("make it pretty") or judgment calls ("pick a good default").
+- It is **not** a license to refuse work. The expected outcome is *clarification in seconds*, then the right work — not an extended debate.
+- It is **not** limited to the author. New contributors and external developers will hit this more often than the author does. The rule exists because *any* operator can be wrong about *any* codebase fact, and the agent is the last line of defense against acting on the wrong fact.
+
+### Anti-patterns
+
+- "The operator said X, so I'll implement X." — Without verifying X against the code, this is the exact failure mode the rule exists to prevent.
+- "I noticed the premise is wrong, but I implemented what they asked anyway and noted it in the response." — Too late. The wrong work is done. Surface the discrepancy *before* writing code, not after.
+- "I noticed the premise is wrong, so I implemented what I thought they really meant." — Also wrong. Confirm with the operator which version is correct; do not silently substitute your interpretation.
+- "The premise is *probably* right, I'll skip verification." — The premises that look most obviously right are the ones where verification is cheapest and the cost of being wrong is highest. Verify anyway.
+
+## Solution quality — no cheap substitutes
+
+Every solution must solve the problem at its root cause. **Never trade correctness for implementation convenience.**
+
+### Rules
+
+1. **Never substitute a heuristic for a precise mechanism.** If the problem requires tracking identity, track identity — don't approximate it with a distance metric. If the problem requires a boundary marker, store a boundary marker — don't estimate freshness from a turn counter. Heuristics drift, precise mechanisms don't.
+
+2. **"Simpler to implement" is not a valid justification for a weaker solution.** The only acceptable reasons to choose a less rigorous approach are:
+   - It would break a published contract or require a backward-incompatible change to consumers.
+   - The architecture physically cannot support the approach (missing data, wrong layer, no stable identity).
+   - The problem domain genuinely doesn't require the precision (not just "it's probably fine").
+   
+   "It's easier" and "it's fewer lines of code" are never acceptable. If the proper solution requires more work, do the work.
+
+3. **Solve the root cause, not the symptom.** If data is stale because there's no coverage tracking, add coverage tracking — don't add a staleness heuristic that guesses whether the data is still good. If a threshold can go negative because compaction reduces token counts, reset the baseline — don't raise the threshold and hope for the best.
+
+4. **When proposing a simpler alternative, justify it rigorously.** If you believe a simpler approach is genuinely sufficient, the explanation must include:
+   - What failure modes the simpler approach introduces
+   - Why those failure modes are acceptable (with specifics, not hand-waving)
+   - What would need to change if the simpler approach proves insufficient
+   
+   If you can't articulate the failure modes, you haven't analyzed the problem deeply enough to justify the shortcut.
+
+5. **Never avoid expanding a surface to dodge work.** If a feature requires a new event type on iOS, a new protocol field, a new enum case, or a new handler — add it. Workarounds that relay, proxy, or approximate the proper mechanism to "keep the surface small" are the same anti-pattern as substituting a heuristic for a precise mechanism. API surfaces, event surfaces, and wire protocols are meant to grow as the product grows. A comment like "iOS does not yet act on this" is a gap waiting for its first consumer, not a reason to route around the gap.
+
+## Conversation storage
+
+Conversations are persisted as NDJSON file pairs under `~/.ion/conversations/`.
+
+### ID format
+
+Each conversation ID is `{unix-millis}-{12-hex-chars}` (e.g. `1780093348767-c1c03e998388`). Generated in `engine/internal/backend/runloop_setup.go` via `time.Now().UnixMilli()` + `newConvSuffix()` (see `runloop_helpers.go`).
+
+### File layout
+
+A conversation with ID `<id>` produces up to three files:
+
+| File | Purpose |
+|------|---------|
+| `<id>.tree.jsonl` | Conversation tree for rendering and branching. Source of truth for the full message history with parent/child relationships. |
+| `<id>.llm.jsonl` | LLM-authoritative message history. Source of truth for what the model actually saw and for token/cost accounting. |
+| `<id>.memory.md` | Session memory summary. Background-generated Markdown summary used for zero-cost compaction and system prompt injection. Optional — only present after enough turns and token growth. |
+
+Legacy formats may also exist: `.jsonl` (v1) and `.json` (v0). The engine auto-migrates legacy files to the split format on the next save.
+
+### `.tree.jsonl` structure
+
+- **Line 1 (header):** JSON object with `"meta": true`, `"id"`, `"leafId"`, `"workingDirectory"`, `"version"`.
+- **Subsequent lines:** `SessionEntry` objects (`engine/internal/conversation/conversation.go`), each with:
+  - `id` — unique entry identifier
+  - `parentId` — pointer to parent entry (null for roots)
+  - `type` — one of `message`, `compaction`, `model_change`, `label`, `custom`
+  - `timestamp` — Unix millis
+  - `data` — type-specific payload (message content, compaction summary, etc.)
+
+### `.llm.jsonl` structure
+
+- **Line 1 (header):** JSON object with `"meta": true`, `"id"`, `"version"`, `"model"`, `"system"` (system prompt), `"totalInputTokens"`, `"totalOutputTokens"`, `"lastInputTokens"`, `"lastInputTokensMsgCount"`, `"totalCost"`, `"createdAt"`, and optional `"parentId"`.
+- **Subsequent lines:** `LlmMessage` objects (`engine/internal/types/llm.go`), each with:
+  - `role` — `user`, `assistant`, or `system`
+  - `content` — string or array of `LlmContentBlock` (text, tool_use, tool_result, image, etc.)
+
+### Looking up a conversation
+
+When given a conversation ID, glob for its files:
+
+```
+~/.ion/conversations/{id}.*
+```
+
+- Read `{id}.tree.jsonl` for the full message history with branching structure.
+- Read `{id}.llm.jsonl` for the LLM-side view, system prompt, and token/cost accounting.
+- Read `{id}.memory.md` for the background session memory summary (if present).
+- If only `{id}.jsonl` or `{id}.json` exists, the conversation is in legacy format (pre-split).
+
+### Key source files
+
+| What | Where |
+|------|-------|
+| ID generation | `engine/internal/backend/runloop_helpers.go` (`newConvSuffix`) |
+| Save/load logic | `engine/internal/conversation/persistence.go` (`Save`, `Load`, `saveSplit`) |
+| Data structures | `engine/internal/conversation/conversation.go` (`Conversation`, `SessionEntry`) |
+| LLM message type | `engine/internal/types/llm.go` (`LlmMessage`) |

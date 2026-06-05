@@ -3,6 +3,7 @@ import SwiftUI
 struct ConversationView: View {
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appTheme) private var theme
     let tabId: String
 
     @State private var cachedRestoredCard: PermissionRequest?
@@ -33,8 +34,17 @@ struct ConversationView: View {
         countConversationAttachments(conversationMessages, desktopCache: viewModel.tabAttachmentCache[tabId])
     }
 
+    private var unifiedTurnView: Bool {
+        if let settings = viewModel.desktopSettings,
+           let val = settings.currentValue(for: "unifiedTurnView"),
+           let flag = val.value as? Bool {
+            return flag
+        }
+        return true
+    }
+
     private var groupedItems: [ConversationItem] {
-        groupConversationItems(conversationMessages)
+        groupConversationItems(conversationMessages, unifiedTurnView: unifiedTurnView)
     }
 
     private var isLoading: Bool {
@@ -251,6 +261,15 @@ struct ConversationView: View {
         return result
     }
 
+    private var themedBackground: some View {
+        ZStack {
+            theme.background.ignoresSafeArea()
+            if let bg = theme.backgroundView {
+                bg.ignoresSafeArea().opacity(0.35)
+            }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .bottom) {
@@ -344,16 +363,24 @@ struct ConversationView: View {
 
             InputBar(tabId: tabId)
         }
-        .background(JarvisTheme.background.ignoresSafeArea())
+        .background(themedBackground)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(JarvisTheme.background, for: .navigationBar)
+        .toolbarBackground(theme.background.opacity(0.95), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
-        .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbarColorScheme(theme.backgroundView != nil ? .dark : nil, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text(tab?.displayTitle ?? "Tab")
-                    .font(.headline)
-                    .lineLimit(1)
+                if theme.backgroundView != nil {
+                    Text(tab?.displayTitle ?? "Tab")
+                        .font(.headline.bold())
+                        .foregroundStyle(theme.accent)
+                        .shadow(color: theme.accent.opacity(0.8), radius: 4)
+                        .shadow(color: theme.accent.opacity(0.4), radius: 10)
+                } else {
+                    Text(tab?.displayTitle ?? "Tab")
+                        .font(.headline)
+                        .lineLimit(1)
+                }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -369,6 +396,7 @@ struct ConversationView: View {
                 } label: {
                     Image(systemName: "square.grid.2x2")
                         .font(.subheadline)
+                        .foregroundStyle(theme.accent)
                 }
             }
         }
@@ -540,9 +568,8 @@ struct ConversationView: View {
     private func conversationItemView(_ item: ConversationItem) -> some View {
         switch item {
         case .user(let message):
-            MessageBubble(
+            EngineMessageRow(
                 message: message,
-                isRunning: false,
                 onRewind: { messageId in
                     viewModel.rewindConversation(tabId: tabId, messageId: messageId)
                 },
@@ -557,24 +584,27 @@ struct ConversationView: View {
                 for: message.id, in: conversationMessages
             )
             let voiceSvc = viewModel.voiceService
-            MessageBubble(
+            EngineMessageRow(
                 message: message,
-                isRunning: isRunning && isLast,
                 copyableContent: combined,
                 isSpeaking: voiceSvc.speakingMessageId == message.id && voiceSvc.isSpeaking,
-                hasPendingSpeech: voiceSvc.hasPending,
+                isRunning: isRunning && isLast,
                 onSkipSpeaking: { voiceSvc.skip() },
-                onStopAllSpeaking: { voiceSvc.stop() }
+                onStopAllSpeaking: { voiceSvc.stop() },
+                hasPendingSpeech: voiceSvc.hasPending
             )
 
         case .system(let message):
-            MessageBubble(message: message)
+            EngineMessageRow(message: message, copyableContent: message.content)
 
         case .toolGroup(let tools):
-            ToolGroupView(tools: tools, isTabRunning: isRunning)
+            EngineToolGroupRow(tools: tools)
 
         case .compaction(let message):
             CompactionRowView(message: message)
+
+        case .agentTurn(let tools, let assistantMessages, let isActive):
+            AgentTurnRow(tools: tools, assistantMessages: assistantMessages, isActive: isActive)
         }
     }
 }

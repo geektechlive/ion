@@ -4,6 +4,10 @@ Single static binary. Communicates over `~/.ion/engine.sock` (NDJSON).
 
 > **Read [`../docs/engine-grounding.md`](../docs/engine-grounding.md) before touching engine code.** It is the canonical framing: engine is a headless library, contracts are additive only, event semantics count, modifying the engine is a restricted operation. This file covers mechanics; the grounding doc covers principles. Both apply.
 
+> **Plan resolution rule (applies to all fix plans for this area):** documenting a defect is not a resolution. See root [`AGENTS.md`](../AGENTS.md) § "Aspirational comments" → "The rule applies to plans, not just code".
+
+> **Role in the consumer landscape.** This package is **the product**. It is consumed by external SDK users, custom harnesses, third-party clients, and the in-repo reference implementations (`desktop/`, `ios/`, `relay/`) — in that order of priority. When making engine changes, the relevant question is *would any plausible external consumer want this?*, not *does desktop use this?* See root [`AGENTS.md`](../AGENTS.md) § "Engine consumers" for the canonical framing.
+
 ## Commands
 
 ```bash
@@ -95,7 +99,7 @@ Client --[Unix socket, NDJSON]--> Server
 
 ## Core principle
 
-Engine executes, harness decides. Engine never blocks for user input, never persists memory, never decides policy. Engine is UI-agnostic — emits typed data events; clients interpret.
+Engine executes, harness decides. Engine never blocks for user input, never persists user preferences or cross-session memory (conversation-scoped state like `.memory.md` is part of session management, not memory), never decides policy. Engine is UI-agnostic — emits typed data events; clients interpret.
 
 ## Event contracts
 
@@ -135,11 +139,13 @@ Optional (harness opt-in): TaskCreate, TaskList, TaskGet, TaskStop.
 
 ## Hooks
 
-66 total: 13 lifecycle + 5 session + 2 pre-action + 2 early-stop + 7 content + 14 per-tool + 3 context + 3 permission + 1 file + 1 workspace + 2 task + 2 elicitation + 4 plan-mode/system-inject + 1 context-inject + 3 capability + 4 extension-lifecycle.
+67 total: 13 lifecycle + 6 session + 2 pre-action + 2 early-stop + 7 content + 14 per-tool + 3 context + 3 permission + 1 file + 1 workspace + 2 task + 2 elicitation + 4 plan-mode/system-inject + 1 context-inject + 3 capability + 4 extension-lifecycle.
 
 The `before_plan_mode_enter`, `before_plan_mode_exit`, `system_inject`, `before_early_stop_decision`, `early_stop_continued`, `before_provider_request`, and `workspace_file_changed` hooks are recent additions; consult `docs/hooks/reference.md` for the canonical breakdown and per-hook payload shapes.
 
 Extension-lifecycle hooks (`extension_respawned`, `turn_aborted`, `peer_extension_died`, `peer_extension_respawned`) fire on auto-respawn. Auto-respawn is post-run only; mid-turn deaths defer to `handleRunExit`. Strike budget: 3 in 60s, reset after 2min healthy. Payloads: `docs/hooks/reference.md`.
+
+The TypeScript SDK runtime automatically unwraps `_payload` wrappers before invoking hook handlers. The engine cannot embed bare strings (or other non-object values) directly in the JSON-RPC params map, so it wraps them as `{_payload: value}`. The SDK detects the single-key `_payload` shape and passes the unwrapped value to the handler. Extension code that handles `before_prompt` or any other hook with a string payload receives the bare string, not the wrapper object. This unwrapping is transparent to extension authors but matters when debugging raw RPC frames or writing a custom SDK implementation.
 
 ## Conventions
 
@@ -149,6 +155,7 @@ Extension-lifecycle hooks (`extension_respawned`, `turn_aborted`, `peer_extensio
 - Parallel tools: `errgroup.Group`.
 - Streaming: `<-chan types.LlmStreamEvent`.
 - TS extensions: esbuild generates inline source maps for readable stack traces in `engine_error` events.
+- `RegisterTool` uses replace-on-duplicate semantics: if a tool with the same name already exists in the SDK registry it is replaced in place, not appended. When an extension subprocess respawns and re-registers its tools during the init handshake, existing entries are updated rather than duplicated. `ExtensionGroup.Tools()` enforces the same invariant at the group level -- last-registered wins when multiple hosts declare the same tool name.
 
 ## Done criteria
 

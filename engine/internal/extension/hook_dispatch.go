@@ -29,7 +29,7 @@ func (h *Host) FireOnError(ctx *Context, info ErrorInfo) error {
 	return h.sdk.FireOnError(ctx, info)
 }
 
-func (h *Host) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, error) {
+func (h *Host) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, string, error) {
 	return h.sdk.FireBeforeAgentStart(ctx, info)
 }
 
@@ -84,6 +84,14 @@ func (h *Host) FireToolStart(ctx *Context, info ToolStartInfo) error {
 
 func (h *Host) FireSessionBeforeCompact(ctx *Context, info CompactionInfo) (bool, error) {
 	return h.sdk.FireSessionBeforeCompact(ctx, info)
+}
+
+// FireCompactSummaryRequest delegates to the SDK. Returns (summary, ok)
+// with ok=true when any handler produced a non-empty summary, else
+// ("", false). The engine reads ok=false as "fall back to the regex
+// fact extractor"; see RunHooks.OnRequestCompactSummary.
+func (h *Host) FireCompactSummaryRequest(ctx *Context, info CompactSummaryRequestInfo) (string, bool) {
+	return h.sdk.FireCompactSummaryRequest(ctx, info)
 }
 
 func (h *Host) FireSessionBeforeFork(ctx *Context, info ForkInfo) (bool, error) {

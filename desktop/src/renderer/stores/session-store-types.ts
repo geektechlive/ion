@@ -42,6 +42,7 @@ export interface State {
   fileEditorStates: Map<string, FileEditorDirState>
   editorGeometry: { x: number; y: number; w: number; h: number }
   planGeometry: { x: number; y: number; w: number; h: number }
+  agentDetailGeometry: { x: number; y: number; w: number; h: number }
   tabsReady: boolean
   initProgress: string | null
   backend: 'api' | 'cli'
@@ -59,6 +60,25 @@ export interface State {
   engineMessages: Map<string, Message[]>
   engineModelOverrides: Map<string, string>
   engineDraftInputs: Map<string, string>
+  /**
+   * Pending model-fallback notice per engine instance, keyed by the
+   * compound `${tabId}:${instanceId}` key. Populated when the engine
+   * emits a `model_fallback` NormalizedEvent — typically because a
+   * dispatched agent requested an unconfigured tier alias and the
+   * runloop swapped to the engine's configured `defaultModel`.
+   *
+   * This client's policy: display a small ⚠ glyph on the affected
+   * EngineStatusBar pill with a tooltip naming the requested and
+   * fallback models. Clear on the next `task_complete` for that
+   * instance (no wall-clock timer — clients don't invent retention
+   * rules per `docs/architecture/agent-state.md`).
+   *
+   * The engine event is workflow, not state — it fires once at the
+   * swap site and is not retained in any snapshot. Persisting the
+   * fact in renderer state turns it into a sticky-until-cleared UI
+   * indicator. See CLAUDE.md § "The typed-event corollary".
+   */
+  engineModelFallbacks: Map<string, { requestedModel: string; fallbackModel: string; reason: string; at: number }>
   /**
    * Pending AskUserQuestion / ExitPlanMode denials per engine instance,
    * keyed by the compound `${tabId}:${instanceId}` key. A `null` slot is
@@ -134,6 +154,7 @@ export interface State {
   toggleEditorReadOnly: (dir: string, fileId: string) => void
   setEditorGeometry: (geo: { x: number; y: number; w: number; h: number }) => void
   setPlanGeometry: (geo: { x: number; y: number; w: number; h: number }) => void
+  setAgentDetailGeometry: (geo: { x: number; y: number; w: number; h: number }) => void
   forkTab: (sourceTabId: string) => Promise<string | null>
   rewindToMessage: (tabId: string, messageId: string) => void
   forkFromMessage: (tabId: string, messageId: string) => Promise<string | null>
@@ -170,10 +191,20 @@ export interface State {
   setWorktreeUncommitted: (tabId: string, hasChanges: boolean) => void
   createEngineTab: (dir?: string, profileId?: string) => string
   handleEngineEvent: (key: string, event: any) => void
-  submitEnginePrompt: (tabId: string, text: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]) => void
+  submitEnginePrompt: (tabId: string, text: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[], rawAttachments?: FileAttachment[], implementationPhase?: boolean) => void
   respondEngineDialog: (tabId: string, dialogId: string, value: any) => void
   addEngineInstance: (tabId: string) => string
   removeEngineInstance: (tabId: string, instanceId: string) => void
+  /**
+   * Reset an engine instance's conversation to a fresh state without
+   * removing the instance itself. Wipes the per-instance message
+   * buffer, status, agent-state, working message, notifications,
+   * dialogs, usage, permission-denied, pinned prompt, and model-override
+   * Maps. Seeds a fresh "Session started" divider into engineMessages.
+   * Used by the iOS "Implement, clear context" flow for engine tabs —
+   * the engine-instance equivalent of resetTabSession on the CLI plane.
+   */
+  resetEngineInstance: (tabId: string, instanceId: string) => void
   selectEngineInstance: (tabId: string, instanceId: string) => void
   renameEngineInstance: (tabId: string, instanceId: string, label: string) => void
   reorderEngineInstances: (tabId: string, reordered: EngineInstance[]) => void

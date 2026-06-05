@@ -178,9 +178,15 @@ extension TransportManager {
         do {
             event = try JSONDecoder().decode(RemoteEvent.self, from: payloadData)
         } catch {
-            // Log decode failures so we can diagnose dropped events
+            // Log decode failures so we can diagnose dropped events.
+            // ionLog writes to os_log (Console.app only). DiagnosticLog writes
+            // to the on-disk log file that gets sent to desktop via
+            // requestDiagnosticLogs — without this, decode errors are invisible
+            // in remote diagnostics.
             let typeHint = (try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any])?["type"] as? String ?? "unknown"
+            let errDesc = String(describing: error).prefix(500)
             ionLog.error("Failed to decode event type=\(typeHint): \(error)")
+            DiagnosticLog.log("DECODE-ERR: type=\(typeHint) size=\(payloadData.count) err=\(errDesc)")
             return
         }
 

@@ -2,16 +2,20 @@ import SwiftUI
 
 // MARK: - ThinkingScanLine
 
+/// A horizontal scan-line that sweeps left-to-right while the assistant
+/// is thinking. Used as the custom activity indicator for JarvisArcReactorTheme.
 struct ThinkingScanLine: View {
     let isActive: Bool
+    @Environment(\.appTheme) private var theme
     @State private var offset: CGFloat = -0.4
 
     var body: some View {
         GeometryReader { geo in
             Rectangle()
                 .fill(LinearGradient(
-                    colors: [.clear, JarvisTheme.accent.opacity(0.7), .clear],
-                    startPoint: .leading, endPoint: .trailing
+                    colors: [.clear, theme.accent.opacity(0.7), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
                 ))
                 .frame(width: geo.size.width * 0.4, height: 1)
                 .offset(x: offset * geo.size.width)

@@ -44,6 +44,7 @@ const initialState = {
   fileEditorStates: new Map(),
   editorGeometry: { x: 60, y: 80, w: 680, h: 480 },
   planGeometry: { x: 60, y: 80, w: 720, h: 420 },
+  agentDetailGeometry: { x: 60, y: 80, w: 600, h: 500 },
   tabsReady: false,
   initProgress: null,
   backend: 'api' as const,
@@ -60,6 +61,7 @@ const initialState = {
   engineMessages: new Map<string, Message[]>(),
   engineModelOverrides: new Map<string, string>(),
   engineDraftInputs: new Map<string, string>(),
+  engineModelFallbacks: new Map<string, { requestedModel: string; fallbackModel: string; reason: string; at: number }>(),
   // Per-engine-instance AskUserQuestion / ExitPlanMode denials. Keyed by
   // `${tabId}:${instanceId}`. See `enginePermissionDenied` JSDoc on
   // `State` (session-store-types.ts) for the full rationale. Mirrors the

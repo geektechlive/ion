@@ -136,6 +136,26 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
       log(`engine_prompt: project-path query failed for tab=${cmd.tabId}: ${(err as Error).message}`)
     }
 
+    // Resolve planFilePath from the renderer store so the engine can
+    // restore the plan file after a session restart instead of
+    // allocating a fresh slug. Same executeJavaScript pattern as
+    // projectPath above.
+    let planFilePath: string | undefined
+    try {
+      const escapedTabForPlan = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const pfp = await state.mainWindow.webContents.executeJavaScript(`
+        (function() {
+          var store = window.__Ion_SESSION_STORE__;
+          if (!store) return null;
+          var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTabForPlan}'; });
+          return tab && tab.planFilePath ? tab.planFilePath : null;
+        })()
+      `)
+      planFilePath = pfp || undefined
+    } catch (err) {
+      log(`engine_prompt: planFilePath query failed for tab=${cmd.tabId}: ${(err as Error).message}`)
+    }
+
     await processIncomingPrompt({
       tabId: cmd.tabId,
       text: rewrittenText,
@@ -147,6 +167,8 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
       instanceId,
       appendSystemPrompt: voicePrompt,
       projectPath,
+      implementationPhase: cmd.implementationPhase,
+      planFilePath,
     })
   } catch (err) {
     log(`engine_prompt error: ${(err as Error).message}`)
@@ -156,6 +178,45 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
 export function handleEngineAbort(cmd: Extract<RemoteCommand, { type: 'engine_abort' }>): void {
   const hKey = cmd.instanceId ? `${cmd.tabId}:${cmd.instanceId}` : cmd.tabId
   engineBridge.sendAbort(hKey)
+}
+
+/**
+ * Reset an engine instance's session to a clean state without removing
+ * the instance pane. Stops the engine session keyed by `${tabId}:${instanceId}`
+ * and asks the renderer to wipe per-instance state Maps. Used by the
+ * iOS "Implement, clear context" flow on engine tabs — the engine-instance
+ * equivalent of `reset_tab_session` for the CLI session plane.
+ *
+ * `reset_tab_session` already exists and routes through `sessionPlane.resetTabSession`
+ * (which calls `bridge.stopSession(tabId)` with bare tabId). For engine
+ * tabs the engine session is keyed by the compound `${tabId}:${instanceId}`,
+ * so bare-tabId stop is silently a no-op. This handler closes that gap.
+ */
+export async function handleResetEngineSession(cmd: Extract<RemoteCommand, { type: 'reset_engine_session' }>): Promise<void> {
+  const key = `${cmd.tabId}:${cmd.instanceId}`
+  log(`reset_engine_session: tabId=${cmd.tabId} instanceId=${cmd.instanceId} key=${key}`)
+  // Stop the engine session at the wire level. Same primitive
+  // engine-control-plane.resetTabSession uses for the CLI plane.
+  await engineBridge.stopSession(key)
+  log(`reset_engine_session: stopSession complete key=${key}`)
+  // Ask the renderer to wipe its per-instance state Maps (messages,
+  // status, agent-state, dialogs, etc.) and seed a fresh
+  // "Session started" divider. Mirrors the IPC pattern other engine
+  // handlers in this file use to mutate renderer state from main.
+  try {
+    const escapedTab = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    const escapedInst = cmd.instanceId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    await state.mainWindow?.webContents.executeJavaScript(`
+      (function() {
+        var store = window.__Ion_SESSION_STORE__;
+        if (!store) return;
+        store.getState().resetEngineInstance('${escapedTab}', '${escapedInst}');
+      })()
+    `)
+    log(`reset_engine_session: renderer state wiped key=${key}`)
+  } catch (err) {
+    log(`reset_engine_session: renderer wipe failed key=${key} err=${(err as Error).message}`)
+  }
 }
 
 export function handleEngineDialogResponse(cmd: Extract<RemoteCommand, { type: 'engine_dialog_response' }>): void {
@@ -311,8 +372,14 @@ export async function handleLoadEngineConversation(cmd: Extract<RemoteCommand, {
         return msgs.map(function(m) {
           var content = m.content || '';
           if (m.role === 'tool' && content.length > 2048) content = content.substring(0, 2048) + '\\n... [truncated]';
-          else if (content.length > 10000) content = content.substring(0, 10000);
-          return { id: m.id, role: m.role, content: content, toolName: m.toolName, toolId: m.toolId, toolStatus: m.toolStatus, timestamp: m.timestamp };
+          // Carry dedupKey through to iOS so the data is available on
+          // reconnect / history-replay. iOS does not yet act on the key,
+          // but having it on the wire lets a future iOS-side dedup
+          // implementation match the desktop's behavior without a
+          // protocol change.
+          var out = { id: m.id, role: m.role, content: content, toolName: m.toolName, toolId: m.toolId, toolStatus: m.toolStatus, timestamp: m.timestamp };
+          if (m.dedupKey) out.dedupKey = m.dedupKey;
+          return out;
         });
       })()
     `) || []
@@ -387,5 +454,91 @@ async function sendCurrentEngineState(tabId: string, instanceId: string | null, 
     }
   } catch (err) {
     log(`sendCurrentEngineState error: ${(err as Error).message}`)
+  }
+}
+
+export async function handleLoadAgentConversation(cmd: Extract<RemoteCommand, { type: 'load_agent_conversation' }>, deviceId: string): Promise<void> {
+  try {
+    log(`load_agent_conversation: conversationIds=${cmd.conversationIds.join(',')}`)
+    if (!engineBridge || cmd.conversationIds.length === 0) {
+      state.remoteTransport?.sendToDevice(deviceId, { type: 'agent_conversation_history', agentName: '', messages: [] })
+      return
+    }
+
+    const allMessages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number }> = []
+    for (const convId of cmd.conversationIds) {
+      try {
+        const data = await engineBridge.getConversation(convId, 0, 0)
+        const msgs = data.messages || []
+        for (const m of msgs) {
+          let content = m.content || ''
+          // Truncate tool result content at 2KB to keep wire size manageable.
+          // User, assistant, and harness messages are never truncated.
+          if (m.role === 'tool' && content.length > 2048) {
+            content = content.substring(0, 2048) + '\n... [truncated]'
+          }
+          allMessages.push({
+            id: m.id || '',
+            role: m.role || 'system',
+            content,
+            toolName: m.toolName,
+            toolId: m.toolId,
+            toolStatus: m.toolStatus,
+            timestamp: m.timestamp || 0,
+          })
+        }
+      } catch (convErr) {
+        log(`load_agent_conversation: failed to load convId=${convId}: ${(convErr as Error).message}`)
+      }
+    }
+
+    // Resolve agent name from the desktop's agent state.
+    // The agent state snapshot in the renderer maps compound keys to agent
+    // arrays; we look up the first agent whose conversationId matches one
+    // of the requested IDs so the iOS side can key the response.
+    let agentName = ''
+    if (state.mainWindow) {
+      try {
+        const convIdsJson = JSON.stringify(cmd.conversationIds)
+        agentName = await state.mainWindow.webContents.executeJavaScript(`
+          (function() {
+            var store = window.__Ion_SESSION_STORE__;
+            if (!store) return '';
+            var convIds = ${convIdsJson};
+            var agentStates = store.getState().engineAgentStates;
+            for (var [, agents] of agentStates) {
+              for (var a of agents) {
+                var meta = a.metadata || {};
+                var dispatches = meta.dispatches || [];
+                for (var d of dispatches) {
+                  for (var cid of convIds) {
+                    if (d.conversationId === cid) return a.name;
+                  }
+                }
+                // Belt-and-suspenders: fall back to legacy fields in case
+                // dispatches[] is empty (e.g. stale renderer state).
+                var aConvId = meta.conversationId || '';
+                var aConvIds = meta.conversationIds || [];
+                for (var cid of convIds) {
+                  if (cid === aConvId || aConvIds.indexOf(cid) >= 0) return a.name;
+                }
+              }
+            }
+            return '';
+          })()
+        `) || ''
+      } catch (_) {
+        // Best-effort name resolution; empty string is fine
+      }
+    }
+
+    log(`load_agent_conversation: resolved agentName=${agentName || '(unknown)'}, totalMessages=${allMessages.length}`)
+    // Echo back the conversationId when loading a single dispatch so the
+    // iOS client can cache per-dispatch conversations independently.
+    const singleConvId = cmd.conversationIds.length === 1 ? cmd.conversationIds[0] : undefined
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'agent_conversation_history', agentName, conversationId: singleConvId, messages: allMessages })
+  } catch (err) {
+    log(`load_agent_conversation error: ${(err as Error).message}`)
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'agent_conversation_history', agentName: '', messages: [] })
   }
 }

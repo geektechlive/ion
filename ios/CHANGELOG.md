@@ -10,6 +10,100 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.38.0](https://github.com/dsswift/ion/compare/ios-v1.37.0...ios-v1.38.0) (2026-06-05)
+
+### Features
+
+* **engine:** fall back to default model on unresolved tier alias (#174) ([4a9d7af](https://github.com/dsswift/ion/commit/4a9d7af0d9cc017df65de66fff33d3b49accda6d))
+* **desktop:** show yaml frontmatter in markdown preview ([6e3ebb9](https://github.com/dsswift/ion/commit/6e3ebb972fb0a16926118c8caf874d8fe0e9985e))
+
+### Bug Fixes
+
+* **desktop:** show ion-native slash commands when claude-compat off ([1481e56](https://github.com/dsswift/ion/commit/1481e560f3c6e39d89fbba410f07cfc2c3e262e2))
+
+## [1.37.0](https://github.com/dsswift/ion/compare/ios-v1.36.0...ios-v1.37.0) (2026-06-05)
+
+### Features
+
+* **ios:** add keyboard utility bar with per-view toggles ([acee173](https://github.com/dsswift/ion/commit/acee1738c57ef0806d1d1aec7970cd830f3d2fd0))
+* **ios:** mirror desktop categories + full settings projection ([b248eaf](https://github.com/dsswift/ion/commit/b248eafde082a4611d9f8b786e25804e2c609be6))
+* **engine:** configurable bash commands in plan mode ([d7e6c5f](https://github.com/dsswift/ion/commit/d7e6c5f7fa0dd2695e54a7f96809db586c0217b2))
+
+### Bug Fixes
+
+* **ios:** shrink oversized system toast notifications ([7588303](https://github.com/dsswift/ion/commit/75883033d7809609bac5490ebf896e383590c12c))
+* **ios:** render attached images on engine prompt without reload ([2fcd2d4](https://github.com/dsswift/ion/commit/2fcd2d40fa9878fbc6b960358cfedb20ea2bdb5b))
+* **ios:** restore keyboard utility bar toggles in Appearance ([a9d454d](https://github.com/dsswift/ion/commit/a9d454da7c926fa5575cbefdc5af4debc3fb9ae7))
+
+## [1.36.0](https://github.com/dsswift/ion/compare/ios-v1.35.0...ios-v1.36.0) (2026-06-04)
+
+### Features
+
+* **desktop:** badge slash commands in user message bubbles ([40211f2](https://github.com/dsswift/ion/commit/40211f213c6cec77e281c0a9c28d9f0db3d17442))
+* **desktop:** add pill icon presets and project iOS pill state ([d580162](https://github.com/dsswift/ion/commit/d580162478286e4199d81d6e7891332193fc46f6))
+* **ios:** add implement divider, plan events, and clear-context option ([848ee49](https://github.com/dsswift/ion/commit/848ee490c566393e98b987412547e805f932b352))
+* **ios:** implement unified turn grouping in ui ([de98622](https://github.com/dsswift/ion/commit/de9862266105bab49a09f56c8791ac7502e23abb))
+* **ios:** send reset_engine_session for engine-tab implement clear ([4bb69e5](https://github.com/dsswift/ion/commit/4bb69e5b17cb26888c5975ec26ef3198ef055d41))
+* **ios:** mirror Steer applied divider on engine_steer_injected ([bb8ba6b](https://github.com/dsswift/ion/commit/bb8ba6b6b2a0f6344724b66e99ad4d3d9fae78cd))
+
+### Bug Fixes
+
+* **ios:** remove ActiveToolRow ([3d2953f](https://github.com/dsswift/ion/commit/3d2953f816b5098007b2c42d90690978d7ed4880))
+* **ios:** tint tab rows with pill color via listRowBackground ([4ee087d](https://github.com/dsswift/ion/commit/4ee087dea34f4bcf96e02257d3f2affd9f4e8748))
+
+## [1.35.0](https://github.com/dsswift/ion/compare/ios-v1.34.0...ios-v1.35.0) (2026-06-03)
+
+### Features
+
+* **ios:** add fuzzy matching for slash commands ([b227651](https://github.com/dsswift/ion/commit/b227651a00a634eaa540b78e87d755b5ead7da92))
+
+### Bug Fixes
+
+* **ios:** replace markdown parser to fix truncation ([25a3649](https://github.com/dsswift/ion/commit/25a364914dfc002f0ffbec70677f82c9a28183e4))
+
+## [1.34.0](https://github.com/dsswift/ion/compare/ios-v1.33.0...ios-v1.34.0) (2026-06-02)
+
+### Features
+
+* **ios:** add Jarvis arc reactor theme system ([6e2df40](https://github.com/dsswift/ion/commit/6e2df40a1ed91ca15c574255e7be3dfe71548936))
+* **ios:** unify conversation and engine rendering ([91aad3c](https://github.com/dsswift/ion/commit/91aad3ced3dd6eb5cf52ee3d653f3a3f4290d8aa))
+* **ios:** add device switch button in Settings ([2fd6c04](https://github.com/dsswift/ion/commit/2fd6c0433b2f597e54ebcf5a94d90cfb042c06a8))
+* **engine:** aggregate dispatches into pager with array model ([5d9cf05](https://github.com/dsswift/ion/commit/5d9cf057a46f69302699867adcca7241f94ebd17))
+* **ios:** add terminal button to engine view toolbar ([3accedd](https://github.com/dsswift/ion/commit/3accedd4dfc42a76635a204574c3761591a892f2))
+* **ios:** dispatch conversation lookup with caching ([4512473](https://github.com/dsswift/ion/commit/45124737149e105d7819d53ef5031d2d8c82ab52))
+* **desktop:** dispatch pager conversation lookup and display ([992390d](https://github.com/dsswift/ion/commit/992390d4a191c294c34920bba17a3d8de74ef4b3))
+* **ios:** add copy session id to tab context menus ([cd58d11](https://github.com/dsswift/ion/commit/cd58d1110b78d7bc410bbf1296aeb31d174c0e82))
+* **ios:** theme-aware glass styling for tool and agent rows ([74fc399](https://github.com/dsswift/ion/commit/74fc3998b0d0c70dd0da5c48211cb41c256fd8da))
+* **ios:** add full-screen agent detail view with dispatch support ([1b5b7e4](https://github.com/dsswift/ion/commit/1b5b7e4aa09615b97421e7ff84ff5e708b5d905d))
+
+### Bug Fixes
+
+* **engine:** preserve background dispatch agent visibility on run exit ([884d853](https://github.com/dsswift/ion/commit/884d8530f66423256399500f396afdca06105623))
+* **ios:** seal engine assistant messages at turn boundary ([055b279](https://github.com/dsswift/ion/commit/055b279c94be9c5eb786d8aea33e2636a28e1b46))
+* **ios:** use VStack for markdown content to fix cell sizing ([bc7eaf9](https://github.com/dsswift/ion/commit/bc7eaf9b27e611ecde781506ea26d49ba279f467))
+* **ios:** respect agent panel default open setting ([3ce23c4](https://github.com/dsswift/ion/commit/3ce23c4eeadb9ad471ab945515bbe8aff02875b5))
+
+## [1.33.0](https://github.com/dsswift/ion/compare/ios-v1.32.0...ios-v1.33.0) (2026-05-31)
+
+### Features
+
+* **ios:** add running state to engine instances ([2b77813](https://github.com/dsswift/ion/commit/2b77813fd1ad901fb22590086c7a4abae907e251))
+
+## [1.32.0](https://github.com/dsswift/ion/compare/ios-v1.31.0...ios-v1.32.0) (2026-05-31)
+
+### Features
+
+* **ios:** add file rename support in file explorer ([4a3a205](https://github.com/dsswift/ion/commit/4a3a2058deaf247c505c9d029a1f3f8a6c0fc145))
+* **engine:** add agent dispatch lifecycle with redispatch ([f9fff27](https://github.com/dsswift/ion/commit/f9fff27fccee90c2193214071c6a96aac47d493a))
+* **ios:** add plan/auto toggle to engine tab footer ([1ee8beb](https://github.com/dsswift/ion/commit/1ee8beba06a0217095f8e0c683bb9d1fdc3ac12f))
+* **ios:** add agent conversation support to remote ([527d63a](https://github.com/dsswift/ion/commit/527d63add02cd0ada892e8cf25303035352f9d56))
+
+### Bug Fixes
+
+* **ios:** add AskUserQuestion and permission card rendering to engine view ([72b13e0](https://github.com/dsswift/ion/commit/72b13e0af2499626eb4b764b02448c1838526807))
+* **ios:** handle malformed tabs in snapshot decode ([0564032](https://github.com/dsswift/ion/commit/0564032507f60cb1f1551680660b090373742885))
+* **ios:** prevent content overflow in message rows ([ab26367](https://github.com/dsswift/ion/commit/ab26367bed309789cef9e42cd52642784ae4f135))
+
 ## [1.31.0](https://github.com/dsswift/ion/compare/ios-v1.30.0...ios-v1.31.0) (2026-05-28)
 
 ### Features

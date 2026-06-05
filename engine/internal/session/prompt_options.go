@@ -12,14 +12,15 @@ import (
 
 func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) types.RunOptions {
 	opts := types.RunOptions{
-		Prompt:        text,
-		ProjectPath:   s.config.WorkingDirectory,
-		SessionID:     s.conversationID,
-		MaxTokens:     s.config.MaxTokens,
-		Thinking:      s.config.Thinking,
-		PlanMode:      s.planMode,
-		PlanModeTools: s.planModeTools,
-		PlanFilePath:  s.planFilePath,
+		Prompt:                      text,
+		ProjectPath:                 s.config.WorkingDirectory,
+		SessionID:                   s.conversationID,
+		MaxTokens:                   s.config.MaxTokens,
+		Thinking:                    s.config.Thinking,
+		PlanMode:                    s.planMode,
+		PlanModeTools:               s.planModeTools,
+		PlanFilePath:                s.planFilePath,
+		PlanModeAllowedBashCommands: s.planModeAllowedBashCommands,
 	}
 
 	if overrides != nil {
@@ -59,6 +60,32 @@ func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) 
 		if overrides.PlanModeSparseReminder != "" {
 			opts.PlanModeSparseReminder = overrides.PlanModeSparseReminder
 		}
+		// Forward the per-prompt bash-allowlist additions. The field is
+		// transient by design: opts.BashAllowlistAdditionsForThisPrompt is
+		// unioned with the session allowlist when runloop_setup builds the
+		// run-time tool list (see buildToolDefs). The session-level
+		// engineSession.planModeAllowedBashCommands is NOT mutated by this
+		// field — that invariant is the point of having a separate field
+		// rather than a session-scoped mutation here.
+		if len(overrides.BashAllowlistAdditionsForThisPrompt) > 0 {
+			opts.BashAllowlistAdditionsForThisPrompt = overrides.BashAllowlistAdditionsForThisPrompt
+		}
+		// Compaction overrides — per-prompt tuning of context compaction.
+		if overrides.CompactTargetPercent > 0 {
+			opts.CompactTargetPercent = overrides.CompactTargetPercent
+		}
+		if overrides.CompactMicroKeepTurns > 0 {
+			opts.CompactMicroKeepTurns = overrides.CompactMicroKeepTurns
+		}
+		if overrides.CompactEnabled != nil {
+			opts.CompactEnabled = overrides.CompactEnabled
+		}
+		if overrides.CompactSummaryEnabled != nil {
+			opts.CompactSummaryEnabled = overrides.CompactSummaryEnabled
+		}
+		if overrides.CompactMemoryEnabled != nil {
+			opts.CompactMemoryEnabled = overrides.CompactMemoryEnabled
+		}
 	}
 
 	if s.config.SystemHint != "" {
@@ -82,14 +109,59 @@ func (m *Manager) applyConfigDefaults(opts *types.RunOptions) {
 	if opts.MaxBudgetUsd <= 0 && m.config.Limits.MaxBudgetUsd != nil {
 		opts.MaxBudgetUsd = *m.config.Limits.MaxBudgetUsd
 	}
-	if opts.CompactThreshold <= 0 && m.config.Compaction != nil && m.config.Compaction.Threshold > 0 {
-		opts.CompactThreshold = m.config.Compaction.Threshold
+	if m.config.Compaction != nil {
+		cc := m.config.Compaction
+		if opts.CompactThreshold <= 0 && cc.Threshold > 0 {
+			opts.CompactThreshold = cc.Threshold
+		}
+		if opts.CompactTargetPercent <= 0 && cc.TargetPercent > 0 {
+			opts.CompactTargetPercent = cc.TargetPercent
+		}
+		if opts.CompactMicroKeepTurns <= 0 && cc.MicroCompactKeep > 0 {
+			opts.CompactMicroKeepTurns = cc.MicroCompactKeep
+		}
+		if opts.CompactMinKeepTurns <= 0 && cc.KeepTurns > 0 {
+			opts.CompactMinKeepTurns = cc.KeepTurns
+		}
+		if opts.CompactEstimationPadding <= 0 && cc.EstimationPadding > 0 {
+			opts.CompactEstimationPadding = cc.EstimationPadding
+		}
+		if opts.CompactEnabled == nil && cc.Enabled != nil {
+			opts.CompactEnabled = cc.Enabled
+		}
+		if opts.CompactSummaryEnabled == nil && cc.SummaryEnabled != nil {
+			opts.CompactSummaryEnabled = cc.SummaryEnabled
+		}
+		if opts.CompactSummaryModel == "" && cc.SummaryModel != "" {
+			opts.CompactSummaryModel = cc.SummaryModel
+		}
+		if opts.CompactSummaryMaxTokens <= 0 && cc.SummaryMaxTokens > 0 {
+			opts.CompactSummaryMaxTokens = cc.SummaryMaxTokens
+		}
+		if opts.CompactMemoryEnabled == nil && cc.MemoryEnabled != nil {
+			opts.CompactMemoryEnabled = cc.MemoryEnabled
+		}
+		if opts.CompactMemoryModel == "" && cc.MemoryModel != "" {
+			opts.CompactMemoryModel = cc.MemoryModel
+		}
+		if opts.CompactMemoryUpdateThreshold <= 0 && cc.MemoryUpdateThreshold > 0 {
+			opts.CompactMemoryUpdateThreshold = cc.MemoryUpdateThreshold
+		}
+		if opts.CompactMemoryUpdateMinTurns <= 0 && cc.MemoryUpdateMinTurns > 0 {
+			opts.CompactMemoryUpdateMinTurns = cc.MemoryUpdateMinTurns
+		}
+		if opts.CompactMemoryMaxTokens <= 0 && cc.MemoryMaxTokens > 0 {
+			opts.CompactMemoryMaxTokens = cc.MemoryMaxTokens
+		}
 	}
 	if m.config.Limits.SuppressSystemMessages != nil && *m.config.Limits.SuppressSystemMessages {
 		opts.SuppressSystemMessages = true
 	}
 	if m.config.Limits.DisablePlanModeReminder != nil && *m.config.Limits.DisablePlanModeReminder {
 		opts.DisablePlanModeReminder = true
+	}
+	if len(opts.PlanModeAllowedBashCommands) == 0 && len(m.config.Limits.PlanModeAllowedBashCommands) > 0 {
+		opts.PlanModeAllowedBashCommands = m.config.Limits.PlanModeAllowedBashCommands
 	}
 	if m.config.Limits.DisableTurnLimitWarning != nil && *m.config.Limits.DisableTurnLimitWarning {
 		opts.DisableTurnLimitWarning = true

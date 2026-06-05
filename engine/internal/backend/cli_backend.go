@@ -336,34 +336,11 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 			}
 		}
 	}
-	// Extension tools are bridged to the CLI via the ion-extensions MCP server
-	// (--mcp-config), but the CLI only OFFERS tools that appear in --allowedTools.
-	// Without this entry, none of the harness's registered tools are callable by
-	// the model on the CLI backend (they are configured but never presented).
-	// "mcp__<server>__*" allow-lists every tool from that server (the server-only
-	// "mcp__<server>" form is not recognized by the CLI -- the __* wildcard is
-	// required).
+	// When an MCP ToolServer is wired, add the wildcard allowlist entry so
+	// the CLI offers all tools from the ion-extensions MCP server to the model.
 	if opts.McpConfig != "" {
-		allowedTools = append(allowedTools, "mcp__ion-extensions__*")
-	}
-
-	// Honor suppressed tools on the CLI path: drop any tool the harness
-	// suppressed via ctx.suppressTool() from the allowed set. ApiBackend already
-	// honors opts.SuppressTools in its run loop; this brings CliBackend to parity
-	// so SuppressTools works regardless of backend. Empty SuppressTools is a no-op
-	// (allowedTools is unchanged), so existing callers are unaffected.
-	if len(opts.SuppressTools) > 0 {
-		suppressed := make(map[string]bool, len(opts.SuppressTools))
-		for _, t := range opts.SuppressTools {
-			suppressed[t] = true
-		}
-		filtered := make([]string, 0, len(allowedTools))
-		for _, t := range allowedTools {
-			if !suppressed[t] {
-				filtered = append(filtered, t)
-			}
-		}
-		allowedTools = filtered
+		allowedTools = append(allowedTools, "mcp__"+McpServerName+"__*")
+		utils.Log("CliBackend", fmt.Sprintf("added MCP wildcard to allowedTools: mcp__%s__*", McpServerName))
 	}
 	args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
 
@@ -394,6 +371,15 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 	}
 
 	cmd := exec.CommandContext(ctx, claudePath, args...)
+
+	// When MCP tools are wired, disable tool search so all bridged tools
+	// appear in the model's upfront tool list. ENABLE_TOOL_SEARCH defaults
+	// on in Claude Code, which hides MCP tools behind a lazy search step
+	// in headless (-p) mode.
+	if opts.McpConfig != "" {
+		cmd.Env = append(os.Environ(), "ENABLE_TOOL_SEARCH=false")
+		utils.Log("CliBackend", "set ENABLE_TOOL_SEARCH=false for MCP tools")
+	}
 
 	// Set working directory if specified
 	if opts.ProjectPath != "" {

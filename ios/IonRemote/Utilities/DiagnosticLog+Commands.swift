@@ -20,7 +20,12 @@ extension DiagnosticLog {
         case .closeTab(let tabId):
             log("CMD: closeTab tabId=\(tabId.prefix(8))")
 
-        case .prompt(let tabId, let text, _, let clientMsgId, let attachments):
+        case .resetTabSession(let tabId):
+            log("CMD: resetTabSession tabId=\(tabId.prefix(8))")
+        case .resetEngineSession(let tabId, let instanceId):
+            log("CMD: resetEngineSession tabId=\(tabId.prefix(8)) instanceId=\(instanceId.prefix(8))")
+
+        case .prompt(let tabId, let text, _, let clientMsgId, let attachments, _):
             log("CMD: prompt tabId=\(tabId.prefix(8)) len=\(text.count) msgId=\(clientMsgId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
 
         case .cancel(let tabId):
@@ -71,7 +76,7 @@ extension DiagnosticLog {
         case .createEngineTab(let dir, let profileId):
             log("CMD: createEngineTab dir=\(dir?.suffix(30) ?? "nil") profile=\(profileId ?? "nil")")
 
-        case .enginePrompt(let tabId, let text, let instId, let attachments):
+        case .enginePrompt(let tabId, let text, let instId, let attachments, _):
             log("CMD: enginePrompt tabId=\(tabId.prefix(8)) len=\(text.count) inst=\(instId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
 
         case .engineAbort(let tabId, let instId):
@@ -97,6 +102,9 @@ extension DiagnosticLog {
 
         case .loadEngineConversation(let tabId, let instId):
             log("CMD: loadEngineConversation tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+
+        case .loadAgentConversation(let conversationIds):
+            log("CMD: loadAgentConversation ids=\(conversationIds.count)")
 
         case .setTabGroupMode(let mode):
             log("CMD: setTabGroupMode mode=\(mode)")
@@ -167,6 +175,9 @@ extension DiagnosticLog {
         case .fsWriteFile(let path, let content):
             log("CMD: fsWriteFile path=\(path.suffix(40)) len=\(content.count)")
 
+        case .fsRename(let oldPath, let newPath):
+            log("CMD: fsRename old=\(oldPath.suffix(40)) new=\(newPath.suffix(40))")
+
         case .discoverCommands(let dir):
             log("CMD: discoverCommands dir=\(dir.suffix(30))")
 
@@ -195,6 +206,12 @@ extension DiagnosticLog {
             // Pairs with the SETTINGS-CMD line on the desktop side for
             // round-trip correlation.
             log("CMD: setDesktopSetting key=\(key)")
+
+        case .setPillColor(let tabId, let color):
+            log("CMD: setPillColor tabId=\(tabId.prefix(8)) color=\(color ?? "nil")")
+
+        case .setPillIcon(let tabId, let icon):
+            log("CMD: setPillIcon tabId=\(tabId.prefix(8)) icon=\(icon ?? "nil")")
         }
     }
 }

@@ -15,6 +15,8 @@ import {
   scheduleApi,
   webhooksApi,
 } from './runtime-async'
+import { doRegisterAgentTools } from './runtime-agents'
+import { emitLog as sharedEmitLog, type LogLevel as SharedLogLevel } from './runtime-log'
 import type {
   AgentSpec,
   CommandDef,
@@ -33,6 +35,7 @@ import type {
   LLMCallOpts,
   LLMCallResult,
   ProcessInfo,
+  RecallAgentOpts,
   SandboxProfile,
   SandboxWrapResult,
   SendPromptOpts,
@@ -56,16 +59,12 @@ let activeEvents: EngineEvent[] | null = null
 // Logging (native API + console redirect)
 // ---------------------------------------------------------------------------
 
-type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+type LogLevel = SharedLogLevel
 
 function emitLog(level: LogLevel, message: string, fields?: Record<string, unknown>): void {
-  process.stdout.write(
-    JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'log',
-      params: { level, message, fields: fields ?? {} },
-    }) + '\n',
-  )
+  // Delegate to the shared emitter so internal SDK modules (e.g.
+  // runtime-agents) and the public `log` export use a single wire path.
+  sharedEmitLog(level, message, fields)
 }
 
 /**
@@ -198,15 +197,50 @@ function buildContext(ctxData: any): IonContext {
       await request('ext/send_prompt', { text, model: opts?.model || '' })
     },
     async dispatchAgent(opts: DispatchAgentOpts): Promise<DispatchAgentResult> {
-      const { onEvent, ...rpcOpts } = opts
-      if (onEvent) {
-        notificationHandlers.set('dispatch_event', onEvent)
+      const {
+        onEvent, onComplete, onError, onRecall,
+        onToolStart, onToolEnd, onToolError, onUsage, onTextDelta,
+        ...rpcOpts
+      } = opts
+
+      // Register notification handlers keyed by agent name so parallel
+      // background dispatches don't clobber each other's callbacks.
+      const agentKey = opts.name
+      const keyedHandlers: [string, ((p: any) => void) | undefined][] = [
+        [`dispatch_event:${agentKey}`, onEvent],
+        [`dispatch_tool_start:${agentKey}`, onToolStart],
+        [`dispatch_tool_end:${agentKey}`, onToolEnd],
+        [`dispatch_tool_error:${agentKey}`, onToolError],
+        [`dispatch_usage:${agentKey}`, onUsage],
+        [`dispatch_text_delta:${agentKey}`, onTextDelta],
+      ]
+      for (const [name, fn] of keyedHandlers) if (fn) notificationHandlers.set(name, fn)
+
+      const cleanup = () => {
+        for (const [name] of keyedHandlers) notificationHandlers.delete(name)
+        for (const k of ['dispatch_complete', 'dispatch_error', 'dispatch_recall'])
+          notificationHandlers.delete(`${k}:${agentKey}`)
       }
-      try {
+
+      if (opts.background) {
+        // Background: wire terminal callbacks that auto-cleanup, return stub.
+        const wrapTerminal = (fn?: (p: any) => void) => (params: any) => {
+          cleanup()
+          if (fn) fn(params)
+        }
+        notificationHandlers.set(`dispatch_complete:${agentKey}`, wrapTerminal(onComplete))
+        notificationHandlers.set(`dispatch_error:${agentKey}`, wrapTerminal(onError))
+        notificationHandlers.set(`dispatch_recall:${agentKey}`, wrapTerminal(onRecall))
         return await request('ext/dispatch_agent', rpcOpts)
-      } finally {
-        notificationHandlers.delete('dispatch_event')
       }
+
+      // Foreground: wait for RPC, then clean up.
+      try { return await request('ext/dispatch_agent', rpcOpts) }
+      finally { cleanup() }
+    },
+    async recallAgent(name: string, opts?: RecallAgentOpts): Promise<boolean> {
+      const result = await request('ext/recall_agent', { name, reason: opts?.reason || '' })
+      return !!result?.found
     },
     async discoverAgents(opts?: DiscoverAgentsOpts): Promise<DiscoveredAgent[]> {
       const result = await request('ext/discover_agents', opts || {})
@@ -343,16 +377,24 @@ async function handleRequest(
       const payload = { ...params }
       delete payload._ctx
 
+      // The engine wraps non-object payloads (bare strings) as
+      // {_payload: value} because they can't be merged into the
+      // params map. Unwrap so handlers receive the bare value.
+      const payloadKeys = Object.keys(payload)
+      const unwrapped =
+        payloadKeys.length === 1 && payloadKeys[0] === '_payload'
+          ? payload._payload
+          : payloadKeys.length > 0
+            ? payload
+            : undefined
+
       // Use a local array to collect events. Save/restore the global so
       // reentrant hook calls (possible when handlers await) don't clobber.
       const savedEvents = activeEvents
       const localEvents: EngineEvent[] = []
       activeEvents = localEvents
       const ctx = buildContext(ctxData)
-      const result = await handler(
-        ctx,
-        Object.keys(payload).length > 0 ? payload : undefined,
-      )
+      const result = await handler(ctx, unwrapped)
       activeEvents = savedEvents
 
       // Wrap the handler return value with any accumulated events.
@@ -441,11 +483,18 @@ function startListening(): void {
         // Suspend activeEvents so any ctx.emit() calls from the notification
         // handler go through notify() directly rather than pushing to a hook
         // handler's event batch.
-        const handler = notificationHandlers.get(msg.method)
+        //
+        // Dispatch callbacks include a `name` field identifying the agent.
+        // Try the per-agent keyed handler first, fall back to the global
+        // handler for backward compatibility.
+        const params = msg.params
+        const agentName = params?.name
+        const handler = (agentName && notificationHandlers.get(`${msg.method}:${agentName}`))
+          || notificationHandlers.get(msg.method)
         if (handler) {
           const saved = activeEvents
           activeEvents = null
-          try { handler(msg.params) } finally { activeEvents = saved }
+          try { handler(params) } finally { activeEvents = saved }
         }
       }
     } catch {
@@ -487,6 +536,9 @@ export function createIon(): IonSDK {
     },
     registerCommand(name, def) {
       commands.set(name, def)
+    },
+    registerAgentTools(opts?) {
+      doRegisterAgentTools(tools, opts)
     },
     webhooks: webhooksApi,
     schedule: scheduleApi,

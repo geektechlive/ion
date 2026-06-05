@@ -1,5 +1,9 @@
 # Desktop (Electron + React + Zustand)
 
+> **Plan resolution rule (applies to all fix plans for this area):** documenting a defect is not a resolution. See root [`AGENTS.md`](../AGENTS.md) § "Aspirational comments" → "The rule applies to plans, not just code".
+
+> **Role in the consumer landscape.** This application is **a reference implementation** of how to consume the Ion Engine — one careful interpretation, not the canonical consumer set. The engine's real consumers are external SDK users, custom harnesses, and third-party clients. The desktop demonstrates engine features at the highest quality bar so external developers can learn from it; it does not demonstrate every engine feature, nor should it. When the engine ships a hook, field, or event variant the desktop does not consume, that is the expected default. See root [`AGENTS.md`](../AGENTS.md) § "Engine consumers".
+
 ## Commands
 
 ```bash
@@ -12,6 +16,8 @@ npm run doctor      # bash scripts/doctor.sh
 ```
 
 Don't kill the user's running dev server. If a restart is needed, tell the user.
+
+**Never run `make desktop`.** It replaces the running Ion.app binary and relaunches the engine, which kills any active Ion session, including the one you are running in. Conversation state is often lost. The user runs `make desktop` manually. If the packaged app needs rebuilding, tell the user.
 
 ## Layout
 
@@ -59,6 +65,12 @@ desktop/src/
 - Framer Motion for animations.
 - Narrow Zustand selectors with custom equality functions; avoid whole-store subscriptions.
 
+## PopoverLayer and pointer events
+
+The `PopoverLayer` has `pointerEvents: 'none'` so it doesn't block interaction with the page beneath it. Any element portaled into it (context menus, dialogs, tooltips) must set `pointerEvents: 'auto'` on its outermost interactive container or clicks will silently pass through.
+
+Context-menu components already do this on their `motion.div`. The `ConfirmDialog` component sets it on its backdrop. If you create a new overlay component that portals into `PopoverLayer`, add `pointerEvents: 'auto'` to its root — without it the component will render but be completely non-interactable with no visible error.
+
 ## Subprocess env
 
 - `CLAUDECODE` and similar leakage env vars are stripped before spawn (`main/cli-env.ts`). Don't bypass.
@@ -80,15 +92,10 @@ desktop/src/
 
 To diagnose renderer-side state in a packaged build, use one of these instead:
 
-1. **Forward to the main logger.** The main process already pipes `[renderer]` lines to `~/.ion/desktop.log` (see entries like `[main] [renderer] ...`). For new diagnostics, add a `window.ion.log(...)` call (or equivalent IPC) so renderer state lands in `desktop.log` where it can be grepped.
-2. **Promote `console.log` to a logged IPC.** A temporary `console.log` in the renderer is invisible in packaged builds. Convert it to an IPC that writes via `main/logger.ts` before asking the user to reproduce.
+1. **Use `console.log` / `console.warn` / `console.error`.** All renderer console output is forwarded to `~/.ion/desktop.log` via the `console-message` handler in `window-manager.ts`. No allowlist — every log line is captured. Errors and warnings get distinct `[renderer:error]` and `[renderer:warn]` tags; everything else appears as `[renderer]`.
+2. **Use `console.debug()` for high-frequency diagnostics** (e.g., per-frame or per-chunk). These are still forwarded (at verbose level) but signal intent — if log volume ever needs trimming, verbose-level lines are the first candidates for filtering.
 3. **Inspect via the main-process snapshot.** `main/remote/snapshot.ts` polls renderer state through `executeJavaScript` and logs to `desktop.log`. Adding fields to that projection is the most reliable way to observe renderer store state from a packaged build.
 4. **Build and run in dev mode** (`cd desktop && npm run dev`) if you genuinely need live DevTools. This is the only way to use them.
-
-**The `console-message` allowlist.** `main/window-manager.ts` listens to renderer `console-message` events but only forwards messages whose text starts with one of a known set of prefixes (e.g. `[task_complete]`, `[App]`, `[FileE`, `[useFile`, `[event-slice]`, `[store]`). Errors (`level >= 2`) are always forwarded. **A `console.log('foo')` with no prefix lands nowhere in a packaged build.** When adding diagnostics:
-
-- Prefix the message with one of the allowlisted tags (or extend the allowlist).
-- Verify the prefix appears in the allowlist before relying on the log line.
 
 When investigating a renderer bug in a packaged build, **add the instrumentation first** (option 1, 2, or 3 above), ship a new build, then ask the user to reproduce. Asking the user to "check the console" is a wasted round-trip.
 
@@ -121,3 +128,4 @@ If a Go struct gained a field you don't have, the test says `"Go-only: [fieldNam
 3. `make check-file-sizes` passes.
 4. UI changes: smoke-tested in `npm run dev`. Report what was tested.
 5. Don't `git push`.
+6. **iOS parity check.** If the change affects a feature that exists on iOS (tab status, engine instances, permissions, working state), verify the iOS side is updated or document why it's deferred. See root `AGENTS.md` § "Cross-platform parity".

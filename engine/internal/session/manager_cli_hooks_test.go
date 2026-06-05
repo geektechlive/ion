@@ -78,11 +78,11 @@ func TestFireBeforePromptCli_SetsSystemPromptLeavesAppendUntouched(t *testing.T)
 	if opts.Prompt != "keep this" {
 		t.Errorf("expected prompt unchanged, got %q", opts.Prompt)
 	}
-	if opts.SystemPrompt != "persona injection" {
-		t.Errorf("expected SystemPrompt set to hook result, got %q", opts.SystemPrompt)
+	if opts.AppendSystemPrompt != "existing" {
+		t.Errorf("expected existing AppendSystemPrompt preserved, got %q", opts.AppendSystemPrompt)
 	}
-	if opts.AppendSystemPrompt != "git context" {
-		t.Errorf("expected AppendSystemPrompt untouched, got %q", opts.AppendSystemPrompt)
+	if opts.SystemPrompt != "extra" {
+		t.Errorf("expected new system prompt in SystemPrompt, got %q", opts.SystemPrompt)
 	}
 }
 

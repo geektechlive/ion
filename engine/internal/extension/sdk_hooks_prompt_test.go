@@ -202,7 +202,7 @@ func TestSDK_FireBeforeAgentStart(t *testing.T) {
 		return BeforeAgentStartResult{SystemPrompt: "You are the Chief of Staff."}, nil
 	})
 
-	sysPrompt, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "pre-agent"})
+	sysPrompt, _, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "pre-agent"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -220,12 +220,48 @@ func TestSDK_FireBeforeAgentStart_MapResult(t *testing.T) {
 		return map[string]interface{}{"systemPrompt": "From subprocess"}, nil
 	})
 
-	sysPrompt, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "test"})
+	sysPrompt, _, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "test"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sysPrompt != "From subprocess" {
 		t.Fatalf("expected 'From subprocess', got %q", sysPrompt)
+	}
+}
+
+func TestSDK_FireBeforeAgentStart_AgentName(t *testing.T) {
+	sdk := NewSDK()
+	sdk.On(HookBeforeAgentStart, func(ctx *Context, payload interface{}) (interface{}, error) {
+		return BeforeAgentStartResult{AgentName: "resolved-agent"}, nil
+	})
+
+	sysPrompt, agentName, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "pre-agent", Task: "do stuff"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if agentName != "resolved-agent" {
+		t.Fatalf("expected agentName 'resolved-agent', got %q", agentName)
+	}
+	if sysPrompt != "" {
+		t.Fatalf("expected empty systemPrompt (independent per-field resolution), got %q", sysPrompt)
+	}
+}
+
+func TestSDK_FireBeforeAgentStart_AgentName_MapResult(t *testing.T) {
+	sdk := NewSDK()
+	sdk.On(HookBeforeAgentStart, func(ctx *Context, payload interface{}) (interface{}, error) {
+		return map[string]interface{}{"agentName": "from-map"}, nil
+	})
+
+	sysPrompt, agentName, err := sdk.FireBeforeAgentStart(testCtx(), AgentInfo{Name: "test"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if agentName != "from-map" {
+		t.Fatalf("expected agentName 'from-map', got %q", agentName)
+	}
+	if sysPrompt != "" {
+		t.Fatalf("expected empty systemPrompt, got %q", sysPrompt)
 	}
 }
 

@@ -65,6 +65,8 @@ func normalizedEventVariants() map[string]NormalizedEventData {
 		EventStreamReset:       &StreamResetEvent{},
 		EventCompacting:        &CompactingEvent{},
 		EventToolStalled:       &ToolStalledEvent{},
+		EventSteerInjected:     &SteerInjectedEvent{},
+		EventModelFallback:     &ModelFallbackEvent{},
 	}
 }
 
@@ -97,6 +99,11 @@ func buildManifest() contractManifest {
 		// so consumers can populate a routing-hint cache without parsing
 		// engine internals. Snapshot semantics — see types.go comment.
 		"EngineCommandListing": reflect.TypeOf(EngineCommandListing{}),
+		// LlmContentBlock is the wire shape for every block carried inside
+		// an LlmMessage. Tracked so cross-language mirrors stay in sync as
+		// new block variants land (most recently the "compact_boundary"
+		// variant — see internal/conversation/compact_boundary.go).
+		"LlmContentBlock": reflect.TypeOf(LlmContentBlock{}),
 	}
 	for name, typ := range shared {
 		m.SharedTypes[name] = jsonFieldNames(typ)

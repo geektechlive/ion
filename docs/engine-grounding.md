@@ -28,9 +28,11 @@ If a UI requirement seems to demand an engine change, that is a **major red flag
 The engine never:
 
 - Blocks for user input.
-- Persists memory or user preferences.
+- Persists user preferences or cross-session memory.
 - Decides policy (who can do what, what to load, how to orchestrate).
 - Knows that a UI exists.
+
+> **Note:** The engine *does* persist conversation-scoped operational state (`.tree.jsonl`, `.llm.jsonl`, `.memory.md`) as part of session management. This is not "memory" in the LLM sense — it is compaction infrastructure that the engine owns. The prohibition targets user preference persistence and durable cross-session memory features, which belong to the harness or client.
 
 When labeling work, decide first: is this engine, harness, or client? If a harness or client gap is caused by a missing engine capability, call that out explicitly — but the default answer is almost always "fix it in the consumer."
 
@@ -65,6 +67,10 @@ Every consumer depends on published contracts. **Never ship a breaking change to
 - Change wire-protocol message framing or envelope structure.
 - Change the **semantics** of an existing event (e.g. turning a snapshot into an incremental update, or vice versa) — even if the wire shape is unchanged.
 - Stop emitting an existing event on one of its established triggers, even when the wire shape is unchanged. Consumers depend on *when* events fire, not just on their schema. Exceptions require an ADR documenting the semantic rationale and the migration impact; the ADR is the single source of truth for what changed and why (e.g. [ADR-003](architecture/adr/003-state-events-vs-workflow-events.md) for the `engine_plan_mode_changed` / `ExitPlanMode` trigger removal).
+
+### Typed events are the complete signaling surface
+
+Typed events fulfill the engine's signaling obligation in full. Do not double-surface signal in stream content, log lines, or system messages. See root [`CLAUDE.md`](../CLAUDE.md) § "The typed-event corollary" for the full rule. Short version: when the engine needs to communicate something to consumers, it emits a typed `NormalizedEvent` variant — and nothing else. Mutating `TaskCompleteEvent.Result`, `TextChunkEvent`, or injecting synthetic system messages to make the same information visible "by another path" is forbidden because it forces every consumer through one UI-shaped interpretation and corrupts headless pipelines that parse stream content as the LLM's verbatim output.
 
 ### Cross-language sync (mandatory when shared types change)
 
@@ -145,6 +151,7 @@ Logging is first-class. Every operation must be reconstructible from logs alone,
 - Engine executes; harness decides; clients render.
 - Contracts are additive only. Semantics count.
 - Snapshots replace; incrementals merge. Pick one and document it.
+- Typed events are the complete signaling surface. Never double-surface in stream content.
 - Engine changes are dangerous. Default to "no."
 - Settings belong to the consumer that owns them.
 - Log everything; success and failure; with context.

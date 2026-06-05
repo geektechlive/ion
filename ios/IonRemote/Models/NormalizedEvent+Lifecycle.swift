@@ -11,7 +11,14 @@ extension RemoteEvent {
     ) throws -> RemoteEvent? {
         switch type {
         case .snapshot:
-            let tabs = try container.decode([RemoteTabState].self, forKey: .tabs)
+            // Decode tabs individually so a single malformed tab doesn't kill
+            // the entire snapshot. SafeDecodable wraps each element in a try?
+            // and surfaces nil for failures.
+            let rawTabs = try container.decode([SafeDecodable<RemoteTabState>].self, forKey: .tabs)
+            let tabs = rawTabs.compactMap(\.value)
+            if rawTabs.count != tabs.count {
+                DiagnosticLog.log("SNAP-DECODE: \(rawTabs.count - tabs.count) tabs failed to decode, \(tabs.count) ok")
+            }
             let recentDirs = try container.decodeIfPresent([String].self, forKey: .recentDirectories) ?? []
             let tabGroupMode = try container.decodeIfPresent(String.self, forKey: .tabGroupMode)
             let tabGroups = try container.decodeIfPresent([RemoteTabGroup].self, forKey: .tabGroups)

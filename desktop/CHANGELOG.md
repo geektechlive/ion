@@ -10,6 +10,131 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.51.0](https://github.com/dsswift/ion/compare/desktop-v1.50.0...desktop-v1.51.0) (2026-06-05)
+
+### Features
+
+* **engine:** fall back to default model on unresolved tier alias (#174) ([4a9d7af](https://github.com/dsswift/ion/commit/4a9d7af0d9cc017df65de66fff33d3b49accda6d))
+* **desktop:** forward slash frontmatter model hint to runoptions ([0466f43](https://github.com/dsswift/ion/commit/0466f43d9faff56c85fa9e7ddfc8387fc02dfe63))
+* **desktop:** show yaml frontmatter in markdown preview ([6e3ebb9](https://github.com/dsswift/ion/commit/6e3ebb972fb0a16926118c8caf874d8fe0e9985e))
+
+### Bug Fixes
+
+* **desktop:** show ion-native slash commands when claude-compat off ([1481e56](https://github.com/dsswift/ion/commit/1481e560f3c6e39d89fbba410f07cfc2c3e262e2))
+
+## [1.50.0](https://github.com/dsswift/ion/compare/desktop-v1.49.0...desktop-v1.50.0) (2026-06-05)
+
+### Features
+
+* **ios:** mirror desktop categories + full settings projection ([b248eaf](https://github.com/dsswift/ion/commit/b248eafde082a4611d9f8b786e25804e2c609be6))
+* **engine:** configurable bash commands in plan mode ([d7e6c5f](https://github.com/dsswift/ion/commit/d7e6c5f7fa0dd2695e54a7f96809db586c0217b2))
+* **engine:** per-prompt bash allowlist additions (no session-state mutation) ([184a16f](https://github.com/dsswift/ion/commit/184a16f5b33f4add261be0f02f9a870efa2ed132))
+
+### Bug Fixes
+
+* **desktop:** use static import for engineBridge in engine-bridge-fs ([b92f8e7](https://github.com/dsswift/ion/commit/b92f8e76e474605f279c4158b46d7fc30adbb0a2))
+* **desktop:** forward all renderer console logs to desktop.log ([07225fa](https://github.com/dsswift/ion/commit/07225faae6c8ec43feb2b19a31505d28229ed0b4))
+* **desktop:** show parent dir in engine profile extension paths ([f46e203](https://github.com/dsswift/ion/commit/f46e203b08e708c6d84904ba9b3c2dd8d440d376))
+* **desktop:** replace hand-rolled YAML frontmatter parser with js-yaml ([7e08ab6](https://github.com/dsswift/ion/commit/7e08ab63486c46a88a2ebfcca19a56d1ecaabf76))
+
+## [1.49.0](https://github.com/dsswift/ion/compare/desktop-v1.48.0...desktop-v1.49.0) (2026-06-04)
+
+### Features
+
+* **engine:** inject steer messages before end_turn exit ([3c5e534](https://github.com/dsswift/ion/commit/3c5e53418393f5cdacbb90ccc1e63d6b6fcd7e22))
+* **desktop:** badge slash commands in user message bubbles ([40211f2](https://github.com/dsswift/ion/commit/40211f213c6cec77e281c0a9c28d9f0db3d17442))
+* **desktop:** add pill icon presets and project iOS pill state ([d580162](https://github.com/dsswift/ion/commit/d580162478286e4199d81d6e7891332193fc46f6))
+* **desktop:** add implement divider, plan viewer, clear-context option ([b697541](https://github.com/dsswift/ion/commit/b697541d62b82c1181ee25e5c2fdcfb9ae5e487c))
+* **desktop:** add unified turn grouping, pagination, prompt guidance ([e874e60](https://github.com/dsswift/ion/commit/e874e6044b106590414fa61047f86afd98c62fb2))
+* **desktop:** add /clear command to reset conversation ([55d3214](https://github.com/dsswift/ion/commit/55d321445d3409b3972f8777956e772c3aa4a7b0))
+* **desktop:** add reset_engine_session for engine-tab clear context ([d1907bc](https://github.com/dsswift/ion/commit/d1907bcf564a3fe38065163d521755ae35db0aac))
+* **desktop:** render Steer applied divider on engine_steer_injected ([9b5c9b1](https://github.com/dsswift/ion/commit/9b5c9b13b005c4de2269853094617da5bc7b7c5f))
+
+### Bug Fixes
+
+* **desktop:** restrict slash plan→auto switch to first prompt only ([bfa0787](https://github.com/dsswift/ion/commit/bfa0787d2ee7d976aef67fbfd6f88c40ea9634d0))
+* **desktop:** no-op cmd-click on non-existent file paths ([b3ebf33](https://github.com/dsswift/ion/commit/b3ebf332df494a2bc2ca85492abe16c3e60b4163))
+
+## [1.48.0](https://github.com/dsswift/ion/compare/desktop-v1.47.0...desktop-v1.48.0) (2026-06-03)
+
+### Features
+
+* **desktop:** add fuzzy matching for slash commands ([0fd88d0](https://github.com/dsswift/ion/commit/0fd88d06968ef427103464e2f5647c16fc04c2c2))
+* **desktop:** mirror LlmContentBlock with compact_boundary fields ([629613c](https://github.com/dsswift/ion/commit/629613c6cd65f7eabab9f077ae755a28d782493f))
+
+### Bug Fixes
+
+* **desktop:** remove silent 10 KB truncation of non-tool messages ([dd21c68](https://github.com/dsswift/ion/commit/dd21c689cb0945bdb90ad25128240076cf6081ab))
+
+## [1.47.0](https://github.com/dsswift/ion/compare/desktop-v1.46.0...desktop-v1.47.0) (2026-06-02)
+
+### Features
+
+* **desktop:** add theme registry with HUD palette ([8527d67](https://github.com/dsswift/ion/commit/8527d67a6941e3bd59eafbfb5795077f247fa4a9))
+* **engine:** aggregate dispatches into pager with array model ([5d9cf05](https://github.com/dsswift/ion/commit/5d9cf057a46f69302699867adcca7241f94ebd17))
+* **ios:** dispatch conversation lookup with caching ([4512473](https://github.com/dsswift/ion/commit/45124737149e105d7819d53ef5031d2d8c82ab52))
+* **desktop:** dispatch pager conversation lookup and display ([992390d](https://github.com/dsswift/ion/commit/992390d4a191c294c34920bba17a3d8de74ef4b3))
+* **ios:** add copy session id to tab context menus ([cd58d11](https://github.com/dsswift/ion/commit/cd58d1110b78d7bc410bbf1296aeb31d174c0e82))
+* **desktop:** add agent panel default open setting ([990f676](https://github.com/dsswift/ion/commit/990f676125b5070c5d6cb6c0fe2e6ce7ed27d907))
+* **desktop:** agent panel with compact mode and geometry persistence ([85e5dbf](https://github.com/dsswift/ion/commit/85e5dbf6a6a0ee72d3425feeb537c501c2a82a0d))
+
+### Bug Fixes
+
+* **engine:** preserve background dispatch agent visibility on run exit ([884d853](https://github.com/dsswift/ion/commit/884d8530f66423256399500f396afdca06105623))
+* **engine:** cap tool result size, persist model override, improve memory quality ([387190d](https://github.com/dsswift/ion/commit/387190d6dd79780fb3c04ea8a9fd3c6b854581e0))
+* **engine:** seed lastModel from conversation on session resume ([74e324b](https://github.com/dsswift/ion/commit/74e324b6d1c2cda96c5e2c188a053509e7e36f32))
+* **desktop:** seal engine assistant messages at turn boundary ([fcd8834](https://github.com/dsswift/ion/commit/fcd88341ef6dfd5ffd9855f05fd59dc44644da94))
+
+## [1.46.0](https://github.com/dsswift/ion/compare/desktop-v1.45.0...desktop-v1.46.0) (2026-06-01)
+
+### Features
+
+* **desktop:** wire implementationPhase for engine tab implement action ([5fdbb49](https://github.com/dsswift/ion/commit/5fdbb495a07b6ba101a788e4c600ee5a9b1b0cd8))
+
+### Bug Fixes
+
+* **desktop:** sync plan mode unconditionally on engine prompt ([0f90cdf](https://github.com/dsswift/ion/commit/0f90cdf6831201089116f260326494bca60f869e))
+
+## [1.45.0](https://github.com/dsswift/ion/compare/desktop-v1.44.0...desktop-v1.45.0) (2026-05-31)
+
+### Features
+
+* **desktop:** add running state to engine instances ([e7a34a6](https://github.com/dsswift/ion/commit/e7a34a69f34bd904a6ebf4e22e8412ecb271b26d))
+
+### Bug Fixes
+
+* **desktop:** prevent mousedown handler from dismissing confirm dialog ([3f83d36](https://github.com/dsswift/ion/commit/3f83d36a57f62382e5bf4f36f808dc8551f7cf71))
+* **desktop:** flush tab state before app exit ([60d39a3](https://github.com/dsswift/ion/commit/60d39a3ab766daf6ed04f7c41b3b9a024f45fd96))
+
+## [1.44.0](https://github.com/dsswift/ion/compare/desktop-v1.43.0...desktop-v1.44.0) (2026-05-31)
+
+### Features
+
+* **desktop:** add plan approval flow to engine tabs ([8f06f74](https://github.com/dsswift/ion/commit/8f06f74e58694e2e687614bbaf0d8fa72f051eec))
+
+## [1.43.0](https://github.com/dsswift/ion/compare/desktop-v1.42.0...desktop-v1.43.0) (2026-05-31)
+
+### Features
+
+* **desktop:** deduplicate harness messages across tabs ([3050e58](https://github.com/dsswift/ion/commit/3050e589f8fa7ea6ccb1a5ec64fb00666e77bcae))
+* **desktop:** add file rename support for remote clients ([951bf7b](https://github.com/dsswift/ion/commit/951bf7be881f5f0755c5ecf5d3e3b0de8b9fc751))
+* **desktop:** add agent conversation loading with panel refactor ([fc3ee8b](https://github.com/dsswift/ion/commit/fc3ee8b806239b38a3666ee36f5ff6745ab19aa9))
+* **engine:** add agent dispatch lifecycle with redispatch ([f9fff27](https://github.com/dsswift/ion/commit/f9fff27fccee90c2193214071c6a96aac47d493a))
+* **desktop:** add plan/auto toggle to engine tab footer ([a49d6fe](https://github.com/dsswift/ion/commit/a49d6fefd2ea9234968c356da9ba65173a4194eb))
+* **desktop:** show running indicator on engine pills ([41768a6](https://github.com/dsswift/ion/commit/41768a66bb9d1f0a4e3c85487b4f101ff62a9032))
+* **desktop:** add raw file attachment encoding to engine ([865a393](https://github.com/dsswift/ion/commit/865a393623c40762a359e2d7b2f16453adea2e7f))
+* **desktop:** add ion scope slash command support ([c5b7967](https://github.com/dsswift/ion/commit/c5b79670126249a6108c70c0207bb430f508ef50))
+
+### Bug Fixes
+
+* **desktop:** handle and render permission denied cards in engine view ([94e2178](https://github.com/dsswift/ion/commit/94e2178c15cfdaa0c4c6eb003047b7c9592afb49))
+* **desktop:** preserve sessionId when merging status fields ([a40d74c](https://github.com/dsswift/ion/commit/a40d74ce819107c4a54b27490bc3be8e6816308f))
+* **desktop:** reject stale idle events during implement flow ([b16d553](https://github.com/dsswift/ion/commit/b16d55384545db3f04b386bb2a835c98e56178ff))
+* **desktop:** prevent table overflow in message bubbles ([392d5ba](https://github.com/dsswift/ion/commit/392d5baa25d567daadee9578d7b1747fa054ee08))
+* **desktop:** keep tab right-click menus on-screen ([60de848](https://github.com/dsswift/ion/commit/60de8484ef04f0cee274e2cc87e51d22d1234b1e))
+* **desktop:** auto-move tabs to done group on task completion ([fe8b449](https://github.com/dsswift/ion/commit/fe8b44931d3dd12c07f2cf17be10211804ea5fba))
+* **engine:** fix CI failures in integration tests and desktop test ([cbbf4a6](https://github.com/dsswift/ion/commit/cbbf4a63975f2c741fa88af0aa8d231323ac66c9))
+
 ## [1.42.0](https://github.com/dsswift/ion/compare/desktop-v1.41.0...desktop-v1.42.0) (2026-05-28)
 
 ### Features

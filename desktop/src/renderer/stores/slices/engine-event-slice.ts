@@ -1,6 +1,7 @@
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
-import { formatClearDivider } from '../../../shared/clear-divider'
+import { formatClearDivider, formatPlanCreatedDivider, formatSteerAppliedDivider } from '../../../shared/clear-divider'
+import { handleEngineStatusEvent } from './engine-event-status'
 
 /**
  * Per-tab cache of extension-registered command names, populated by
@@ -116,143 +117,12 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_status': {
-          // Track whether the inside-`set` reducer captured a new
-          // sessionId into engineConversationIds — if so, we trigger an
-          // immediate persistence flush after the reducer returns so the
-          // sessionId survives a hard kill (closed laptop lid, OS force-
-          // quit, power loss) that arrives before the next debounced save.
-          // Without this, the renderer holds the sessionId in memory only
-          // and the user's "continuous" conversation silently restarts
-          // from scratch on the next launch.
-          let didCaptureNewSessionId = false
-          set((state) => {
-            const statusFields = new Map(state.engineStatusFields)
-
-            // Merge last-known context/cost into incoming status fields
-            // so the footer doesn't reset to 0% when the engine emits a
-            // status event without usage data.
-            const prev = state.engineStatusFields.get(key)
-            const merged = { ...event.fields }
-            if (!merged.contextPercent) {
-              const usage = state.engineUsage.get(key)
-              if (usage && usage.percent > 0) {
-                merged.contextPercent = usage.percent
-              }
-            }
-            if (!merged.totalCostUsd && prev?.totalCostUsd) {
-              merged.totalCostUsd = prev.totalCostUsd
-            }
-            statusFields.set(key, merged)
-            const sessionId = event.fields?.sessionId
-            const pane = state.enginePanes.get(tabId)
-            const isActive = !pane || pane.activeInstanceId === key.split(':')[1]
-            const isIdle = event.fields?.state === 'idle'
-            const isRunning = event.fields?.state === 'running'
-            let engineConversationIds = state.engineConversationIds
-            if (sessionId) {
-              const existing = state.engineConversationIds.get(key) ?? []
-              if (existing[existing.length - 1] !== sessionId) {
-                engineConversationIds = new Map(state.engineConversationIds)
-                engineConversationIds.set(key, [...existing, sessionId])
-                didCaptureNewSessionId = true
-                // Permanent diagnostic log per the repo logging policy
-                // (~/.claude/docs/standards/logging.md, repo CLAUDE.md
-                // "Logging policy"). This is the only place the runtime
-                // `engineConversationIds` map is mutated for engine-view
-                // tabs (compound `${tabId}:${instanceId}` keys); without
-                // this line, we have no way to confirm from logs alone
-                // that the source map is being populated before the
-                // persistence layer reads from it. Logs the exact key
-                // shape so a future "session not resumed on restart"
-                // investigation can confirm the key matches what
-                // session-store-persistence.ts expects.
-                console.log(`[engine_status] engineConversationIds.set key=${key} sessionId=${sessionId} chainLen=${existing.length + 1}`)
-              }
-            }
-
-            // Promote AskUserQuestion / ExitPlanMode permissionDenials
-            // carried on engine_status into the per-engine-instance
-            // `enginePermissionDenied` map (keyed by the compound
-            // `${tabId}:${instanceId}` key). This is the engine-view
-            // counterpart to the sessionPlane synthesis at
-            // engine-control-plane-events.ts:handleStatusEvent — which is
-            // bypassed for engine-view tabs because EngineControlPlane is
-            // keyed by bare tabId and engine-view events arrive with the
-            // compound key.
-            //
-            // Per-instance scoping (vs. mutating the parent
-            // `tab.permissionDenied`) is what keeps sibling instances
-            // under the same engine tab from showing each other's cards
-            // when the user switches between sub-tabs. The parent tab's
-            // pill still glows via getWaitingState() in TabStripShared.ts,
-            // which folds across this map for engine tabs.
-            //
-            // Snapshot/idempotence rules:
-            //   - We write `state.enginePermissionDenied.set(key, ...)`
-            //     using the FULL compound key — not the parent tabId.
-            //   - When the array is empty/absent (a follow-up cost-only
-            //     `engine_status` tick), we PRESERVE any existing entry
-            //     for this key so the card stays visible. The renderer-
-            //     side card render in EngineView relies on this — the
-            //     engine emits one engine_status with denials and then a
-            //     stream of cost-only ticks; clobbering would make the
-            //     card flicker out.
-            //   - We log both branches with verbosity matching
-            //     event-slice.ts's `[task_complete] tab=... branch=...`
-            //     lines so a single grep covers CLI + engine paths.
-            //     `enginePermDenied` is the engine-tab marker; CLI tabs
-            //     use the older `permDenied` token in their own logs.
-            const askOrExitDenials: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> = (event.fields?.permissionDenials || []).filter(
-              (d: { toolName: string }) => d.toolName === 'AskUserQuestion' || d.toolName === 'ExitPlanMode',
-            )
-            const hasInterestingDenials = askOrExitDenials.length > 0
-            let enginePermissionDeniedUpdate: Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null> | null = null
-            if (hasInterestingDenials) {
-              const toolNamesStr = JSON.stringify(askOrExitDenials.map((d) => d.toolName))
-              const instanceId = key.split(':')[1] || ''
-              console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=denials enginePermDenied set to ${toolNamesStr}`)
-              enginePermissionDeniedUpdate = new Map(state.enginePermissionDenied)
-              enginePermissionDeniedUpdate.set(key, { tools: askOrExitDenials })
-            } else if ((event.fields?.permissionDenials?.length ?? 0) === 0) {
-              // Cost-only or running tick — PRESERVE existing entry for
-              // this key. Logged at debug verbosity (no state change).
-              // Keep the noise low; only log if we currently hold a card
-              // to preserve for this instance.
-              const existing = state.enginePermissionDenied.get(key)
-              if (existing?.tools?.length) {
-                const instanceId = key.split(':')[1] || ''
-                console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=noDenials preserving existing enginePermDenied (${existing.tools.length} tools)`)
-              }
-            }
-
-            const needsTabUpdate = isActive && (sessionId || isIdle || isRunning)
-            // Fold conversationId / status updates into the same tabs.map
-            // pass when applicable. The `enginePermissionDenied` map is
-            // returned separately — it lives outside the per-tab struct.
-            const returnPatch: Partial<typeof state> = { engineStatusFields: statusFields, engineConversationIds }
-            if (enginePermissionDeniedUpdate) {
-              returnPatch.enginePermissionDenied = enginePermissionDeniedUpdate
-            }
-            if (needsTabUpdate) {
-              const tabs = state.tabs.map((t) => {
-                if (t.id !== tabId) return t
-                const updates: Partial<typeof t> = {}
-                if (sessionId && t.conversationId !== sessionId) {
-                  updates.conversationId = sessionId
-                  updates.lastKnownSessionId = sessionId
-                }
-                if (isRunning && t.status !== 'running' && isActive) {
-                  updates.status = 'running' as const
-                }
-                if (isIdle && t.status !== 'idle' && isActive) {
-                  updates.status = 'idle' as const
-                }
-                return Object.keys(updates).length > 0 ? { ...t, ...updates } : t
-              })
-              returnPatch.tabs = tabs
-            }
-            return returnPatch
-          })
+          // Delegated to engine-event-status.ts to keep this switch
+          // file under the 600-line TypeScript cap. The helper returns
+          // `didCaptureNewSessionId` so we can trigger the immediate
+          // persistence flush below — that signal is the only piece of
+          // post-reducer behavior the slice still owns for this event.
+          const { didCaptureNewSessionId } = handleEngineStatusEvent(set, key, tabId, event)
           // Durability: persist immediately whenever a new sessionId
           // arrived. The default subscriber debounces saves at 100 ms,
           // which is normally fine but creates a window where a hard
@@ -291,14 +161,46 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_harness_message': {
+          // Dedup hook: if the engine carries `metadata.dedupKey` on the
+          // event, suppress the push when a prior harness message in this
+          // engine-instance scrollback already has the same key. The
+          // engine treats `metadata` as opaque pass-through; this is the
+          // renderer-honored convention (see docs/protocol/server-events.md
+          // and Message.dedupKey in types-session.ts). Non-harness roles
+          // ignore the field. Bare harness messages with no metadata opt
+          // out — both push, no dedup applied.
+          const metaUnknown = (event as { metadata?: unknown }).metadata
+          const dedupKeyRaw =
+            metaUnknown && typeof metaUnknown === 'object'
+              ? (metaUnknown as Record<string, unknown>).dedupKey
+              : undefined
+          const dedupKey =
+            typeof dedupKeyRaw === 'string' && dedupKeyRaw.length > 0 ? dedupKeyRaw : undefined
           set((state) => {
             const messages = new Map(state.engineMessages)
             const msgs = [...(messages.get(key) || [])]
+            if (dedupKey) {
+              const prior = msgs.find((m) => m.role === 'harness' && m.dedupKey === dedupKey)
+              if (prior) {
+                // Log both sides of the decision so investigations don't
+                // require guessing why a "missing" welcome did not appear.
+                console.log(
+                  `[store] engine_harness_message dedup: key=${key} dedupKey=${dedupKey} ` +
+                  `prior=${prior.id} priorTs=${prior.timestamp} dropped duplicate emission`,
+                )
+                return state
+              }
+              console.log(
+                `[store] engine_harness_message dedup: key=${key} dedupKey=${dedupKey} ` +
+                `no prior match — pushing as the first occurrence`,
+              )
+            }
             msgs.push({
               id: nextMsgId(),
               role: 'harness' as const,
               content: event.message,
               timestamp: Date.now(),
+              ...(dedupKey ? { dedupKey } : {}),
             })
             messages.set(key, msgs)
             return { engineMessages: messages }
@@ -318,7 +220,7 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
             const messages = new Map(state.engineMessages)
             const msgs = [...(messages.get(key) || [])]
             const last = msgs[msgs.length - 1]
-            if (last && last.role === 'assistant') {
+            if (last && last.role === 'assistant' && !last.sealed) {
               msgs[msgs.length - 1] = { ...last, content: last.content + event.text }
             } else {
               msgs.push({ id: nextMsgId(), role: 'assistant', content: event.text, timestamp: Date.now() })
@@ -332,6 +234,27 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_message_end': {
+          // IMPORTANT: `engine_message_end` fires at the end of EVERY LLM
+          // message, not at run completion. A single SendPrompt commonly
+          // produces several LLM messages (assistant → tool_use →
+          // tool_result → assistant → …). Flipping `tab.status` to
+          // 'idle' here makes the tab pill stop pulsing, hides the
+          // "Thinking…" indicator, and removes the Interrupt button
+          // between every turn — even though the engine is still
+          // actively running. The next `engine_text_delta` flips status
+          // back to 'running', producing a visible flicker and stranding
+          // the user without an abort affordance during tool calls.
+          //
+          // The authoritative idle signal is `engine_status { state:
+          // "idle" }` (engine/internal/session/event_translation.go:251-
+          // 258) which the engine emits exactly once at true run-exit.
+          // That handler (case 'engine_status' above) is the only place
+          // that should set `tab.status = 'idle'` from engine activity.
+          // `engine_error` and `engine_dead` also reset status; both are
+          // terminal.
+          //
+          // We still update usage/cost here — those are per-message
+          // accounting values and are correct between turns.
           set((state) => {
             const usage = new Map(state.engineUsage)
             if (event.usage) {
@@ -343,15 +266,28 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
             }
             const pane = state.enginePanes.get(tabId)
             const isActive = !pane || pane.activeInstanceId === key.split(':')[1]
-            const tabs = isActive ? state.tabs.map((t) => {
+            const tabs = isActive && event.usage ? state.tabs.map((t) => {
               if (t.id !== tabId) return t
               return {
                 ...t,
-                status: 'idle' as const,
-                ...(event.usage ? { contextTokens: event.usage.inputTokens, contextPercent: event.usage.contextPercent } : {}),
+                contextTokens: event.usage!.inputTokens,
+                contextPercent: event.usage!.contextPercent,
               }
             }) : state.tabs
             return { engineUsage: usage, tabs }
+          })
+          // Seal the current assistant message so the next engine_text_delta
+          // creates a new message instead of appending to this one.
+          set((state) => {
+            const messages = new Map(state.engineMessages)
+            const msgs = [...(messages.get(key) || [])]
+            const last = msgs[msgs.length - 1]
+            if (last && last.role === 'assistant') {
+              msgs[msgs.length - 1] = { ...last, sealed: true }
+              messages.set(key, msgs)
+              return { engineMessages: messages }
+            }
+            return {}
           })
           break
         }
@@ -540,6 +476,77 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
               return { engineWorkingMessages: workingMessages, engineMessages: messages }
             })
           }
+          break
+        }
+        case 'engine_plan_mode_changed': {
+          // Insert a "Plan created" divider into the engine conversation
+          // each time plan mode is entered. This fires on every entry
+          // (including re-entry after implementation), producing the
+          // repeating cycle: Session started → Plan created → Implementing
+          // → Plan created → Implementing → …
+          if (event.planModeEnabled) {
+            set((state) => {
+              const messages = new Map(state.engineMessages)
+              const msgs = [...(messages.get(key) || [])]
+              msgs.push({
+                id: nextMsgId(),
+                role: 'system' as const,
+                content: formatPlanCreatedDivider(new Date(), event.planSlug),
+                timestamp: Date.now(),
+                planFilePath: event.planFilePath,
+              })
+              messages.set(key, msgs)
+              return { engineMessages: messages }
+            })
+          }
+          break
+        }
+        case 'engine_steer_injected': {
+          // The engine drained a mid-turn steer message into the
+          // conversation as a user turn. Insert a divider so the user
+          // can see where their steer landed in the scrollback. The
+          // engine emits this from three checkpoints (between turns,
+          // before end_turn exit, after tool results) — each capture
+          // gets its own divider so the user sees the count.
+          set((state) => {
+            const messages = new Map(state.engineMessages)
+            const msgs = [...(messages.get(key) || [])]
+            msgs.push({
+              id: nextMsgId(),
+              role: 'system' as const,
+              content: formatSteerAppliedDivider(new Date(), event.steerMessageLength),
+              timestamp: Date.now(),
+            })
+            messages.set(key, msgs)
+            return { engineMessages: messages }
+          })
+          break
+        }
+        case 'engine_model_fallback': {
+          // The engine fell back to its configured defaultModel because
+          // the requested model didn't resolve to a provider. This
+          // client's policy: show a small ⚠ glyph on the affected
+          // engine instance pill via the EngineStatusBar. The fact is
+          // stored per-instance (compound key) and cleared on the next
+          // engine_status state=idle for that same instance (see the
+          // `state === 'idle'` branch in engine-event-status.ts).
+          //
+          // Engine event semantics: ModelFallbackEvent is a workflow
+          // signal, not a state snapshot — it fires once at the swap
+          // site. Persisting it in renderer state is renderer policy,
+          // not engine policy; another consumer (headless harness,
+          // future CLI client) is free to ignore the event entirely.
+          // See CLAUDE.md § "The typed-event corollary".
+          set((state) => {
+            const fallbacks = new Map(state.engineModelFallbacks)
+            fallbacks.set(key, {
+              requestedModel: event.fallbackRequestedModel,
+              fallbackModel: event.fallbackModel,
+              reason: event.fallbackReason,
+              at: Date.now(),
+            })
+            return { engineModelFallbacks: fallbacks }
+          })
           break
         }
       }

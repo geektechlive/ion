@@ -1,9 +1,11 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct IonRemoteApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewModel = SessionViewModel()
+    @State private var themeManager = ThemeManager()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -15,10 +17,19 @@ struct IonRemoteApp: App {
             ContentView()
                 .environment(viewModel)
                 .environment(viewModel.briefingsStore)
-                .preferredColorScheme(.dark)
-                .tint(JarvisTheme.accent)
+                .environment(\.appTheme, themeManager)
+                .preferredColorScheme(themeManager.preferredColorScheme)
+                .tint(themeManager.accent)
                 .onAppear {
                     appDelegate.sessionViewModel = viewModel
+                    DiagnosticLog.log("[IonRemoteApp] theme injected — id: \(themeManager.selectedThemeId), accent: \(themeManager.accent)")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .briefingFromPush)) { note in
+                    guard let info = note.userInfo,
+                          let briefingId = info["briefingId"] as? String,
+                          let title = info["briefingTitle"] as? String,
+                          let text = info["briefingText"] as? String else { return }
+                    viewModel.briefingsStore.receive(briefingId: briefingId, title: title, text: text)
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
@@ -31,6 +42,23 @@ struct IonRemoteApp: App {
                         // were backgrounded, so we can't trust cached state.
                         if viewModel.showGitInfoInTabList {
                             viewModel.requestAllGitChanges()
+                        }
+                        // Scan delivered notifications and write directly to the
+                        // store. TabListView.onReceive is only active when
+                        // connected, so we can't rely on the NotificationCenter
+                        // path alone during the reconnect phase.
+                        UNUserNotificationCenter.current().getDeliveredNotifications { notes in
+                            for note in notes {
+                                let ui = note.request.content.userInfo
+                                guard let briefingId = ui["briefingId"] as? String,
+                                      let briefingText = ui["briefingText"] as? String else { continue }
+                                let title = note.request.content.title.isEmpty
+                                    ? "Briefing" : note.request.content.title
+                                DispatchQueue.main.async {
+                                    viewModel.briefingsStore.receive(
+                                        briefingId: briefingId, title: title, text: briefingText)
+                                }
+                            }
                         }
                     case .background:
                         // Stop transport but preserve all state (tabs, messages,
@@ -47,6 +75,7 @@ struct IonRemoteApp: App {
 
 struct ContentView: View {
     @Environment(SessionViewModel.self) private var viewModel
+    @Environment(\.appTheme) private var theme
     @State private var connectingElapsed: Int = 0
     @State private var showTroubleshooting = false
 
@@ -82,7 +111,7 @@ struct ContentView: View {
             Spacer()
             Image(systemName: "bolt.shield.fill")
                 .font(.system(size: 50))
-                .foregroundStyle(JarvisTheme.accent)
+                .foregroundStyle(theme.accent)
             ProgressView()
                 .controlSize(.large)
             Text(viewModel.connectionState.label)
@@ -99,7 +128,7 @@ struct ContentView: View {
                 viewModel.reconnect()
             }
             .buttonStyle(.borderedProminent)
-            .tint(JarvisTheme.accent)
+            .tint(theme.accent)
             .padding(.top, 8)
             if connectingElapsed > 10 {
                 DisclosureGroup("Troubleshooting", isExpanded: $showTroubleshooting) {
@@ -126,7 +155,7 @@ struct ContentView: View {
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
-                    .tint(JarvisTheme.accent)
+                    .tint(theme.accent)
                 }
             }
             Spacer()

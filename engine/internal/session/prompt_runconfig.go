@@ -34,6 +34,12 @@ func (m *Manager) buildRunConfig(
 ) *backend.RunConfig {
 	runCfg := &backend.RunConfig{}
 
+	// Thread the engine's default model so the run loop can fall back
+	// when a requested model doesn't resolve (e.g. unrecognized tier alias).
+	if m.config != nil && m.config.DefaultModel != "" {
+		runCfg.DefaultModel = m.config.DefaultModel
+	}
+
 	// Thread timeouts config into the run so tool execution and the run loop
 	// can read configured values.
 	if m.config != nil && m.config.Timeouts != nil {
@@ -45,6 +51,12 @@ func (m *Manager) buildRunConfig(
 	// runloop falls back via types.EarlyStopDefaults().
 	if m.config != nil && m.config.EarlyStopContinue != nil {
 		runCfg.EarlyStopContinue = m.config.EarlyStopContinue
+	}
+
+	// Thread tool-result size cap from engine.json compaction config so the
+	// runloop can persist oversized tool results to disk.
+	if m.config != nil && m.config.Compaction != nil && m.config.Compaction.MaxToolResultChars > 0 {
+		runCfg.MaxToolResultChars = m.config.Compaction.MaxToolResultChars
 	}
 
 	if permEng != nil {
@@ -73,6 +85,17 @@ func (m *Manager) buildRunConfig(
 	}
 	m.wireAgentSpawner(s, key, currentModel, spawnerExtGroup, runCfg)
 
+	// Wire session memory getter so compaction can use the pre-built
+	// summary as a zero-cost alternative to LLM summarization.
+	if s.sessionMemory != nil {
+		sm := s.sessionMemory
+		runCfg.GetSessionMemory = sm.GetMemory
+		runCfg.GetLastSummarizedEntryID = sm.GetLastSummarizedEntryID
+		runCfg.ResetMemoryTracking = func(tokens int) {
+			sm.ResetUpdateTracking(tokens, sm.GetLastUpdateTurn())
+		}
+	}
+
 	// Wire OnPlanModeEnter unconditionally: it calls RequestPlanModeEnter on
 	// the manager which handles hook dispatch and session-state flipping
 	// internally. This callback is always needed so the runloop interception
@@ -88,6 +111,15 @@ func (m *Manager) buildRunConfig(
 	// Default when no extensions: auto-allow.
 	runCfg.Hooks.OnPlanModeExit = func(planFilePath string) (bool, string) {
 		return m.RequestPlanModeExit(capturedKey, planFilePath)
+	}
+
+	// Wire GetSessionPlanFilePath: lets the ExitPlanMode interception resolve
+	// the session-level planFilePath when the run's own planFilePath is empty.
+	// This covers the case where the model calls ExitPlanMode in a non-plan-mode
+	// run (prompt-level plan mode) after a prior plan-mode session set the path.
+	runCfg.Hooks.GetSessionPlanFilePath = func() string {
+		_, path := m.GetPlanModeState(capturedKey)
+		return path
 	}
 
 	return runCfg
@@ -142,9 +174,40 @@ func (m *Manager) wireExtensionHooks(s *engineSession, key string, requestID str
 
 	runCfg.Hooks.OnTurnStart = func(_ string, turnNum int) {
 		extGroup.FireTurnStart(ctx, extension.TurnInfo{TurnNumber: turnNum})
+		// Fire task_created in tandem with turn_start so the hook surface
+		// is consistent across backends. The CLI backend fires both from
+		// fireCliTurnHooks (see event_translation.go); the ApiBackend
+		// path mirrors that here using the same TaskID format
+		// (<session-key>-t<turn-number>) so external consumers observe
+		// identical TaskIDs regardless of which backend serviced the run.
+		taskID := fmt.Sprintf("%s-t%d", key, turnNum)
+		utils.Debug("Session", fmt.Sprintf("ApiBackend OnTurnStart: task_created taskID=%s turn=%d", taskID, turnNum))
+		_ = extGroup.FireTaskCreated(ctx, extension.TaskLifecycleInfo{
+			TaskID: taskID,
+			Name:   fmt.Sprintf("turn-%d", turnNum),
+			Status: "running",
+		})
 	}
 	runCfg.Hooks.OnTurnEnd = func(_ string, turnNum int) {
 		extGroup.FireTurnEnd(ctx, extension.TurnInfo{TurnNumber: turnNum})
+		// Fire task_completed at turn end. Same TaskID format as the
+		// matching task_created above.
+		taskID := fmt.Sprintf("%s-t%d", key, turnNum)
+		utils.Debug("Session", fmt.Sprintf("ApiBackend OnTurnEnd: task_completed taskID=%s turn=%d", taskID, turnNum))
+		_ = extGroup.FireTaskCompleted(ctx, extension.TaskLifecycleInfo{
+			TaskID: taskID,
+			Name:   fmt.Sprintf("turn-%d", turnNum),
+			Status: "completed",
+		})
+
+		// Trigger background session memory update if wired. The session
+		// memory debounces internally (turn count + token growth), so this
+		// fires on every turn but only produces work when thresholds are met.
+		if s.sessionMemory != nil {
+			if conv := apiBackend.GetConversation(capturedRequestID); conv != nil {
+				s.sessionMemory.OnTurnEnd(conv, turnNum)
+			}
+		}
 	}
 
 	// Translate the backend's BeforeProviderRequestInfo into the extension
@@ -250,12 +313,36 @@ func (m *Manager) wireExtensionHooks(s *engineSession, key string, requestID str
 		cancel, _ := extGroup.FireSessionBeforeCompact(ctx, extension.CompactionInfo{})
 		return cancel
 	}
+	runCfg.Hooks.OnRequestCompactSummary = func(_ string, strategy string, messages []types.LlmMessage) (string, bool) {
+		// Fan out to the extension group. The hook is observe+respond:
+		// returning ("", false) means "no opinion", which the runloop
+		// reads as a signal to fall back to the regex fact extractor.
+		// Strategy is "auto" (proactive token-limit driven) or "reactive"
+		// (prompt_too_long retry) — handlers branch on it to tune their
+		// summariser to the trigger (e.g. shorter output on reactive
+		// because the provider just rejected the prompt).
+		summary, ok := extGroup.FireCompactSummaryRequest(ctx, extension.CompactSummaryRequestInfo{
+			Strategy:     strategy,
+			MessageCount: len(messages),
+			Messages:     messages,
+		})
+		utils.Debug("Session", fmt.Sprintf("compact_summary_request bridge: strategy=%s msgCount=%d hookProvided=%v summaryLen=%d", strategy, len(messages), ok, len(summary)))
+		return summary, ok
+	}
 	runCfg.Hooks.OnSessionCompact = func(_ string, info interface{}) {
 		if ci, ok := info.(map[string]interface{}); ok {
 			payload := extension.CompactionInfo{
-				Strategy:       fmt.Sprintf("%v", ci["strategy"]),
-				MessagesBefore: toInt(ci["messagesBefore"]),
-				MessagesAfter:  toInt(ci["messagesAfter"]),
+				Strategy:         fmt.Sprintf("%v", ci["strategy"]),
+				MessagesBefore:   toInt(ci["messagesBefore"]),
+				MessagesAfter:    toInt(ci["messagesAfter"]),
+				TokensBefore:     toInt(ci["tokensBefore"]),
+				TokenLimit:       toInt(ci["tokenLimit"]),
+				TargetTokens:     toInt(ci["targetTokens"]),
+				MicroCompactKeep: toInt(ci["microCompactKeep"]),
+				TokensAfter:      toInt(ci["tokensAfter"]),
+			}
+			if sm, ok := ci["sessionMemory"].(string); ok {
+				payload.SessionMemory = sm
 			}
 			// Decode the typed facts slice. The producer
 			// (backend.compactIfNeeded / compactReactive) embeds

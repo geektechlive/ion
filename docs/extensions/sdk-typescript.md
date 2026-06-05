@@ -29,6 +29,7 @@ interface IonSDK {
   on(hook: string, handler: (ctx: IonContext, payload?: any) => any): void
   registerTool(def: ToolDef): void
   registerCommand(name: string, def: CommandDef): void
+  registerAgentTools(opts?: RegisterAgentToolsOpts): void
 }
 ```
 
@@ -89,6 +90,22 @@ ion.registerCommand('status', {
 })
 ```
 
+### `registerAgentTools(opts?)`
+
+Scan `agents/*.md` in the extension directory, parse each file's YAML frontmatter, and register a dispatch tool per agent. Called once at startup, synchronously after `createIon()`.
+
+Each discovered agent with a `parent` field gets a tool named `dispatch_<name>` (hyphens replaced with underscores). When the LLM calls the tool, the SDK invokes `ctx.dispatchAgent()` with the agent's `systemPrompt`, `model`, and `task` from the tool input.
+
+By default, root agents (no `parent` field) are excluded since they represent the conversation itself, not dispatch targets. Customize filtering, tool naming, and descriptions via `RegisterAgentToolsOpts`.
+
+```typescript
+const ion = createIon()
+ion.registerAgentTools()
+
+// Suppress the generic Agent tool so the model uses typed dispatch tools
+ion.on('session_start', (ctx) => { ctx.suppressTool('Agent') })
+```
+
 ## IonContext
 
 Passed to every hook handler, tool execute function, and command execute function. Provides access to session state and engine communication.
@@ -109,6 +126,7 @@ interface IonContext {
   callTool(name: string, input: Record<string, unknown>): Promise<{ content: string; isError?: boolean }>
   sendPrompt(text: string, opts?: SendPromptOpts): Promise<void>
   dispatchAgent(opts: DispatchAgentOpts): Promise<DispatchAgentResult>
+  recallAgent(name: string, opts?: RecallAgentOpts): Promise<boolean>
   discoverAgents(opts?: DiscoverAgentsOpts): Promise<DiscoveredAgent[]>
 }
 ```
@@ -251,7 +269,7 @@ interface SendPromptOpts {
 }
 ```
 
-**`dispatchAgent(opts)`** -- dispatch an engine-native agent. Blocks until the agent completes.
+**`dispatchAgent(opts)`** -- dispatch an engine-native agent. In the default (foreground) mode, blocks until the agent completes and returns a `DispatchAgentResult`.
 
 ```typescript
 const result = await ctx.dispatchAgent({
@@ -261,7 +279,51 @@ const result = await ctx.dispatchAgent({
   systemPrompt: 'You are a research agent. Be thorough.',
   projectPath: ctx.cwd
 })
-// { output: '...', exitCode: 0, elapsed: 8.3 }
+// { name: 'researcher', output: '...', exitCode: 0, elapsed: 8.3, cost: 0.012, ... }
+```
+
+Pass `background: true` to run the agent asynchronously. The promise resolves immediately with a stub result; the terminal outcome is delivered via `onComplete`, `onError`, or `onRecall` callbacks:
+
+```typescript
+await ctx.dispatchAgent({
+  name: 'code-reviewer',
+  task: 'Review the latest changes',
+  background: true,
+  onComplete: (result) => {
+    ctx.emit({ type: 'engine_notify', message: `Review done: ${result.output}`, level: 'info' })
+  },
+  onError: (err) => {
+    ctx.emit({ type: 'engine_notify', message: `Review failed: ${err.message}`, level: 'error' })
+  },
+  onRecall: (info) => {
+    ctx.emit({ type: 'engine_notify', message: `Review cancelled: ${info.reason}`, level: 'info' })
+  },
+})
+```
+
+Lifecycle callbacks provide real-time visibility into a dispatched agent's progress. They fire for both foreground and background dispatches:
+
+- **`onToolStart(info)`** — a tool invocation began in the child session
+- **`onToolEnd(info)`** — a tool completed successfully
+- **`onToolError(info)`** — a tool completed with an error
+- **`onUsage(info)`** — token/cost usage update from the child
+- **`onTextDelta(info)`** — streaming text chunk from the child
+
+```typescript
+await ctx.dispatchAgent({
+  name: 'implementer',
+  task: 'Build the feature',
+  background: true,
+  onToolStart: (info) => log.debug(`tool started: ${info.toolName}`),
+  onUsage: (info) => log.debug(`tokens: ${info.cumulativeInputTokens}+${info.cumulativeOutputTokens}`),
+  onComplete: (result) => log.info(`done in ${result.elapsed}s, cost $${result.cost}`),
+})
+```
+
+**`recallAgent(name, opts?)`** -- terminate a running background dispatch by agent name. Returns `true` if a dispatch was found and recalled, `false` otherwise. The recalled agent's `onRecall` callback fires with the provided reason. Has no effect on foreground dispatches.
+
+```typescript
+const found = await ctx.recallAgent('code-reviewer', { reason: 'user requested' })
 ```
 
 **`getContextUsage()`** -- query the active conversation's current token usage and percent of the model's context window. Returns `null` when no conversation is active (e.g. called from `session_start` before the first prompt). Reads the live counters maintained by the engine's session manager — no socket round-trip is needed for repeated calls within a single hook.
@@ -290,6 +352,52 @@ ion.registerCommand('recall', {
 ```
 
 Useful for: recovering details lost to compaction (the persisted log survives compaction; the in-context messages do not), implementing custom recall commands, and building harness-side memory features. Searches the full persisted record, not just the currently-loaded context.
+
+**`getSessionMemory()`** -- returns the current session memory content. Empty string when session memory is not active or no summary has been generated yet. Session memory is a structured summary of earlier conversation maintained in the background by the compaction system.
+
+```typescript
+ion.hook('session_compact', async (info, ctx) => {
+  const memory = await ctx.getSessionMemory()
+  if (memory) {
+    // Persist to external knowledge base
+    await externalDB.upsert('session-memory', memory)
+  }
+})
+```
+
+Useful for: reading the engine's conversation summary for external persistence, building custom compaction-aware features, and integrating with vector stores or knowledge graphs that need the full session context.
+
+**`setSessionMemory(content)`** -- replaces the session memory with custom content and persists it to disk. Use this to provide your own summarization strategy, overriding the engine's background summarizer.
+
+```typescript
+ion.hook('turn_end', async (info, ctx) => {
+  const customSummary = await myCustomSummarizer(ctx)
+  await ctx.setSessionMemory(customSummary)
+})
+```
+
+Useful for: replacing the engine's default summarization with a custom strategy (e.g. vector-store-backed, domain-specific extraction, or multi-modal summarization).
+
+**`compact_summary_request` hook** -- substitute a harness-side summariser for the engine's regex fact extractor. The hook fires inside proactive (auto) and reactive (prompt_too_long) compaction, after the session-memory and LLM tiers and before the regex fallback. The handler receives the compaction strategy (`'auto'` or `'reactive'`) and the pre-compaction message slice (already filtered through the boundary firewall so prior summaries are not in scope). Return a non-empty string to short-circuit the regex fallback; return an empty string or skip the return to let the engine fall through to its regex pipeline.
+
+```typescript
+ion.hook('compact_summary_request', async (info, ctx) => {
+  // info.strategy is 'auto' or 'reactive' — tune the summariser to the
+  // trigger. Reactive summaries should be aggressive (fewer tokens)
+  // because the provider just rejected the prompt; auto summaries can
+  // afford a richer rendering.
+  const targetWords = info.strategy === 'reactive' ? 80 : 250
+  try {
+    const summary = await myLLMSummarizer(info.messages, { targetWords })
+    return summary // becomes the compact_boundary block's Summary field
+  } catch (err) {
+    ctx.log('warn', `compact summary failed, falling back to regex: ${err}`)
+    return '' // empty return → engine uses regex fact extractor
+  }
+})
+```
+
+Useful for: replacing the engine's regex fact extractor with an LLM-based summariser, branching summary strategy on the compaction trigger, and integrating with external summarisation services. The engine never blocks on the handler — wrap any LLM call in a bounded timeout and return an empty string on failure rather than throwing or blocking.
 
 **`elicit(opts)`** -- ask the user a structured question via the connected client. Resolves with the user's response (or a cancellation signal). The engine blocks the calling extension's hook until the user replies or the client times out.
 
@@ -357,14 +465,16 @@ Discriminated union of event types the extension can emit. The five named varian
 ```typescript
 type EngineEvent =
   | { type: 'engine_agent_state'; agents: any[] }     // complete snapshot — see note below
-  | { type: 'engine_status'; fields: any }
-  | { type: 'engine_working_message'; message: string }
-  | { type: 'engine_notify'; message: string; level: string }
-  | { type: 'engine_harness_message'; message: string; source?: string }
+  | { type: 'engine_status'; fields: any; metadata?: Record<string, unknown> }
+  | { type: 'engine_working_message'; message: string; metadata?: Record<string, unknown> }
+  | { type: 'engine_notify'; message: string; level: string; metadata?: Record<string, unknown> }
+  | { type: 'engine_harness_message'; message: string; source?: string; metadata?: Record<string, unknown> }
   | { type: string; [key: string]: unknown }   // open variant — custom harness events
 ```
 
 > **`engine_agent_state` is always a complete snapshot.** Every emission replaces the consumer's local view. Include every agent you want visible; consumers do not merge across events. See the [Agent State Contract](../architecture/agent-state.md).
+
+**Pass-through `metadata`.** Four user-visible variants (`engine_harness_message`, `engine_notify`, `engine_working_message`, `engine_status`) carry an optional `metadata` map. The engine treats it as opaque — it forwards the field verbatim to clients and applies no semantics. Clients honor specific conventions; the canonical one today is `metadata.dedupKey` on `engine_harness_message`, which lets the desktop renderer suppress repeated emissions of the same logical message within an engine-instance scrollback (useful for "fire on every `session_start`" patterns like ion-meta's welcome). See the [well-known metadata keys table](../protocol/server-events.md#well-known-metadata-keys-for-engine_harness_message) in the wire-protocol reference. Pick small structured hints; this field is not a state-transfer channel.
 
 **Custom event types.** Pick a `type` value that won't collide with current or future engine-emitted events. Convention: prefix with the extension or harness name (`jarvis_inbox_update`, `ion-meta_persona_loaded`). The engine validates only `engine_agent_state` payloads; every other type is forwarded to all connected socket clients unchanged. The desktop bridge passes events through without type-based dispatch, so any custom payload your renderers know how to handle is fair game.
 
@@ -386,6 +496,19 @@ interface DispatchAgentOpts {
   projectPath?: string      // working directory for the agent
   sessionId?: string        // resume an existing child session
   maxTurns?: number         // cap child agent loop turns (omit or <=0 = unlimited)
+  planMode?: boolean        // start child in plan mode
+  planFilePath?: string     // override plan file path (default: engine allocates one)
+  planModeTools?: string[]  // override allowed tools during plan mode
+  background?: boolean      // run async; return stub result immediately
+  onComplete?: (result: DispatchAgentResult) => void   // background: success
+  onError?: (err: DispatchError) => void               // background: failure
+  onRecall?: (info: RecallInfo) => void                 // background: cancelled
+  onToolStart?: (info: DispatchToolStartInfo) => void   // tool invocation began in child
+  onToolEnd?: (info: DispatchToolEndInfo) => void       // tool completed in child
+  onToolError?: (info: DispatchToolErrorInfo) => void   // tool errored in child
+  onUsage?: (info: DispatchUsageInfo) => void           // token/cost usage update
+  onTextDelta?: (info: DispatchTextDeltaInfo) => void   // streaming text chunks from child
+  onPlanProposal?: (info: DispatchPlanProposalInfo) => void  // child proposed a plan
 }
 ```
 
@@ -393,9 +516,103 @@ interface DispatchAgentOpts {
 
 ```typescript
 interface DispatchAgentResult {
-  output: string    // agent's final output text
-  exitCode: number  // 0 = success
-  elapsed: number   // wall time in seconds
+  name: string        // agent name
+  output: string      // agent's final output text
+  exitCode: number    // 0 = success
+  elapsed: number     // wall time in seconds
+  cost: number        // USD cost
+  inputTokens: number
+  outputTokens: number
+  sessionId?: string  // child session ID (for resume)
+  planFilePath?: string  // plan file written by child (when planMode was true)
+  planExited?: boolean   // true when child called ExitPlanMode
+}
+```
+
+## DispatchError
+
+```typescript
+interface DispatchError {
+  name: string       // agent name
+  message: string    // error description
+  exitCode: number   // non-zero
+  elapsed: number    // wall time in seconds
+}
+```
+
+## RecallInfo
+
+```typescript
+interface RecallInfo {
+  name: string       // agent name
+  reason: string     // recall reason
+  elapsed: number    // wall time in seconds
+  toolCount: number  // tools completed before recall
+}
+```
+
+## RecallAgentOpts
+
+```typescript
+interface RecallAgentOpts {
+  reason?: string    // human-readable reason for the recall
+}
+```
+
+## RegisterAgentToolsOpts
+
+```typescript
+interface RegisterAgentToolsOpts {
+  filter?: (agent: DiscoveredAgent) => boolean        // filter which agents get dispatch tools
+  toolName?: (agent: DiscoveredAgent) => string       // customize tool name (default: dispatch_<name>)
+  description?: (agent: DiscoveredAgent) => string    // customize tool description
+}
+```
+
+## Dispatch Lifecycle Payloads
+
+```typescript
+interface DispatchToolStartInfo {
+  name: string       // agent name
+  toolName: string   // tool being invoked
+  toolId: string     // tool call ID
+}
+
+interface DispatchToolEndInfo {
+  name: string       // agent name
+  toolName: string
+  toolId: string
+  content: string    // tool result content
+}
+
+interface DispatchToolErrorInfo {
+  name: string       // agent name
+  toolName: string
+  toolId: string
+  content: string    // error content
+}
+
+interface DispatchUsageInfo {
+  name: string                 // agent name
+  inputTokens: number          // per-turn input tokens
+  outputTokens: number         // per-turn output tokens
+  cumulativeInputTokens: number  // cumulative across dispatch
+  cumulativeOutputTokens: number // cumulative across dispatch
+  cumulativeCost: number       // cumulative USD cost
+}
+
+interface DispatchTextDeltaInfo {
+  name: string       // agent name
+  delta: string      // new text chunk
+  accumulated: string // all text so far
+}
+
+interface DispatchPlanProposalInfo {
+  name: string          // agent name
+  agentId: string       // dispatch-generated agent ID
+  planFilePath: string  // absolute path to the plan file
+  planSlug: string      // human-readable slug (basename minus .md)
+  planRequested: boolean // true when caller set planMode=true; false if child self-initiated
 }
 ```
 

@@ -2,6 +2,10 @@
 
 iPhone companion (Ion Remote) for Ion Desktop. LAN (Bonjour/mDNS) + relay (WebSocket).
 
+> **Plan resolution rule (applies to all fix plans for this area):** documenting a defect is not a resolution. See root [`AGENTS.md`](../AGENTS.md) § "Aspirational comments" → "The rule applies to plans, not just code".
+
+> **Role in the consumer landscape.** This application is **a reference implementation** for mobile companion clients of the Ion Engine. It is not the canonical mobile client — third-party developers may build their own. The engine's real consumers are external. When the engine ships a feature iOS does not consume, that is the expected default; we extend iOS coverage when there is a UX or parity reason, not to validate engine surface. See root [`AGENTS.md`](../AGENTS.md) § "Engine consumers".
+
 ## Commands
 
 ```bash
@@ -73,6 +77,8 @@ LAN and relay share `RemoteCommand` and `RemoteTabState`. Pairing is ECDH; share
 ## Wire-protocol parity
 
 iOS models (`NormalizedEvent`, `RemoteCommand`, `RemoteTabState`) mirror desktop/engine wire types. When the engine adds an event variant or field, the iOS Swift type must add it too — otherwise relay/LAN messages decode incorrectly. Source of truth: `engine/internal/types/normalized_event.go` and `desktop/src/shared/types.ts`.
+
+**Do not defer event-surface expansion.** When a desktop feature requires iOS to react to an engine event that iOS doesn't yet decode, the proper fix is to add the event to `NormalizedEvent.swift` and handle it in the appropriate ViewModel extension. Do not create workarounds that relay rendered artifacts (e.g. sending a divider as an `engine_harness_message` instead of teaching iOS to decode the real event). Comments like "iOS does not yet act on this" describe known gaps — when a consumer arrives, close the gap.
 
 ## Contract sync (cross-language types)
 

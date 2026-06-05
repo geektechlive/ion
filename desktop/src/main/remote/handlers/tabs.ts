@@ -5,7 +5,7 @@ import { log as _log } from '../../logger'
 import { state, sessionPlane, engineBridge } from '../../state'
 import { broadcast } from '../../broadcast'
 import { terminalManager } from '../../terminal-manager-instance'
-import { readSettings } from '../../settings-store'
+import { readSettings, SETTINGS_DEFAULTS } from '../../settings-store'
 import { getRemoteTabStates } from '../snapshot'
 import { discoverCommands } from '../../cli-compat/command-discovery'
 import { autoPullDiagnosticLogs } from './diagnostics'
@@ -218,6 +218,7 @@ export async function handlePrompt(cmd: Extract<RemoteCommand, { type: 'prompt' 
     source: 'remote',
     isEngineTab: false,
     projectPath,
+    implementationPhase: cmd.implementationPhase,
   }).catch((err: unknown) => {
     log(`handlePrompt: pipeline error: ${(err as Error).message}`)
   })
@@ -230,14 +231,51 @@ export function handleCancel(cmd: Extract<RemoteCommand, { type: 'cancel' }>): v
   }
 }
 
-export function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type: 'set_permission_mode' }>): void {
+export async function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type: 'set_permission_mode' }>): Promise<void> {
   const mode = cmd.mode
   if (mode !== 'auto' && mode !== 'plan') {
     log(`Remote set_permission_mode: invalid mode "${mode}"`)
     return
   }
   log(`Remote set_permission_mode: tab=${cmd.tabId} mode=${mode}`)
-  sessionPlane.setPermissionMode(cmd.tabId, mode)
+
+  // Engine tabs are keyed by `tabId:instanceId` in the engine.
+  // The generic sessionPlane.setPermissionMode uses bare tabId which
+  // silently misses the engine session. Detect engine tabs and route
+  // through the compound-key bridge path.
+  let routed = false
+  if (state.mainWindow) {
+    try {
+      const escapedTab = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const info = await state.mainWindow.webContents.executeJavaScript(`
+        (function() {
+          var store = window.__Ion_SESSION_STORE__;
+          if (!store) return null;
+          var s = store.getState();
+          var tab = s.tabs.find(function(t) { return t.id === '${escapedTab}'; });
+          if (!tab || !tab.isEngine) return null;
+          var pane = s.enginePanes.get('${escapedTab}');
+          if (!pane || !pane.activeInstanceId) return null;
+          return { instanceId: pane.activeInstanceId };
+        })()
+      `)
+      if (info?.instanceId) {
+        const compoundKey = `${cmd.tabId}:${info.instanceId}`
+        log(`Remote set_permission_mode: engine tab, using compound key=${compoundKey}`)
+        engineBridge.sendSetPlanMode(compoundKey, mode === 'plan', undefined, 'remote')
+        routed = true
+      }
+    } catch (err) {
+      log(`Remote set_permission_mode: engine tab detection failed: ${(err as Error).message}`)
+    }
+  }
+
+  // CLI tabs (or fallback when engine detection fails)
+  if (!routed) {
+    sessionPlane.setPermissionMode(cmd.tabId, mode)
+  }
+
+  // Always broadcast so the UI updates regardless of tab type
   broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId: cmd.tabId, mode })
 }
 
@@ -276,10 +314,14 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
           } else {
             startIdx = Math.max(0, total - pageSize);
           }
+          // Snap startIdx backward to a turn boundary (user message) to avoid
+          // sending partial turns/tool-groups to iOS
+          while (startIdx > 0 && all[startIdx] && all[startIdx].role !== 'user') {
+            startIdx--;
+          }
           var page = all.slice(startIdx, endIdx).map(function(m) {
             var content = m.content || '';
             if (m.role === 'tool' && content.length > 2048) content = content.substring(0, 2048) + '\\n... [truncated]';
-            else if (content.length > 10000) content = content.substring(0, 10000);
             return {
               id: m.id, role: m.role, content: content,
               toolName: m.toolName, toolInput: m.toolInput,
@@ -368,7 +410,26 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
 export async function handleDiscoverCommands(cmd: Extract<RemoteCommand, { type: 'discover_commands' }>, deviceId: string): Promise<void> {
   const { directory } = cmd
   try {
-    const commands = await discoverCommands(directory)
+    const all = await discoverCommands(directory)
+    // Mirror the desktop IPC handler's enableClaudeCompat filter so the iOS
+    // autocomplete shows the same list the desktop does. Ion-native
+    // commands are always returned; .claude/* entries are gated by the
+    // user's Claude Code Compatibility setting. See
+    // `desktop/src/main/ipc/sessions-list.ts` for the matching filter and
+    // `desktop/src/main/slash-classify.ts` for the expansion-time gate.
+    let claudeCompat = SETTINGS_DEFAULTS.enableClaudeCompat
+    try {
+      const s = readSettings()
+      claudeCompat = s.enableClaudeCompat ?? claudeCompat
+    } catch (err) {
+      log(`discover_commands: readSettings failed reading enableClaudeCompat; defaulting to ${claudeCompat}: ${err}`)
+    }
+    const commands = claudeCompat ? all : all.filter((c) => c.origin === 'ion')
+    if (!claudeCompat) {
+      log(`discover_commands: claudeCompat=false, returning ${commands.length} ion entries, filtered ${all.length - commands.length} claude entries (device=${deviceId})`)
+    } else {
+      log(`discover_commands: claudeCompat=true, returning ${commands.length} entries (device=${deviceId})`)
+    }
     state.remoteTransport?.sendToDevice(deviceId, { type: 'discover_commands_response', directory, commands })
   } catch (err) {
     log(`discover_commands error: ${(err as Error).message}`)

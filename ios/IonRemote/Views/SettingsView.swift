@@ -1,31 +1,94 @@
 import SwiftUI
 
+/// Top-level settings screen. Shows category rows that push into
+/// dedicated detail views, matching the iOS Settings.app pattern.
+///
+/// Layout
+/// ──────
+/// 1. Active-device picker (only when ≥2 paired desktops). Tapping a
+///    different device switches transports immediately — no Connect
+///    button, no drilling into Desktops & Connection. Single-device
+///    setups skip this picker entirely to avoid wasting space.
+/// 2. Category rows:
+///    - Desktops & Connection — pairing list, connection diagnostics,
+///      and per-desktop projected settings.
+///    - Appearance — merged iOS-local appearance/interface settings
+///      (theme + new-tab default + tab list + agent panel + tab groups).
+///    - Models — conversation/engine model pickers.
+///    - Voice — voice toggle, API key, mode, prompt.
+///    - Diagnostics & About — transport info, log, version.
+///
+/// Per-desktop scoping
+/// ───────────────────
+/// All "desktop settings" land in the Desktops & Connection → Desktop
+/// Settings nested screen, scoped to the currently-active pairing.
+/// Switching desktops from the picker at the top of this screen brings
+/// up a fresh snapshot from the newly-active desktop, and that snapshot
+/// drives every per-desktop projected control downstream.
 struct SettingsView: View {
     @Environment(SessionViewModel.self) private var viewModel
+    @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
-    @State private var showPairingSheet = false
-    @State private var elevenLabsKey: String = ""
-    @State private var keySaved = false
-    @State private var voiceTestInProgress = false
-    @State private var voiceTestResult: VoiceService.TestResult?
-    @State private var showVoiceTestAlert = false
-    @State private var voicePromptText: String = ""
-    @State private var editingDevice: PairedDevice? = nil
-    @State private var showUnpairAllConfirmation = false
 
     var body: some View {
         NavigationStack {
             List {
-                connectionSection
-                desktopSettingsSection
-                voiceSection
-                diagnosticsSection
-                newTabSection
-                tabListSection
-                modelsSection
-                tabGroupsSection
-                pairedDevicesSection
-                aboutSection
+                // Multi-device picker, shown only when the user has
+                // paired ≥2 desktops. With a single pairing the picker
+                // is useless decoration so we hide it.
+                if viewModel.pairedDevices.count >= 2 {
+                    Section {
+                        activeDevicePicker
+                    } header: {
+                        Text("Active Desktop")
+                    } footer: {
+                        Text("Switch between paired desktops without leaving Settings.")
+                    }
+                }
+
+                categoryLink(
+                    "Desktops & Connection",
+                    icon: "desktopcomputer",
+                    color: .blue,
+                    detail: viewModel.activeDevice?.displayName
+                ) {
+                    SettingsDesktopsView()
+                }
+
+                categoryLink(
+                    "Appearance",
+                    icon: "paintbrush",
+                    color: .purple,
+                    detail: currentThemeName
+                ) {
+                    SettingsAppearanceView()
+                }
+
+                categoryLink(
+                    "Models",
+                    icon: "cpu",
+                    color: .orange,
+                    detail: currentModelLabel
+                ) {
+                    SettingsModelsView()
+                }
+
+                categoryLink(
+                    "Voice",
+                    icon: "waveform",
+                    color: .green,
+                    detail: viewModel.voiceService.isEnabled ? "On" : "Off"
+                ) {
+                    SettingsVoiceView()
+                }
+
+                categoryLink(
+                    "Diagnostics & About",
+                    icon: "stethoscope",
+                    color: .gray
+                ) {
+                    SettingsDiagnosticsView()
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -34,501 +97,129 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showPairingSheet) {
-                PairingView()
-            }
-            .sheet(item: $editingDevice) { device in
-                DeviceCustomizationSheet(device: device)
-                    .environment(viewModel)
-            }
         }
     }
 
-    private var statusLabel: String {
-        guard viewModel.connectionState == .connected else {
-            return viewModel.connectionState.label
-        }
-        switch viewModel.transportState {
-        case .lanPreferred: return "Connected (LAN)"
-        case .relayOnly: return "Connected (Relay)"
-        case .disconnected: return "Connected"
-        }
-    }
+    // MARK: - Active device picker
 
-    private var transportLabel: String {
-        switch viewModel.transportState {
-        case .lanPreferred: return "LAN (Bonjour)"
-        case .relayOnly: return "Relay (WebSocket)"
-        case .disconnected: return "Disconnected"
-        }
-    }
-
-    // MARK: - Sections
-
-    private var voiceSection: some View {
-        Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.voiceService.isEnabled },
-                set: {
-                    viewModel.voiceService.isEnabled = $0
-                    viewModel.sendVoiceConfig()
-                }
-            )) {
-                Label("Voice Responses", systemImage: "waveform")
-            }
-            SecureField("ElevenLabs API Key", text: $elevenLabsKey)
-                .textContentType(.password)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            Button {
-                if elevenLabsKey.trimmingCharacters(in: .whitespaces).isEmpty {
-                    KeychainHelper.delete("com.geektechlive.ionremote.elevenlabs")
-                } else {
-                    KeychainHelper.set(elevenLabsKey, service: "com.geektechlive.ionremote.elevenlabs")
-                }
-                withAnimation { keySaved = true }
-                Haptic.success()
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    withAnimation { keySaved = false }
-                }
-            } label: {
-                HStack {
-                    Text(keySaved ? "Key Saved ✓" : "Save Key")
-                    if keySaved {
-                        Spacer()
-                    }
-                }
-                .foregroundStyle(keySaved ? .green : JarvisTheme.accent)
-            }
-            Button {
-                voiceTestInProgress = true
-                Task {
-                    let result = await viewModel.voiceService.testVoice()
-                    voiceTestInProgress = false
-                    voiceTestResult = result
-                    showVoiceTestAlert = true
-                    if result.isSuccess { Haptic.success() } else { Haptic.error() }
-                }
-            } label: {
-                HStack {
-                    Text("Test Voice")
-                    if voiceTestInProgress {
-                        Spacer()
-                        ProgressView()
-                    }
-                }
-            }
-            .disabled(voiceTestInProgress)
-            Picker(selection: Binding(
-                get: { viewModel.voiceService.voiceMode },
-                set: {
-                    viewModel.voiceService.voiceMode = $0
-                    viewModel.sendVoiceConfig()
-                }
-            )) {
-                Text("Client-Only").tag(VoiceService.VoiceMode.clientOnly)
-                Text("Desktop-Assisted").tag(VoiceService.VoiceMode.desktopAssisted)
-            } label: {
-                Label("Processing", systemImage: "cpu")
-            }
-            if viewModel.voiceService.voiceMode == .desktopAssisted {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Voice System Prompt")
-                        .font(.subheadline.weight(.medium))
-                    TextEditor(text: $voicePromptText)
-                        .font(.caption)
-                        .frame(minHeight: 120, maxHeight: 200)
-                        .scrollContentBackground(.hidden)
-                        .background(Color(.systemGray6))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    HStack {
-                        Button("Save Prompt") {
-                            viewModel.voiceService.voiceSystemPrompt = voicePromptText
-                            viewModel.sendVoiceConfig()
-                            Haptic.success()
-                        }
-                        .font(.subheadline)
-                        Spacer()
-                        Button("Reset to Default") {
-                            voicePromptText = VoiceService.defaultVoicePrompt
-                            viewModel.voiceService.voiceSystemPrompt = voicePromptText
-                            viewModel.sendVoiceConfig()
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        } header: {
-            Text("Voice")
-        } footer: {
-            if !viewModel.voiceService.isEnabled {
-                Text("Voice is off.")
-            } else if viewModel.voiceService.voiceMode == .desktopAssisted {
-                Text("Desktop shapes LLM output for voice before iOS speaks it.")
-            } else {
-                Text("Jarvis will read responses aloud.")
-            }
-        }
-        .onAppear {
-            elevenLabsKey = KeychainHelper.get("com.geektechlive.ionremote.elevenlabs") ?? ""
-            voicePromptText = viewModel.voiceService.voiceSystemPrompt
-        }
-        .alert(
-            voiceTestResult?.isSuccess == true ? "Voice Test Passed" : "Voice Test Failed",
-            isPresented: $showVoiceTestAlert
-        ) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(voiceTestResult?.message ?? "")
-        }
-    }
-
-    @ViewBuilder
-    private var connectionSection: some View {
-        Section("Connection") {
-            HStack {
-                Text("Status")
-                Spacer()
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(viewModel.connectionState.color)
-                        .frame(width: 8, height: 8)
-                    Text(statusLabel)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HStack {
-                Text("Relay URL")
-                Spacer()
-                Text(viewModel.relayURL.isEmpty ? "Not configured" : viewModel.relayURL)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-        }
-    }
-
-    /// "Desktop Settings" entry-point row. A single NavigationLink that
-    /// pushes the per-desktop projection editor when the current pairing
-    /// has a snapshot loaded. Mirrors Apple's own Settings.app pattern
-    /// of a one-row section with secondary detail text and a chevron —
-    /// the row is the discoverable handle to a richer detail screen
-    /// rather than a soup of inline toggles at the top level.
+    /// Inline picker row for switching the active desktop. Mirrors the
+    /// `DesktopPickerMenu` toolbar pill (used in the main app
+    /// toolbar) but rendered as a Settings-style row so it fits the
+    /// surrounding List visual language.
     ///
-    /// The section is hidden entirely when no pairing is active or the
-    /// initial snapshot hasn't arrived yet (`desktopSettings == nil`).
-    /// This keeps the Settings screen looking intentional rather than
-    /// showing a placeholder row that the user can't interact with.
-    @ViewBuilder
-    private var desktopSettingsSection: some View {
-        if viewModel.desktopSettings != nil, viewModel.connectionState == .connected {
-            Section {
-                NavigationLink {
-                    DesktopSettingsView()
-                        .environment(viewModel)
+    /// Tapping a non-active device calls `switchToDevice(id:)`, which
+    /// tears down the current transport and brings up the new one.
+    /// The active-device row shows a checkmark and is non-tappable.
+    private var activeDevicePicker: some View {
+        Menu {
+            ForEach(viewModel.pairedDevices) { device in
+                let isActive = device.id == viewModel.activeDeviceId
+                    || (viewModel.activeDeviceId == nil && device.id == viewModel.pairedDevices.first?.id)
+                Button {
+                    if !isActive {
+                        DiagnosticLog.log("[SettingsView] Active picker → switching to \(device.id)")
+                        viewModel.switchToDevice(id: device.id)
+                        Haptic.success()
+                    }
                 } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.body)
-                            .foregroundStyle(JarvisTheme.accent)
-                            .frame(width: 28, height: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Desktop Settings")
-                                .font(.body)
-                            Text(viewModel.activeDevice?.displayName ?? "Connected desktop")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } footer: {
-                Text("Preferences for the currently-connected desktop. Each paired desktop keeps its own values.")
-            }
-        }
-    }
-
-    private var diagnosticsSection: some View {
-        Section("Diagnostics") {
-            HStack {
-                Label("Transport", systemImage: "antenna.radiowaves.left.and.right")
-                Spacer()
-                Text(transportLabel)
-                    .foregroundStyle(.secondary)
-            }
-            if let latency = viewModel.connectionQuality.latencyLabel {
-                HStack {
-                    Label("Latency", systemImage: "timer")
-                    Spacer()
-                    Text(latency)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            HStack {
-                Label("Buffered", systemImage: "tray.full")
-                Spacer()
-                Text("\(viewModel.connectionQuality.lastBuffered)")
-                    .foregroundStyle(.secondary)
-            }
-            HStack {
-                Label("Signal", systemImage: "wifi")
-                Spacer()
-                Text(viewModel.connectionQuality.signalLevel.label)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var newTabSection: some View {
-        Section("New Tab") {
-            Picker("Default Directory", selection: Binding<String?>(
-                get: { viewModel.defaultBaseDirectory },
-                set: { viewModel.defaultBaseDirectory = $0 }
-            )) {
-                Text("None (desktop default)").tag(nil as String?)
-                ForEach(viewModel.recentDirectories, id: \.self) { dir in
-                    Text((dir as NSString).lastPathComponent).tag(dir as String?)
-                }
-            }
-        }
-    }
-
-    private var tabListSection: some View {
-        Section {
-            Toggle(isOn: Binding(
-                get: { viewModel.showGitInfoInTabList },
-                set: { viewModel.showGitInfoInTabList = $0 }
-            )) {
-                Label("Show Git Info", systemImage: "arrow.triangle.branch")
-            }
-        } header: {
-            Text("Tab List")
-        } footer: {
-            Text("Shows the current branch and commit counts on each tab.")
-        }
-    }
-
-    private var modelsSection: some View {
-        let models = viewModel.availableModels
-        return Section("Models") {
-            Picker("Conversation", selection: Binding<String>(
-                get: { viewModel.preferredModel },
-                set: { newValue in viewModel.setPreferredModelDefault(newValue) }
-            )) {
-                ForEach(models) { model in
-                    Text(model.label).tag(model.id)
-                }
-            }
-            Picker("Engine", selection: Binding<String>(
-                get: { viewModel.engineDefaultModel },
-                set: { newValue in viewModel.setEngineDefaultModelDefault(newValue) }
-            )) {
-                Text("Same as Conversation").tag("")
-                ForEach(models) { model in
-                    Text(model.label).tag(model.id)
-                }
-            }
-        }
-    }
-
-
-    private var tabGroupsSection: some View {
-        Section {
-            Picker("Grouping", selection: Binding<String>(
-                get: { viewModel.tabGroupMode == "manual" ? "manual" : "auto" },
-                set: { newValue in viewModel.setTabGroupMode(newValue) }
-            )) {
-                Text("Auto (by directory)").tag("auto")
-                Text("Manual (custom groups)").tag("manual")
-            }
-
-            if viewModel.tabGroupMode == "manual" {
-                let sorted = viewModel.tabGroups.sorted { $0.order < $1.order }
-                ForEach(sorted) { group in
                     HStack {
-                        Text(group.label)
-                        Spacer()
-                        if group.isDefault {
-                            Image(systemName: "star.fill")
-                                .font(.caption)
-                                .foregroundStyle(.yellow)
-                        }
+                        Label(device.displayName, systemImage: device.displayIcon)
+                        if isActive { Image(systemName: "checkmark") }
                     }
                 }
-                .onMove { source, destination in
-                    var reordered = sorted
-                    reordered.move(fromOffsets: source, toOffset: destination)
-                    let orderedIds = reordered.map(\.id)
-                    viewModel.reorderTabGroups(orderedIds: orderedIds)
+                .disabled(isActive)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                if let device = viewModel.activeDevice {
+                    Image(systemName: device.displayIcon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(activeStatusColor, in: RoundedRectangle(cornerRadius: 6))
+                } else {
+                    Image(systemName: "questionmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Color.gray, in: RoundedRectangle(cornerRadius: 6))
                 }
-            }
-        } header: {
-            Text("Tab Groups")
-        } footer: {
-            if viewModel.tabGroupMode == "manual" {
-                Text("Drag to reorder groups. Create or delete groups from the desktop settings.")
-            }
-        }
-    }
-
-    private var pairedDevicesSection: some View {
-        Section {
-            if viewModel.pairedDevices.isEmpty {
-                Text("No paired devices")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(viewModel.pairedDevices) { device in
-                    let isActive = device.id == viewModel.activeDevice?.id
-                    Button {
-                        editingDevice = device
-                        Haptic.light()
-                    } label: {
-                        HStack {
-                            Image(systemName: device.displayIcon)
-                                .font(.title3)
-                                .foregroundStyle(JarvisTheme.accent)
-                                .frame(width: 28, height: 28)
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Text(device.displayName)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                    if device.customName != nil || device.customIcon != nil {
-                                        Image(systemName: "pencil.circle.fill")
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                            .help("Custom name/icon set")
-                                    }
-                                    if isActive {
-                                        Text("Active")
-                                            .font(.caption2)
-                                            .foregroundStyle(.green)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(
-                                                Capsule().stroke(Color.green, lineWidth: 1)
-                                            )
-                                    }
-                                }
-                                // When a custom name is in use, show the original host
-                                // name in small text so users can still identify the
-                                // underlying machine.
-                                if let custom = device.customName?.trimmingCharacters(in: .whitespacesAndNewlines),
-                                   !custom.isEmpty,
-                                   custom != device.name {
-                                    Text(device.name)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                if let lastSeen = device.lastSeen {
-                                    Text("Last seen \(lastSeen.formatted(.relative(presentation: .named)))")
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                            Circle()
-                                .fill(isActive && viewModel.connectionState == .connected ? Color.green : Color(.tertiaryLabel))
-                                .frame(width: 8, height: 8)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        if !isActive {
-                            Button {
-                                viewModel.switchToDevice(id: device.id)
-                                Haptic.success()
-                            } label: {
-                                Label("Switch to", systemImage: "arrow.right.arrow.left")
-                            }
-                            .tint(JarvisTheme.accent)
-                        }
-                    }
-                }
-                .onDelete { offsets in
-                    let devices = offsets.map { viewModel.pairedDevices[$0] }
-                    for device in devices {
-                        viewModel.unpairDevice(device)
-                    }
-                }
-            }
-
-            Button {
-                showPairingSheet = true
-            } label: {
-                Label("Pair New Desktop…", systemImage: "plus")
-            }
-        } header: {
-            Text("Paired Desktops")
-        } footer: {
-            Text("Tap a desktop to set a custom name and icon. Changes sync to all paired iPhones.")
-        }
-    }
-
-    private var appVersionString: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        let hash = info?["IonBuildHash"] as? String ?? "?"
-        return "v\(version) (\(build).\(hash))"
-    }
-
-    private var aboutSection: some View {
-        Section("About") {
-            HStack {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "bolt.shield.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(JarvisTheme.accent)
-                    Text("Jarvis")
-                        .font(.headline)
-                    Text(appVersionString)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(viewModel.activeDevice?.displayName ?? "No active desktop")
+                        .foregroundStyle(.primary)
+                    Text(connectionStateLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
-            .listRowBackground(Color.clear)
+            .contentShape(Rectangle())
+        }
+    }
 
-            NavigationLink("Diagnostic Log") {
-                DiagnosticLogView()
-            }
+    /// Status-color dot color for the active device. Green when
+    /// connected, orange when reconnecting/connecting, red otherwise.
+    private var activeStatusColor: Color {
+        switch viewModel.connectionState {
+        case .connected: .green
+        case .reconnecting, .connecting: .orange
+        default: .red
+        }
+    }
 
-            Button(role: .destructive) {
-                showUnpairAllConfirmation = true
-            } label: {
-                HStack {
-                    Spacer()
-                    Text("Unpair All Devices")
-                        .font(.subheadline.weight(.medium))
-                    Spacer()
+    /// Connection-state subtitle for the picker row. Mirrors
+    /// `DesktopPickerMenu.connectionStateLabel`.
+    private var connectionStateLabel: String {
+        let connection = viewModel.connectionState.label
+        switch viewModel.transportState {
+        case .lanPreferred:
+            return "\(connection) · LAN"
+        case .relayOnly:
+            return "\(connection) · Relay"
+        case .disconnected:
+            return connection
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var currentThemeName: String {
+        ThemeRegistry.themes.first { $0.id == theme.selectedThemeId }?.displayName ?? "Default"
+    }
+
+    private var currentModelLabel: String {
+        viewModel.availableModels.first { $0.id == viewModel.preferredModel }?.label ?? viewModel.preferredModel
+    }
+
+    /// Reusable category row with icon, label, optional detail, and chevron.
+    private func categoryLink<Destination: View>(
+        _ title: String,
+        icon: String,
+        color: Color,
+        detail: String? = nil,
+        @ViewBuilder destination: () -> Destination
+    ) -> some View {
+        NavigationLink(destination: destination) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(color, in: RoundedRectangle(cornerRadius: 6))
+
+                Text(title)
+
+                Spacer()
+
+                if let detail {
+                    Text(detail)
+                        .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                        .lineLimit(1)
                 }
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-            .listRowBackground(Color.clear)
-            .confirmationDialog(
-                "Unpair All Devices",
-                isPresented: $showUnpairAllConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Unpair All", role: .destructive) {
-                    dismiss()
-                    viewModel.resetAll()
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will remove all paired desktops. You will need to re-pair to reconnect.")
             }
         }
     }

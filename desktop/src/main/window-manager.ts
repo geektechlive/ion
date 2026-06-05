@@ -122,29 +122,9 @@ export function createWindow(): void {
   mainWindow.setAlwaysOnTop(true, 'screen-saver')
 
   mainWindow.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) log(`[renderer:error] ${message}`)
-    else if (
-      message.startsWith('[FileE') ||
-      message.startsWith('[App]') ||
-      message.startsWith('[useFile') ||
-      message.startsWith('[task_complete]') ||
-      message.startsWith('[event-slice]') ||
-      message.startsWith('[engine-event-slice]') ||
-      message.startsWith('[store]') ||
-      // tab-slice's pin-to-group diagnostics. The store's other prefix is
-      // already covered by [store] above; pin operations use [tab-pin] as a
-      // distinct tag so they can be grep'd independently when investigating
-      // group-membership regressions. Without this allowlist entry the main
-      // process would silently drop the line.
-      message.startsWith('[tab-pin]') ||
-      // event-slice's plan-proposal handler (Part 3). The handler logs the
-      // kind + path the moment the engine emits engine_plan_proposal so the
-      // main-process log carries the same timeline the renderer sees.
-      message.startsWith('[plan_proposal]') ||
-      // auto-move suppression diagnostics from the same store. Same forward
-      // tag as the renderer's existing logs in tab-slice.ts.
-      message.startsWith('[auto-move]')
-    ) log(`[renderer] ${message}`)
+    if (level >= 3) log(`[renderer:error] ${message}`)
+    else if (level === 2) log(`[renderer:warn] ${message}`)
+    else log(`[renderer] ${message}`)
   })
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     log(`[renderer:gone] reason=${details.reason} exitCode=${details.exitCode}`)
@@ -177,16 +157,30 @@ export function createWindow(): void {
       detail: 'Tip: Press ⌥Space to hide/show the app without quitting.',
     })
     if (choice === 0) {
-      state.forceQuit = true
-      terminalManager.destroyAll()
-      sessionPlane.shutdown()
-      globalShortcut.unregisterAll()
-      if (state.tray) {
-        state.tray.destroy()
-        state.tray = null
-      }
-      flushLogs()
-      app.exit(0)
+      // Flush renderer tab state before exiting — the Zustand store debounces
+      // persistTabs() at 100ms and app.exit(0) kills the renderer immediately,
+      // so any pending state (conversationId, titles, etc.) would be lost.
+      void (async () => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          try {
+            await win.webContents.executeJavaScript(
+              'window.__ionForceFlushTabs && window.__ionForceFlushTabs()',
+            )
+          } catch {
+            // Window may already be destroyed or renderer unresponsive.
+          }
+        }
+        state.forceQuit = true
+        terminalManager.destroyAll()
+        sessionPlane.shutdown()
+        globalShortcut.unregisterAll()
+        if (state.tray) {
+          state.tray.destroy()
+          state.tray = null
+        }
+        flushLogs()
+        app.exit(0)
+      })()
     }
   })
   mainWindow.on('close', (e) => {

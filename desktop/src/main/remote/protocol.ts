@@ -8,6 +8,33 @@
 
 import type { NormalizedEvent, TabStatus, PermissionRequest, AgentStateUpdate, StatusFields } from '../../shared/types'
 
+/**
+ * Wire shape for one entry in `desktop_settings_snapshot.schema`.
+ *
+ * Mirrors `ProjectableSettingSchema` from
+ * `desktop/src/main/projectable-settings-types.ts`. Declared here as a
+ * named interface (rather than inlined) so the recursive `itemSchema`
+ * reference can name itself — TS forbids self-references inside
+ * anonymous object types.
+ *
+ * The recursion supports list-typed settings whose records contain
+ * sub-fields. Today the per-record schemas describe only scalar leaves
+ * (boolean/string/number/enum), but the wire type allows arbitrary
+ * nesting so a future list-of-list shape would not require a protocol
+ * bump.
+ */
+export interface DesktopSettingsSchemaEntry {
+  key: string
+  type: 'boolean' | 'string' | 'number' | 'enum' | 'list'
+  group: string
+  label: string
+  description: string
+  defaultValue: unknown
+  choices?: Array<{ value: string | null; label: string }>
+  range?: { min: number; max: number; step: number }
+  itemSchema?: DesktopSettingsSchemaEntry[]
+}
+
 // ─── Remote Tab State (lightweight projection for mobile clients) ───
 
 export interface RemoteTabState {
@@ -26,15 +53,21 @@ export interface RemoteTabState {
   isTerminalOnly?: boolean
   isEngine?: boolean
   engineProfileId?: string | null
-  engineInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null }>
+  engineInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null; isRunning?: boolean; modelFallback?: { requestedModel: string; fallbackModel: string } }>
   activeEngineInstanceId?: string | null
   terminalInstances?: TerminalInstanceInfo[]
   activeTerminalInstanceId?: string | null
   groupId?: string | null
   /** When true, auto-group movement is suppressed for this tab. */
   groupPinned?: boolean
+  /** The current conversation/session ID for this tab. Engine tabs use StatusFields.sessionId instead. */
+  conversationId?: string | null
   /** Unix ms timestamp of the last status-changing activity (message, status change). */
   lastActivityAt?: number
+  /** Custom pill background color hex string (e.g. "#f08c4a"). Null means use theme default. */
+  pillColor?: string | null
+  /** Custom pill icon key (e.g. "diamond", "star"). Null means use the default status dot. */
+  pillIcon?: string | null
 }
 
 // ─── Terminal instance metadata ───
@@ -81,10 +114,19 @@ export type RemoteCommand =
   | { type: 'create_tab'; workingDirectory?: string; pinToGroupId?: string }
   | { type: 'create_terminal_tab'; workingDirectory?: string }
   | { type: 'close_tab'; tabId: string }
-  | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }
+  | { type: 'prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean }
   | { type: 'cancel'; tabId: string }
   | { type: 'respond_permission'; tabId: string; questionId: string; optionId: string }
   | { type: 'set_permission_mode'; tabId: string; mode: 'auto' | 'plan' }
+  | { type: 'reset_tab_session'; tabId: string }
+  // Engine-instance counterpart to reset_tab_session: stops the engine
+  // session keyed by `${tabId}:${instanceId}` and wipes the renderer-side
+  // per-instance state (messages, status, dialogs, etc.) without removing
+  // the instance pane itself. iOS sends this for engine tabs when the
+  // user picks "Implement, clear context" on the plan-approval card —
+  // `reset_tab_session` only addresses the CLI session plane and silently
+  // misses engine instances.
+  | { type: 'reset_engine_session'; tabId: string; instanceId: string }
   | { type: 'load_conversation'; tabId: string; before?: string }
   | { type: 'terminal_input'; tabId: string; instanceId: string; data: string }
   | { type: 'terminal_resize'; tabId: string; instanceId: string; cols: number; rows: number }
@@ -97,7 +139,7 @@ export type RemoteCommand =
   | { type: 'rewind'; tabId: string; messageId: string }
   | { type: 'fork_from_message'; tabId: string; messageId: string }
   | { type: 'create_engine_tab'; workingDirectory?: string; profileId?: string }
-  | { type: 'engine_prompt'; tabId: string; instanceId?: string; text: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }> }
+  | { type: 'engine_prompt'; tabId: string; instanceId?: string; text: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean }
   | { type: 'engine_abort'; tabId: string; instanceId?: string }
   | { type: 'engine_dialog_response'; tabId: string; instanceId?: string; dialogId: string; value: any }
   | { type: 'engine_add_instance'; tabId: string }
@@ -106,6 +148,7 @@ export type RemoteCommand =
   | { type: 'engine_move_instance'; sourceTabId: string; instanceId: string; targetTabId: string }
   | { type: 'engine_set_model'; tabId: string; instanceId?: string; model: string }
   | { type: 'load_engine_conversation'; tabId: string; instanceId?: string }
+  | { type: 'load_agent_conversation'; conversationIds: string[] }
   | { type: 'set_tab_group_mode'; mode: 'auto' | 'manual' }
   | { type: 'move_tab_to_group'; tabId: string; groupId: string }
   | { type: 'toggle_tab_group_pin'; tabId: string }
@@ -131,6 +174,12 @@ export type RemoteCommand =
   | { type: 'fs_read_file'; filePath: string }
   | { type: 'fs_read_image'; filePath: string }
   | { type: 'fs_write_file'; filePath: string; content: string }
+  // Rename a file or directory inside a project root. Both `oldPath` and
+  // `newPath` are validated by `isValidProjectPath` on the desktop;
+  // failures surface via `fs_rename_result` with `ok: false` rather than
+  // throwing. This is purely a client↔harness wire — the engine has no
+  // notion of a "file explorer" and never sees these commands.
+  | { type: 'fs_rename'; oldPath: string; newPath: string }
   | { type: 'discover_commands'; directory: string }
   | { type: 'upload_attachment'; dataUrl: string; name: string; correlationId?: string }
   | { type: 'voice_config'; enabled: boolean; mode: 'client' | 'desktop'; systemPrompt?: string }
@@ -153,6 +202,8 @@ export type RemoteCommand =
   // than erroring — same forward-compat posture as the rest of the
   // RemoteCommand union.
   | { type: 'set_desktop_setting'; key: string; value: unknown }
+  | { type: 'set_pill_color'; tabId: string; pillColor: string | null }
+  | { type: 'set_pill_icon'; tabId: string; pillIcon: string | null }
 
 // ─── Ion → iOS events ───
 
@@ -178,14 +229,19 @@ export type RemoteEvent =
   | { type: 'terminal_instance_removed'; tabId: string; instanceId: string }
   | { type: 'terminal_snapshot'; tabId: string; instances: TerminalInstanceInfo[]; activeInstanceId: string | null; buffers?: Record<string, string> }
   | { type: 'engine_agent_state'; tabId: string; instanceId?: string | null; agents: AgentStateUpdate[] }
-  | { type: 'engine_status'; tabId: string; instanceId?: string | null; fields: StatusFields }
-  | { type: 'engine_working_message'; tabId: string; instanceId?: string | null; message: string }
-  | { type: 'engine_notify'; tabId: string; instanceId?: string | null; message: string; level: string }
+  | { type: 'engine_status'; tabId: string; instanceId?: string | null; fields: StatusFields; metadata?: Record<string, unknown> }
+  | { type: 'engine_working_message'; tabId: string; instanceId?: string | null; message: string; metadata?: Record<string, unknown> }
+  | { type: 'engine_notify'; tabId: string; instanceId?: string | null; message: string; level: string; metadata?: Record<string, unknown> }
   | { type: 'engine_dialog'; tabId: string; instanceId?: string | null; dialogId: string; method: string; title: string; message?: string; options?: string[]; defaultValue?: string }
   | { type: 'engine_dialog_resolved'; tabId: string; instanceId?: string | null; dialogId: string }
   | { type: 'engine_text_delta'; tabId: string; instanceId?: string | null; text: string }
   | { type: 'engine_message_end'; tabId: string; instanceId?: string | null; usage: { inputTokens: number; outputTokens: number; contextPercent: number; cost: number } }
-  | { type: 'engine_harness_message'; tabId: string; instanceId?: string | null; message: string; source?: string }
+  // `metadata` is an opaque pass-through hint map forwarded from the engine.
+  // Carried verbatim across the relay to iOS so future iOS-side handlers
+  // (e.g. dedup, render-style hints) can adopt the same conventions the
+  // desktop renderer honors without a protocol break. See
+  // docs/protocol/server-events.md for well-known keys.
+  | { type: 'engine_harness_message'; tabId: string; instanceId?: string | null; message: string; source?: string; metadata?: Record<string, unknown> }
   | { type: 'engine_tool_start'; tabId: string; instanceId?: string | null; toolName: string; toolId: string }
   | { type: 'engine_tool_end'; tabId: string; instanceId?: string | null; toolId: string; result?: string; isError?: boolean }
   | { type: 'engine_tool_stalled'; tabId: string; instanceId?: string | null; toolId: string; toolName: string; elapsed: number }
@@ -195,7 +251,8 @@ export type RemoteEvent =
   | { type: 'engine_instance_added'; tabId: string; instance: { id: string; label: string } }
   | { type: 'engine_instance_removed'; tabId: string; instanceId: string }
   | { type: 'engine_instance_moved'; sourceTabId: string; instanceId: string; targetTabId: string }
-  | { type: 'engine_conversation_history'; tabId: string; instanceId?: string | null; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number }> }
+  | { type: 'engine_conversation_history'; tabId: string; instanceId?: string | null; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number; dedupKey?: string }> }
+  | { type: 'agent_conversation_history'; agentName: string; conversationId?: string; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number }> }
   | { type: 'input_prefill'; tabId: string; text: string; switchTo?: boolean }
   | { type: 'engine_profiles'; profiles: Array<{ id: string; name: string; extensions: string[] }> }
   // ─── Desktop settings projection (Part 7) ───────────────────────────
@@ -229,14 +286,7 @@ export type RemoteEvent =
   | {
       type: 'desktop_settings_snapshot'
       settings: Record<string, unknown>
-      schema: Array<{
-        key: string
-        type: 'boolean' | 'string' | 'number'
-        group: string
-        label: string
-        description: string
-        defaultValue: unknown
-      }>
+      schema: Array<DesktopSettingsSchemaEntry>
       groups: Array<{ id: string; label: string }>
     }
   | { type: 'heartbeat'; seq: number; ts: number; buffered: number }
@@ -255,6 +305,10 @@ export type RemoteEvent =
   | { type: 'fs_file_content'; filePath: string; content: string | null; error?: string }
   | { type: 'fs_image_content'; filePath: string; dataUrl: string | null; error?: string }
   | { type: 'fs_write_result'; filePath: string; ok: boolean; error?: string }
+  // Result of an fs_rename command. iOS uses this to refresh the parent
+  // directory listing on success and to surface errors. The shape mirrors
+  // `fs_write_result` deliberately: ok-flag plus optional error string.
+  | { type: 'fs_rename_result'; oldPath: string; newPath: string; ok: boolean; error?: string }
   | { type: 'upload_attachment_result'; id: string; name: string; path: string; correlationId?: string; error?: string }
   | { type: 'discover_commands_response'; directory: string; commands: Array<{ name: string; description: string; scope: 'user' | 'project'; source: 'command' | 'skill' }> }
   | { type: 'tab_attachments'; tabId: string; attachments: Array<{ type: string; name: string; path: string }> }

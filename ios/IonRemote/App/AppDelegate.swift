@@ -34,15 +34,28 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         print("[Ion] APNs registration failed: \(error)")
     }
 
-    // MARK: - UNUserNotificationCenterDelegate
+    /// Called when iOS wakes the app in the background for a content-available:1 push.
+    /// Ensures briefing payloads land in BriefingsStore even when the user opens
+    /// the app directly without tapping the notification.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Self.handleBriefingPayload(userInfo)
+        completionHandler(.newData)
+    }
 
+    // MARK: - Foreground delivery
+
+    /// Process briefings silently when the app is in the foreground; suppress banner.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         Self.handleBriefingPayload(notification.request.content.userInfo)
-        completionHandler([.banner, .list, .sound])
+        completionHandler([])
     }
 
     func userNotificationCenter(
@@ -50,31 +63,48 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        Self.handleBriefingPayload(response.notification.request.content.userInfo, openSheet: true)
+        let userInfo = response.notification.request.content.userInfo
+        Self.handleBriefingPayload(userInfo, openSheet: true)
+        if let tabId = userInfo["tabId"] as? String {
+            sessionViewModel?.navigateToTab(tabId)
+        }
         completionHandler()
     }
+
+    // MARK: - Briefings
 
     private static func handleBriefingPayload(_ userInfo: [AnyHashable: Any], openSheet: Bool = false) {
         guard let briefingId = userInfo["briefingId"] as? String,
               let briefingText = userInfo["briefingText"] as? String else { return }
-        let title = (userInfo["title"] as? String)
-            ?? (((userInfo["aps"] as? [String: Any])?["alert"] as? [String: Any])?["title"] as? String)
-            ?? "Briefing"
+        let title = userInfo["briefingTitle"] as? String ?? "Morning Brief"
         let payload: [String: Any] = [
             "briefingId": briefingId,
-            "title": title,
+            "briefingTitle": title,
             "briefingText": briefingText,
             "openSheet": openSheet,
         ]
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .briefingFromPush, object: nil, userInfo: payload)
+        NotificationCenter.default.post(name: .briefingFromPush, object: nil, userInfo: payload)
+    }
+
+    // MARK: - Private
+
+    private func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            if let error {
+                print("[push] authorization error: \(error.localizedDescription)")
+                return
+            }
+            guard granted else {
+                print("[push] authorization denied by user")
+                return
+            }
+            DispatchQueue.main.async {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
         }
     }
 }
-#endif
 
 extension Notification.Name {
-    static let apnsTokenRefreshed = Notification.Name("apnsTokenRefreshed")
     static let briefingFromPush = Notification.Name("briefingFromPush")
-    static let forceScrollToBottom = Notification.Name("forceScrollToBottom")
 }

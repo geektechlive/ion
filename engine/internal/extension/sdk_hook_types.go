@@ -71,10 +71,49 @@ type CompactionFact struct {
 // string-pair — message indices are intentionally not exposed because they
 // reference messages that no longer exist after the hook fires.
 type CompactionInfo struct {
-	Strategy       string           `json:"strategy"`
-	MessagesBefore int              `json:"messagesBefore"`
-	MessagesAfter  int              `json:"messagesAfter"`
-	Facts          []CompactionFact `json:"facts,omitempty"`
+	Strategy         string           `json:"strategy"`
+	MessagesBefore   int              `json:"messagesBefore"`
+	MessagesAfter    int              `json:"messagesAfter"`
+	Facts            []CompactionFact `json:"facts,omitempty"`
+	TokensBefore     int              `json:"tokensBefore,omitempty"`
+	TokenLimit       int              `json:"tokenLimit,omitempty"`
+	TargetTokens     int              `json:"targetTokens,omitempty"`
+	MicroCompactKeep int              `json:"microCompactKeep,omitempty"`
+	TokensAfter      int              `json:"tokensAfter,omitempty"`
+	SessionMemory    string           `json:"sessionMemory,omitempty"`
+}
+
+// CompactSummaryRequestInfo is the payload for the
+// compact_summary_request hook. Handlers receive the pre-compaction
+// message slice (already sliced at the last boundary by
+// MessagesAfterLastCompactBoundary so previous summaries are not
+// included) and may return a summary string that becomes the new
+// compact_boundary block's Summary field, short-circuiting the engine's
+// regex fact extractor.
+//
+// MessageCount is informational (the slice length) so handlers can log
+// without re-counting. Strategy is "auto" (proactive) or "reactive"
+// (prompt_too_long retry) — handlers that want to tune their summariser
+// based on the trigger can branch on it.
+//
+// Field stability: this struct is part of the published hook contract.
+// New fields may be added with zero-value defaults; existing fields must
+// not be removed or renamed.
+type CompactSummaryRequestInfo struct {
+	Strategy     string             `json:"strategy"`
+	MessageCount int                `json:"messageCount"`
+	Messages     []types.LlmMessage `json:"messages"`
+}
+
+// CompactSummaryRequestResult is the optional return value from a
+// compact_summary_request handler. Summary, when non-empty, replaces the
+// engine's regex-built summary text. An empty Summary (or a nil result)
+// means "no opinion — fall back to the engine's regex path". The first
+// non-empty Summary across hosts wins (last-writer semantics).
+//
+// Field stability: published hook contract — additive only.
+type CompactSummaryRequestResult struct {
+	Summary string `json:"summary,omitempty"`
 }
 
 // ForkInfo describes a session fork event.
@@ -207,6 +246,12 @@ type WorkspaceFileChangedInfo struct {
 
 // TaskLifecycleInfo carries details about a task event.
 type TaskLifecycleInfo struct {
+	// TaskID is `<session-key>-t<turn-number>` on every engine backend.
+	// The format is a public contract; consumers join task_created and
+	// task_completed on (SessionKey, TaskID) and correlate with the
+	// adjacent turn_start / turn_end hooks via TurnInfo.TurnNumber.
+	// Changes to the format require an ADR per
+	// docs/hooks/reference.md § Task Lifecycle.
 	TaskID string                 `json:"task_id"`
 	Name   string                 `json:"name,omitempty"`
 	Status string                 `json:"status,omitempty"`
@@ -333,6 +378,7 @@ type LLMCallResult struct {
 // BeforeAgentStartResult holds the optional overrides a before_agent_start handler may return.
 type BeforeAgentStartResult struct {
 	SystemPrompt string `json:"systemPrompt,omitempty"`
+	AgentName    string `json:"agentName,omitempty"`
 }
 
 // BeforePromptResult holds the optional overrides a before_prompt handler may return.

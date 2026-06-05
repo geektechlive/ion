@@ -14,12 +14,14 @@
  *      message (the prior race-compensator is gone).
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../session-store-helpers', () => ({
   nextMsgId: vi.fn(() => 'mock-msg-id'),
   playNotificationIfHidden: vi.fn(async () => {}),
   totalInputTokens: vi.fn(() => 0),
+  scheduleDoneGroupMove: vi.fn(),
+  cancelDoneGroupMove: vi.fn(() => false),
 }))
 
 vi.mock('../../preferences', () => ({
@@ -122,16 +124,49 @@ describe('event-slice — engine_plan_mode_changed', () => {
 
     expect(state.tabs[0].permissionMode).toBe('plan')
   })
+
+  it('appends a "Plan created" divider system message on planModeEnabled=true', () => {
+    // Regression test: the event-slice handler also seeds a divider into
+    // the CLI tab's messages so the user can see when the plan phase
+    // started. The earlier test only verified permissionMode; this one
+    // pins the divider-insertion path that engine-event-slice.ts mirrors
+    // for the engine-tab path.
+    const { state, slice } = buildHarness()
+    const messagesBefore = state.tabs[0].messages.length
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_mode_changed' as any,
+      planModeEnabled: true,
+      planFilePath: '/tmp/plan.md',
+      planSlug: 'my-plan',
+    } as any)
+
+    expect(state.tabs[0].messages.length).toBe(messagesBefore + 1)
+    const last = state.tabs[0].messages.at(-1)!
+    expect(last.role).toBe('system')
+    expect(last.content).toMatch(/^── Plan created at /)
+    expect(last.content).toContain('my-plan')
+    expect(last.planFilePath).toBe('/tmp/plan.md')
+  })
+
+  it('does NOT append a divider on planModeEnabled=false', () => {
+    // The false branch is a proposal (ExitPlanMode) — the desktop's
+    // user-approval gate is the authoritative chokepoint, so the
+    // proposal must not insert a divider into the scrollback.
+    const { state, slice } = buildHarness()
+    const messagesBefore = state.tabs[0].messages.length
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_mode_changed' as any,
+      planModeEnabled: false,
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    expect(state.tabs[0].messages.length).toBe(messagesBefore)
+  })
 })
 
 describe('event-slice — task_complete with ExitPlanMode denial', () => {
-  beforeEach(() => {
-    vi.useFakeTimers()
-  })
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it('populates permissionDenied and does NOT schedule sendMessage while in plan mode', () => {
     const { state, slice } = buildHarness()
 
@@ -156,9 +191,7 @@ describe('event-slice — task_complete with ExitPlanMode denial', () => {
     expect(state.tabs[0].permissionDenied.tools).toHaveLength(1)
     expect(state.tabs[0].permissionDenied.tools[0].toolName).toBe('ExitPlanMode')
 
-    // Advance any pending timers and confirm no synthetic
-    // "Plan mode is not active..." message was scheduled.
-    vi.runAllTimers()
+    // Confirm no synthetic "Plan mode is not active..." message was scheduled.
     expect(state.sendMessage).not.toHaveBeenCalled()
   })
 })

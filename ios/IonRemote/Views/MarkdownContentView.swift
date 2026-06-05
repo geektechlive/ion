@@ -9,18 +9,17 @@ private struct ImageItem: Identifiable, Sendable {
 }
 
 struct MarkdownContentView: View {
+    @Environment(\.appTheme) private var theme
     let blocks: [MarkdownBlock]
     @State private var fullscreenImage: ImageItem?
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }
-        .sheet(item: $fullscreenImage) { item in
-            FullscreenImageView(url: item.url)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Block dispatch
@@ -112,8 +111,8 @@ struct MarkdownContentView: View {
     private func blockQuoteView(text: AttributedString) -> some View {
         HStack(alignment: .top, spacing: 0) {
             RoundedRectangle(cornerRadius: 1.5)
-                .fill(Color(hex: 0x4ECDC4).opacity(0.6))
-                .frame(width: 3)
+                .fill(theme.accent.opacity(0.6))
+                .frame(width: 3.5)
 
             Text(text)
                 .foregroundStyle(.secondary)
@@ -139,6 +138,108 @@ struct MarkdownContentView: View {
             Text(text)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 6)
+        }
+    }
+
+    // MARK: - Table
+
+    private func tableView(
+        headers: [AttributedString],
+        rows: [[AttributedString]],
+        alignments: [TableColumnAlignment]
+    ) -> some View {
+        let colCount = max(
+            headers.count, rows.first?.count ?? 0
+        )
+        return ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, verticalSpacing: 0) {
+                if !headers.isEmpty {
+                    GridRow {
+                        ForEach(0..<colCount, id: \.self) { col in
+                            tableCellContent(
+                                text: col < headers.count
+                                    ? headers[col] : AttributedString(),
+                                alignment: tableAlignment(
+                                    col, alignments
+                                ),
+                                isHeader: true
+                            )
+                        }
+                    }
+                }
+
+                ForEach(
+                    Array(rows.enumerated()), id: \.offset
+                ) { rowIndex, row in
+                    GridRow {
+                        ForEach(0..<colCount, id: \.self) { col in
+                            tableCellContent(
+                                text: col < row.count
+                                    ? row[col] : AttributedString(),
+                                alignment: tableAlignment(
+                                    col, alignments
+                                ),
+                                isHeader: false
+                            )
+                        }
+                    }
+                    .background(
+                        rowIndex.isMultiple(of: 2)
+                            ? Color(.tertiarySystemFill).opacity(0.5)
+                            : Color.clear
+                    )
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(.separator), lineWidth: 0.5)
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func tableCellContent(
+        text: AttributedString,
+        alignment: HorizontalAlignment,
+        isHeader: Bool
+    ) -> some View {
+        let textAlign: TextAlignment = switch alignment {
+        case .trailing: .trailing
+        case .center: .center
+        default: .leading
+        }
+        return Text(text)
+            .font(isHeader ? .subheadline.bold() : .subheadline)
+            .multilineTextAlignment(textAlign)
+            .frame(
+                maxWidth: .infinity,
+                alignment: Alignment(
+                    horizontal: alignment, vertical: .center
+                )
+            )
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                isHeader
+                    ? Color(.tertiarySystemFill)
+                    : Color.clear
+            )
+            .overlay(
+                Rectangle()
+                    .stroke(Color(.separator), lineWidth: 0.5)
+            )
+    }
+
+    private func tableAlignment(
+        _ col: Int,
+        _ alignments: [TableColumnAlignment]
+    ) -> HorizontalAlignment {
+        guard col < alignments.count else { return .leading }
+        return switch alignments[col] {
+        case .left: .leading
+        case .center: .center
+        case .right: .trailing
         }
     }
 

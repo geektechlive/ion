@@ -2,6 +2,7 @@ import type { TabStatus, TabState, EngineInstance } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { makeLocalTab, nextMsgId } from '../session-store-helpers'
+import { formatSessionStartDivider } from '../../../shared/clear-divider'
 
 export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -28,6 +29,13 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         hasChosenDirectory: !!(dir || defaultBase),
         pillIcon: 'lightning',
         groupId,
+        // Engine tabs start in auto mode regardless of the desktop default.
+        // Extensions control plan mode via ctx.SetPlanMode — the user's
+        // default permission mode preference applies to CLI tabs only.
+        permissionMode: 'auto',
+        // Clear the plan-model override that makeLocalTab may have set
+        // (it applies the split model when defaultPermissionMode is 'plan').
+        modelOverride: null,
       }
 
       set((state) => ({
@@ -66,6 +74,21 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         ),
       }))
       const key = `${tabId}:${id}`
+      // Seed the session-start divider as the first message for this instance.
+      // This is the only place it is created — on tab restoration,
+      // addEngineInstance is skipped (instances already exist and
+      // engineMessages is pre-populated from persisted data), so no
+      // duplicate is produced.
+      set((state) => {
+        const messages = new Map(state.engineMessages)
+        messages.set(key, [{
+          id: nextMsgId(),
+          role: 'system' as const,
+          content: formatSessionStartDivider(new Date()),
+          timestamp: Date.now(),
+        }])
+        return { engineMessages: messages }
+      })
       // Eagerly set the model override so it's available for iOS sync
       const prefs = usePreferencesStore.getState()
       const initialModel = prefs.engineDefaultModel || prefs.preferredModel || ''
@@ -161,12 +184,126 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, engineModelOverrides, enginePermissionDenied })
     },
 
+    resetEngineInstance: (tabId, instanceId) => {
+      // Engine-instance counterpart to resetTabSession: stop the engine
+      // session and wipe per-instance state, but keep the instance pane
+      // itself so the user stays on the same tab/sub-tab. Mirrors the
+      // CLI-side resetTabSession on engine-control-plane.ts which keeps
+      // the tab open and zeros out conversationId/promptCount.
+      const panes = new Map(get().enginePanes)
+      const pane = panes.get(tabId)
+      if (!pane) return
+      const instanceExists = pane.instances.some((i) => i.id === instanceId)
+      if (!instanceExists) return
+      const key = `${tabId}:${instanceId}`
+      // engineAbort tears down the engine session keyed by `${tabId}:${instanceId}`.
+      // Same primitive removeEngineInstance uses; here we keep the pane entry.
+      window.ion.engineAbort(key).catch(() => {})
+      // Wipe per-instance state Maps. Same list as removeEngineInstance —
+      // every Map keyed by `${tabId}:${instanceId}` must be cleared so the
+      // next prompt starts from a clean slate.
+      const engineMessages = new Map(get().engineMessages)
+      const engineAgentStates = new Map(get().engineAgentStates)
+      const engineStatusFields = new Map(get().engineStatusFields)
+      const engineWorkingMessages = new Map(get().engineWorkingMessages)
+      const engineNotifications = new Map(get().engineNotifications)
+      const engineDialogs = new Map(get().engineDialogs)
+      const enginePinnedPrompt = new Map(get().enginePinnedPrompt)
+      const engineUsage = new Map(get().engineUsage)
+      const engineDraftInputs = new Map(get().engineDraftInputs)
+      const enginePermissionDenied = new Map(get().enginePermissionDenied)
+      engineMessages.delete(key)
+      engineAgentStates.delete(key)
+      engineStatusFields.delete(key)
+      engineWorkingMessages.delete(key)
+      engineNotifications.delete(key)
+      engineDialogs.delete(key)
+      enginePinnedPrompt.delete(key)
+      engineUsage.delete(key)
+      engineDraftInputs.delete(key)
+      enginePermissionDenied.delete(key)
+      // Seed a fresh "Session started" divider so the renderer shows the
+      // user where the reset boundary fell. Mirrors the seed in
+      // addEngineInstance — the same divider helper, the same insertion site.
+      engineMessages.set(key, [{
+        id: nextMsgId(),
+        role: 'system' as const,
+        content: formatSessionStartDivider(new Date()),
+        timestamp: Date.now(),
+      }])
+      set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, enginePermissionDenied })
+    },
+
     selectEngineInstance: (tabId, instanceId) => {
       const panes = new Map(get().enginePanes)
       const pane = panes.get(tabId)
       if (!pane) return
       panes.set(tabId, { ...pane, activeInstanceId: instanceId })
-      set({ enginePanes: panes })
+
+      // Reconcile tab.status from the newly-active instance's known
+      // state so the thinking indicator, interrupt button, and status
+      // bar correctly reflect the selected sub-tab. Without this, the
+      // tab status stays frozen at whatever the *previous* instance
+      // last set — e.g. stuck 'running' after switching to an idle
+      // instance.
+      const key = `${tabId}:${instanceId}`
+      const statusFields = get().engineStatusFields.get(key)
+      const instanceState = statusFields?.state
+      const denial = get().enginePermissionDenied.get(key)
+
+      // Also sync conversationId so the status bar footer shows the
+      // correct conversation for the newly-active instance.
+      const convChain = get().engineConversationIds.get(key)
+      const lastConvId = convChain?.[convChain.length - 1]
+
+      if (instanceState) {
+        // Map instance state to tab.status — mirrors the logic in
+        // engine-event-status.ts:167-181.
+        let newStatus: TabStatus
+        if (instanceState === 'running' || instanceState === 'connecting' || instanceState === 'starting') {
+          newStatus = 'running'
+        } else if (instanceState === 'idle') {
+          // Check for "interesting" denials (AskUserQuestion / ExitPlanMode)
+          const hasInterestingDenials = denial?.tools?.some(
+            (t) => t.toolName === 'AskUserQuestion' || t.toolName === 'ExitPlanMode',
+          ) ?? false
+          newStatus = hasInterestingDenials ? 'completed' : 'idle'
+        } else {
+          newStatus = 'idle'
+        }
+
+        console.log(`[selectEngineInstance] tab=${tabId.slice(0, 8)} instance=${instanceId} reconciledStatus=${newStatus}`)
+
+        set((state) => ({
+          enginePanes: panes,
+          tabs: state.tabs.map((t) => {
+            if (t.id !== tabId) return t
+            const updates: Partial<typeof t> = { status: newStatus }
+            if (lastConvId && t.conversationId !== lastConvId) {
+              updates.conversationId = lastConvId
+              updates.lastKnownSessionId = lastConvId
+            }
+            return { ...t, ...updates }
+          }),
+        }))
+      } else {
+        // No status entry yet (instance just created, no events
+        // received) — update panes and conversationId only, leave
+        // tab.status unchanged.
+        console.log(`[selectEngineInstance] tab=${tabId.slice(0, 8)} instance=${instanceId} noStatusEntry, panes only`)
+        if (lastConvId) {
+          set((state) => ({
+            enginePanes: panes,
+            tabs: state.tabs.map((t) => {
+              if (t.id !== tabId) return t
+              if (t.conversationId === lastConvId) return { ...t }
+              return { ...t, conversationId: lastConvId, lastKnownSessionId: lastConvId }
+            }),
+          }))
+        } else {
+          set({ enginePanes: panes })
+        }
+      }
     },
 
     renameEngineInstance: (tabId, instanceId, label) => {
@@ -294,24 +431,39 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       set({ engineModelOverrides: overrides })
     },
 
-    submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments) => {
+    submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase) => {
       const pane = get().enginePanes.get(tabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
+      // Sync plan mode to the engine session via compound key before
+      // submitting the prompt. The engine session is keyed by
+      // `tabId:instanceId`; the generic setPermissionMode path uses
+      // bare tabId which silently misses the engine session.
+      const currentTab = get().tabs.find(t => t.id === tabId)
+      const isPlanMode = currentTab?.permissionMode === 'plan'
+      window.ion.engineSetPlanMode(key, isPlanMode)
       // Build a FileAttachment list from the encoded image attachments so
       // the user-message bubble can render images inline. The path is the
       // only field needed at render time; main-side READ_IMAGE_DATA_URL
       // turns it into a data URL for <img>.
-      const userAttachments = (imageAttachments || [])
-        .filter((a) => !!a.path)
-        .map((a) => ({
-          id: crypto.randomUUID(),
-          type: 'image' as const,
-          name: (a.path?.split('/').pop() || 'image'),
-          path: a.path!,
-          mimeType: a.mediaType,
+      const userAttachments = rawAttachments && rawAttachments.length > 0
+        ? rawAttachments.map((a) => ({
+          id: a.id,
+          type: a.type,
+          name: a.name,
+          path: a.path,
+          mimeType: a.mimeType,
         }))
+        : (imageAttachments || [])
+          .filter((a) => !!a.path)
+          .map((a) => ({
+            id: crypto.randomUUID(),
+            type: 'image' as const,
+            name: (a.path?.split('/').pop() || 'image'),
+            path: a.path!,
+            mimeType: a.mediaType,
+          }))
       set((state) => {
         const pinnedPrompt = new Map(state.enginePinnedPrompt)
         pinnedPrompt.set(key, text)
@@ -325,7 +477,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
           ...(userAttachments.length > 0 ? { attachments: userAttachments } : {}),
         })
         messages.set(key, msgs)
-        const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const } : t)
+        const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const, attachments: [] } : t)
         // Clear any pending engine-instance denial — submitting a new
         // prompt is the user moving past the question/plan card. Mirrors
         // the engine-side clearing in `prompt_dispatch.go`.
@@ -334,8 +486,11 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         return { enginePinnedPrompt: pinnedPrompt, engineMessages: messages, tabs, enginePermissionDenied }
       })
       const prefs = usePreferencesStore.getState()
-      const modelOverride = get().engineModelOverrides.get(key) || prefs.engineDefaultModel || prefs.preferredModel || undefined
-      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt, imageAttachments).then((result) => {
+      const rawModel = get().engineModelOverrides.get(key) || prefs.engineDefaultModel || prefs.preferredModel || undefined
+      // Filter out invalid model values (e.g. "unknown" from stale state)
+      // so the engine's own defaultModel resolution handles the fallback.
+      const modelOverride = rawModel === 'unknown' ? undefined : rawModel
+      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase).then((result) => {
         if (result && !result.ok) {
           set((state) => {
             const messages = new Map(state.engineMessages)

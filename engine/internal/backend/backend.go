@@ -164,6 +164,15 @@ type RunHooks struct {
 	// auto-approve (always allow the exit).
 	OnPlanModeExit func(planFilePath string) (allowed bool, reason string)
 
+	// GetSessionPlanFilePath retrieves the session-level planFilePath when
+	// the run's own planFilePath is empty. This happens when the model calls
+	// ExitPlanMode outside of engine plan mode (prompt-level plan mode) — the
+	// run was created with planMode=false and planFilePath="", but the session
+	// still retains the planFilePath from a prior plan-mode run. Without this
+	// fallback, the ExitPlanMode interception emits a plan_proposal with an
+	// empty planFilePath, which consumers cannot act on.
+	GetSessionPlanFilePath func() string
+
 	// OnSystemInject fires before each engine-injected steering message.
 	// Returns (text, suppress). If suppress is true, the message is not injected.
 	// If text is non-empty, it replaces the default.
@@ -186,6 +195,34 @@ type RunHooks struct {
 	OnSessionBeforeCompact func(runID string) bool
 	// OnSessionCompact observes a completed compaction.
 	OnSessionCompact func(runID string, info interface{})
+
+	// OnRequestCompactSummary is an optional harness-owned summariser
+	// invoked during proactive / reactive compaction in place of the
+	// engine's built-in regex fact extractor. The handler receives the
+	// compaction strategy ("auto" for proactive token-limit driven,
+	// "reactive" for prompt_too_long retry) along with the pre-compaction
+	// message slice (already filtered through
+	// MessagesAfterLastCompactBoundary so prior summaries are not in
+	// scope) and returns (summary, ok). When ok is true, summary is
+	// used verbatim as the boundary block's Summary field. When ok is
+	// false (or the field is nil), the engine falls back to its
+	// FormatFactsSummary(ExtractFacts(...)) pipeline.
+	//
+	// The strategy parameter lets harness summarisers tune their output
+	// to the trigger — e.g. a reactive summary may want to be more
+	// aggressive (fewer tokens) because the provider just rejected the
+	// prompt, while an auto summary can afford a richer rendering.
+	//
+	// The engine never blocks on this callback; the runloop dispatches
+	// synchronously. Harness implementations that want to call an LLM
+	// must do so with a bounded timeout and surface failures by
+	// returning ("", false) — never by blocking the run.
+	//
+	// This is the engine-side bridge for the optional
+	// "compact_summary_request" hook on the extension SDK. See
+	// docs/hooks/reference.md and the runloop_compaction.go logging for
+	// the "path=hook" / "path=regex" markers.
+	OnRequestCompactSummary func(runID string, strategy string, messages []types.LlmMessage) (summary string, ok bool)
 
 	OnFileChanged func(runID string, path string, action string)
 
@@ -217,10 +254,35 @@ type RunConfig struct {
 	Telemetry     TelemetryCollector
 	Timeouts      *types.TimeoutsConfig
 
+	// DefaultModel is the engine-wide default model from EngineConfig.
+	// Used as a fallback when the requested model doesn't resolve to a
+	// provider (e.g. an unrecognized tier alias in an agent .md).
+	DefaultModel string
+
 	// EarlyStopContinue carries the engine-wide defaults for the early-stop
 	// continuation feature (from ~/.ion/engine.json or built-in defaults).
 	// Nil means "use built-in defaults" (types.EarlyStopDefaults()). Per-run
 	// RunOptions fields take precedence over this; the
 	// before_early_stop_decision hook overrides both.
 	EarlyStopContinue *types.EarlyStopContinueConfig
+
+	// GetSessionMemory returns the current session memory content for use
+	// as a zero-cost compaction summary. Set by the session layer from
+	// SessionMemory.GetMemory. Nil means session memory is not available.
+	GetSessionMemory func() string
+
+	// GetLastSummarizedEntryID returns the entry ID boundary of the most
+	// recent session memory summary. Used by the compaction system to
+	// validate that the memory covers the messages being dropped.
+	GetLastSummarizedEntryID func() string
+
+	// ResetMemoryTracking resets the session memory debounce baselines
+	// to the given token count after compaction reduces the message count.
+	ResetMemoryTracking func(tokens int)
+
+	// MaxToolResultChars caps the character count of any single tool result
+	// added to the conversation. Threaded from engine.json compaction config.
+	// Zero means "use built-in default" (conversation.DefaultMaxToolResultChars).
+	// Per-run RunOptions.MaxToolResultChars takes precedence when non-zero.
+	MaxToolResultChars int
 }

@@ -85,6 +85,8 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   stream_reset: [],
   compacting: ['active', 'clearedBlocks', 'messagesAfter', 'messagesBefore', 'strategy', 'summary'],
   tool_stalled: ['elapsed', 'toolId', 'toolName'],
+  steer_injected: ['messageLength'],
+  model_fallback: ['fallbackModel', 'reason', 'requestedModel'],
 }
 
 // ─── TS SharedTypes field map ───
@@ -93,6 +95,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
   StatusFields: [
     // Note: TS also has `backend` which is a desktop-only concept not in Go.
     // It is intentionally excluded from the contract.
+    'backgroundAgents',
     'contextPercent',
     'contextWindow',
     'extensionName',
@@ -105,6 +108,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'totalCostUsd',
   ],
   EngineConfig: [
+    'claudeCompat',
     'extensions',
     'maxTokens',
     'model',
@@ -125,7 +129,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'output_tokens',
     'service_tier',
   ],
-  AgentStateUpdate: ['metadata', 'name', 'status'],
+  AgentStateUpdate: ['id', 'metadata', 'name', 'status'],
   ModelEntry: [
     'contextWindow',
     'costPer1kInput',
@@ -148,6 +152,32 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
   // The desktop's prompt pipeline reads this off the wire to populate a
   // routing-hint cache keyed by session — see desktop/src/main/prompt-pipeline.ts.
   EngineCommandListing: ['description', 'name'],
+  // Wire shape for content blocks carried inside LlmMessage payloads.
+  // The compact_boundary variant (gentle-knitting-cup plan) added the
+  // optional summary / trigger / messages* / clearedBlocks / tokensBefore
+  // / factCount / recentFiles fields; the existing tool/image/text
+  // variants share the same struct so every variant shows up here.
+  LlmContentBlock: [
+    'clearedBlocks',
+    'content',
+    'factCount',
+    'id',
+    'input',
+    'is_error',
+    'messagesAfter',
+    'messagesBefore',
+    'messagesSummarized',
+    'name',
+    'recentFiles',
+    'source',
+    'summary',
+    'text',
+    'thinking',
+    'tokensBefore',
+    'tool_use_id',
+    'trigger',
+    'type',
+  ],
 }
 
 // ─── Tests ───

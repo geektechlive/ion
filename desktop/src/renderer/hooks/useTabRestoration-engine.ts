@@ -60,6 +60,7 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
   // conversation file immediately at startup instead of
   // waiting for engine_status to populate the map.
   const restoredEngineConversationIds = new Map(useSessionStore.getState().engineConversationIds)
+  const restoredEngineModelOverrides = new Map(useSessionStore.getState().engineModelOverrides)
 
   if (st.engineInstances && st.engineInstances.length > 0) {
     restoredPanes.set(tabId, {
@@ -81,6 +82,7 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
             toolInput: m.toolInput,
             toolStatus: m.toolStatus as Message['toolStatus'],
             timestamp: m.timestamp,
+            dedupKey: m.dedupKey,
           })))
         }
       }
@@ -93,6 +95,7 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
           const key = `${tabId}:${inst.id}`
           restoredEngineAgentStates.set(key, saved.map((a) => ({
             name: a.name,
+            ...(a.id ? { id: a.id } : {}),
             status: (a.status === 'running' ? 'done' : a.status) as AgentStateUpdate['status'],
             metadata: a.metadata,
           })))
@@ -131,6 +134,16 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
         const sid = st.engineSessionIds[inst.id]
         if (sid) {
           restoredEngineConversationIds.set(`${tabId}:${inst.id}`, [sid])
+        }
+      }
+    }
+
+    if (st.engineModelOverrides) {
+      for (const inst of st.engineInstances) {
+        const m = st.engineModelOverrides[inst.id]
+        if (m) {
+          restoredEngineModelOverrides.set(`${tabId}:${inst.id}`, m)
+          console.log(`[restore] engine model override for ${tabId.slice(0, 8)}:${inst.id.slice(0, 8)} model=${m}`)
         }
       }
     }
@@ -198,6 +211,13 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
             draftInput: st.draftInput ?? '',
             lastMessagePreview: st.lastMessagePreview || null,
             lastEventAt: st.lastEventAt ?? null,
+            // Restore the persisted permission mode. createEngineTab
+            // defaults to 'auto' for NEW tabs (extensions control plan
+            // mode), but restored tabs must honour whatever mode was
+            // active when the app quit — the extension may have set
+            // plan mode mid-conversation and the user expects it to
+            // survive a restart.
+            permissionMode: st.permissionMode,
             // NB: deliberately NOT restoring st.permissionDenied
             // for engine tabs — legacy field, now superseded by
             // enginePermissionDenied (per-instance). See the
@@ -211,6 +231,7 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
     engineDraftInputs: restoredEngineDraftInputs,
     enginePermissionDenied: restoredEnginePermissionDenied,
     engineConversationIds: restoredEngineConversationIds,
+    engineModelOverrides: restoredEngineModelOverrides,
   }))
   if (st.draftInput) console.log(`[restore] draft for engine tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
 
@@ -235,6 +256,16 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
           extensions: profile.extensions,
           workingDirectory: st.workingDirectory,
           ...(instSessionId ? { sessionId: instSessionId } : {}),
+        }).then(() => {
+          // Sync plan mode to the engine after the session exists.
+          // The engine creates fresh sessions with planMode=false;
+          // without this, a restored plan-mode tab loses its engine
+          // plan mode state until the next submitEnginePrompt fires
+          // the belt-and-suspenders sync.
+          if (st.permissionMode === 'plan') {
+            console.log(`[restore] syncing plan mode to engine for ${key}`)
+            window.ion.engineSetPlanMode(key, true)
+          }
         }).catch((err: { message?: string }) => {
           console.error(`[restore] engine start failed for ${key}: ${err.message}`)
         })

@@ -10,6 +10,7 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/types"
+	"github.com/dsswift/ion/engine/internal/utils"
 )
 
 // Fact is a structured piece of information extracted from conversation messages.
@@ -28,9 +29,42 @@ var (
 	discoveryPatterns  = regexp.MustCompile(`(?i)\b(?:found|discovered|noticed|realized|learned|turns out)\b`)
 )
 
+// MaxFactsPerSection caps the number of facts FormatFactsSummary renders
+// per section before collapsing the remainder into a "... (+N more)"
+// overflow line. Without the cap a single noisy compaction round (e.g. a
+// build dumping a hundred file paths through tool results) generates a
+// summary so long it consumes most of the post-compaction window — the
+// opposite of what compaction is supposed to do.
+//
+// 20 is a starting point chosen to fit comfortably in a screen of
+// markdown while still surfacing enough detail to be useful. Tune by
+// tests, not by feel; the cap is a contract the compaction tests pin.
+const MaxFactsPerSection = 20
+
 // ExtractFacts scans messages for patterns and returns structured facts.
+//
+// Facts are deduplicated within a single pass by (Type, Content) so a
+// file path mentioned in N tool results contributes one bullet, not N.
+// Cross-pass deduplication is handled at the caller layer via
+// conversation.MessagesAfterLastCompactBoundary, which prevents earlier
+// boundary summaries from being re-scanned — see the gentle-knitting-cup
+// plan for the structural rationale.
 func ExtractFacts(messages []types.LlmMessage) []Fact {
+	utils.Debug("Compaction", fmt.Sprintf("ExtractFacts: scanning %d messages", len(messages)))
 	var facts []Fact
+	// (Type, Content) dedupe key. The map value is unused — we only need
+	// presence. Using a string key sidesteps tuple-key gymnastics; the
+	// pipe character is reserved-safe because neither Type nor Content
+	// contains it in the patterns we emit.
+	seen := make(map[string]struct{})
+	add := func(f Fact) {
+		key := f.Type + "|" + f.Content
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		facts = append(facts, f)
+	}
 
 	for i, msg := range messages {
 		text := extractText(msg)
@@ -44,7 +78,7 @@ func ExtractFacts(messages []types.LlmMessage) []Fact {
 			for _, p := range paths {
 				p = strings.TrimSpace(p)
 				if p != "" && (strings.HasPrefix(p, "/") || strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../")) {
-					facts = append(facts, Fact{Type: "file_mod", Content: p, Source: i})
+					add(Fact{Type: "file_mod", Content: p, Source: i})
 				}
 			}
 		}
@@ -52,36 +86,51 @@ func ExtractFacts(messages []types.LlmMessage) []Fact {
 		if decisionPatterns.MatchString(text) {
 			sentence := extractMatchingSentence(text, decisionPatterns)
 			if sentence != "" {
-				facts = append(facts, Fact{Type: "decision", Content: sentence, Source: i})
+				add(Fact{Type: "decision", Content: sentence, Source: i})
 			}
 		}
 
 		if errorPatterns.MatchString(text) {
 			sentence := extractMatchingSentence(text, errorPatterns)
 			if sentence != "" {
-				facts = append(facts, Fact{Type: "error", Content: sentence, Source: i})
+				add(Fact{Type: "error", Content: sentence, Source: i})
 			}
 		}
 
 		if preferencePatterns.MatchString(text) {
 			sentence := extractMatchingSentence(text, preferencePatterns)
 			if sentence != "" {
-				facts = append(facts, Fact{Type: "preference", Content: sentence, Source: i})
+				add(Fact{Type: "preference", Content: sentence, Source: i})
 			}
 		}
 
 		if discoveryPatterns.MatchString(text) {
 			sentence := extractMatchingSentence(text, discoveryPatterns)
 			if sentence != "" {
-				facts = append(facts, Fact{Type: "discovery", Content: sentence, Source: i})
+				add(Fact{Type: "discovery", Content: sentence, Source: i})
 			}
 		}
 	}
 
+	// Log fact counts by category.
+	counts := make(map[string]int)
+	for _, f := range facts {
+		counts[f.Type]++
+	}
+	utils.Debug("Compaction", fmt.Sprintf("ExtractFacts: done total=%d decisions=%d file_mods=%d errors=%d preferences=%d discoveries=%d",
+		len(facts), counts["decision"], counts["file_mod"], counts["error"], counts["preference"], counts["discovery"]))
+
 	return facts
 }
 
-// FormatFactsSummary formats extracted facts into a human-readable summary grouped by type.
+// FormatFactsSummary formats extracted facts into a human-readable
+// summary grouped by type.
+//
+// Each section is capped at MaxFactsPerSection bullets; any remainder is
+// collapsed to a "... (+N more)" line. The cap protects against
+// pathological cases where a single noisy turn produced dozens of
+// matches — without it the summary itself can blow the context budget
+// it was meant to reclaim.
 func FormatFactsSummary(facts []Fact) string {
 	grouped := make(map[string][]Fact)
 	order := []string{"decision", "file_mod", "error", "preference", "discovery"}
@@ -109,8 +158,19 @@ func FormatFactsSummary(facts []Fact) string {
 			label = typ
 		}
 		fmt.Fprintf(&sb, "## %s\n", label)
-		for _, f := range items {
+
+		// Render up to the cap; collapse the rest. The collapsed-count
+		// line is appended only when there are excess items, so capped
+		// sections look identical to uncapped ones below the threshold.
+		shown := items
+		if len(items) > MaxFactsPerSection {
+			shown = items[:MaxFactsPerSection]
+		}
+		for _, f := range shown {
 			fmt.Fprintf(&sb, "- %s\n", f.Content)
+		}
+		if len(items) > MaxFactsPerSection {
+			fmt.Fprintf(&sb, "- ... (+%d more)\n", len(items)-MaxFactsPerSection)
 		}
 		sb.WriteString("\n")
 	}
@@ -121,6 +181,7 @@ func FormatFactsSummary(facts []Fact) string {
 // CompactPartial removes entries from a conversation tree, keeping everything
 // after pivotEntryID. Direction is "before" (remove older) or "after" (remove newer).
 func CompactPartial(conv *conversation.Conversation, pivotEntryID string, direction string) error {
+	utils.Debug("Compaction", fmt.Sprintf("CompactPartial: pivotID=%s direction=%s entries=%d", pivotEntryID, direction, len(conv.Entries)))
 	if len(conv.Entries) == 0 {
 		return nil
 	}
@@ -133,6 +194,7 @@ func CompactPartial(conv *conversation.Conversation, pivotEntryID string, direct
 		}
 	}
 	if pivotIdx < 0 {
+		utils.Warn("Compaction", fmt.Sprintf("CompactPartial: pivot not found: %s", pivotEntryID))
 		return fmt.Errorf("pivot entry not found: %s", pivotEntryID)
 	}
 
@@ -148,6 +210,7 @@ func CompactPartial(conv *conversation.Conversation, pivotEntryID string, direct
 		return fmt.Errorf("invalid direction: %s (expected 'before' or 'after')", direction)
 	}
 
+	utils.Debug("Compaction", fmt.Sprintf("CompactPartial: complete direction=%s entriesAfter=%d", direction, len(conv.Entries)))
 	conv.Messages = conversation.BuildContextPath(conv)
 	return nil
 }
@@ -198,6 +261,7 @@ func ExtractRecentFiles(messages []types.LlmMessage) []string {
 		}
 	}
 
+	utils.Debug("Compaction", fmt.Sprintf("ExtractRecentFiles: found %d files from %d messages", len(files), len(messages)))
 	return files
 }
 

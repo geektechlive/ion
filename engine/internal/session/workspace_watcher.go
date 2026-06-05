@@ -2,6 +2,8 @@ package session
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -63,6 +65,22 @@ func (m *Manager) startWorkspaceWatcher(s *engineSession, key string, group *ext
 	if s.config.WorkingDirectory == "" {
 		utils.Debug("session", fmt.Sprintf("startWorkspaceWatcher: skip key=%s reason=empty_working_directory", key))
 		return nil
+	}
+
+	// Skip watcher when the working directory IS the engine's own data
+	// directory (~/.ion). The default ignore pattern ".ion/**" is relative to
+	// the watcher root, so it only works when the root is a *parent* of
+	// ~/.ion. When the root IS ~/.ion, every engine-internal file change
+	// (logs, conversations, sockets, state files) triggers watcher events —
+	// a feedback loop that generates hundreds of thousands of spurious log
+	// lines per log rotation and wastes CPU.
+	if home, err := os.UserHomeDir(); err == nil {
+		ionHome := filepath.Clean(filepath.Join(home, ".ion"))
+		cwdClean := filepath.Clean(s.config.WorkingDirectory)
+		if cwdClean == ionHome {
+			utils.Info("session", fmt.Sprintf("startWorkspaceWatcher: skip key=%s reason=working_directory_is_ion_home cwd=%s", key, cwdClean))
+			return nil
+		}
 	}
 
 	ignores := resolveWatchIgnores(s.config)

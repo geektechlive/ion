@@ -3,6 +3,8 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
@@ -30,6 +32,36 @@ func (m *Manager) handleNormalizedEvent(runID string, event types.NormalizedEven
 	// EngineEvent translation and would be dropped by the ee.Type == ""
 	// check below, but it is the signal for turn_end.
 	m.fireCliTurnHooks(s, key, sOk, event)
+
+	// Capture the conversation/session ID as early as possible. The API
+	// backend emits a SessionInitEvent right after loadOrCreateConversation
+	// so the session manager learns the ID before any tool call or dispatch
+	// completes. Without this, s.conversationID is empty during the first
+	// run, which causes dispatch persistence (appendConversationEntry) to
+	// silently skip writing agent_dispatch entries.
+	if init, ok := event.Data.(*types.SessionInitEvent); ok && init.SessionID != "" {
+		m.mu.Lock()
+		if s2, ok2 := m.sessions[key]; ok2 && s2.conversationID == "" {
+			s2.conversationID = init.SessionID
+			utils.Log("Session", fmt.Sprintf("captured conversationID=%s from SessionInitEvent key=%s", init.SessionID, key))
+
+			// Initialize session memory for the newly created conversation.
+			// On resumed sessions this is already done in StartSession; here
+			// we cover the fresh-conversation path where the backend assigns
+			// the conversation ID during the first run.
+			memoryDisabled := m.config != nil && m.config.Compaction != nil &&
+				m.config.Compaction.MemoryEnabled != nil && !*m.config.Compaction.MemoryEnabled
+			if s2.sessionMemory == nil && !memoryDisabled {
+				home, _ := os.UserHomeDir()
+				convDir := filepath.Join(home, ".ion", "conversations")
+				sm := NewSessionMemory(init.SessionID, convDir, nil)
+				sm.Start()
+				s2.sessionMemory = sm
+				utils.Log("Session", fmt.Sprintf("created session memory for new conv=%s key=%s", init.SessionID, key))
+			}
+		}
+		m.mu.Unlock()
+	}
 
 	contextWindow := conversation.DefaultContext
 	m.mu.RLock()
@@ -224,10 +256,27 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 	utils.Info("Session", fmt.Sprintf("handleRunExit: key=%s runID=%s code=%s signal=%s sessionID=%s", key, runID, codeStr, sigStr, sessionID))
 
 	var nextPrompt *pendingPrompt
+	var bgCount int
 	m.mu.Lock()
 	if s, ok := m.sessions[key]; ok {
 		s.requestID = ""
-		s.agents.ClearStates()
+		// Preserve completed agent states (done/error/cancelled) so their
+		// conversation history survives for post-run inspection and tab
+		// persistence. Also preserve running states that correspond to active
+		// background dispatches — those agents are legitimately still running.
+		// Only clear running states that are stale (no live dispatch backing them).
+		if s.dispatchRegistry != nil {
+			activeNames := s.dispatchRegistry.ActiveNames()
+			bgCount = len(activeNames)
+			if bgCount > 0 {
+				utils.Log("Session", fmt.Sprintf("handleRunExit: preserving %d background dispatch agent(s): %v", bgCount, activeNames))
+				s.agents.ClearRunningStatesExcept(activeNames)
+			} else {
+				s.agents.ClearRunningStates()
+			}
+		} else {
+			s.agents.ClearRunningStates()
+		}
 		if sessionID != "" {
 			s.conversationID = sessionID
 		}
@@ -239,29 +288,32 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 	}
 	m.mu.Unlock()
 
-	// Clear engine-managed agent state (Agent tool sub-agents).
-	// Only emit if the session had built-in agent states; extension-managed
-	// agents are owned by the extension and must not be wiped on run exit.
+	// Persist any terminal dispatch entries to the conversation file.
+	// This runs AFTER the backend's final save (which fires before OnExit)
+	// so the load-append-save cycle won't be overwritten by a subsequent
+	// backend save. Only terminal states (done/error/cancelled) with
+	// dispatch metadata (task, agent type) are persisted.
+	m.persistTerminalDispatches(key, sessionID)
+
+	// Emit updated agent state snapshot after clearing running agents.
+	// Completed agents (done/error/cancelled) are preserved so their
+	// conversation history survives for post-run inspection. The merged
+	// snapshot includes both extension-managed roster entries and any
+	// retained engine-managed agents.
 	//
-	// Engine contract: `engine_agent_state` is a complete snapshot. After
-	// ClearStates() above, the registry has no engine-managed states left,
-	// so we emit the empty array as the authoritative "no engine-managed
-	// agents are live" signal. See docs/architecture/agent-state.md.
+	// Engine contract: `engine_agent_state` is a complete snapshot.
+	// See docs/architecture/agent-state.md.
 	m.mu.RLock()
-	hasExtGroup := false
+	var runExitSnapshot []types.AgentStateUpdate
 	if s, ok := m.sessions[key]; ok {
-		hasExtGroup = s.extGroup != nil && !s.extGroup.IsEmpty()
+		runExitSnapshot = s.agents.MergedSnapshot()
 	}
 	m.mu.RUnlock()
-	if !hasExtGroup {
-		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=0 reason=run_exit", key))
-		m.emit(key, types.EngineEvent{
-			Type:   "engine_agent_state",
-			Agents: []types.AgentStateUpdate{},
-		})
-	} else {
-		utils.Debug("Session", fmt.Sprintf("handleRunExit: skipping engine agent_state — extension owns registry key=%s", key))
-	}
+	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=run_exit", key, len(runExitSnapshot)))
+	m.emit(key, types.EngineEvent{
+		Type:   "engine_agent_state",
+		Agents: runExitSnapshot,
+	})
 
 	// Clear any stale working message before transitioning to idle
 	m.emit(key, types.EngineEvent{Type: "engine_working_message", EventMessage: ""})
@@ -280,13 +332,21 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 	}
 	m.mu.RUnlock()
 
+	// When background dispatches are still running, include the count so
+	// clients can keep the tab status active and interrupt button visible
+	// even though the parent LLM turn has ended.
+	idleFields := &types.StatusFields{
+		Label: key, State: "idle", SessionID: sessionID,
+		ContextPercent: idlePct, ContextWindow: idleCW,
+		Model: idleModel, TotalCostUsd: idleCost,
+		BackgroundAgents: bgCount,
+	}
+	if bgCount > 0 {
+		utils.Log("Session", fmt.Sprintf("handleRunExit: emitting idle with backgroundAgents=%d key=%s", bgCount, key))
+	}
 	m.emit(key, types.EngineEvent{
-		Type: "engine_status",
-		Fields: &types.StatusFields{
-			Label: key, State: "idle", SessionID: sessionID,
-			ContextPercent: idlePct, ContextWindow: idleCW,
-			Model: idleModel, TotalCostUsd: idleCost,
-		},
+		Type:   "engine_status",
+		Fields: idleFields,
 	})
 
 	if (code != nil && *code != 0) || signal != nil {
@@ -340,126 +400,6 @@ func (m *Manager) handleRunError(runID string, err error) {
 	// Reap descendants so a dispatched child does not continue running
 	// (and billing model time) after the parent loop has died.
 	m.abortAllDescendants(key, fmt.Sprintf("parent run error: %s", err.Error()))
-}
-
-// fireCliTurnHooks fires turn_start / turn_end extension hooks for CLI
-// backend runs. No-op when the backend is not CliBackend or when the
-// session has no extension group.
-//
-// Turn boundaries are derived from the normalised event stream:
-//   - turn_start: first TextChunkEvent or ToolCallEvent after run start
-//     or after the previous turn ended.
-//   - turn_end: TaskUpdateEvent (completed assistant message) signals that
-//     the model finished responding and tools (if any) have been executed.
-//   - TaskCompleteEvent: final result; close any active turn before the
-//     run finishes.
-//
-// Under HybridBackend, the resolved backend for the *current* run depends
-// on the model that started it. We use s.lastModel (set in prompt_dispatch
-// when StartRun is called) to drive the resolution. If lastModel is empty
-// (no run yet), this is a no-op — matching the pre-hybrid behavior of
-// returning early when the backend wasn't a subprocess backend.
-func (m *Manager) fireCliTurnHooks(s *engineSession, key string, sOk bool, event types.NormalizedEvent) {
-	if !isSubprocessBackend(m.resolvedBackend(s.lastModel)) {
-		return
-	}
-	if !sOk || s.extGroup == nil || s.extGroup.IsEmpty() {
-		return
-	}
-
-	switch e := event.Data.(type) {
-	case *types.TextChunkEvent:
-		// Accumulate assistant text for message_update hook.
-		m.mu.Lock()
-		s.cliTextBuf += e.Text
-		alreadyActive := s.cliTurnActive
-		if !alreadyActive {
-			s.cliTurnNumber++
-			s.cliTurnActive = true
-		}
-		turnNum := s.cliTurnNumber
-		m.mu.Unlock()
-
-		if !alreadyActive {
-			ctx := m.newExtContext(s, key)
-			s.extGroup.FireTurnStart(ctx, extension.TurnInfo{TurnNumber: turnNum})
-			taskID := fmt.Sprintf("%s-t%d", key, turnNum)
-			_ = s.extGroup.FireTaskCreated(ctx, extension.TaskLifecycleInfo{
-				TaskID: taskID,
-				Name:   fmt.Sprintf("turn-%d", turnNum),
-				Status: "running",
-			})
-		}
-
-	case *types.ToolCallEvent:
-		_ = e // suppress unused
-		m.mu.Lock()
-		alreadyActive := s.cliTurnActive
-		if !alreadyActive {
-			s.cliTurnNumber++
-			s.cliTurnActive = true
-		}
-		turnNum := s.cliTurnNumber
-		m.mu.Unlock()
-
-		if !alreadyActive {
-			ctx := m.newExtContext(s, key)
-			s.extGroup.FireTurnStart(ctx, extension.TurnInfo{TurnNumber: turnNum})
-		}
-
-	case *types.TaskUpdateEvent:
-		_ = e // suppress unused
-		m.mu.Lock()
-		wasActive := s.cliTurnActive
-		s.cliTurnActive = false
-		turnNum := s.cliTurnNumber
-		accum := s.cliTextBuf
-		s.cliTextBuf = ""
-		m.mu.Unlock()
-
-		if wasActive {
-			ctx := m.newExtContext(s, key)
-			if accum != "" {
-				_ = s.extGroup.FireMessageUpdate(ctx, extension.MessageUpdateInfo{
-					Role:    "assistant",
-					Content: accum,
-				})
-			}
-			s.extGroup.FireTurnEnd(ctx, extension.TurnInfo{TurnNumber: turnNum})
-		}
-
-	case *types.TaskCompleteEvent:
-		_ = e // suppress unused
-		m.mu.Lock()
-		wasActive := s.cliTurnActive
-		s.cliTurnActive = false
-		turnNum := s.cliTurnNumber
-		accum := s.cliTextBuf
-		s.cliTextBuf = ""
-		m.mu.Unlock()
-
-		if wasActive {
-			ctx := m.newExtContext(s, key)
-			if accum != "" {
-				_ = s.extGroup.FireMessageUpdate(ctx, extension.MessageUpdateInfo{
-					Role:    "assistant",
-					Content: accum,
-				})
-			}
-			s.extGroup.FireTurnEnd(ctx, extension.TurnInfo{TurnNumber: turnNum})
-		}
-		// task_completed fires unconditionally: the run is fully done whether or
-		// not a turn was active when it finished.
-		{
-			ctx := m.newExtContext(s, key)
-			taskID := fmt.Sprintf("%s-t%d", key, turnNum)
-			_ = s.extGroup.FireTaskCompleted(ctx, extension.TaskLifecycleInfo{
-				TaskID: taskID,
-				Name:   fmt.Sprintf("turn-%d", turnNum),
-				Status: "completed",
-			})
-		}
-	}
 }
 
 // classifyErrorCategory maps an error code to an extension ErrorCategory.
@@ -622,6 +562,30 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 
 	case *types.ToolStalledEvent:
 		return types.EngineEvent{Type: "engine_tool_stalled", ToolID: e.ToolID, ToolName: e.ToolName, ToolElapsed: e.Elapsed}
+
+	case *types.SteerInjectedEvent:
+		// Surface mid-turn steer captures as a typed engine event so
+		// clients can render a confirmation (divider, toast, log line).
+		// The character count is enough for the UI; the message body is
+		// already in the conversation as a user turn and does not need
+		// to be echoed back over the wire.
+		return types.EngineEvent{Type: "engine_steer_injected", SteerMessageLength: e.MessageLength}
+
+	case *types.ModelFallbackEvent:
+		// Surface the model-fallback workflow signal as a typed engine
+		// event so clients can render an indicator. The desktop and iOS
+		// renderers display a small ⚠ glyph on the affected engine
+		// instance pill; headless harnesses may abort, retry, or route
+		// elsewhere. The engine has no opinion — see CLAUDE.md §
+		// "The typed-event corollary" for the rule that the typed event
+		// is the engine's *complete* signaling surface (no parallel
+		// stream-content mutation).
+		return types.EngineEvent{
+			Type:                   "engine_model_fallback",
+			FallbackRequestedModel: e.RequestedModel,
+			FallbackModel:          e.FallbackModel,
+			FallbackReason:         e.Reason,
+		}
 
 	default:
 		return types.EngineEvent{}

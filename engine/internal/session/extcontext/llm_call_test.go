@@ -51,6 +51,7 @@ func (a *llmCallTestAccessor) DeregisterAgent(_ string)                         
 func (a *llmCallTestAccessor) RegisterAgentSpec(_ types.AgentSpec)              {}
 func (a *llmCallTestAccessor) DeregisterAgentSpec(_ string)                     {}
 func (a *llmCallTestAccessor) LookupAgentSpec(_ string) (types.AgentSpec, bool) { return types.AgentSpec{}, false }
+func (a *llmCallTestAccessor) LookupExtDisplayName(_ string) string             { return "" }
 func (a *llmCallTestAccessor) ExtGroup() *extension.ExtensionGroup              { return a.extGroup }
 func (a *llmCallTestAccessor) ExtConfig() *extension.ExtensionConfig            { return nil }
 func (a *llmCallTestAccessor) ProcRegistry() *extension.ProcessRegistry         { return nil }
@@ -62,11 +63,16 @@ func (a *llmCallTestAccessor) PermissionCheck(_ string, _ map[string]interface{}
 }
 func (a *llmCallTestAccessor) McpConnections() []*mcp.Connection             { return nil }
 func (a *llmCallTestAccessor) SearchHistory(_ string, _ int) []extension.HistoryMatch { return nil }
+func (a *llmCallTestAccessor) GetSessionMemory() string                              { return "" }
+func (a *llmCallTestAccessor) SetSessionMemory(_ string)                             {}
 func (a *llmCallTestAccessor) TranslateEvent(_ types.NormalizedEvent, _ int) types.EngineEvent {
 	return types.EngineEvent{}
 }
 func (a *llmCallTestAccessor) SetPlanMode(_ bool, _ string)        {}
 func (a *llmCallTestAccessor) GetPlanModeState() (bool, string)    { return false, "" }
+func (a *llmCallTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string { return "" }
+func (a *llmCallTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate))  {}
+func (a *llmCallTestAccessor) EmitAgentSnapshot(_ string) {}
 
 // registerMockProvider registers a MockProvider for the given model under
 // a fixed provider id. Returns the mock so the test can inspect recorded

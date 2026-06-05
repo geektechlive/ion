@@ -1,12 +1,12 @@
 ---
 title: Hook Reference
-description: Complete reference for all 63 Ion Engine hooks with payloads, return types, and behavior.
+description: Complete reference for all 66 Ion Engine hooks with payloads, return types, and behavior.
 sidebar_position: 2
 ---
 
 # Hook Reference
 
-All 64 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
+All 67 hooks grouped by category. For each hook: when it fires, what payload it receives, what return values do, and the dispatch pattern.
 
 ## Lifecycle (13)
 
@@ -88,12 +88,13 @@ type BeforePromptResult struct {
 }
 ```
 
-## Session Management (5)
+## Session Management (6)
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
 | `session_before_compact` | Before context compaction | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter}` | `bool` | Return `true` to cancel compaction. |
 | `session_compact` | After compaction completes | `CompactionInfo{Strategy, MessagesBefore, MessagesAfter, Facts}` | ignored | Observe only. `Facts` carries structured snippets extracted from the pre-compaction messages — useful for persisting to external memory before they're discarded. May be empty. |
+| `compact_summary_request` | Inside proactive / reactive compaction, after session-memory and LLM tiers and before the regex fallback | `CompactSummaryRequestInfo{Strategy, MessageCount, Messages}` | `CompactSummaryRequestResult{Summary}` or bare `string` | First non-empty `Summary` becomes the new `compact_boundary` block's `Summary` field, short-circuiting the engine's regex fact extractor. Empty/nil return falls through to the regex pipeline. Use this to wire a harness-side summariser (LLM-based, vector-store-backed, domain-specific) that produces higher-quality summaries than the engine's regex pipeline. |
 | `session_before_fork` | Before session fork | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | `bool` | Return `true` to cancel fork. |
 | `session_fork` | After fork completes | `ForkInfo{SourceSessionKey, NewSessionKey, ForkMessageIndex}` | ignored | Observe only |
 | `session_before_switch` | Before session switch | `nil` | ignored | Observe only |
@@ -103,10 +104,16 @@ type BeforePromptResult struct {
 **CompactionInfo**
 ```go
 type CompactionInfo struct {
-    Strategy       string
-    MessagesBefore int
-    MessagesAfter  int
-    Facts          []CompactionFact // structured facts extracted from compacted messages; may be empty
+    Strategy         string           // "auto" (proactive) or "reactive" (prompt_too_long)
+    MessagesBefore   int
+    MessagesAfter    int
+    Facts            []CompactionFact // structured facts extracted from compacted messages; may be empty
+    TokensBefore     int              // token count before compaction (proactive only; 0 for reactive)
+    TokenLimit       int              // absolute token limit that triggered compaction
+    TargetTokens     int              // post-compact target token budget
+    MicroCompactKeep int              // number of recent turns protected from micro-compaction
+    TokensAfter      int              // token count after compaction
+    SessionMemory    string           // session memory content used as summary (empty if not available)
 }
 ```
 
@@ -119,6 +126,26 @@ type CompactionFact struct {
 ```
 
 `Facts` is populated on `session_compact` only (not on `session_before_compact`), and may be empty when step-1 micro-compaction alone is sufficient and no fact patterns matched. Message indices are intentionally not exposed — by the time the hook fires, the source messages have been mutated or truncated.
+
+`SessionMemory` contains the background session memory content when it was used as the summary source (tier 1 of the three-tier fallback). Empty when session memory was not available and the summary came from LLM or regex extraction.
+
+**CompactSummaryRequestInfo**
+```go
+type CompactSummaryRequestInfo struct {
+    Strategy     string             // "auto" (proactive) or "reactive" (prompt_too_long retry)
+    MessageCount int                // len(Messages); supplied so handlers can log without re-counting
+    Messages     []types.LlmMessage // pre-compaction slice, already filtered through MessagesAfterLastCompactBoundary so prior summaries are not in scope
+}
+```
+
+**CompactSummaryRequestResult**
+```go
+type CompactSummaryRequestResult struct {
+    Summary string // when non-empty, replaces the engine's regex-built summary text; empty means "no opinion — fall back to regex"
+}
+```
+
+The `compact_summary_request` handler may return a `CompactSummaryRequestResult` value, a `*CompactSummaryRequestResult` pointer, or a bare `string`. All three shapes flow through the same first-non-empty selection. The engine never blocks on this handler; harness implementations that call an LLM must do so with a bounded timeout and surface failures by returning `("", false)` rather than blocking the run. Branch on `Strategy` to tune the summariser to the trigger — e.g. a reactive summary may want to be more aggressive (fewer tokens) because the provider just rejected the prompt, while an auto summary can afford a richer rendering.
 
 **ForkInfo**
 ```go
@@ -133,7 +160,7 @@ type ForkInfo struct {
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
-| `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt}` | Last non-nil wins. Injects system prompt into the sub-agent. |
+| `before_agent_start` | Before a sub-agent launches | `AgentInfo{Name, Task}` | `BeforeAgentStartResult{SystemPrompt, AgentName}` | Last non-empty wins per field independently. Injects system prompt and/or resolves agent name. |
 | `before_provider_request` | Immediately before each outbound LLM provider call from the agent loop. Fires once per turn (including fallback hops). | `BeforeProviderRequestInfo{Provider, Model, TurnNumber, MessageCount, ToolCount, HasSystemPrompt, MaxTokens}` | ignored | Observe only |
 
 ### Payload Types
@@ -141,7 +168,8 @@ type ForkInfo struct {
 **BeforeAgentStartResult**
 ```go
 type BeforeAgentStartResult struct {
-    SystemPrompt string
+    SystemPrompt string `json:"systemPrompt,omitempty"` // injected system prompt; empty = no change
+    AgentName    string `json:"agentName,omitempty"`    // override agent name; empty = no change
 }
 ```
 
@@ -319,8 +347,10 @@ Out-of-tree paths are not covered. Extensions that need to watch files outside t
 
 | Hook | When | Payload | Return | Effect |
 |------|------|---------|--------|--------|
-| `task_created` | Task spawned | `TaskLifecycleInfo{TaskID, Name, Status, Extra}` | ignored | Observe only |
-| `task_completed` | Task finished | `TaskLifecycleInfo{TaskID, Name, Status, Extra}` | ignored | Observe only |
+| `task_created` | Turn starts (every backend) | `TaskLifecycleInfo{TaskID, Name, Status, Extra}` | ignored | Observe only |
+| `task_completed` | Turn ends (every backend) | `TaskLifecycleInfo{TaskID, Name, Status, Extra}` | ignored | Observe only |
+
+> **Contract — TaskID format.** `TaskID` is `<session-key>-t<turn-number>` on every engine backend (`ApiBackend`, `CliBackend`, `HybridBackend`). Consumers join `task_created` and `task_completed` on `(SessionKey, TaskID)` and correlate with the adjacent `turn_start` / `turn_end` hooks via `TurnInfo.TurnNumber`. **The format is a public contract.** Changing it requires an ADR documenting the rationale and migration impact, following the precedent of [ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md) for the `engine_plan_mode_changed` trigger removal. Adding new components to the right of `-t<turn-number>` is non-breaking (consumers parse left-anchored); removing or reordering existing components is breaking.
 
 ### Payload Types
 
@@ -668,35 +698,3 @@ type PeerExtensionInfo struct {
 }
 ```
 
-## Async Registration Lifecycle (4)
-
-Fire when an extension registers or deregisters a webhook route or schedule job via the async-trigger subsystem. The `*_registered` variants are veto-capable: a handler that returns `AsyncRegistrationVeto{Block: true}` refuses the registration. The `*_deregistered` variants are observation-only — return values are ignored. Deregistration cannot be blocked because a veto there would let one extension permanently trap another extension's resources.
-
-| Hook | When | Payload | Return | Effect |
-|------|------|---------|--------|--------|
-| `webhook_registered` | Extension registers a webhook route (init or runtime) | `AsyncRegistrationInfo` | `AsyncRegistrationVeto` | Return `Block: true` to refuse registration. Last explicit opinion wins. |
-| `webhook_deregistered` | Webhook route removed (runtime deregister or session teardown) | `AsyncRegistrationInfo` | ignored | Observe only |
-| `schedule_registered` | Extension registers a schedule job (init or runtime) | `AsyncRegistrationInfo` | `AsyncRegistrationVeto` | Return `Block: true` to refuse registration. Last explicit opinion wins. |
-| `schedule_deregistered` | Schedule job removed (runtime deregister or session teardown) | `AsyncRegistrationInfo` | ignored | Observe only |
-
-### Payload Types
-
-**AsyncRegistrationInfo**
-```go
-type AsyncRegistrationInfo struct {
-    Kind   string      `json:"kind"`           // "webhook" or "schedule"
-    ID     string      `json:"id"`             // webhook path or schedule job id
-    Origin string      `json:"origin"`         // "init" or "runtime"
-    Decl   interface{} `json:"decl,omitempty"` // typed declaration (WebhookRoute or ScheduleJob)
-}
-```
-
-**AsyncRegistrationVeto**
-```go
-type AsyncRegistrationVeto struct {
-    Block  bool   `json:"block"`
-    Reason string `json:"reason,omitempty"`
-}
-```
-
-Veto semantics match `before_plan_mode_enter`: last handler that expresses an explicit opinion wins. A handler returning nil, a zero-value veto, or any non-veto value abstains. JSON-RPC subprocess extensions return `{block: true, reason: "..."}` map equivalents.

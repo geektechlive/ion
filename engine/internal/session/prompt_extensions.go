@@ -79,26 +79,26 @@ func (m *Manager) fireBeforeAgentStart(s *engineSession, key string, extGroup *e
 	}
 	utils.Log("Session", fmt.Sprintf("SendPrompt[%s]: firing before_agent_start", key))
 	basCtx := m.newExtContext(s, key)
-	agentSysPrompt, _ := extGroup.FireBeforeAgentStart(basCtx, extension.AgentInfo{})
+	agentSysPrompt, _, _ := extGroup.FireBeforeAgentStart(basCtx, extension.AgentInfo{})
 	if agentSysPrompt != "" {
 		opts.AppendSystemPrompt += "\n\n" + agentSysPrompt
 		utils.Log("Session", fmt.Sprintf("SendPrompt[%s]: before_agent_start injected %d chars", key, len(agentSysPrompt)))
 	}
 }
 
-// fireBeforePromptCli fires the before_prompt hook for subprocess backend runs
+// fireBeforePromptCli fires the before_prompt hook for subprocess backends
 // (CliBackend and CodexCliBackend). ApiBackend wires this hook inside
-// buildRunConfig; subprocess backends skip that path, so we fire the hook here
-// and materialise the result into RunOptions before the subprocess launches.
-// No-op when the backend is not a subprocess backend.
+// buildRunConfig; subprocess backends skip that path, so we fire the hook
+// here and materialise the result into RunOptions before the subprocess is
+// launched. No-op when the backend is not a subprocess backend.
 //
-// Under HybridBackend, this fires for Anthropic models (→ *CliBackend) and
-// OpenAI models (→ *CodexCliBackend). API-routed hybrid runs use the
-// ApiBackend's buildRunConfig path for before_prompt, identical to plain
-// "backend": "api".
+// Under HybridBackend, this only fires when the model resolves to the
+// inner *CliBackend (Anthropic models) or *CodexCliBackend (OpenAI models).
+// API-routed hybrid runs use the ApiBackend's buildRunConfig path for
+// before_prompt, identical to plain "backend": "api".
 //
 // For CodexCliBackend, opts.SystemPrompt is prepended to the user prompt
-// text inside the subprocess (Codex has no --system-prompt flag).
+// rather than passed as a flag (Codex has no --system-prompt equivalent).
 func (m *Manager) fireBeforePromptCli(s *engineSession, key string, extGroup *extension.ExtensionGroup, skipExtensions bool, opts *types.RunOptions) {
 	if !isSubprocessBackend(m.resolvedBackend(opts.Model)) {
 		return

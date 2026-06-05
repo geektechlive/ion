@@ -204,54 +204,11 @@ extension SessionViewModel {
             DiagnosticLog.log("ENGINE: agent_state key=\(key) count=\(agents.count) statuses=[\(statuses)]")
             engineAgentStates[key] = agents
 
-            // Retroactively stamp active tool chips with the agent name.
-            // Runs on every update because the extension emits a placeholder
-            // "Staff member" first, then a second event with the real name —
-            // so we must re-stamp when displayName changes too.
-            if let newNonChief = agents.first(where: { $0.status == "running" && $0.type != "chief" }),
-               var toolChips = activeTools[key] {
-                var chipsUpdated = false
-                for toolId in toolChips.keys where toolChips[toolId]?.toolName == "Agent"
-                    && toolChips[toolId]?.agentName != newNonChief.displayName {
-                    toolChips[toolId]?.agentName = newNonChief.displayName
-                    chipsUpdated = true
-                }
-                if chipsUpdated { activeTools[key] = toolChips }
-            }
-
-            // Retroactively stamp running tool chips (engine messages) with the agent name.
-            if let newNonChief = agents.first(where: { $0.status == "running" && $0.type != "chief" }),
-               var msgs = engineMessages[key] {
-                var updated = false
-                for i in msgs.indices.reversed() {
-                    guard msgs[i].role == "tool" else { break }
-                    if msgs[i].toolStatus == "running" && msgs[i].agentName != newNonChief.displayName {
-                        msgs[i].agentName = newNonChief.displayName
-                        updated = true
-                    }
-                }
-                if updated { engineMessages[key] = msgs }
-            }
-
-            // Also stamp Message objects that MessageBubble reads.
-            if let newNonChief = agents.first(where: { $0.status == "running" && $0.type != "chief" }),
-               var msgArr = messages[tabId] {
-                var msgUpdated = false
-                for i in msgArr.indices.reversed() {
-                    guard msgArr[i].role == .tool else { break }
-                    if msgArr[i].toolStatus == .running && msgArr[i].agentName != newNonChief.displayName {
-                        msgArr[i].agentName = newNonChief.displayName
-                        msgUpdated = true
-                    }
-                }
-                if msgUpdated { messages[tabId] = msgArr }
-            }
-
-        case .engineStatus(let tabId, let instanceId, let fields):
+        case .engineStatus(let tabId, let instanceId, let fields, _):
             let key = resolveEngineKey(tabId: tabId, instanceId: instanceId)
             engineStatusFields[key] = fields
 
-        case .engineWorkingMessage(let tabId, let instanceId, let message):
+        case .engineWorkingMessage(let tabId, let instanceId, let message, _):
             let key = resolveEngineKey(tabId: tabId, instanceId: instanceId)
             engineWorkingMessages[key] = message
 
@@ -265,10 +222,13 @@ extension SessionViewModel {
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
             activeTools[key]?[toolId]?.isStalled = true
 
+        case .engineSteerInjected(let tabId, let instanceId, let messageLength):
+            handleEngineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
+
         case .engineError(let tabId, let instanceId, let message):
             handleEngineError(tabId: tabId, instanceId: instanceId, message: message)
 
-        case .engineNotify(let tabId, let instanceId, let message, let level):
+        case .engineNotify(let tabId, let instanceId, let message, let level, _):
             handleEngineNotify(tabId: tabId, instanceId: instanceId, message: message, level: level)
 
         case .engineDialog(let tabId, let instanceId, let dialogId, let method, let title, let options, let defaultValue):
@@ -285,11 +245,11 @@ extension SessionViewModel {
         case .engineMessageEnd(let tabId, let instanceId, let inputTokens, _, let contextPercent, _):
             handleEngineMessageEnd(tabId: tabId, instanceId: instanceId, inputTokens: inputTokens, contextPercent: contextPercent)
 
-        case .engineHarnessMessage(let tabId, let instanceId, let message, _):
-            let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-            var msgs = engineMessages[key] ?? []
-            msgs.append(EngineMessage(id: UUID().uuidString, role: "harness", content: message, timestamp: Date().timeIntervalSince1970 * 1000))
-            engineMessages[key] = msgs
+        case .engineHarnessMessage(let tabId, let instanceId, let message, _, _):
+            handleEngineHarnessMessage(tabId: tabId, instanceId: instanceId, message: message)
+
+        case .enginePlanModeChanged(let tabId, let instanceId, let planModeEnabled, _, let planSlug):
+            handleEnginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planSlug: planSlug)
 
         case .engineConversationHistory(let tabId, let instanceId, let messages):
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
@@ -297,6 +257,9 @@ extension SessionViewModel {
             ionLog.info("engineConversationHistory: key=\(key), messageCount=\(messages.count), filtered=\(filtered.count)")
             engineMessages[key] = filtered
             engineConversationLoaded.insert(key)
+
+        case .agentConversationHistory(let agentName, let conversationId, let messages):
+            handleAgentConversationHistory(agentName: agentName, conversationId: conversationId, messages: messages)
 
         case .engineDead(let tabId, let instanceId, let exitCode, let signal, let stderrTail):
             handleEngineDead(tabId: tabId, instanceId: instanceId, exitCode: exitCode, signal: signal, stderrTail: stderrTail)
@@ -356,8 +319,8 @@ extension SessionViewModel {
         case .engineEarlyStopDecisionRequest:
             handleEngineEarlyStopDecisionRequest()
 
-        case .engineCommandRegistry(let tabId, _, let commands):
-            handleEngineCommandRegistry(tabId: tabId, commands: commands)
+        case .engineCommandRegistry(let tabId, let instanceId, let commands):
+            handleEngineCommandRegistry(tabId: tabId, instanceId: instanceId, commands: commands)
 
         case .engineCommandResult:
             handleEngineCommandResult()
@@ -436,6 +399,24 @@ extension SessionViewModel {
         case .fsWriteResult(_, let response):
             fileWriteResult = response
 
+        case .fsRenameResult(_, let newPath, let response):
+            // Lightweight pattern mirroring `.fsWriteResult`:
+            //   - publish the response so the view can surface errors,
+            //   - on success, re-issue `fsListDir` on the parent dir of
+            //     newPath so the listing reflects the rename. We don't
+            //     also refresh oldPath's parent because the desktop
+            //     handler only ever changes basename, so the parents
+            //     match. If a future variant ever moves across
+            //     directories, this is the spot to add the second
+            //     refresh.
+            fileRenameResult = response
+            if response.ok {
+                let parent = (newPath as NSString).deletingLastPathComponent
+                if !parent.isEmpty {
+                    requestFsListDir(directory: parent)
+                }
+            }
+
         case .uploadAttachmentResult(let id, let name, let path, let correlationId, let error):
             handleUploadAttachmentResult(id: id, name: name, path: path, correlationId: correlationId, error: error)
 
@@ -464,7 +445,8 @@ extension SessionViewModel {
     private func handlePermissionRequest(tabId: String, questionId: String, toolName: String, toolInput: [String: AnyCodable]?, options: [PermissionOption]) {
         let inputKeys = toolInput?.keys.sorted() ?? []
         let inputSummary = toolInput?.map { "\($0.key): \(type(of: $0.value.value))" }.joined(separator: ", ") ?? "nil"
-        DiagnosticLog.log("PERM: handlePermissionRequest: tabId=\(tabId.prefix(8)) questionId=\(questionId.prefix(16)) toolName=\(toolName) inputKeys=\(inputKeys) inputTypes=[\(inputSummary)] options=\(options.map(\.label))")
+        let isEngine = tabs.first(where: { $0.id == tabId })?.isEngine == true
+        DiagnosticLog.log("PERM: handlePermissionRequest: tabId=\(tabId.prefix(8)) questionId=\(questionId.prefix(16)) toolName=\(toolName) inputKeys=\(inputKeys) inputTypes=[\(inputSummary)] options=\(options.map(\.label)) isEngine=\(isEngine)")
 
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             var normalizedInput = toolInput
@@ -614,16 +596,6 @@ extension SessionViewModel {
         } else {
             pendingUploadResults.append(UploadAttachmentResult(id: id, name: name, path: path, correlationId: correlationId, error: nil))
         }
-    }
-
-    // MARK: - Diagnostic log request
-
-    @MainActor
-    private func handleRequestDiagnosticLogs() {
-        let logs = DiagnosticLog.exportAllSessions()
-        let deviceId = activeDeviceId ?? "unknown"
-        let deviceName = UIDevice.current.name
-        send(.diagnosticLogsResponse(logs: logs, deviceId: deviceId, deviceName: deviceName))
     }
 
 }

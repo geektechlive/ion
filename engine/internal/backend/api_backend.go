@@ -52,6 +52,18 @@ type activeRun struct {
 	// Reset to 0 whenever a run re-enters plan mode via the EnterPlanMode
 	// sentinel so the throttle does not silence the first post-entry reminder.
 	planModeReminderTurn int
+	// planModeAllowedBashCommands is the set of command prefixes that the
+	// Bash tool is allowed to execute during plan mode. When non-empty,
+	// Bash is included in the plan-mode tool list but gated at execution
+	// time — only commands whose leading token(s) match one of these
+	// prefixes are permitted. Set from RunOptions.PlanModeAllowedBashCommands
+	// in buildToolDefs.
+	planModeAllowedBashCommands []string
+
+	// opts captures the RunOptions for this run so compaction (and other
+	// cross-turn logic) can read config-driven knobs without plumbing opts
+	// through every internal call. Set once in StartRunWithConfig.
+	opts *types.RunOptions
 
 	// compactionsWithoutProgress counts proactive compactions that have fired
 	// without an intervening successful API response. Bounds the cascade if
@@ -176,8 +188,11 @@ func (b *ApiBackend) StartRunWithConfig(requestID string, options types.RunOptio
 		// buildSystemPrompt; RunOptions wins so we set it unconditionally
 		// and buildSystemPrompt only writes the hook value when this is empty.
 		planModeSparseReminderOverride: options.PlanModeSparseReminder,
+		opts:         &options,
 		cfg:          cfg,
 	}
+
+	utils.Info("ApiBackend", fmt.Sprintf("StartRunWithConfig: runID=%s model=%s sessionID=%s planMode=%v", requestID, options.Model, options.SessionID, options.PlanMode))
 
 	b.mu.Lock()
 	b.activeRuns[requestID] = run
@@ -274,6 +289,21 @@ func (b *ApiBackend) GetContextUsage(requestID string) *conversation.ContextUsag
 	return &usage
 }
 
+// GetConversation returns the active run's conversation for the given request
+// ID. Returns nil when no matching run is active or the conversation has not
+// been initialized yet. The caller receives the live pointer — mutations are
+// visible to the runloop, so callers must treat the returned value as
+// read-only or copy what they need.
+func (b *ApiBackend) GetConversation(requestID string) *conversation.Conversation {
+	b.mu.Lock()
+	run, ok := b.activeRuns[requestID]
+	b.mu.Unlock()
+	if !ok || run.conv == nil {
+		return nil
+	}
+	return run.conv
+}
+
 // SearchHistory searches the active run's conversation history for the given
 // query, returning up to maxResults matches. Returns nil when no matching run
 // is active or the conversation has not been initialized yet.
@@ -299,6 +329,7 @@ func (b *ApiBackend) Steer(requestID, message string) bool {
 	case run.steerCh <- message:
 		return true
 	default:
+		utils.Warn("ApiBackend", fmt.Sprintf("Steer: channel full, message dropped: runID=%s msgLen=%d", requestID, len(message)))
 		return false // channel full
 	}
 }
@@ -318,6 +349,7 @@ func (b *ApiBackend) IsRunning(requestID string) bool {
 }
 
 func (b *ApiBackend) removeRun(requestID string) {
+	utils.Debug("ApiBackend", fmt.Sprintf("removeRun: runID=%s", requestID))
 	b.mu.Lock()
 	delete(b.activeRuns, requestID)
 	b.mu.Unlock()

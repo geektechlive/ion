@@ -25,8 +25,15 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// When true, auto-group movement is suppressed for this tab. Nil/absent decodes as false.
     var groupPinned: Bool?
     var modelOverride: String?
+    /// The current conversation/session ID for this tab. CLI tabs populate
+    /// this directly; engine tabs use `StatusFields.sessionId` instead.
+    var conversationId: String?
     /// Unix ms timestamp of the last status-changing activity (from desktop snapshot).
     var lastActivityAt: Double?
+    /// Custom pill background color hex string (e.g. "#f08c4a"). Nil means use theme default.
+    var pillColor: String?
+    /// Custom pill icon key (e.g. "diamond", "star"). Nil means use the default status dot.
+    var pillIcon: String?
 
     var displayTitle: String {
         customTitle ?? title
@@ -43,6 +50,30 @@ struct TerminalInstanceInfo: Codable, Identifiable, Sendable {
     var cwd: String
 }
 
+// MARK: - EngineInstanceModelFallback
+
+/// Per-engine-instance model-fallback indicator carried on
+/// EngineInstanceInfo. Populated by the desktop snapshot when the engine
+/// emitted a ModelFallbackEvent for the corresponding run — i.e. the
+/// requested model didn't resolve to a provider and the engine fell
+/// back to its configured `defaultModel`.
+///
+/// iOS receives this via the snapshot path, not via a live RemoteEvent,
+/// because the engine's ModelFallbackEvent is a workflow signal (fires
+/// once at the swap site) — to give iOS a sticky-across-reconnect
+/// indicator without a new RemoteEvent variant, the desktop projects
+/// the fact onto the snapshot. See CLAUDE.md § "Common parity surfaces"
+/// row for model fallback indicator and § "The typed-event corollary"
+/// for the broader rule that the engine's typed event is the complete
+/// signaling surface.
+struct EngineInstanceModelFallback: Codable, Sendable, Equatable {
+    /// The model string the run was started with (e.g. an unconfigured
+    /// tier alias like "standard").
+    let requestedModel: String
+    /// The engine's configured `defaultModel` that the run actually used.
+    let fallbackModel: String
+}
+
 // MARK: - EngineInstanceInfo
 
 struct EngineInstanceInfo: Codable, Identifiable, Sendable {
@@ -57,6 +88,20 @@ struct EngineInstanceInfo: Codable, Identifiable, Sendable {
     /// through `permissionQueue` on the enclosing `RemoteTabState` (the
     /// desktop promotes the active instance's denial into that queue).
     var waitingState: String? = nil
+    /// Per-engine-instance running state, decoded from the desktop snapshot.
+    /// `true` when the instance's engine state is `running`, `connecting`,
+    /// or `starting`. `EngineInstanceBar` renders a pulsing orange dot when
+    /// this is true and no `waitingState` is set. The parent tab's overall
+    /// status is aggregated by the snapshot — if any instance is running,
+    /// `RemoteTabState.status` is promoted to `.running`.
+    var isRunning: Bool? = nil
+    /// Per-engine-instance model-fallback indicator. Non-nil when the
+    /// desktop's engineModelFallbacks map holds an entry for this
+    /// `tabId:instanceId` — i.e. the engine emitted ModelFallbackEvent
+    /// for the current/most recent run and the run hasn't yet gone
+    /// idle. `EngineInstanceBar` renders a ⚠ glyph when non-nil; tap
+    /// to reveal the requested + fallback model names.
+    var modelFallback: EngineInstanceModelFallback? = nil
 }
 
 // MARK: - PermissionMode
@@ -79,8 +124,9 @@ struct PermissionRequest: Codable, Identifiable, Sendable {
 // MARK: - ActiveToolInfo
 
 /// Tracks a tool call that is currently executing on the engine.
-/// Used by the iOS app to display active tool cards with elapsed time
-/// and an abort button when the tool appears stalled.
+/// Used by ConversationView to derive the activity indicator text
+/// (e.g. "Running Bash…"). The isStalled flag is retained for potential
+/// future use in the activity indicator.
 struct ActiveToolInfo: Identifiable {
     let id: String        // toolId from the engine
     let toolName: String

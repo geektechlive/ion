@@ -52,6 +52,37 @@ type PromptOverrides struct {
 	// if missing it falls back to fresh allocation. Additive optional
 	// field; empty by default.
 	PlanFilePath string
+
+	// BashAllowlistAdditionsForThisPrompt are per-prompt additions to
+	// the plan-mode Bash allowlist. The engine unions these with the
+	// session-scoped allowlist (engineSession.planModeAllowedBashCommands)
+	// when building the run-time tool list, then drops them at run end —
+	// the session-level allowlist is NEVER mutated. Intended carrier:
+	// slash-command frontmatter that needs a one-turn permission
+	// extension. See types.RunOptions.BashAllowlistAdditionsForThisPrompt
+	// for the wire-side contract. Additive optional field; nil/empty
+	// for prompts that don't need per-prompt additions.
+	BashAllowlistAdditionsForThisPrompt []string
+
+	// CompactTargetPercent overrides the post-compact target as a percentage of
+	// the context window. Zero means "use engine default".
+	CompactTargetPercent float64
+
+	// CompactMicroKeepTurns overrides the number of recent turns protected
+	// from micro-compaction. Zero means "use engine default".
+	CompactMicroKeepTurns int
+
+	// CompactEnabled overrides the auto-compact gate. nil means "use engine
+	// default"; false disables proactive compaction for this prompt.
+	CompactEnabled *bool
+
+	// CompactSummaryEnabled overrides whether LLM-based summarization is used
+	// during compaction. nil means "use engine default".
+	CompactSummaryEnabled *bool
+
+	// CompactMemoryEnabled overrides whether the background session memory
+	// summarizer is active. nil means "use engine default".
+	CompactMemoryEnabled *bool
 }
 
 // SendPrompt dispatches a prompt to the session's backend run.
@@ -138,9 +169,27 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	}
 	m.applyConfigDefaults(&opts)
 	resolveModelTier(&opts)
+
+	// When the resolved model is the engine default and the session has a
+	// conversation-seeded model, prefer the conversation's model. This
+	// preserves the model across desktop restarts where the tab UUID changes
+	// and the desktop loses its engineModelOverrides. The user can still
+	// explicitly override by selecting a different model in the picker.
+	if s.lastModel != "" && m.config != nil && opts.Model == m.config.DefaultModel && opts.Model != s.lastModel {
+		utils.Log("Session", fmt.Sprintf("prompt_dispatch: key=%s overriding default model %s with conversation model %s", key, opts.Model, s.lastModel))
+		opts.Model = s.lastModel
+	}
+
 	injectContextFiles(s, &opts)
 	m.injectExtensionContext(s, key, &opts)
 	injectGitContext(s, &opts)
+
+	// Inject session memory into the system prompt so the model has context
+	// from previously compacted conversation history. Only fires when memory
+	// is non-empty (i.e. a prior session generated a summary).
+	if s.sessionMemory != nil {
+		s.sessionMemory.InjectMemoryIntoSystemPrompt(&opts)
+	}
 
 	utils.Log("Session", fmt.Sprintf("SendPrompt[%s]: releasing lock, model=%s", key, opts.Model))
 

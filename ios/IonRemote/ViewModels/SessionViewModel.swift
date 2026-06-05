@@ -149,9 +149,12 @@ final class SessionViewModel {
     var enginePinnedPrompt: [String: String] = [:]
     var engineModelOverrides: [String: String] = [:]             // compoundKey -> model override
     // Engine conversation messages (per compound key)
-    var engineMessages: [String: [EngineMessage]] = [:]         // compoundKey -> messages
+    var engineMessages: [String: [Message]] = [:]         // compoundKey -> messages
     var engineConversationLoaded: Set<String> = []               // compoundKeys that have loaded history
     var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
+    // Agent dispatch conversation history (per conversationId for dispatch pager)
+    var agentConversationMessages: [String: [Message]] = [:]     // conversationId -> messages
+    var agentConversationLoading: Set<String> = []               // conversationIds currently loading
     // Engine instance state (per engine tab)
     var engineInstances: [String: [EngineInstanceInfo]] = [:]   // tabId -> instances
     var activeEngineInstance: [String: String] = [:]              // tabId -> active instanceId
@@ -205,6 +208,12 @@ final class SessionViewModel {
     var fileListings: [String: FsDirListingResponse] = [:]   // directory -> listing
     var fileContent: [String: FsFileContentResponse] = [:]    // filePath -> content
     var fileWriteResult: FsWriteResultResponse? = nil
+    /// Latest result of an `fsRename` command. Observed by
+    /// `FileExplorerRowView` to surface error alerts (the success path
+    /// is handled by the event handler triggering a fresh
+    /// `requestFsListDir` on the parent directory; the view doesn't
+    /// need to read this for the happy path).
+    var fileRenameResult: FsRenameResultResponse? = nil
     var fileListingLoading: Set<String> = []
     var fileContentLoading: Set<String> = []
 
@@ -214,8 +223,11 @@ final class SessionViewModel {
     // Discovered slash commands (per working directory)
     var discoveredCommands: [String: [DiscoveredSlashCommand]] = [:]
 
-    // Engine-registered slash commands (per tabId, from engine_command_registry)
-    var engineCommandsByTab: [String: [DiscoveredSlashCommand]] = [:]
+    /// Extension-registered slash commands from engine_command_registry events.
+    /// Keyed by engine session key (tabId or "tabId:instanceId") — mirrors the
+    /// desktop's `extensionCommandsByKey` in engine-event-slice.ts.
+    /// Snapshot semantics: every event REPLACES the prior entry for that key.
+    var extensionCommands: [String: [EngineCommandListing]] = [:]
 
     // Upload attachment results (consumed by InputBar / EngineView)
     var pendingUploadResults: [UploadAttachmentResult] = []
@@ -286,8 +298,29 @@ final class SessionViewModel {
         set { UserDefaults.standard.set(newValue, forKey: "showGitInfoInTabList") }
     }
 
+    /// Whether to tint tab rows with their configured pill color (on by default).
+    /// iOS-only preference — does not affect desktop. When disabled the tab list
+    /// renders without any color tinting regardless of what the desktop has set.
+    var showTabColorInTabList: Bool {
+        get { UserDefaults.standard.object(forKey: "showTabColorInTabList") == nil
+              ? true
+              : UserDefaults.standard.bool(forKey: "showTabColorInTabList") }
+        set { UserDefaults.standard.set(newValue, forKey: "showTabColorInTabList") }
+    }
+
+    /// Whether tapping an agent row opens a full-screen popup (on by default).
+    var agentPanelFullScreenPopup: Bool {
+        get { UserDefaults.standard.object(forKey: "agentPanelFullScreenPopup") == nil
+              ? true
+              : UserDefaults.standard.bool(forKey: "agentPanelFullScreenPopup") }
+        set { UserDefaults.standard.set(newValue, forKey: "agentPanelFullScreenPopup") }
+    }
+
     /// APNs device token (set by AppDelegate on registration success).
     var apnsToken: String?
+
+    /// Jarvis morning briefings received via push notification.
+    var briefingsStore = BriefingsStore()
 
     // MARK: - Settings (persisted via paired device)
 

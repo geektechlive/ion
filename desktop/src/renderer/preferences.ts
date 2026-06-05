@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { TabGroup } from '../shared/types'
-import { applyTheme, applyHud, syncTokensToCss, darkColors, lightColors, hudColors, type ColorPalette } from './theme-tokens'
+import { applyTheme, syncTokensToCss, darkColors, lightColors, getTheme, type ColorPalette } from './theme-tokens'
 import type { PreferencesState, ThemeMode } from './preferences-types'
 import { saveSettings, getAllSettings, getEffectiveTabGroups, INITIAL_SAVED, loadPersistedSettings } from './preferences-persist'
 
@@ -8,10 +8,12 @@ export type { ThemeMode, PreferencesState } from './preferences-types'
 export { getEffectiveTabGroups } from './preferences-persist'
 
 const saved = INITIAL_SAVED
+const _savedThemeId = localStorage.getItem('ion_selectedTheme') ?? 'ion-dark'
 
 export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   isDark: saved.themeMode === 'light' ? false : true,
   themeMode: saved.themeMode,
+  selectedTheme: _savedThemeId,
   soundEnabled: saved.soundEnabled,
   expandedUI: saved.expandedUI,
   ultraWide: saved.ultraWide,
@@ -19,7 +21,6 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   recentBaseDirectories: saved.recentBaseDirectories,
   directoryUsageCounts: saved.directoryUsageCounts,
   preferredOpenWith: saved.preferredOpenWith,
-  // showImplementClearContext removed in 30dc41fd — no longer needed (Implement always clears context)
   defaultPermissionMode: saved.defaultPermissionMode,
   expandOnTabSwitch: saved.expandOnTabSwitch,
   bashCommandEntry: saved.bashCommandEntry,
@@ -41,6 +42,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   enableClaudeCompat: saved.enableClaudeCompat ?? true,
   enableEarlyStopContinuation: saved.enableEarlyStopContinuation ?? false,
   showTodoList: saved.showTodoList,
+  agentPanelDefaultOpen: saved.agentPanelDefaultOpen,
+  agentDetailPopup: saved.agentDetailPopup,
+  unifiedTurnView: saved.unifiedTurnView,
   aiGeneratedTitles: saved.aiGeneratedTitles,
   hideOnExternalLaunch: saved.hideOnExternalLaunch,
   keepExplorerOnCollapse: saved.keepExplorerOnCollapse,
@@ -76,6 +80,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   planModelSplitEnabled: saved.planModelSplitEnabled,
   planModeModel: saved.planModeModel,
   implementModeModel: saved.implementModeModel,
+  planModeAllowedBashCommands: saved.planModeAllowedBashCommands,
+  showImplementClearContext: saved.showImplementClearContext,
   _systemIsDark: true,
   setDefaultTallConversation: (enabled) => {
     set({ defaultTallConversation: enabled })
@@ -105,8 +111,21 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   setThemeMode: (mode) => {
     const resolved = mode === 'system' ? get()._systemIsDark : mode === 'dark' || mode === 'hud'
     set({ themeMode: mode, isDark: resolved })
-    if (mode === 'hud') applyHud(); else applyTheme(resolved)
+    // Only apply ion-dark/ion-light if no forced-scheme theme is active
+    if (!getTheme(get().selectedTheme).forcedColorScheme) {
+      applyTheme(resolved)
+    }
     saveSettings(getAllSettings(get))
+  },
+  setSelectedTheme: (id) => {
+    set({ selectedTheme: id })
+    localStorage.setItem('ion_selectedTheme', id)
+    const theme = getTheme(id)
+    if (theme.forcedColorScheme) {
+      applyTheme(id)
+    } else {
+      applyTheme(get().isDark)
+    }
   },
   setSoundEnabled: (enabled) => {
     set({ soundEnabled: enabled })
@@ -237,6 +256,18 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   setShowTodoList: (enabled) => {
     set({ showTodoList: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setAgentPanelDefaultOpen: (enabled) => {
+    set({ agentPanelDefaultOpen: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setAgentDetailPopup: (enabled) => {
+    set({ agentDetailPopup: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setUnifiedTurnView: (enabled) => {
+    set({ unifiedTurnView: enabled })
     saveSettings(getAllSettings(get))
   },
   setAiGeneratedTitles: (enabled) => {
@@ -433,6 +464,14 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     set({ implementModeModel: model })
     saveSettings(getAllSettings(get))
   },
+  setPlanModeAllowedBashCommands: (cmds) => {
+    set({ planModeAllowedBashCommands: cmds })
+    saveSettings(getAllSettings(get))
+  },
+  setShowImplementClearContext: (enabled) => {
+    set({ showImplementClearContext: enabled })
+    saveSettings(getAllSettings(get))
+  },
   setSystemTheme: (isDark) => {
     set({ _systemIsDark: isDark })
     // Only apply if following system
@@ -448,7 +487,13 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
 }))
 
 // Initialize CSS vars with saved theme
-syncTokensToCss(saved.themeMode === 'light' ? lightColors : saved.themeMode === 'hud' ? hudColors : darkColors)
+if (getTheme(_savedThemeId).forcedColorScheme) {
+  syncTokensToCss(getTheme(_savedThemeId).colors)
+  document.documentElement.classList.add('dark')
+  document.documentElement.classList.remove('light')
+} else {
+  syncTokensToCss(saved.themeMode === 'light' ? lightColors : darkColors)
+}
 
 // Load persisted settings from disk (async, fires once on startup)
 loadPersistedSettings(
@@ -456,6 +501,17 @@ loadPersistedSettings(
   () => usePreferencesStore.getState(),
   applyTheme,
 )
+
+// Listen for settings changes pushed from the main process (e.g. iOS
+// `set_desktop_setting` writes). Without this, iOS-originated changes
+// only land on disk — the renderer Zustand store keeps the stale
+// in-memory value until the next restart.
+window.ion?.on?.('ion:settings-changed', (_e: unknown, key: string, value: unknown) => {
+  const current = usePreferencesStore.getState()
+  if (key in current && (current as unknown as Record<string, unknown>)[key] !== value) {
+    usePreferencesStore.setState({ [key]: value })
+  }
+})
 
 /** Reactive hook — returns the active color palette */
 export function useColors(): ColorPalette {

@@ -163,7 +163,8 @@ func (h *Host) registerStringForwarder(hook string) {
 }
 
 // registerBeforeAgentStartForwarder registers a handler for before_agent_start
-// that parses {"systemPrompt": "string"} and returns a BeforeAgentStartResult.
+// that parses {"systemPrompt": "string", "agentName": "string"} and returns
+// a BeforeAgentStartResult.
 func (h *Host) registerBeforeAgentStartForwarder() {
 	h.sdk.On(HookBeforeAgentStart, func(ctx *Context, payload interface{}) (interface{}, error) {
 		raw, err := h.callHook("hook/"+HookBeforeAgentStart, ctx, payload)
@@ -177,15 +178,19 @@ func (h *Host) registerBeforeAgentStartForwarder() {
 		}
 		var result struct {
 			SystemPrompt string `json:"systemPrompt"`
+			AgentName    string `json:"agentName"`
 		}
 		if err := json.Unmarshal(raw, &result); err != nil {
 			utils.Log("extension", fmt.Sprintf("hook/%s: bad result: %v", HookBeforeAgentStart, err))
 			return nil, nil
 		}
-		if result.SystemPrompt == "" {
+		if result.SystemPrompt == "" && result.AgentName == "" {
 			return nil, nil
 		}
-		return BeforeAgentStartResult{SystemPrompt: result.SystemPrompt}, nil
+		return BeforeAgentStartResult{
+			SystemPrompt: result.SystemPrompt,
+			AgentName:    result.AgentName,
+		}, nil
 	})
 }
 

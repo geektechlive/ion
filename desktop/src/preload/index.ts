@@ -130,13 +130,15 @@ export interface IonAPI {
   fsSaveDialog(defaultPath?: string): Promise<{ filePath: string | null }>
   fsRevealInFinder(targetPath: string): Promise<void>
   fsOpenNative(targetPath: string): Promise<{ ok: boolean; error?: string }>
+  fsExists(targetPath: string): Promise<{ exists: boolean }>
   fsWatchFile(filePath: string): Promise<{ ok: boolean; error?: string }>
   fsUnwatchFile(filePath: string): Promise<{ ok: boolean; error?: string }>
   onFileChanged(callback: (filePath: string) => void): () => void
 
   // ─── Engine operations ───
   engineStart(key: string, config: EngineConfig): Promise<{ ok: boolean; error?: string }>
-  enginePrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[]): Promise<{ ok: boolean; error?: string }>
+  enginePrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[], rawAttachments?: FileAttachment[], implementationPhase?: boolean): Promise<{ ok: boolean; error?: string }>
+  engineSetPlanMode(key: string, enabled: boolean): void
   engineAbort(key: string): Promise<void>
   engineAbortAgent(key: string, agentName: string, subtree: boolean): Promise<void>
   engineDialogResponse(key: string, dialogId: string, value: any): Promise<void>
@@ -349,6 +351,7 @@ const api: IonAPI = {
   fsSaveDialog: (defaultPath) => ipcRenderer.invoke(IPC.FS_SAVE_DIALOG, { defaultPath }),
   fsRevealInFinder: (targetPath) => ipcRenderer.invoke(IPC.FS_REVEAL_IN_FINDER, { targetPath }),
   fsOpenNative: (targetPath) => ipcRenderer.invoke(IPC.FS_OPEN_NATIVE, { targetPath }),
+  fsExists: (targetPath) => ipcRenderer.invoke(IPC.FS_EXISTS, { targetPath }),
   fsWatchFile: (filePath) => ipcRenderer.invoke(IPC.FS_WATCH_FILE, { filePath }),
   fsUnwatchFile: (filePath) => ipcRenderer.invoke(IPC.FS_UNWATCH_FILE, { filePath }),
   onFileChanged: (callback) => {
@@ -359,7 +362,8 @@ const api: IonAPI = {
 
   // ─── Engine operations ───
   engineStart: (key, config) => ipcRenderer.invoke(IPC.ENGINE_START, { key, config }),
-  enginePrompt: (key, text, model, appendSystemPrompt, imageAttachments) => ipcRenderer.invoke(IPC.ENGINE_PROMPT, { key, text, model, appendSystemPrompt, imageAttachments }),
+  enginePrompt: (key, text, model, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase) => ipcRenderer.invoke(IPC.ENGINE_PROMPT, { key, text, model, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase }),
+  engineSetPlanMode: (key, enabled) => ipcRenderer.send('ion:engine-set-plan-mode', key, enabled),
   engineAbort: (key) => ipcRenderer.invoke(IPC.ENGINE_ABORT, { key }),
   engineAbortAgent: (key, agentName, subtree) =>
     ipcRenderer.invoke(IPC.ENGINE_ABORT_AGENT, { key, agentName, subtree }),

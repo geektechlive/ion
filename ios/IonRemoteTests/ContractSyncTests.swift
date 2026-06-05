@@ -18,6 +18,25 @@ import XCTest
 ///     `types-engine.ts`. Drift attribution: if a future review flags
 ///     a missing iOS mirror of an EngineConfig field, the answer is
 ///     "by design"; flip back to this comment.
+///   - `LlmContentBlock` is intentionally not mirrored on iOS. The type
+///     is the wire shape carried inside `LlmMessage` payloads, which
+///     iOS never decodes (iOS consumes the higher-level normalized event
+///     stream — `engine_text_delta`, `engine_compacting`, etc.). The
+///     `compact_boundary` variant added in the gentle-knitting-cup plan
+///     surfaces on the wire through the existing `engine_compacting`
+///     event (which iOS already decodes); the typed boundary block is an
+///     engine-internal marker, not a renderer input. If a future iOS
+///     feature ever needs to walk `LlmMessage` blocks (e.g. a compaction
+///     transcript reader), add the Swift mirror at that point.
+///   - `ModelFallbackEvent` is intentionally not decoded as a live
+///     RemoteEvent on iOS. The engine emits `model_fallback` as a
+///     workflow signal at the swap site; the desktop projects it onto
+///     its session store and forwards the *fact* to iOS via the
+///     snapshot path (RemoteTabState.engineInstances[i].modelFallback).
+///     iOS reads from the snapshot only — there is no live RemoteEvent
+///     variant for this signal. If a future iOS feature needs the live
+///     event (e.g. per-instance toast notifications), add the Swift
+///     case at that point. See the grand-surfing-moth plan, §4.
 final class ContractSyncTests: XCTestCase {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -92,6 +111,7 @@ final class ContractSyncTests: XCTestCase {
                 ["toolName": "bash", "toolUseId": "tu-1"],
             ],
             "extensionName": "Chief of Staff",
+            "backgroundAgents": 2,
         ]
 
         let data = try JSONSerialization.data(withJSONObject: json)
@@ -105,7 +125,7 @@ final class ContractSyncTests: XCTestCase {
 
         // Verify we know about all Go fields (document any intentional gaps)
         let swiftHandled: Set<String> = [
-            "label", "state", "sessionId", "team", "model",
+            "backgroundAgents", "label", "state", "sessionId", "team", "model",
             "contextPercent", "contextWindow", "totalCostUsd",
             "permissionDenials", "extensionName",
         ]
@@ -135,7 +155,7 @@ final class ContractSyncTests: XCTestCase {
         """.data(using: .utf8)!
 
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .engineStatus(let tabId, _, let fields) = event {
+        if case .engineStatus(let tabId, _, let fields, _) = event {
             XCTAssertEqual(tabId, "t1")
             XCTAssertEqual(fields.label, "Running")
             XCTAssertEqual(fields.state, "running")

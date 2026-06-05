@@ -258,6 +258,9 @@ export class RemoteTransport extends EventEmitter {
   /** Encrypt and send an event to all connected devices. Returns true if sent to at least one. */
   private _sendToAll(event: RemoteEvent, push: boolean, pushTitle?: string, pushBody?: string): boolean {
     const plaintext = JSON.stringify(event)
+    if (event.type === 'snapshot') {
+      log(`snapshot payload: ${plaintext.length} bytes, ${(event as any).tabs?.length ?? 0} tabs`)
+    }
     let sentAny = false
 
     // Send to each device via its preferred transport.

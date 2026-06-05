@@ -30,7 +30,21 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
           t.id === activeTabId ? { ...t, permissionMode: mode } : t
         ),
       }))
-      window.ion.setPermissionMode(activeTabId, mode, source)
+      // Engine tabs are keyed by `tabId:instanceId` in the engine.
+      // The generic setPermissionMode path uses bare tabId which
+      // silently misses the engine session. Route through the
+      // compound-key bridge path for engine tabs.
+      const activeTab = get().tabs.find((t) => t.id === activeTabId)
+      if (activeTab?.isEngine) {
+        const pane = get().enginePanes.get(activeTabId)
+        const instanceId = pane?.activeInstanceId
+        if (instanceId) {
+          const compoundKey = `${activeTabId}:${instanceId}`
+          window.ion.engineSetPlanMode(compoundKey, mode === 'plan')
+        }
+      } else {
+        window.ion.setPermissionMode(activeTabId, mode, source)
+      }
       // Auto-switch to the plan model when entering plan mode
       const { planModelSplitEnabled, planModeModel } = usePreferencesStore.getState()
       if (planModelSplitEnabled && mode === 'plan' && planModeModel) {

@@ -110,6 +110,10 @@ type Context struct {
 	// with optional extension loading, system prompt injection, and event streaming.
 	DispatchAgent func(opts DispatchAgentOpts) (*DispatchAgentResult, error)
 
+	// RecallAgent terminates a running background dispatch by agent name.
+	// Returns true if a dispatch was found and recalled, false otherwise.
+	RecallAgent func(name string, opts RecallAgentOpts) (bool, error)
+
 	// Elicit raises an elicitation request that fans out to: (a) every
 	// connected client as an engine_elicitation_request event for UI render,
 	// and (b) the elicitation_request extension hook so other extensions can
@@ -122,6 +126,16 @@ type Context struct {
 	// matching snippets with metadata. Useful for extensions that need to
 	// recover details from earlier in the conversation.
 	SearchHistory func(query string, maxResults int) ([]HistoryMatch, error)
+
+	// GetSessionMemory returns the current session memory content for this
+	// session. Returns empty string when session memory is not active or
+	// no summary has been generated yet.
+	GetSessionMemory func() (string, error)
+
+	// SetSessionMemory replaces the session memory with custom content and
+	// persists it to disk. Extensions can use this to provide their own
+	// summarization strategies, overriding the engine's background summarizer.
+	SetSessionMemory func(content string) error
 
 	// SetPlanMode imperatively enables or disables plan mode for this session.
 	// The engine flips session state, emits PlanModeChangedEvent so consumers
@@ -178,13 +192,81 @@ type DispatchAgentOpts struct {
 	// touching global engine config.
 	MaxTurns int `json:"maxTurns,omitempty"`
 
+	// --- Plan mode ---
+
+	// PlanMode, when true, starts the child session in plan mode. The child
+	// receives a plan-mode-filtered tool set, the plan-mode system prompt,
+	// and the ExitPlanMode sentinel tool. When the child calls ExitPlanMode,
+	// the run terminates with the plan file path in the result.
+	PlanMode bool `json:"planMode,omitempty"`
+
+	// PlanFilePath overrides the plan file path for the child session. When
+	// empty and PlanMode is true, the engine allocates a fresh plan file
+	// with a word-slug name (the default behavior for any plan-mode session).
+	PlanFilePath string `json:"planFilePath,omitempty"`
+
+	// PlanModeTools overrides the set of allowed tools during plan mode for
+	// the child session. When nil/empty and PlanMode is true, the engine
+	// uses the default plan-mode tool set.
+	PlanModeTools []string `json:"planModeTools,omitempty"`
+
 	// OnEvent is called for each engine event emitted by the child session.
 	// Not serialized -- set via the host when dispatching from an extension.
 	OnEvent func(ev types.EngineEvent) `json:"-"`
+
+	// --- Background dispatch (Phase 1) ---
+
+	// Background, when true, causes the dispatch to return a stub result
+	// immediately and run the child session in a goroutine. The terminal
+	// outcome is delivered via OnComplete, OnError, or OnRecall.
+	Background bool `json:"background,omitempty"`
+
+	// OnComplete fires when a background dispatch finishes successfully
+	// (exit code 0). Not called for foreground dispatches.
+	OnComplete func(result DispatchAgentResult) `json:"-"`
+
+	// OnError fires when a background dispatch finishes with an error
+	// (non-zero exit code or child error). Not called for foreground dispatches.
+	OnError func(err DispatchError) `json:"-"`
+
+	// OnRecall fires when a background dispatch is cancelled via RecallAgent.
+	// Not called for foreground dispatches.
+	OnRecall func(info RecallInfo) `json:"-"`
+
+	// --- Lifecycle event callbacks (Phase 2) ---
+
+	// OnToolStart fires when the dispatched agent begins a tool invocation.
+	OnToolStart func(info DispatchToolStartInfo) `json:"-"`
+
+	// OnToolEnd fires when a dispatched agent's tool invocation completes
+	// successfully (IsError=false on the ToolResultEvent).
+	OnToolEnd func(info DispatchToolEndInfo) `json:"-"`
+
+	// OnToolError fires when a dispatched agent's tool invocation completes
+	// with an error (IsError=true on the ToolResultEvent).
+	OnToolError func(info DispatchToolErrorInfo) `json:"-"`
+
+	// OnUsage fires when the dispatched agent emits a usage event, carrying
+	// both the per-turn usage and cumulative totals across the dispatch.
+	OnUsage func(info DispatchUsageInfo) `json:"-"`
+
+	// OnTextDelta fires when the dispatched agent emits a text chunk,
+	// carrying the delta and accumulated text so far.
+	OnTextDelta func(info DispatchTextDeltaInfo) `json:"-"`
+
+	// --- Plan mode lifecycle callbacks ---
+
+	// OnPlanProposal fires when a dispatched agent calls ExitPlanMode,
+	// proposing a plan for approval. This callback is observational — the
+	// plan proposal event is always forwarded to the parent session via
+	// OnEvent regardless of whether this callback is set. Use it to react
+	// to proposals (e.g. log, notify, update state) without suppressing them.
+	OnPlanProposal func(info DispatchPlanProposalInfo) `json:"-"`
 }
 
 // DispatchAgentResult holds the outcome of a dispatched agent.
 type DispatchAgentResult struct {
+	Name                     string  `json:"name"`
 	Output                   string  `json:"output"`
 	ExitCode                 int     `json:"exitCode"`
 	Elapsed                  float64 `json:"elapsed"`
@@ -194,6 +276,96 @@ type DispatchAgentResult struct {
 	CacheReadInputTokens     int     `json:"cacheReadInputTokens,omitempty"`
 	CacheCreationInputTokens int     `json:"cacheCreationInputTokens,omitempty"`
 	SessionID                string  `json:"sessionId,omitempty"`
+
+	// PlanFilePath is the absolute path of the plan file written by the
+	// child session. Non-empty only when the child was in plan mode and
+	// wrote a plan (regardless of whether it called ExitPlanMode).
+	PlanFilePath string `json:"planFilePath,omitempty"`
+
+	// PlanExited is true when the child called ExitPlanMode (the run
+	// terminated because the model proposed a plan for approval). When
+	// false and PlanFilePath is non-empty, the child was in plan mode but
+	// finished without proposing (e.g. hit max turns or was recalled).
+	PlanExited bool `json:"planExited,omitempty"`
+}
+
+// DispatchError describes a failed background dispatch.
+type DispatchError struct {
+	Name     string  `json:"name"`
+	Message  string  `json:"message"`
+	ExitCode int     `json:"exitCode"`
+	Elapsed  float64 `json:"elapsed"`
+}
+
+// RecallInfo describes a recalled (cancelled) background dispatch.
+type RecallInfo struct {
+	Name      string  `json:"name"`
+	Reason    string  `json:"reason"`
+	Elapsed   float64 `json:"elapsed"`
+	ToolCount int     `json:"toolCount"`
+}
+
+// RecallAgentOpts configures a recall operation.
+type RecallAgentOpts struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// --- Phase 2: Lifecycle event callback payloads ---
+
+// DispatchToolStartInfo carries data for the OnToolStart callback.
+type DispatchToolStartInfo struct {
+	Name     string `json:"name"`
+	ToolName string `json:"toolName"`
+	ToolID   string `json:"toolId"`
+}
+
+// DispatchToolEndInfo carries data for the OnToolEnd callback.
+type DispatchToolEndInfo struct {
+	Name     string `json:"name"`
+	ToolName string `json:"toolName"`
+	ToolID   string `json:"toolId"`
+	Content  string `json:"content"`
+}
+
+// DispatchToolErrorInfo carries data for the OnToolError callback.
+type DispatchToolErrorInfo struct {
+	Name     string `json:"name"`
+	ToolName string `json:"toolName"`
+	ToolID   string `json:"toolId"`
+	Content  string `json:"content"`
+}
+
+// DispatchUsageInfo carries per-turn and cumulative usage data.
+type DispatchUsageInfo struct {
+	Name string `json:"name"`
+
+	// Per-turn usage from the current UsageEvent.
+	InputTokens  int `json:"inputTokens"`
+	OutputTokens int `json:"outputTokens"`
+
+	// Cumulative totals across all turns in this dispatch.
+	CumulativeInputTokens  int     `json:"cumulativeInputTokens"`
+	CumulativeOutputTokens int     `json:"cumulativeOutputTokens"`
+	CumulativeCost         float64 `json:"cumulativeCost"`
+}
+
+// DispatchTextDeltaInfo carries a text chunk and accumulated text.
+type DispatchTextDeltaInfo struct {
+	Name        string `json:"name"`
+	Delta       string `json:"delta"`
+	Accumulated string `json:"accumulated"`
+}
+
+// DispatchPlanProposalInfo carries data for the OnPlanProposal callback.
+type DispatchPlanProposalInfo struct {
+	Name         string `json:"name"`
+	AgentID      string `json:"agentId"`
+	PlanFilePath string `json:"planFilePath"`
+	PlanSlug     string `json:"planSlug"`
+	// PlanRequested is true when the caller explicitly set PlanMode=true
+	// on the dispatch opts. False when the child agent self-initiated
+	// plan mode (called EnterPlanMode without being told to).
+	PlanRequested bool `json:"planRequested"`
 }
 
 // DiscoverAgentsOpts configures which directories to scan for agent definitions

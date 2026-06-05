@@ -7,6 +7,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/permissions"
 	"github.com/dsswift/ion/engine/internal/recorder"
 	"github.com/dsswift/ion/engine/internal/session/agents"
+	"github.com/dsswift/ion/engine/internal/session/extcontext"
 	"github.com/dsswift/ion/engine/internal/session/pending"
 	"github.com/dsswift/ion/engine/internal/telemetry"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -38,21 +39,22 @@ type pendingPrompt struct {
 
 // engineSession holds the state for a single session managed by the Manager.
 type engineSession struct {
-	key           string
-	config        types.EngineConfig
-	requestID     string // empty when no active run
-	conversationID string
-	agents         *agents.Registry
-	extensionName  string // friendly name broadcast by the extension
-	suppressedTools    []string
-	childPIDs     map[int]struct{}
-	planMode           bool
-	planModeTools      []string
-	planFilePath       string
-	planModePromptSent bool
-	hasExitedPlanMode  bool // set when ExitPlanMode fires; enables reentry detection
-	promptQueue   []pendingPrompt
-	maxQueueDepth int // default 32
+	key                         string
+	config                      types.EngineConfig
+	requestID                   string // empty when no active run
+	conversationID              string
+	agents                      *agents.Registry
+	extensionName               string // friendly name broadcast by the extension
+	suppressedTools             []string
+	childPIDs                   map[int]struct{}
+	planMode                    bool
+	planModeTools               []string
+	planModeAllowedBashCommands []string
+	planFilePath                string
+	planModePromptSent          bool
+	hasExitedPlanMode           bool // set when ExitPlanMode fires; enables reentry detection
+	promptQueue                 []pendingPrompt
+	maxQueueDepth               int // default 32
 
 	// Wired subsystems (populated in StartSession)
 	extGroup     *extension.ExtensionGroup
@@ -108,8 +110,8 @@ type engineSession struct {
 	agentCounter int
 
 	// CLI backend turn tracking (populated by handleNormalizedEvent)
-	cliTurnNumber  int  // current turn number for CLI runs
-	cliTurnActive  bool // true between turn_start and turn_end
+	cliTurnNumber int  // current turn number for CLI runs
+	cliTurnActive bool // true between turn_start and turn_end
 
 	// CLI backend message_update text accumulator. TextChunkEvent deltas are
 	// appended here; on turn_end the accumulated content fires the
@@ -128,6 +130,16 @@ type engineSession struct {
 	// ToolCallUpdateEvent carries ToolID: "" (content_block_delta has no toolID),
 	// so accumulation falls back to this field to key under the correct toolID.
 	cliLastToolID string
+
+	// dispatchRegistry tracks active background dispatches for this session.
+	// Used by RecallAgent to cancel running background agents, and by the
+	// dispatch completion callback to deregister finished dispatches.
+	// Initialized in StartSession, nil-safe (code that creates ext contexts
+	// passes it through variadic).
+	dispatchRegistry *extcontext.DispatchRegistry
+
+	// sessionMemory maintains a background summary of the conversation for
+	// zero-cost compaction recovery. Created in StartSession, nil when the
+	// feature is not enabled or the session has no conversation ID.
+	sessionMemory *SessionMemory
 }
-
-

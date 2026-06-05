@@ -96,13 +96,6 @@ export function useTabRestoration() {
             window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
             if (st.draftInput) console.log(`[restore] draft for tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
           } else if (st.isEngine) {
-            // Engine tab — full restoration logic is extracted to
-            // useTabRestoration-engine.ts to keep this file under the
-            // 600-line cap. Returns the new tabId (used by the
-            // historical-message loop below; engine tabs don't have
-            // historicalSessionIds so the new id appears in
-            // restoredTabIds but gets skipped by the loop's
-            // `historicalIds.length > 0` guard).
             restoreEngineTab(st, restoredTabIds, i)
           } else if (st.isTerminalOnly) {
             // Terminal-only tab
@@ -379,6 +372,18 @@ export function useTabRestoration() {
             h: Math.max(180, g.h),
           }
           useSessionStore.setState({ planGeometry: clampedGeo })
+        }
+
+        // Restore global agent detail popup geometry (clamped to current screen)
+        if (saved.agentDetailGeometry) {
+          const g = saved.agentDetailGeometry
+          const clampedGeo = {
+            x: Math.max(-200, Math.min(window.innerWidth - 100, g.x)),
+            y: Math.max(0, Math.min(window.innerHeight - 32, g.y)),
+            w: Math.max(280, g.w),
+            h: Math.max(180, g.h),
+          }
+          useSessionStore.setState({ agentDetailGeometry: clampedGeo })
         }
 
         // Restore expanded/collapsed state, or fall back to setting

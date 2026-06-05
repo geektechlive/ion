@@ -283,7 +283,7 @@ func (h *HybridBackend) OnExit(fn func(string, *int, *string, string)) {
 	h.onExit = fn
 }
 
-// fanOutNormalized is registered on both inner backends. It forwards
+// fanOutNormalized is registered on all inner backends. It forwards
 // normalized events to the outer handler set via OnNormalized.
 func (h *HybridBackend) fanOutNormalized(runID string, ev types.NormalizedEvent) {
 	h.hookMu.RLock()
@@ -294,7 +294,7 @@ func (h *HybridBackend) fanOutNormalized(runID string, ev types.NormalizedEvent)
 	}
 }
 
-// fanOutError is registered on both inner backends. It forwards run errors
+// fanOutError is registered on all inner backends. It forwards run errors
 // to the outer handler set via OnError.
 func (h *HybridBackend) fanOutError(runID string, err error) {
 	h.hookMu.RLock()
@@ -305,7 +305,7 @@ func (h *HybridBackend) fanOutError(runID string, err error) {
 	}
 }
 
-// fanOutExit is registered on both inner backends. It prunes the routing
+// fanOutExit is registered on all inner backends. It prunes the routing
 // table for the exiting run before forwarding to the outer handler set
 // via OnExit. The prune happens unconditionally so the table never leaks
 // — even if the manager has not registered an OnExit handler.

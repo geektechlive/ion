@@ -128,15 +128,55 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                     if (ws === null && hasPlanReady) ws = 'plan-ready';
                   }
                 }
-                return { id: inst.id, label: inst.label, waitingState: ws };
+                // Per-instance running state so iOS EngineInstanceBar can
+                // show a pulsing dot on each running sub-tab. Parallels the
+                // waitingState derivation above.
+                var instRunning = false;
+                if (s.engineStatusFields && s.engineStatusFields.get) {
+                  var sf = s.engineStatusFields.get(t.id + ':' + inst.id);
+                  if (sf) {
+                    var st = sf.state;
+                    instRunning = st === 'running' || st === 'connecting' || st === 'starting';
+                  }
+                }
+                // Per-instance model-fallback indicator. Projects the
+                // renderer's engineModelFallbacks map onto each instance
+                // so iOS can render a matching ⚠ glyph on its
+                // EngineInstanceBar. The desktop populates the source
+                // map from engine_model_fallback events; we forward only
+                // the requested + fallback model strings (no timestamp,
+                // no reason — iOS doesn't need them to render the
+                // indicator). When iOS's snapshot pull arrives with the
+                // field omitted, the iOS indicator clears — matching the
+                // desktop's clear-on-idle behaviour via the snapshot tick.
+                // See CLAUDE.md § "Common parity surfaces" row for model
+                // fallback indicator.
+                var mfOut = undefined;
+                if (s.engineModelFallbacks && s.engineModelFallbacks.get) {
+                  var mf = s.engineModelFallbacks.get(t.id + ':' + inst.id);
+                  if (mf) {
+                    mfOut = { requestedModel: mf.requestedModel, fallbackModel: mf.fallbackModel };
+                  }
+                }
+                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, modelFallback: mfOut };
               });
               activeEngineInstanceId = ePaneForList.activeInstanceId || ePaneForList.instances[0].id;
+            }
+            // Aggregate running state across all engine instances so the
+            // iOS tab-list dot pulses when ANY instance is running, even
+            // if the active instance is idle. Parallels the desktop's
+            // isAnyEngineInstanceRunning helper in TabStripShared.ts.
+            var anyInstanceRunning = false;
+            if (engineInstances) {
+              for (var ei = 0; ei < engineInstances.length; ei++) {
+                if (engineInstances[ei].isRunning) { anyInstanceRunning = true; break; }
+              }
             }
             return {
               id: t.id,
               title: t.title,
               customTitle: t.customTitle,
-              status: t.status,
+              status: (t.isEngine && anyInstanceRunning && t.status !== 'running' && t.status !== 'connecting') ? 'running' : t.status,
               workingDirectory: t.workingDirectory,
               permissionMode: t.permissionMode,
               permissionQueue: queue,
@@ -152,8 +192,11 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               groupId: t.groupId || null,
               modelOverride: t.modelOverride || null,
               groupPinned: t.groupPinned || false,
+              conversationId: t.conversationId || null,
               lastMessageContent: lastMsg,
               lastActivityTs: lastTs || 0,
+              pillColor: t.pillColor || null,
+              pillIcon: t.pillIcon || null,
             };
           });
         } catch(e) { return []; }
@@ -212,7 +255,10 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
         groupId: t.groupId || null,
         modelOverride: t.modelOverride || null,
         groupPinned: t.groupPinned || false,
+        conversationId: t.conversationId || undefined,
         lastActivityAt: t.lastActivityTs || undefined,
+        pillColor: t.pillColor || null,
+        pillIcon: t.pillIcon || null,
       }))
 
     mapped.sort((a, b) => {

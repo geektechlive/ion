@@ -82,13 +82,24 @@ extension SessionViewModel {
     }
 
     @MainActor
-    func handleEngineCommandRegistry(tabId: String, commands: [EngineCommandListing]) {
-        // Snapshot semantics: replace the cached set wholesale.
-        // Empty array = no extension commands for this session.
-        let mapped = commands.map {
-            DiscoveredSlashCommand(name: $0.name, description: $0.description ?? "", scope: "engine", source: "engine")
+    func handleEngineCommandRegistry(tabId: String, instanceId: String?, commands: [EngineCommandListing]) {
+        // Complete snapshot of slash commands exposed by the session's loaded
+        // extensions. Snapshot semantics: the payload is a REPLACE-style
+        // snapshot, not an incremental update. Empty `commands: []` is the
+        // authoritative "no extension commands for this session" signal.
+        // See docs/architecture/agent-state.md for the canonical
+        // snapshot-replace pattern.
+        let key: String
+        if let instId = instanceId, !instId.isEmpty {
+            key = "\(tabId):\(instId)"
+        } else {
+            key = tabId
         }
-        engineCommandsByTab[tabId] = mapped
+        if commands.isEmpty {
+            extensionCommands.removeValue(forKey: key)
+        } else {
+            extensionCommands[key] = commands
+        }
     }
 
     @MainActor

@@ -41,9 +41,11 @@ const mocks = vi.hoisted(() => {
   const broadcastMock = (globalThis as any).vi?.fn?.() ?? function () {}
   const expandSlashMock = (globalThis as any).vi?.fn?.() ?? function () {}
   const clearConversationFileMock = (globalThis as any).vi?.fn?.()?.mockResolvedValue?.(undefined) ?? function () { return Promise.resolve() }
-  // getTabStatusMock: returns a tab-like object. Default: no conversationId.
-  // Override in tests to simulate a loaded-but-not-started conversation.
-  const getTabStatusMock = (globalThis as any).vi?.fn?.()?.mockReturnValue?.({ conversationId: null }) ?? function () { return { conversationId: null } }
+  // getTabStatusMock: returns a tab-like object. Default: fresh tab (no
+  // conversationId, no prompts since checkpoint). Override in tests to
+  // simulate a loaded-but-not-started conversation or a mid-checkpoint tab.
+  const getTabStatusMock = (globalThis as any).vi?.fn?.()?.mockReturnValue?.({ conversationId: null, promptCountSinceCheckpoint: 0 }) ?? function () { return { conversationId: null, promptCountSinceCheckpoint: 0 } }
+  const notifyConversationClearedMock = (globalThis as any).vi?.fn?.() ?? function () {}
   return {
     bridgeListeners,
     sendCommandMock,
@@ -56,6 +58,7 @@ const mocks = vi.hoisted(() => {
     expandSlashMock,
     clearConversationFileMock,
     getTabStatusMock,
+    notifyConversationClearedMock,
   }
 })
 
@@ -70,7 +73,8 @@ mocks.executeJsMock = vi.fn().mockResolvedValue(null)
 mocks.broadcastMock = vi.fn()
 mocks.expandSlashMock = vi.fn().mockResolvedValue({ expanded: false })
 mocks.clearConversationFileMock = vi.fn().mockResolvedValue(undefined)
-mocks.getTabStatusMock = vi.fn().mockReturnValue({ conversationId: null })
+mocks.getTabStatusMock = vi.fn().mockReturnValue({ conversationId: null, promptCountSinceCheckpoint: 0 })
+mocks.notifyConversationClearedMock = vi.fn()
 
 function emitBridgeEvent(key: string, event: any): void {
   const arr = mocks.bridgeListeners.get('event') ?? []
@@ -101,6 +105,11 @@ vi.mock('../state', () => {
       // getTabStatus delegates through getTabStatusMock so individual tests
       // can override the returned tab object (e.g. to set a conversationId).
       getTabStatus: (...args: any[]) => mocks.getTabStatusMock(...args),
+      // notifyConversationCleared is invoked by the /clear short-circuit and
+      // by event-wiring on engine-side /clear success. Most tests do not
+      // assert on it, but it must exist on the mock so /clear-related tests
+      // do not blow up on a missing function.
+      notifyConversationCleared: (...args: any[]) => mocks.notifyConversationClearedMock(...args),
     },
     engineBridge: mockEngineBridge,
     extensionCommandRegistry: new Map(),
@@ -134,6 +143,7 @@ vi.mock('../remote/attachment-encoder', () => ({
 // Pull in the SUT AFTER mocks are set up.
 import { processIncomingPrompt } from '../prompt-pipeline'
 import { _resetAwaitersForTests } from '../command-await'
+import { TURN_GROUPING_GUIDANCE } from '../turn-grouping-guidance'
 
 // ───────────────────────────────────────────────────────────────────────────
 // Test fixtures
@@ -152,7 +162,8 @@ beforeEach(() => {
   mocks.broadcastMock.mockReset()
   mocks.expandSlashMock.mockReset().mockResolvedValue({ expanded: false })
   mocks.clearConversationFileMock.mockReset().mockResolvedValue(undefined)
-  mocks.getTabStatusMock.mockReset().mockReturnValue({ conversationId: null })
+  mocks.getTabStatusMock.mockReset().mockReturnValue({ conversationId: null, promptCountSinceCheckpoint: 0 })
+  mocks.notifyConversationClearedMock.mockReset()
   mocks.bridgeListeners.clear()
   _resetAwaitersForTests()
   mocks.sendCommandMock.mockImplementation((key: string, command: string, _args: string) => {
@@ -254,7 +265,7 @@ describe('processIncomingPrompt — slash, engine reports unknown, .md falls bac
   })
 
   it('expands via .md and submits the expansion as a normal prompt', async () => {
-    mocks.expandSlashMock.mockResolvedValue({ expanded: true, systemPrompt: 'sys', userPrompt: 'expanded body' })
+    mocks.expandSlashMock.mockResolvedValue({ expanded: true, systemPrompt: 'sys', userPrompt: 'expanded body', frontmatter: {} })
     const opts: any = { prompt: '/ion--review 138', projectPath: '/proj' }
     await processIncomingPrompt({
       tabId: 'tab-1',
@@ -266,16 +277,22 @@ describe('processIncomingPrompt — slash, engine reports unknown, .md falls bac
       runOptions: opts,
     })
     expect(mocks.sendCommandMock).toHaveBeenCalledWith('tab-1', 'ion--review', '138')
-    expect(mocks.expandSlashMock).toHaveBeenCalledWith('/ion--review 138', '/proj')
+    expect(mocks.expandSlashMock).toHaveBeenCalledWith('/ion--review 138', '/proj', 'ion')
     // Pipeline should mutate runOptions and then submit it.
     expect(opts.prompt).toBe('expanded body')
-    expect(opts.appendSystemPrompt).toBe('sys')
+    // The CLI dispatch path runs applyHarnessSystemPromptAddenda, which
+    // appends the turn-grouping guidance to runOptions.appendSystemPrompt.
+    // The expansion-supplied "sys" remains as the prefix.
+    expect(opts.appendSystemPrompt).toMatch(/^sys\n\nTool calls are not rendered inline/)
+    expect(opts.appendSystemPrompt).toBe(`sys\n\n${TURN_GROUPING_GUIDANCE}`)
     expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
     expect(mocks.submitPromptMock).toHaveBeenCalledWith('tab-1', 'req-6', opts)
   })
 
   it('auto-switches permission mode to auto on .md expansion', async () => {
-    mocks.expandSlashMock.mockResolvedValue({ expanded: true, systemPrompt: 'sys', userPrompt: 'expanded' })
+    // Explicitly set first-prompt state so the guard allows the switch.
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, conversationId: null })
+    mocks.expandSlashMock.mockResolvedValue({ expanded: true, systemPrompt: 'sys', userPrompt: 'expanded', frontmatter: {} })
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: '/ion--review 138',
@@ -286,6 +303,9 @@ describe('processIncomingPrompt — slash, engine reports unknown, .md falls bac
     })
     expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
   })
+  // Additional plan→auto guard tests (active conversation, resumed session)
+  // live in prompt-pipeline-plan-mode.test.ts to keep this file under the
+  // 600-line cap.
 })
 
 describe('processIncomingPrompt — slash, engine reports unknown, no .md', () => {
@@ -393,7 +413,7 @@ describe('processIncomingPrompt — engine reports unknown_command, .md template
     mocks.sendCommandMock.mockImplementation((key: string, command: string) => {
       setTimeout(() => emitBridgeEvent(key, { type: 'engine_command_result', command, commandError: 'unknown_command', message: `unknown command: ${command}` }), 0)
     })
-    mocks.expandSlashMock.mockResolvedValue({ expanded: true, systemPrompt: 'Review changes', userPrompt: 'Please review PRs 138, 139' })
+    mocks.expandSlashMock.mockResolvedValue({ expanded: true, systemPrompt: 'Review changes', userPrompt: 'Please review PRs 138, 139', frontmatter: {} })
   })
 
   it('passes projectPath through to expandSlashCommand', async () => {
@@ -405,7 +425,7 @@ describe('processIncomingPrompt — engine reports unknown_command, .md template
       isEngineTab: false,
       projectPath: '/Users/me/proj',
     })
-    expect(mocks.expandSlashMock).toHaveBeenCalledWith('/ion--review-changes 138,139', '/Users/me/proj')
+    expect(mocks.expandSlashMock).toHaveBeenCalledWith('/ion--review-changes 138,139', '/Users/me/proj', 'ion')
   })
 
   it('submits the expansion via REMOTE_USER_MESSAGE for remote-source CLI tabs', async () => {
@@ -452,6 +472,10 @@ describe('processIncomingPrompt — engine tab', () => {
     }))
   })
 })
+
+// Harness system-prompt addenda (turn-grouping guidance) tests live in
+// `prompt-pipeline-addenda.test.ts` to keep this file under the 600-line
+// TypeScript cap. See CLAUDE.md → "When a file exceeds the cap".
 
 describe('processIncomingPrompt — /clear with no engine session (unknown_command short-circuit)', () => {
   // Regression guard: /clear on a fresh tab (no prior prompt → no engine session)
@@ -521,8 +545,10 @@ describe('processIncomingPrompt — /clear with no engine session (unknown_comma
       runOptions: { prompt: '/no-such-command' } as any,
     })
     // .md expansion was attempted (then failed), so the unknown-command
-    // system message was emitted — NOT the divider.
-    expect(mocks.expandSlashMock).toHaveBeenCalledTimes(1)
+    // system message was emitted — NOT the divider. Two calls: ion scope
+    // first (always), then claude scope (gated, but enableClaudeCompat
+    // defaults to true in the mock settings).
+    expect(mocks.expandSlashMock).toHaveBeenCalledTimes(2)
     const calls = mocks.executeJsMock.mock.calls.map((c: any[]) => c[0] as string)
     expect(calls.some((s: string) => s.includes('Unknown command: /no-such-command'))).toBe(true)
     expect(calls.every((s: string) => !s.includes('── Cleared'))).toBe(true)

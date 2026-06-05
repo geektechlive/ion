@@ -43,9 +43,26 @@ export function registerSessionsListIpc(): void {
       try {
         const s = readSettings()
         claudeCompat = s.enableClaudeCompat ?? claudeCompat
-      } catch {}
-      if (!claudeCompat) return []
-      return await discoverCommands(projectPath)
+      } catch (err) {
+        // Per desktop/AGENTS.md "no silent catch": surface the fallback so
+        // a settings-read failure doesn't silently change the autocomplete
+        // composition. The default flips claude-compat ON, so this matters.
+        log(`DISCOVER_COMMANDS: readSettings failed reading enableClaudeCompat; defaulting to ${claudeCompat}: ${err}`)
+      }
+      const all = await discoverCommands(projectPath)
+      if (claudeCompat) {
+        log(`DISCOVER_COMMANDS: claudeCompat=true, returning ${all.length} entries (ion + claude)`)
+        return all
+      }
+      // Claude Code Compatibility off: return only ion-native entries.
+      // Ion-native commands (~/.ion/commands, {project}/.ion/commands) are
+      // never gated by this setting — only .claude/commands and
+      // .claude/skills are. See `slash-classify.ts` for the matching
+      // expansion-time gate.
+      const ionOnly = all.filter((c) => c.origin === 'ion')
+      const claudeFiltered = all.length - ionOnly.length
+      log(`DISCOVER_COMMANDS: claudeCompat=false, returning ${ionOnly.length} ion entries, filtered ${claudeFiltered} claude entries`)
+      return ionOnly
     } catch (err) {
       log(`DISCOVER_COMMANDS error: ${err}`)
       return []

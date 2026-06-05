@@ -149,7 +149,34 @@ export interface Message {
   autoExpandResult?: boolean
   /** File or plan attachments associated with this message */
   attachments?: Attachment[]
+  /**
+   * Optional dedup key carried verbatim from
+   * `engine_harness_message.metadata.dedupKey`. The renderer uses it to
+   * suppress repeated emissions in the same engine-instance scrollback —
+   * if a `role: 'harness'` message with this key already exists in the
+   * key's message list, the new event is dropped instead of pushed.
+   * Persists with the message so dedup survives app restart and rehydrate.
+   * Other roles ignore this field; only harness messages opt in.
+   * Convention: `<extensionName>:<messageKey>` (e.g. `ion-meta:welcome`).
+   * See engine-event-slice.ts for the consumer logic and
+   * docs/protocol/server-events.md for the well-known-keys table.
+   */
+  dedupKey?: string
+  /**
+   * Path to the plan file associated with a plan-created divider message.
+   * Populated only on `role: 'system'` messages whose content starts with
+   * `── Plan created`. The renderer uses it to make the plan slug clickable
+   * (opens the plan preview, same as clicking a plan in the attachment drawer).
+   * Client-only field — NOT part of the Go contract or wire protocol.
+   */
+  planFilePath?: string
   timestamp: number
+  /**
+   * Local UI state only -- NOT a wire protocol field, NOT persisted.
+   * Set to true by engine_message_end so the next engine_text_delta
+   * opens a fresh assistant message instead of appending to this one.
+   */
+  sealed?: boolean
 }
 
 export interface RunResult {

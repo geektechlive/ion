@@ -123,21 +123,44 @@ sdk.FireAgentEnd(ctx, AgentInfo{Name: "worker", Task: "test"})
 ```go
 sdk.FireSessionBeforeCompact(ctx, CompactionInfo{...}) // returns (cancelled bool, error)
 
-// session_compact fires after compaction completes. CompactionInfo.Facts
-// carries structured snippets the engine extracted from the pre-compaction
-// message set ({Type, Content} pairs). Extensions maintaining external memory
-// (vector store, knowledge graph, SQLite) can persist these durably before
-// the source messages are discarded. Facts may be empty when no patterns
-// matched.
+// session_compact fires after compaction completes. CompactionInfo carries
+// token-level metrics (TokensBefore, TokenLimit, TargetTokens, TokensAfter),
+// the MicroCompactKeep setting, and structured Facts the engine extracted
+// from the pre-compaction message set ({Type, Content} pairs). Extensions
+// maintaining external memory (vector store, knowledge graph, SQLite) can
+// persist these durably before the source messages are discarded. Facts may
+// be empty when no patterns matched.
 sdk.FireSessionCompact(ctx, CompactionInfo{
-    Strategy:       "auto",
-    MessagesBefore: 50,
-    MessagesAfter:  10,
+    Strategy:         "auto",
+    MessagesBefore:   50,
+    MessagesAfter:    10,
+    TokensBefore:     180000,
+    TokenLimit:       100000,
+    TargetTokens:     100000,
+    MicroCompactKeep: 3,
+    TokensAfter:      95000,
     Facts: []CompactionFact{
         {Type: "decision", Content: "decided to use SQLite"},
         {Type: "file_mod", Content: "/Users/foo/project/main.go"},
     },
 })
+
+// compact_summary_request fires inside proactive (auto) and reactive
+// (prompt_too_long) compaction, after the session-memory and LLM tiers
+// and before the regex fallback. Substitute a harness-side summariser
+// for the engine's regex fact extractor by registering a handler that
+// returns a non-empty string; an empty return falls through to the
+// regex path. Branch on Strategy ("auto" | "reactive") to tune the
+// summariser to the trigger — reactive summaries should be aggressive
+// (fewer tokens) because the provider just rejected the prompt; auto
+// summaries can afford a richer rendering. The engine never blocks on
+// the handler; wrap LLM calls in a bounded timeout and return ("",
+// false) on failure rather than blocking the run.
+summary, ok := sdk.FireCompactSummaryRequest(ctx, CompactSummaryRequestInfo{
+    Strategy:     "auto",
+    MessageCount: len(messages),
+    Messages:     messages,
+}) // returns (summary string, ok bool); ok=false means "fall back to regex"
 
 sdk.FireSessionBeforeFork(ctx, ForkInfo{...})           // returns (cancelled bool, error)
 sdk.FireSessionFork(ctx, ForkInfo{...})
@@ -325,6 +348,10 @@ type HistoryMatch struct {
 
 Searches the full persisted record (including pre-compaction messages), not just the currently-loaded context. Useful for recall commands and harness-side memory features.
 
+**`GetSessionMemory()`** -- returns the current session memory content. Empty string when not active.
+
+**`SetSessionMemory(content)`** -- replaces the session memory with custom content and persists it to disk.
+
 **`SetPlanMode(enabled, source)`** -- imperatively flip the session's plan mode on or off. `source` is a free-form audit string (`"slash_command"`, `"hook"`, `"user_approval"`, etc.) that is logged with the transition. Fires `engine_plan_mode_changed` as a state event — this is a confirmed transition, not a proposal. See [ADR-003](../architecture/adr/003-state-events-vs-workflow-events.md) for the state-vs-workflow distinction.
 
 **`GetPlanMode()`** -- returns the current plan-mode state and (if active) the path to the plan file. Reads the session manager's authoritative state, not any cached value.
@@ -398,20 +425,25 @@ type ToolResult struct {
 
 ```go
 type DispatchAgentOpts struct {
-    Name         string `json:"name"`
-    Task         string `json:"task"`
-    Model        string `json:"model,omitempty"`
-    ExtensionDir string `json:"extensionDir,omitempty"`
-    SystemPrompt string `json:"systemPrompt,omitempty"`
-    ProjectPath  string `json:"projectPath,omitempty"`
-    SessionID    string `json:"sessionId,omitempty"`
-    MaxTurns     int    `json:"maxTurns,omitempty"` // cap child loop turns; <=0 means unlimited
+    Name          string   `json:"name"`
+    Task          string   `json:"task"`
+    Model         string   `json:"model,omitempty"`
+    ExtensionDir  string   `json:"extensionDir,omitempty"`
+    SystemPrompt  string   `json:"systemPrompt,omitempty"`
+    ProjectPath   string   `json:"projectPath,omitempty"`
+    SessionID     string   `json:"sessionId,omitempty"`
+    MaxTurns      int      `json:"maxTurns,omitempty"`      // cap child loop turns; <=0 means unlimited
+    PlanMode      bool     `json:"planMode,omitempty"`      // start child in plan mode
+    PlanFilePath  string   `json:"planFilePath,omitempty"`  // override plan file path
+    PlanModeTools []string `json:"planModeTools,omitempty"` // override allowed tools during plan mode
 }
 
 type DispatchAgentResult struct {
-    Output   string  `json:"output"`
-    ExitCode int     `json:"exitCode"`
-    Elapsed  float64 `json:"elapsed"`
+    Output       string  `json:"output"`
+    ExitCode     int     `json:"exitCode"`
+    Elapsed      float64 `json:"elapsed"`
+    PlanFilePath string  `json:"planFilePath,omitempty"` // plan file written by child
+    PlanExited   bool    `json:"planExited,omitempty"`   // true when child called ExitPlanMode
 }
 ```
 

@@ -9,6 +9,12 @@ struct EngineInstanceBar: View {
     @Environment(SessionViewModel.self) private var viewModel
     @State private var renamingInstance: EngineInstanceInfo? = nil
     @State private var renameText: String = ""
+    /// When non-nil, surfaces a small alert describing the model-fallback
+    /// for the corresponding instance — tapped by the user on the ⚠
+    /// glyph rendered in `instanceButton`. iOS has no tooltip primitive
+    /// equivalent to the desktop's Tooltip component, so an alert is the
+    /// idiomatic disclosure surface for this kind of one-shot detail.
+    @State private var fallbackDetail: (instanceLabel: String, info: EngineInstanceModelFallback)? = nil
 
     /// Other engine tabs the active instance can be moved to.
     private var moveTargets: [RemoteTabState] {
@@ -41,6 +47,22 @@ struct EngineInstanceBar: View {
         } message: {
             Text("Enter a new name for this instance")
         }
+        // Model-fallback disclosure alert. Triggered when the user taps
+        // the ⚠ glyph rendered next to an instance label in
+        // `instanceButton`. Shows the requested vs. fallback model
+        // names so the user understands which model is actually running.
+        // The indicator clears on its own when the run completes (idle
+        // transition propagates through the next snapshot tick).
+        .alert("Model fallback", isPresented: Binding(
+            get: { fallbackDetail != nil },
+            set: { if !$0 { fallbackDetail = nil } }
+        )) {
+            Button("OK", role: .cancel) { fallbackDetail = nil }
+        } message: {
+            if let detail = fallbackDetail {
+                Text("Instance \"\(detail.instanceLabel)\" requested model \"\(detail.info.requestedModel)\" which isn't configured; running with default \"\(detail.info.fallbackModel)\" instead.")
+            }
+        }
     }
 
     @ViewBuilder
@@ -49,22 +71,48 @@ struct EngineInstanceBar: View {
             viewModel.selectEngineInstance(tabId: tabId, instanceId: instance.id)
         } label: {
             HStack(spacing: 4) {
-                // Per-instance waiting-state dot. Desktop maps the value
-                // to "question" (AskUserQuestion pending) or "plan-ready"
-                // (ExitPlanMode pending) per the snapshot contract. Color
-                // and semantic priority mirror the desktop palette
-                // (yellow/orange for question, green for plan-ready).
-                // When nil, no dot is shown.
+                // Per-instance status dot. Priority:
+                // 1. waitingState (question → blue, plan-ready → green)
+                //    Colors match TabRowView.statusInfo and desktop
+                //    EngineStatusBar palette: blue (#4A9EF5) for question,
+                //    green for plan-ready.
+                // 2. isRunning → pulsing orange (matches tab-list running dot)
+                // 3. Neither → no dot shown
                 if let ws = instance.waitingState {
                     Circle()
-                        .fill(ws == "question" ? Color.orange : Color.green)
+                        .fill(ws == "question" ? Color(hex: 0x4A9EF5) : Color.green)
                         .frame(width: 6, height: 6)
+                } else if instance.isRunning == true {
+                    InstancePulsingDot()
                 }
                 Image(systemName: "bolt")
                     .font(.caption2)
                 Text(instance.label)
                     .font(.caption)
                     .lineLimit(1)
+
+                // Model-fallback indicator. The desktop populates
+                // `EngineInstanceInfo.modelFallback` via the snapshot
+                // projection (see snapshot.ts) when the engine emitted
+                // a ModelFallbackEvent for this instance's most recent
+                // run. Rendered as a small ⚠ glyph in the same pill;
+                // tapping opens an alert with the requested + fallback
+                // model names. The indicator clears on its own when the
+                // run goes idle (the desktop's clear-on-idle propagates
+                // through the next snapshot tick). Per CLAUDE.md §
+                // "Common parity surfaces", iOS shows the same signal
+                // as desktop EngineStatusBar.
+                if let fb = instance.modelFallback {
+                    Button {
+                        fallbackDetail = (instanceLabel: instance.label, info: fb)
+                    } label: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color(hex: 0x4A9EF5))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Model fallback active for \(instance.label)")
+                }
 
                 if instances.count > 1 {
                     Button {
@@ -87,6 +135,19 @@ struct EngineInstanceBar: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            // -- Clipboard actions --
+            let instanceKey = "\(tabId):\(instance.id)"
+            if let sessionId = viewModel.engineStatusFields[instanceKey]?.sessionId {
+                Button {
+                    UIPasteboard.general.string = sessionId
+                    viewModel.showToast(ToastMessage(style: .success, title: "Session ID copied"))
+                } label: {
+                    Label("Copy Session ID", systemImage: "doc.on.doc")
+                }
+                Divider()
+            }
+
+            // -- Instance management --
             Button {
                 renamingInstance = instance
                 renameText = instance.label
@@ -111,5 +172,26 @@ struct EngineInstanceBar: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - InstancePulsingDot
+
+/// Small pulsing orange dot for running engine instances. Matches the
+/// pulse animation from `TabRowView` (1.5s easeInOut, opacity 1→0.3).
+private struct InstancePulsingDot: View {
+    @Environment(\.appTheme) private var theme
+    @State private var pulseOpacity: Double = 1.0
+
+    var body: some View {
+        Circle()
+            .fill(theme.statusRunning)
+            .frame(width: 6, height: 6)
+            .opacity(pulseOpacity)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                    pulseOpacity = 0.3
+                }
+            }
     }
 }

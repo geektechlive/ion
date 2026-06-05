@@ -27,9 +27,17 @@ func BuildDiscoverAgentsFunc(sa SessionAccessor) func(extension.DiscoverAgentsOp
 		sourceMap := make(map[string]string) // dir -> source label
 
 		home, _ := os.UserHomeDir()
-		extDir := ""
-		if cfg := sa.ExtConfig(); cfg != nil {
-			extDir = cfg.ExtensionDir
+
+		// Collect extension directories from all hosts in the group.
+		// Each host knows its own ExtensionDir from Load(); the session-wide
+		// ExtConfig() omits it because a session can have multiple extensions.
+		var extDirs []string
+		if eg := sa.ExtGroup(); eg != nil {
+			for _, host := range eg.Hosts() {
+				if d := host.ExtensionDir(); d != "" {
+					extDirs = append(extDirs, d)
+				}
+			}
 		}
 
 		cwd := sa.WorkingDirectory()
@@ -38,9 +46,15 @@ func BuildDiscoverAgentsFunc(sa SessionAccessor) func(extension.DiscoverAgentsOp
 			var dir string
 			switch src {
 			case "extension":
-				if extDir != "" {
-					dir = filepath.Join(extDir, "agents")
+				for _, ed := range extDirs {
+					d := filepath.Join(ed, "agents")
+					if opts.BundleName != "" {
+						d = filepath.Join(d, opts.BundleName)
+					}
+					dirs = append(dirs, d)
+					sourceMap[d] = src
 				}
+				continue
 			case "user":
 				if home != "" {
 					dir = filepath.Join(home, ".ion", "agents")

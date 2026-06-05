@@ -22,13 +22,23 @@ extension RemoteCommand {
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
-        case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments):
+        case .resetTabSession(let tabId):
+            try container.encode(TypeKey.resetTabSession, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+
+        case .resetEngineSession(let tabId, let instanceId):
+            try container.encode(TypeKey.resetEngineSession, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(instanceId, forKey: .instanceId)
+
+        case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments, let implementationPhase):
             try container.encode(TypeKey.prompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(origin, forKey: .origin)
             try container.encodeIfPresent(clientMsgId, forKey: .clientMsgId)
             try container.encodeIfPresent(attachments, forKey: .attachments)
+            try container.encodeIfPresent(implementationPhase, forKey: .implementationPhase)
         case .cancel(let tabId):
             try container.encode(TypeKey.cancel, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -110,12 +120,13 @@ extension RemoteCommand {
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
             try container.encodeIfPresent(profileId, forKey: .profileId)
 
-        case .enginePrompt(let tabId, let text, let instanceId, let attachments):
+        case .enginePrompt(let tabId, let text, let instanceId, let attachments, let implementationPhase):
             try container.encode(TypeKey.enginePrompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             try container.encodeIfPresent(attachments, forKey: .attachments)
+            try container.encodeIfPresent(implementationPhase, forKey: .implementationPhase)
 
         case .engineAbort(let tabId, let instanceId):
             try container.encode(TypeKey.engineAbort, forKey: .type)
@@ -159,6 +170,10 @@ extension RemoteCommand {
             try container.encode(TypeKey.loadEngineConversation, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
+
+        case .loadAgentConversation(let conversationIds):
+            try container.encode(TypeKey.loadAgentConversation, forKey: .type)
+            try container.encode(conversationIds, forKey: .conversationIds)
 
         case .setTabGroupMode(let mode):
             try container.encode(TypeKey.setTabGroupMode, forKey: .type)
@@ -275,6 +290,11 @@ extension RemoteCommand {
             try container.encode(filePath, forKey: .filePath)
             try container.encode(content, forKey: .content)
 
+        case .fsRename(let oldPath, let newPath):
+            try container.encode(TypeKey.fsRename, forKey: .type)
+            try container.encode(oldPath, forKey: .oldPath)
+            try container.encode(newPath, forKey: .newPath)
+
         case .discoverCommands(let directory):
             try container.encode(TypeKey.discoverCommands, forKey: .type)
             try container.encode(directory, forKey: .directory)
@@ -325,6 +345,27 @@ extension RemoteCommand {
             try container.encode(TypeKey.setDesktopSetting, forKey: .type)
             try container.encode(key, forKey: .key)
             try container.encode(value, forKey: .value)
+
+        case .setPillColor(let tabId, let pillColor):
+            try container.encode(TypeKey.setPillColor, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            // Encode null explicitly (not absent) so the desktop can distinguish
+            // "reset to default" from "field omitted" — matches the setRemoteDisplay
+            // null-encoding pattern.
+            if let pillColor {
+                try container.encode(pillColor, forKey: .pillColor)
+            } else {
+                try container.encodeNil(forKey: .pillColor)
+            }
+
+        case .setPillIcon(let tabId, let pillIcon):
+            try container.encode(TypeKey.setPillIcon, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            if let pillIcon {
+                try container.encode(pillIcon, forKey: .pillIcon)
+            } else {
+                try container.encodeNil(forKey: .pillIcon)
+            }
         }
     }
 }

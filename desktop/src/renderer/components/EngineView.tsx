@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useSessionStore } from '../stores/sessionStore'
+import { usePreferencesStore } from '../preferences'
 import { useColors } from '../theme'
+import { formatImplementDivider } from '../../shared/clear-divider'
 import { EngineDialog } from './EngineDialog'
 import { EngineStatusBar } from './EngineStatusBar'
 import { AgentPanel } from './AgentPanel'
@@ -11,7 +13,7 @@ import { ArrowDown } from '@phosphor-icons/react'
 import {
   groupMessages,
   ToolGroup, AssistantMessage, SystemMessage, HarnessMessage, MessageBubble,
-  CopyButton, InterruptButton, CompactionRow,
+  CopyButton, InterruptButton, CompactionRow, AgentTurnGroup,
 } from './conversation'
 
 // Stable empty refs to avoid creating new array/object references on every render.
@@ -84,6 +86,7 @@ export function EngineView({ tabId }: EngineViewProps) {
   const submitEnginePrompt = useSessionStore(s => s.submitEnginePrompt)
   const isTall = useSessionStore(s => s.tallViewTabId === tabId)
   const toggleTallView = useSessionStore(s => s.toggleTallView)
+  const unifiedTurnView = usePreferencesStore(s => s.unifiedTurnView)
   const engineModelOverride = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
     const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
@@ -92,6 +95,9 @@ export function EngineView({ tabId }: EngineViewProps) {
   const isRunning = tabStatus === 'running' || tabStatus === 'connecting'
   const hasRunningChildren = agentStates.some(a => a.status === 'running')
   const [agentPanelFullscreen, setAgentPanelFullscreen] = useState(false)
+  // Per-instance agent panel heights — persisted only for the tab's lifetime.
+  // Key is the engine instance compound key (tabId:instanceId).
+  const [agentPanelHeights, setAgentPanelHeights] = useState<Map<string, number>>(new Map())
   const scrollRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
@@ -107,7 +113,7 @@ export function EngineView({ tabId }: EngineViewProps) {
 
   // Include all messages (user messages shown inline, plus pinned prompt header)
   const visibleMessages = messages
-  const grouped = useMemo(() => groupMessages(visibleMessages, { includeUser: true }), [visibleMessages])
+  const grouped = useMemo(() => groupMessages(visibleMessages, { includeUser: true, unifiedTurnView }), [visibleMessages, unifiedTurnView])
 
   const hasContent = visibleMessages.some(m => m.role === 'assistant' && (m.content || '').length > 0)
   const showThinking = isRunning && !hasContent && agentStates.filter(a => a.status === 'running').length === 0
@@ -149,20 +155,7 @@ export function EngineView({ tabId }: EngineViewProps) {
     return () => clearTimeout(timer)
   }, [notifications.length, tabId])
 
-  // No instances placeholder
-  if (!pane || pane.instances.length === 0) {
-    return (
-      <div style={{
-        display: 'flex', flexDirection: 'column', height: '100%',
-        alignItems: 'center', justifyContent: 'center',
-        color: colors.textTertiary, fontSize: 13,
-      }}>
-        Session not started
-      </div>
-    )
-  }
-
-  const handleAbort = () => {
+  const handleAbort = useCallback(() => {
     console.log(`[EngineView] handleAbort: key=${key} isRunning=${isRunning} hasRunningChildren=${hasRunningChildren} tabStatus=${tabStatus}`)
     if (!key) return
     // Always send abort — the engine's SendAbort is safe when no run is active
@@ -187,21 +180,17 @@ export function EngineView({ tabId }: EngineViewProps) {
         )
       }
     }, 5_000)
-  }
+  }, [key, isRunning, hasRunningChildren, tabStatus, tabId])
 
   // ─── Permission-denied card handlers ───
   //
-  // EngineView's variant of usePermissionDeniedHandlers. The conversation
-  // hook calls `sendMessage` (CLI/sessionPlane path); the engine variant
-  // calls `submitEnginePrompt` for the active engine instance so the
-  // answer is delivered as a new engine prompt on the same key.
-  //
-  // We deliberately do NOT reuse the conversation hook directly — that
-  // hook also implements the Plan-Mode → Implement flow which depends on
-  // CLI-specific machinery (resetTabSession, sendMessage signature with
-  // an implementationPhase flag). The engine variant currently supports
-  // only the AskUserQuestion path; ExitPlanMode on engine tabs is still
-  // an open item flagged in the plan.
+  // EngineView's variant of the ConversationView's
+  // buildPermissionDeniedHandlers. The conversation hook calls
+  // `sendMessage` (CLI path); the engine variant calls
+  // `submitEnginePrompt` for the active engine instance so the answer
+  // is delivered as a new prompt on the same key. Engine tabs do NOT
+  // need `resetTabSession` — the engine manages its own session
+  // lifecycle; we just disable plan mode and submit a new prompt.
   const clearPermissionDenied = useCallback(() => {
     if (!key) return
     useSessionStore.setState((s) => {
@@ -220,6 +209,113 @@ export function EngineView({ tabId }: EngineViewProps) {
     }
     submitEnginePrompt(tabId, answer, undefined, undefined)
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt])
+
+  const handleImplement = useCallback(async (clearContext: boolean = false) => {
+    console.log(`[EngineView] handleImplement: tab=${tabId.slice(0, 8)} key=${key} clearContext=${clearContext}`)
+    clearPermissionDenied()
+
+    // Insert an "Implementing plan" divider so the user can see the
+    // boundary between planning and implementation phases — mirrors the
+    // CLI tab path in usePermissionDeniedHandlers.ts.
+    if (key) {
+      useSessionStore.getState().addEngineSystemMessage(key, formatImplementDivider(new Date()))
+    }
+
+    // Switch to auto mode — for engine tabs this calls
+    // engineSetPlanMode(compoundKey, false) internally (tab-slice.ts:38-43).
+    // This drops the plan-mode system prompt and restricted tool list on
+    // the engine side without destroying the conversation, regardless of
+    // whether we follow the clear-context path below.
+    useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
+
+    // Honor the per-click `clearContext` argument. Engine tabs do not yet
+    // have a per-instance reset IPC (no `engineResetSession` exists), so
+    // when clearContext=true the renderer logs a warning and falls
+    // through to the default no-reset behavior. The CLI-tab and iOS
+    // paths fully honor the flag. The "Implement, clear context" button
+    // is revealed in PermissionDeniedCard by the
+    // `showImplementClearContext` preference.
+    if (clearContext) {
+      console.warn(`[EngineView] handleImplement: clearContext=true is not yet supported for engine tabs — staying in the same engine-instance conversation. CLI tabs and iOS CLI tabs honor this action. Tracking engine API gap as a follow-up (no engineResetSession IPC).`)
+    } else {
+      console.log(`[EngineView] handleImplement: clearContext=false — preserving engine-instance conversation`)
+    }
+
+    // Auto-switch to the implementation model if the split feature is enabled
+    const { planModelSplitEnabled, implementModeModel } = usePreferencesStore.getState()
+    if (planModelSplitEnabled && implementModeModel) {
+      useSessionStore.getState().setTabModel(tabId, implementModeModel)
+    }
+
+    // Auto-move tab to in-progress group if designated
+    const { inProgressGroupId, tabGroupMode, autoGroupMovement } = usePreferencesStore.getState()
+    const tab = useSessionStore.getState().tabs.find(t => t.id === tabId)
+    if (autoGroupMovement && inProgressGroupId && tabGroupMode === 'manual' && tab && tab.groupId !== inProgressGroupId) {
+      if (tab.groupPinned) {
+        console.log(`[EngineView] auto-move suppressed: tab=${tabId.slice(0, 8)} pinned=true`)
+      } else {
+        useSessionStore.getState().moveTabToGroup(tabId, inProgressGroupId)
+      }
+    }
+
+    // Extract plan file path: tab state (engine event) > denial toolInput
+    let planFilePath: string | null = tabPlanFilePath || null
+    if (!planFilePath && permissionDenied?.tools) {
+      const exitDenial = permissionDenied.tools.find(
+        (t: { toolName: string; toolInput?: Record<string, unknown> }) =>
+          t.toolName === 'ExitPlanMode' && t.toolInput
+      )
+      if (exitDenial?.toolInput?.planFilePath) {
+        planFilePath = exitDenial.toolInput.planFilePath as string
+      }
+    }
+
+    // Read plan content
+    let planContent: string | null = null
+    if (planFilePath) {
+      try {
+        const result = await window.ion.readPlan(planFilePath)
+        planContent = result.content
+      } catch (err) {
+        console.warn('[EngineView] Failed to read plan file:', err)
+      }
+    }
+
+    // Clear the tab-level planFilePath now that we've read it
+    useSessionStore.setState((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === tabId ? { ...t, planFilePath: null } : t
+      ),
+    }))
+
+    const implementPrompt = planContent
+      ? `Implement the following plan:\n\n${planContent}`
+      : 'Implement the plan.'
+    console.log(`[EngineView] submitting implement prompt: tab=${tabId.slice(0, 8)} promptLen=${implementPrompt.length}`)
+    submitEnginePrompt(tabId, implementPrompt, undefined, undefined, undefined, true)
+  }, [tabId, key, clearPermissionDenied, submitEnginePrompt, tabPlanFilePath, permissionDenied])
+
+  const handleImplementAndUnpin = useCallback(async (clearContext: boolean = false) => {
+    // Unpin first so the auto-move guard fires when handleImplement
+    // switches the tab to auto mode.
+    useSessionStore.getState().toggleTabGroupPin(tabId)
+    console.log(`[EngineView] implement-and-unpin: tab=${tabId.slice(0, 8)} clearContext=${clearContext} — pin cleared`)
+    await handleImplement(clearContext)
+  }, [tabId, handleImplement])
+
+  // No instances placeholder — all hooks MUST be declared above this point
+  // to satisfy React's rules of hooks (constant hook count across renders).
+  if (!pane || pane.instances.length === 0) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', height: '100%',
+        alignItems: 'center', justifyContent: 'center',
+        color: colors.textTertiary, fontSize: 13,
+      }}>
+        Session not started
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
@@ -286,6 +382,8 @@ export function EngineView({ tabId }: EngineViewProps) {
                     return <AssistantMessage key={item.message.id} message={item.message} skipMotion />
                   case 'tool-group':
                     return <ToolGroup key={`tg-${idx}`} tools={item.messages} skipMotion />
+                  case 'agent-turn':
+                    return <AgentTurnGroup key={`at-${idx}`} tools={item.tools} assistantMessages={item.assistantMessages} isActive={item.isActive} skipMotion />
                   case 'harness':
                     return <HarnessMessage key={item.message.id} message={item.message} skipMotion bootstrapCollapsedCount={item.bootstrapCollapsedCount} />
                   case 'system':
@@ -390,6 +488,8 @@ export function EngineView({ tabId }: EngineViewProps) {
             tabGroupPinned={tabGroupPinned}
             onDismiss={clearPermissionDenied}
             onAnswer={handleAnswerDenial}
+            onImplement={handleImplement}
+            onImplementAndUnpin={handleImplementAndUnpin}
           />
         )}
       </AnimatePresence>
@@ -400,6 +500,11 @@ export function EngineView({ tabId }: EngineViewProps) {
           agents={agentStates}
           isFullscreen={agentPanelFullscreen}
           onToggleFullscreen={() => setAgentPanelFullscreen(!agentPanelFullscreen)}
+          panelHeight={key ? agentPanelHeights.get(key) : undefined}
+          onPanelHeightChange={(h) => {
+            if (!key) return
+            setAgentPanelHeights(prev => { const next = new Map(prev); next.set(key, h); return next })
+          }}
         />
       </div>
 

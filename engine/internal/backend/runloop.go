@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,35 +39,47 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		earlyStop.maxContinuations, earlyStop.diminishingDelta, earlyStop.source, opts.IsSubagent,
 	))
 
-	// Resolve provider
-	model := opts.Model
-	if model == "" {
-		msg := "no model configured: set defaultModel in ~/.ion/engine.json or pass --model. See docs/configuration/engine-json.md."
+	// Resolve provider — applies the engine's graceful-degradation
+	// policy (fall back to DefaultModel when the requested model is
+	// unknown) and emits ModelFallbackEvent on the swap path. See
+	// runloop_provider_resolve.go for the full contract; on any
+	// non-recoverable failure the helper has already emitted the
+	// appropriate ErrorEvent + exit and we just return.
+	provider, model := b.resolveProviderForRun(run, &opts)
+	if provider == nil {
+		return
+	}
+
+	// Load or create conversation
+	conv, convErr := loadOrCreateConversation(opts, model)
+	if convErr != nil {
+		msg := fmt.Sprintf("Failed to load conversation %s: %v. Your conversation history is safe on disk — please retry.", opts.SessionID, convErr)
 		utils.Error("ApiBackend", msg)
 		b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{
 			ErrorMessage: msg,
-			ErrorCode:    "no_model_configured",
+			ErrorCode:    "conversation_load_failed",
 		}})
 		b.emitError(run, fmt.Errorf("%s", msg))
 		b.emitExit(run.requestID, intPtr(1), nil, opts.SessionID)
 		return
 	}
+	run.conv = conv
 
-	provider := b.resolveProvider(model)
-	if provider == nil {
-		utils.Error("ApiBackend", fmt.Sprintf("no provider for model %q", model))
-		b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{
-			ErrorMessage: fmt.Sprintf("no provider found for model %q", model),
-			ErrorCode:    "invalid_model",
-		}})
-		b.emitError(run, fmt.Errorf("no provider found for model %q", model))
-		b.emitExit(run.requestID, intPtr(1), nil, opts.SessionID)
-		return
+	// Resolve the conversations directory for post-compact .tree.jsonl path
+	// injection. Best-effort: an error just leaves the path empty.
+	convDir := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		convDir = filepath.Join(home, ".ion", "conversations")
 	}
 
-	// Load or create conversation
-	conv := loadOrCreateConversation(opts, model)
-	run.conv = conv
+	// Emit the conversation/session ID early so the session manager can
+	// capture it before the first tool call or dispatch completes. Without
+	// this, s.conversationID is empty during the first run until
+	// handleRunExit fires, which causes dispatch persistence to silently
+	// skip writing agent_dispatch entries.
+	b.emit(run, types.NormalizedEvent{Data: &types.SessionInitEvent{
+		SessionID: conv.ID,
+	}})
 
 	// Persist the working directory so migrated conversations carry the project context.
 	if opts.ProjectPath != "" && conv.WorkingDirectory == "" {
@@ -128,17 +142,8 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			return
 		}
 
-		// Check for steer messages
-		select {
-		case steerMsg := <-run.steerCh:
-			conversation.AddUserMessage(run.conv, steerMsg)
-			if err := conversation.Save(run.conv, ""); err != nil {
-				utils.Log("ApiBackend", "failed to save conversation after steer: "+err.Error())
-			}
-			utils.Log("ApiBackend", "steer message injected into conversation")
-		default:
-			// no steer message, continue normally
-		}
+		// Check for steer messages that arrived between turns.
+		b.drainSteer(run, conv)
 
 		// Increment turn counter before firing turn_start, so the first turn
 		// reports turn=1 (matching TS behavior).
@@ -225,8 +230,21 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		compactLimit := conversation.AutoCompactTokenLimit(contextWindow, opts.MaxTokens)
 		if opts.CompactThreshold > 0 {
 			compactLimit = int(float64(contextWindow) * opts.CompactThreshold / 100.0)
+			utils.Debug("ApiBackend", fmt.Sprintf("compactLimit=%d source=legacy-override threshold=%.0f%% window=%d", compactLimit, opts.CompactThreshold, contextWindow))
+		} else {
+			utils.Debug("ApiBackend", fmt.Sprintf("compactLimit=%d source=auto maxTokens=%d window=%d", compactLimit, opts.MaxTokens, contextWindow))
 		}
-		b.compactIfNeeded(run, conv, hooks, contextWindow, compactLimit)
+		cp := buildCompactParams(&opts, convDir)
+		if run.cfg != nil && run.cfg.GetSessionMemory != nil {
+			cp.getSessionMemory = run.cfg.GetSessionMemory
+		}
+		if run.cfg != nil && run.cfg.GetLastSummarizedEntryID != nil {
+			cp.getLastSummarizedEntryID = run.cfg.GetLastSummarizedEntryID
+		}
+		if run.cfg != nil && run.cfg.ResetMemoryTracking != nil {
+			cp.resetMemoryTracking = run.cfg.ResetMemoryTracking
+		}
+		b.compactIfNeeded(ctx, run, conv, hooks, contextWindow, compactLimit, cp)
 
 		// Build stream options (sanitize before each API call to catch orphaned tool blocks)
 		streamOpts := types.LlmStreamOptions{
@@ -353,6 +371,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			if (strings.Contains(errMsg, "prompt_too_long") || strings.Contains(errMsg, "prompt is too long") ||
 				strings.Contains(errMsg, "overloaded_error")) && turn > 0 {
 				promptTooLongRetries++
+				utils.Debug("ApiBackend", fmt.Sprintf("prompt_too_long: retry=%d/%d runID=%s turn=%d", promptTooLongRetries, maxPromptTooLongRetries, run.requestID, turn))
 				if promptTooLongRetries > maxPromptTooLongRetries {
 					utils.Error("ApiBackend", fmt.Sprintf("prompt_too_long: %d retries exhausted, giving up: runID=%s", maxPromptTooLongRetries, run.requestID))
 					b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{
@@ -363,7 +382,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					b.emitExit(run.requestID, intPtr(1), nil, conv.ID)
 					return
 				}
-				b.compactReactive(run, conv, hooks, promptTooLongRetries)
+				b.compactReactive(ctx, run, conv, hooks, contextWindow, promptTooLongRetries, cp)
 				continue // retry the turn after compaction
 			}
 			cause := ""
@@ -401,6 +420,9 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		}
 
 		// Stream succeeded with a valid stop reason -- reset retry counters.
+		if promptTooLongRetries > 0 || truncationRetries > 0 || run.compactionsWithoutProgress > 0 {
+			utils.Debug("ApiBackend", fmt.Sprintf("counters reset: promptTooLong=%d truncation=%d compactionsWithoutProgress=%d", promptTooLongRetries, truncationRetries, run.compactionsWithoutProgress))
+		}
 		promptTooLongRetries = 0
 		truncationRetries = 0
 		run.compactionsWithoutProgress = 0
@@ -496,6 +518,19 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				continue
 			}
 
+			// Check for a steer message that arrived while the model was
+			// streaming its final response. If present, inject it and
+			// continue the loop so the model reacts on its next turn
+			// rather than the message being treated as a new run by the
+			// session layer. This is the critical fix for "steer during
+			// end_turn is orphaned."
+			if b.drainSteer(run, conv) {
+				if err := conversation.Save(conv, ""); err != nil {
+					utils.Log("ApiBackend", "failed to save conversation after end_turn steer: "+err.Error())
+				}
+				continue
+			}
+
 			// Save conversation
 			if err := conversation.Save(conv, ""); err != nil {
 				utils.Log("ApiBackend", "failed to save conversation: "+err.Error())
@@ -524,6 +559,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 
 			if len(toolUseBlocks) == 0 {
 				// No tool calls despite tool_use stop reason; treat as end_turn
+				utils.Warn("ApiBackend", fmt.Sprintf("tool_use stop reason with zero tool blocks: runID=%s turn=%d", run.requestID, turn))
 				continue
 			}
 
@@ -575,12 +611,29 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				return
 			}
 
-			// Add tool results to conversation
-			conversation.AddToolResults(conv, results)
+			// Apply system-wide tool result size cap. Oversized results
+			// (dispatch transcripts, large file reads, verbose command
+			// output) are persisted to disk with a preview so the LLM
+			// retains access without consuming context window tokens.
+			maxToolResultChars := opts.MaxToolResultChars
+			if maxToolResultChars == 0 && run.cfg != nil && run.cfg.MaxToolResultChars > 0 {
+				maxToolResultChars = run.cfg.MaxToolResultChars
+			}
+			if convDir != "" && maxToolResultChars >= 0 {
+				conversation.AddToolResultsWithSizeCheck(conv, results, convDir, maxToolResultChars)
+			} else {
+				conversation.AddToolResults(conv, results)
+			}
 			// Persist immediately so tool history survives mid-multi-turn crashes.
 			if err := conversation.Save(conv, ""); err != nil {
 				utils.Log("ApiBackend", "failed to save conversation after AddToolResults: "+err.Error())
 			}
+
+			// Check for a steer message that arrived during tool execution.
+			// Injecting it here (rather than waiting for the top-of-loop
+			// check) ensures it lands in the conversation before the very
+			// next LLM call, minimizing latency.
+			b.drainSteer(run, conv)
 
 			// Reset early-stop continuation counters on tool_use: the model
 			// is making forward progress through tools, so the next end_turn

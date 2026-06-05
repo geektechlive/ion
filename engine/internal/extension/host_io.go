@@ -111,6 +111,31 @@ func (h *Host) callWithTimeout(method string, params interface{}, timeout time.D
 		return nil, fmt.Errorf("send %s: %w", method, err)
 	}
 
+	// When timeout <= 0, wait indefinitely (cancellable only by subprocess
+	// death or channel close). The engine does not impose duration opinions
+	// on extension tool calls or dispatches.
+	if timeout <= 0 {
+		select {
+		case resp, ok := <-ch:
+			if !ok {
+				return nil, fmt.Errorf("extension subprocess died during %s call", method)
+			}
+			if resp.Error != nil {
+				he := &hookError{Code: resp.Error.Code, Message: resp.Error.Message}
+				if resp.Error.Data != nil {
+					he.Stack = resp.Error.Data.Stack
+				}
+				return nil, he
+			}
+			return resp.Result, nil
+		case <-deadCh:
+			h.pendMu.Lock()
+			delete(h.pending, id)
+			h.pendMu.Unlock()
+			return nil, fmt.Errorf("extension subprocess died during %s call", method)
+		}
+	}
+
 	select {
 	case resp, ok := <-ch:
 		if !ok {
@@ -146,7 +171,7 @@ func (h *Host) callWithTimeout(method string, params interface{}, timeout time.D
 }
 
 // callHook wraps a hook payload with context metadata and sends it to the
-// subprocess. It sets currentCtx for the duration of the call so that
+// subprocess. It pushes ctx onto ctxStack for the duration of the call so that
 // extension-initiated notifications (ext/emit, ext/send_message) received
 // during the blocking call can access the active context.
 //
@@ -219,8 +244,8 @@ func (h *Host) callHook(method string, ctx *Context, payload interface{}) (json.
 		}
 	}
 
-	h.currentCtx.Store(ctx)
-	defer h.currentCtx.Store(nil)
+	h.ctxStack.Push(ctx)
+	defer h.ctxStack.Pop()
 	return h.call(method, wrapped)
 }
 

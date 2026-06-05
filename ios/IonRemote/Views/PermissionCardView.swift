@@ -19,6 +19,7 @@ struct PermissionCardView: View {
 // MARK: - Generic Permission Card
 
 struct PermissionCardGenericView: View {
+    @Environment(\.appTheme) private var theme
     @Environment(SessionViewModel.self) private var viewModel
     let tabId: String
     let request: PermissionRequest
@@ -73,7 +74,7 @@ struct PermissionCardGenericView: View {
         if label.contains("deny") || label.contains("reject") || label.contains("no") {
             return .red
         }
-        return Color(hex: 0x4ECDC4)
+        return theme.accent
     }
 
     private func triggerHaptic() {

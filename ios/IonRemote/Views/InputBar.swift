@@ -3,6 +3,7 @@ import PhotosUI
 import UniformTypeIdentifiers
 
 struct InputBar: View {
+    @Environment(\.appTheme) private var theme
     @Environment(SessionViewModel.self) private var viewModel
     let tabId: String
 
@@ -58,12 +59,37 @@ struct InputBar: View {
     }
 
     private var slashCommands: [DiscoveredSlashCommand] {
-        let dir = viewModel.discoveredCommands[workingDirectory] ?? []
-        let eng = viewModel.engineCommandsByTab[tabId] ?? []
-        // Engine commands first so Jarvis slash commands take precedence,
-        // then file-system discovered commands. Deduplicate by name.
-        var seen = Set<String>()
-        return (eng + dir).filter { seen.insert($0.name).inserted }
+        var cmds = viewModel.discoveredCommands[workingDirectory] ?? []
+
+        // Inject the /clear builtin (matches desktop's SLASH_COMMANDS constant).
+        // `origin` is nil for synthetic local entries — the filter only applies
+        // to disk-discovered commands the desktop server sent us.
+        let clearCmd = DiscoveredSlashCommand(
+            name: "clear", description: "Clear conversation history",
+            scope: "builtin", source: "builtin", origin: nil
+        )
+        if !cmds.contains(where: { $0.name == "clear" }) {
+            cmds.insert(clearCmd, at: 0)
+        }
+
+        // Merge extension-registered commands from engine_command_registry.
+        let tab = viewModel.tab(for: tabId)
+        let extKey: String? = {
+            guard let t = tab else { return nil }
+            return (t.isEngine == true) ? viewModel.engineCompoundKey(tabId: t.id) : t.id
+        }()
+        if let key = extKey, let extCmds = viewModel.extensionCommands[key] {
+            for ec in extCmds where !cmds.contains(where: { $0.name == ec.name }) {
+                cmds.append(DiscoveredSlashCommand(
+                    name: ec.name,
+                    description: ec.description ?? ec.name,
+                    scope: "extension",
+                    source: "extension",
+                    origin: nil
+                ))
+            }
+        }
+        return cmds
     }
 
     private var hasUploading: Bool {
@@ -84,7 +110,7 @@ struct InputBar: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            if keyboardVisible {
+            if keyboardVisible && viewModel.showKeyboardUtilityBarInCLI {
                 KeyboardUtilityBar(
                     onDismiss: { isFocused = false },
                     promptText: promptTextBinding
@@ -118,7 +144,7 @@ struct InputBar: View {
                     .background(Color(.tertiarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.medium))
                     .overlay(RoundedRectangle(cornerRadius: IonTheme.Radius.medium).stroke(
-                        isRecordingVoice ? JarvisTheme.accent.opacity(0.5) : Color(.separator),
+                        isRecordingVoice ? theme.accent.opacity(0.5) : Color(.separator),
                         lineWidth: isRecordingVoice ? 1.5 : 1
                     ))
                     .textInputAutocapitalization(.never)
@@ -384,7 +410,7 @@ struct InputBar: View {
         if !isConnected {
             return .gray
         }
-        return isQueued ? .orange : JarvisTheme.accent
+        return isQueued ? .orange : theme.accent
     }
 
     // MARK: - Attachments

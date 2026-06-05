@@ -1,4 +1,5 @@
 import SwiftUI
+import Markdown
 
 /// A parsed markdown block produced by `MarkdownFormatter.parse`.
 enum MarkdownBlock: Identifiable {
@@ -34,41 +35,67 @@ enum MarkdownBlock: Identifiable {
 /// Parses Markdown into `[MarkdownBlock]` for rich composite rendering, or
 /// into a single `AttributedString` for compact inline previews.
 ///
-/// Uses Apple's `AttributedString` with `.full` interpretation and walks the
-/// `presentationIntent` runs to classify blocks. No third-party dependency.
+/// Uses `apple/swift-markdown` (CommonMark + GFM) as the parser. Walks the
+/// resulting AST to emit our flat `[MarkdownBlock]` representation. The
+/// rendering layer (`MarkdownContentView`) is unchanged.
+///
+/// Robustness contract: `parse(_:)` never throws. For any input string `s`,
+/// it returns a non-empty `[MarkdownBlock]`. A three-tier fallback (walker →
+/// raw paragraph) guarantees no content is silently dropped at the document
+/// level, even for malformed or partial markdown (e.g. an LLM cut off
+/// mid-stream). See `docs/architecture/file-organization.md` for context.
 @MainActor
 enum MarkdownFormatter {
 
     // MARK: - Rich block API (full-screen viewer)
 
     static func parse(_ markdown: String) -> [MarkdownBlock] {
-        guard let parsed = try? AttributedString(
-            markdown: markdown,
-            options: .init(
-                allowsExtendedAttributes: true,
-                interpretedSyntax: .full,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        ) else {
-            return [.paragraph(text: fallback(markdown))]
+        let inputLen = markdown.count
+        DiagnosticLog.log("markdown.parse: input_len=\(inputLen)")
+
+        // Empty / whitespace input: return a single empty paragraph. This
+        // preserves the previous formatter's behavior so call sites that
+        // assume parse(...) returns at least one block don't need updating.
+        if markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            DiagnosticLog.log("markdown.parse: empty input → single empty paragraph")
+            return [.paragraph(text: AttributedString(""))]
         }
 
-        var blocks: [MarkdownBlock] = []
-        var accum = AttributedString()
-        var currentKind: BlockKind?
+        // Normalize line endings. swift-markdown handles CRLF/LF/CR per the
+        // CommonMark spec, but we normalize once on entry so any subsequent
+        // string manipulation (table rendering, plain-text fallbacks) sees
+        // a single canonical form.
+        let normalized = markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
 
-        for run in parsed.runs {
-            let segment = AttributedString(parsed[run.range])
-            let kind = classify(run.presentationIntent)
-
-            if kind != currentKind {
-                flush(currentKind, text: &accum, into: &blocks)
-                currentKind = kind
-            }
-            accum.append(segment)
+        // The Document(parsing:) initializer itself does not throw — it
+        // always returns *some* Document, however degenerate. The do/try
+        // here is defensive: if a future swift-markdown release changes
+        // the contract (or a walker throws), we degrade to a single
+        // paragraph rather than losing the whole message.
+        let blocks: [MarkdownBlock]
+        do {
+            let document = Markdown.Document(parsing: normalized)
+            blocks = try walkDocument(document, raw: normalized)
+        } catch {
+            DiagnosticLog.log("markdown.parse: walker failed err=\(error) → raw paragraph fallback")
+            return [.paragraph(text: AttributedString(normalized))]
         }
-        flush(currentKind, text: &accum, into: &blocks)
-        return blocks.flatMap { expandImages($0) }
+
+        // Final safety net: if the walker produced no blocks for non-empty
+        // input (should never happen for well-formed swift-markdown output,
+        // but if a future spec change makes it possible we don't want to
+        // surface an empty message), fall back to a raw paragraph so the
+        // user still sees their content.
+        if blocks.isEmpty {
+            DiagnosticLog.log("markdown.parse: walker emitted 0 blocks → raw paragraph fallback")
+            return [.paragraph(text: AttributedString(normalized))]
+        }
+
+        let summary = summarize(blocks)
+        DiagnosticLog.log("markdown.parse: emitted blocks=\(blocks.count) kinds=[\(summary)]")
+        return blocks
     }
 
     // MARK: - Compact single-string API (card preview)
@@ -108,172 +135,354 @@ enum MarkdownFormatter {
         return result
     }
 
-    // MARK: - Image extraction
+    // MARK: - Document walker
 
-    /// Splits a `.paragraph` block by scanning for bare image URLs on their
-    /// own line. Non-image lines are re-joined into paragraph blocks; image
-    /// lines become `.image` blocks. All other block types pass through unchanged.
-    private static func expandImages(_ block: MarkdownBlock) -> [MarkdownBlock] {
-        guard case .paragraph(let attr) = block else { return [block] }
-        let raw = String(attr.characters)
-        let lines = raw.components(separatedBy: "\n")
+    /// Walk the swift-markdown `Document` AST and emit our flat block list.
+    /// The walker is non-throwing in practice — every CommonMark block kind
+    /// has a mapping. The `throws` signature exists only to let future
+    /// extensions throw without restructuring `parse(_:)`.
+    private static func walkDocument(
+        _ document: Markdown.Document,
+        raw: String
+    ) throws -> [MarkdownBlock] {
+        var out: [MarkdownBlock] = []
+        for child in document.blockChildren {
+            walkBlock(child, into: &out)
+        }
+        return out
+    }
 
-        var result: [MarkdownBlock] = []
-        var pendingLines: [String] = []
+    /// Walk one block-level AST node and append zero or more `MarkdownBlock`s
+    /// to `out`. Lists fan out internally via `walkListItem`.
+    private static func walkBlock(
+        _ block: any Markup,
+        into out: inout [MarkdownBlock]
+    ) {
+        switch block {
+        case let heading as Markdown.Heading:
+            out.append(.heading(
+                level: heading.level,
+                text: renderInline(heading.inlineChildren)
+            ))
 
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let url = bareImageURL(trimmed) {
-                if !pendingLines.isEmpty {
-                    let joined = pendingLines.joined(separator: "\n")
-                    pendingLines = []
-                    let rebuilt = (try? AttributedString(
-                        markdown: joined,
-                        options: .init(
-                            allowsExtendedAttributes: true,
-                            interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                            failurePolicy: .returnPartiallyParsedIfPossible
-                        )
-                    )) ?? AttributedString(joined)
-                    result.append(.paragraph(text: rebuilt))
-                }
-                result.append(.image(url: url))
-            } else {
-                pendingLines.append(line)
+        case let paragraph as Markdown.Paragraph:
+            out.append(.paragraph(text: renderInline(paragraph.inlineChildren)))
+
+        case let codeBlock as Markdown.CodeBlock:
+            // CodeBlock.code retains the trailing newline that cmark inserts;
+            // trim it so the rendered code view doesn't show a phantom empty
+            // last line.
+            var code = codeBlock.code
+            if code.hasSuffix("\n") { code.removeLast() }
+            let lang = codeBlock.language?.trimmingCharacters(
+                in: .whitespacesAndNewlines)
+            out.append(.code(
+                language: (lang?.isEmpty == true) ? nil : lang,
+                text: code
+            ))
+
+        case is Markdown.ThematicBreak:
+            out.append(.thematicBreak)
+
+        case let blockQuote as Markdown.BlockQuote:
+            // Flatten quoted content. We render every nested block's plain
+            // text into one attributed string with newlines, preserving the
+            // current MarkdownBlock.blockQuote contract (single AttributedString).
+            let inner = flattenBlocksToAttributed(blockQuote.blockChildren)
+            out.append(.blockQuote(text: inner))
+
+        case let orderedList as Markdown.OrderedList:
+            // CommonMark stores the starting ordinal on the list itself.
+            var ordinal = Int(orderedList.startIndex)
+            for item in orderedList.listItems {
+                walkListItem(item, into: &out, ordinal: ordinal, ordered: true)
+                ordinal += 1
+            }
+
+        case let unorderedList as Markdown.UnorderedList:
+            // Unordered lists carry no ordinal; we pass 0 (the renderer ignores
+            // it when `ordered == false`).
+            for item in unorderedList.listItems {
+                walkListItem(item, into: &out, ordinal: 0, ordered: false)
+            }
+
+        case let table as Markdown.Table:
+            walkTable(table, into: &out)
+
+        case let htmlBlock as Markdown.HTMLBlock:
+            // Raw HTML has no SwiftUI rendering path; surface it as a
+            // monospaced code-like paragraph so the user at least sees the
+            // text rather than losing it silently.
+            out.append(.paragraph(text: AttributedString(htmlBlock.rawHTML)))
+
+        default:
+            // CustomBlock, BlockDirective, Doxygen commands, and any future
+            // block kinds fall through to plain text. format(_:) is the
+            // canonical "give me the text" helper for any Markup node.
+            let text = block.format()
+            if !text.isEmpty {
+                out.append(.paragraph(text: AttributedString(text)))
             }
         }
-
-        if !pendingLines.isEmpty {
-            let joined = pendingLines.joined(separator: "\n")
-            let rebuilt = (try? AttributedString(
-                markdown: joined,
-                options: .init(
-                    allowsExtendedAttributes: true,
-                    interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                    failurePolicy: .returnPartiallyParsedIfPossible
-                )
-            )) ?? AttributedString(joined)
-            result.append(.paragraph(text: rebuilt))
-        }
-
-        return result.isEmpty ? [block] : result
     }
 
-    /// Returns a `URL` if `line` is a bare image URL (no spaces, starts with
-    /// http/https, ends with a recognised image extension or extension + query).
-    private static func bareImageURL(_ line: String) -> URL? {
-        guard !line.isEmpty,
-              !line.contains(" "),
-              line.hasPrefix("https://")
-        else { return nil }
-
-        let extensions = ["png", "jpg", "jpeg", "gif", "webp", "svg"]
-        let lowered = line.lowercased()
-
-        // Strip query string for extension check
-        let pathPart = lowered.components(separatedBy: "?").first ?? lowered
-        guard extensions.contains(where: { pathPart.hasSuffix(".\($0)") }),
-              let url = URL(string: line)
-        else { return nil }
-
-        return url
-    }
-
-    // MARK: - Block classification
-
-    /// Internal block kind used to group consecutive runs that belong to
-    /// the same logical block. Equality is by kind + identity so that
-    /// two distinct paragraphs are flushed separately.
-    private enum BlockKind: Equatable {
-        case heading(Int, Int)      // level, identity
-        case paragraph(Int)         // identity
-        case code(String?, Int)     // language, identity
-        case blockQuote(Int)        // identity
-        case listItem(Int, Bool, Int) // ordinal, ordered, identity
-        case thematicBreak(Int)     // identity
-        case unknown
-    }
-
-    private static func classify(
-        _ intent: PresentationIntent?
-    ) -> BlockKind {
-        guard let intent else { return .unknown }
-
-        for component in intent.components {
-            switch component.kind {
-            case .header(let level):
-                return .heading(level, component.identity)
-            case .codeBlock(let lang):
-                return .code(lang, component.identity)
-            case .blockQuote:
-                return .blockQuote(component.identity)
-            case .thematicBreak:
-                return .thematicBreak(component.identity)
-            case .listItem(let ordinal):
-                let ordered = intent.components.contains {
-                    $0.kind == .orderedList
-                }
-                return .listItem(ordinal, ordered, component.identity)
-            default:
+    /// Walk a single list item. Each item becomes one `.listItem` block, and
+    /// any nested blocks (paragraphs, code blocks, sublists) inside the item
+    /// are flattened: the first paragraph becomes the item text, and any
+    /// subsequent nested blocks (e.g. nested lists, code) are emitted as
+    /// their own top-level blocks. This matches the current renderer's
+    /// flat-list assumption — nested lists render visually as additional
+    /// items rather than as a true tree, same behavior as the previous
+    /// Foundation-based formatter.
+    private static func walkListItem(
+        _ item: Markdown.ListItem,
+        into out: inout [MarkdownBlock],
+        ordinal: Int,
+        ordered: Bool
+    ) {
+        // Reserve the position where the list-item block will land. Any
+        // nested blocks (sublists, code, blockquotes) emitted by the loop
+        // below append to `out` *after* this index so the visual order is:
+        // [item, nested-block, nested-block, ...].
+        let insertIndex = out.count
+        var itemText = AttributedString()
+        var didCaptureFirst = false
+        for child in item.blockChildren {
+            if !didCaptureFirst, let para = child as? Markdown.Paragraph {
+                itemText = renderInline(para.inlineChildren)
+                didCaptureFirst = true
                 continue
             }
+            // Any other nested blocks (code, sublists, blockquotes) are
+            // emitted as their own top-level blocks after the item.
+            walkBlock(child, into: &out)
         }
-        // Fall back to paragraph, keyed by the outermost identity.
-        let pid = intent.components.last?.identity ?? 0
-        return .paragraph(pid)
+        if !didCaptureFirst {
+            // Empty list item (rare) — emit an empty item so list numbering
+            // stays consistent.
+            itemText = AttributedString("")
+        }
+        out.insert(
+            .listItem(ordinal: ordinal, ordered: ordered, text: itemText),
+            at: insertIndex
+        )
     }
 
-    // MARK: - Flushing
+    // MARK: - Table walker
 
-    private static func flush(
-        _ kind: BlockKind?,
-        text: inout AttributedString,
-        into blocks: inout [MarkdownBlock]
+    /// Convert a swift-markdown `Table` into our flat `.table(...)` block.
+    /// Reuses the existing renderer contract: headers as a `[AttributedString]`,
+    /// rows as `[[AttributedString]]`, alignments as `[TableColumnAlignment]`
+    /// padded to the column count.
+    private static func walkTable(
+        _ table: Markdown.Table,
+        into out: inout [MarkdownBlock]
     ) {
-        guard let kind, !text.characters.isEmpty else {
-            text = AttributedString()
-            return
+        // Header
+        var headers: [AttributedString] = []
+        for cell in table.head.cells {
+            headers.append(renderInline(cell.inlineChildren))
         }
-        let captured = text
-        text = AttributedString()
 
-        switch kind {
-        case .heading(let level, _):
-            blocks.append(.heading(level: level, text: captured))
-        case .paragraph:
-            blocks.append(.paragraph(text: captured))
-        case .code(let lang, _):
-            blocks.append(.code(language: lang, text: plain(captured)))
-        case .blockQuote:
-            blocks.append(.blockQuote(text: captured))
-        case .listItem(let ordinal, let ordered, _):
-            blocks.append(.listItem(
-                ordinal: ordinal, ordered: ordered, text: captured
-            ))
-        case .thematicBreak(let identity):
-            blocks.append(.thematicBreak(id: identity))
-        case .unknown:
-            blocks.append(.paragraph(text: captured))
+        // Body rows
+        var rows: [[AttributedString]] = []
+        for row in table.body.rows {
+            var cells: [AttributedString] = []
+            for cell in row.cells {
+                cells.append(renderInline(cell.inlineChildren))
+            }
+            rows.append(cells)
+        }
+
+        // Alignments. GFM's spec allows nil (default left). Pad to the wider
+        // of header/first-row column count so the renderer's bounded index
+        // access stays in range.
+        let colCount = max(headers.count, rows.first?.count ?? 0)
+        var alignments: [TableColumnAlignment] = []
+        for col in 0..<colCount {
+            if col < table.columnAlignments.count,
+               let a = table.columnAlignments[col]
+            {
+                alignments.append(convertAlignment(a))
+            } else {
+                alignments.append(.left)
+            }
+        }
+
+        out.append(.table(
+            headers: headers,
+            rows: rows,
+            alignments: alignments
+        ))
+    }
+
+    private static func convertAlignment(
+        _ a: Markdown.Table.ColumnAlignment
+    ) -> TableColumnAlignment {
+        switch a {
+        case .left:   return .left
+        case .center: return .center
+        case .right:  return .right
+        }
+    }
+
+    // MARK: - Inline rendering
+
+    /// Render a sequence of inline markup nodes into a single `AttributedString`
+    /// with the appropriate per-run styling. SwiftUI's `Text(AttributedString)`
+    /// honors `font`, `foregroundColor`, and inline links automatically.
+    private static func renderInline(
+        _ inlines: some Sequence<InlineMarkup>
+    ) -> AttributedString {
+        var result = AttributedString()
+        for inline in inlines {
+            result.append(renderInlineNode(inline))
+        }
+        return result
+    }
+
+    /// Render one inline AST node. Recurses through containers (Emphasis,
+    /// Strong, Link, Strikethrough) so nested styles compose (e.g. bold
+    /// inside a link).
+    private static func renderInlineNode(_ inline: any Markup) -> AttributedString {
+        switch inline {
+        case let text as Markdown.Text:
+            return AttributedString(text.string)
+
+        case let code as Markdown.InlineCode:
+            var a = AttributedString(code.code)
+            a.font = .system(.body, design: .monospaced)
+            a.backgroundColor = Color(.tertiarySystemFill)
+            return a
+
+        case let emphasis as Markdown.Emphasis:
+            var inner = renderInline(emphasis.inlineChildren)
+            // Apply italic to every existing run by setting the font on the
+            // attribute container. AttributedString lacks a direct "merge
+            // italic into existing font" API, so we walk the runs and
+            // promote each to an italic variant. For runs that already have
+            // a code (monospace) font, italic is purely a visual hint —
+            // SwiftUI's `Text` honors `.italic` independently of the font.
+            inner.runs.forEach { run in
+                let range = run.range
+                inner[range].font = (inner[range].font ?? .body).italic()
+            }
+            return inner
+
+        case let strong as Markdown.Strong:
+            var inner = renderInline(strong.inlineChildren)
+            inner.runs.forEach { run in
+                let range = run.range
+                inner[range].font = (inner[range].font ?? .body).bold()
+            }
+            return inner
+
+        case let strike as Markdown.Strikethrough:
+            var inner = renderInline(strike.inlineChildren)
+            inner.runs.forEach { run in
+                let range = run.range
+                inner[range].strikethroughStyle = .single
+            }
+            return inner
+
+        case let link as Markdown.Link:
+            var inner = renderInline(link.inlineChildren)
+            if let dest = link.destination, let url = URL(string: dest) {
+                inner.runs.forEach { run in
+                    let range = run.range
+                    inner[range].link = url
+                }
+            }
+            return inner
+
+        case let image as Markdown.Image:
+            // No inline image rendering yet — surface the alt text + URL so
+            // the content isn't lost. Future work: inline image preview.
+            let alt = image.plainText
+            if let src = image.source {
+                return AttributedString("[image: \(alt.isEmpty ? src : alt)]")
+            }
+            return AttributedString(alt.isEmpty ? "[image]" : "[image: \(alt)]")
+
+        case is Markdown.LineBreak:
+            return AttributedString("\n")
+
+        case is Markdown.SoftBreak:
+            // CommonMark soft breaks render as a space in HTML; we mirror
+            // that so prose reflows naturally on small screens.
+            return AttributedString(" ")
+
+        case let inlineHTML as Markdown.InlineHTML:
+            // Raw inline HTML: surface as plain text rather than dropping.
+            return AttributedString(inlineHTML.rawHTML)
+
+        case let symbolLink as Markdown.SymbolLink:
+            // Disabled by default (we don't pass .parseSymbolLinks), but
+            // handle it anyway so a future config flip doesn't lose content.
+            return AttributedString("`\(symbolLink.destination ?? "")`")
+
+        case let attrs as Markdown.InlineAttributes:
+            // We don't honor the attributes themselves; render the children.
+            return renderInline(attrs.inlineChildren)
+
+        default:
+            // CustomInline and any future inline kinds: render plain text.
+            return AttributedString(inline.format())
         }
     }
 
     // MARK: - Helpers
 
-    private static func plain(_ attr: AttributedString) -> String {
-        String(attr.characters)
+    /// Flatten a sequence of blocks (e.g. the contents of a BlockQuote) into
+    /// a single attributed string, joining nested blocks with newlines. This
+    /// preserves the current `MarkdownBlock.blockQuote` contract, which holds
+    /// a single `AttributedString` rather than nested blocks.
+    private static func flattenBlocksToAttributed(
+        _ blocks: some Sequence<BlockMarkup>
+    ) -> AttributedString {
+        var result = AttributedString()
+        var first = true
+        for block in blocks {
+            if !first {
+                result.append(AttributedString("\n"))
+            }
+            first = false
+            switch block {
+            case let p as Markdown.Paragraph:
+                result.append(renderInline(p.inlineChildren))
+            case let h as Markdown.Heading:
+                result.append(renderInline(h.inlineChildren))
+            case let cb as Markdown.CodeBlock:
+                var a = AttributedString(cb.code)
+                a.font = .system(.body, design: .monospaced)
+                result.append(a)
+            default:
+                result.append(AttributedString(block.format()))
+            }
+        }
+        return result
     }
 
-    private static func fallback(
-        _ markdown: String
-    ) -> AttributedString {
-        if let inline = try? AttributedString(
-            markdown: markdown,
-            options: .init(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace
-            )
-        ) {
-            return inline
+    /// Build a "kind:count" summary string for the diagnostic log so we can
+    /// audit parser output without grepping the full block list.
+    private static func summarize(_ blocks: [MarkdownBlock]) -> String {
+        var counts: [String: Int] = [:]
+        for b in blocks {
+            let key: String
+            switch b {
+            case .heading:       key = "heading"
+            case .paragraph:     key = "paragraph"
+            case .code:          key = "code"
+            case .blockQuote:    key = "blockQuote"
+            case .listItem:      key = "listItem"
+            case .thematicBreak: key = "thematicBreak"
+            case .table:         key = "table"
+            }
+            counts[key, default: 0] += 1
         }
-        return AttributedString(markdown)
+        return counts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key):\($0.value)" }
+            .joined(separator: ", ")
     }
 }

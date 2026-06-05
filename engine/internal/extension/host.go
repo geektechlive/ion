@@ -13,7 +13,10 @@ import (
 )
 
 // defaultRPCTimeout is the compiled default for extension RPC calls.
-const defaultRPCTimeout = 30 * time.Second
+// Zero means no timeout — calls block until the subprocess responds or
+// dies. The engine does not impose duration opinions on extension
+// operations. Users may override via engine.json timeouts.extensionRpc.
+const defaultRPCTimeout = 0
 
 // Host manages extension subprocess lifecycle. It supports both in-process
 // extensions (Go functions registered directly on the SDK) and subprocess
@@ -57,8 +60,9 @@ type Host struct {
 	// Extension name returned from init handshake.
 	name string
 
-	// Bidirectional RPC: context for extension-initiated notifications.
-	currentCtx atomic.Pointer[Context]
+	// Bidirectional RPC: context stack for extension-initiated requests.
+	// Supports concurrent tool/hook/async-fire contexts on CliBackend.
+	ctxStack ctxStack
 
 	// notifMu guards the callbacks the readLoop reads when dispatching
 	// extension-initiated notifications (ext/emit, ext/send_message). Kept
@@ -165,6 +169,26 @@ func (h *Host) SetRPCTimeout(d time.Duration) {
 // Name returns the extension's name as reported by the init handshake.
 func (h *Host) Name() string {
 	return h.name
+}
+
+// ExtensionDir returns the directory containing the extension entry point,
+// as resolved during Load. Empty before Load completes.
+func (h *Host) ExtensionDir() string {
+	if h.loadedConfig != nil {
+		return h.loadedConfig.ExtensionDir
+	}
+	return ""
+}
+
+// SetExtensionDir sets the extension directory on the host config. If the
+// host has not been loaded yet (loadedConfig is nil), a minimal config is
+// initialised. This is primarily useful for tests that need to set the
+// extension directory without spawning a subprocess.
+func (h *Host) SetExtensionDir(dir string) {
+	if h.loadedConfig == nil {
+		h.loadedConfig = &ExtensionConfig{}
+	}
+	h.loadedConfig.ExtensionDir = dir
 }
 
 // SetOnSendMessage sets the callback invoked when the extension sends an

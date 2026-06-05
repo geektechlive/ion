@@ -56,18 +56,19 @@ function persistTabs(useSessionStore: Store): void {
             const k = `${t.id}:${inst.id}`
             const arr = eMsgs.get(k)
             if (arr && arr.length > 0) {
-              msgs[inst.id] = arr.map((m) => ({ role: m.role, content: m.content, toolName: m.toolName, toolId: m.toolId, toolInput: m.toolInput, toolStatus: m.toolStatus, timestamp: m.timestamp }))
+              msgs[inst.id] = arr.map((m) => ({ role: m.role, content: m.content, toolName: m.toolName, toolId: m.toolId, toolInput: m.toolInput, toolStatus: m.toolStatus, timestamp: m.timestamp, ...(m.dedupKey ? { dedupKey: m.dedupKey } : {}), ...(m.planFilePath ? { planFilePath: m.planFilePath } : {}) }))
             }
           }
           if (Object.keys(msgs).length > 0) result.engineMessages = msgs
           const { engineAgentStates: eAgents } = useSessionStore.getState()
-          const agentStates: Record<string, Array<{ name: string; status: string; metadata?: Record<string, any> }>> = {}
+          const agentStates: Record<string, Array<{ name: string; id?: string; status: string; metadata?: Record<string, any> }>> = {}
           for (const inst of hPane.instances) {
             const k = `${t.id}:${inst.id}`
             const arr = eAgents.get(k)
             if (arr && arr.length > 0) {
               agentStates[inst.id] = arr.map((a) => ({
                 name: a.name,
+                ...(a.id ? { id: a.id } : {}),
                 status: a.status === 'running' ? 'done' : a.status,
                 ...(a.metadata ? { metadata: a.metadata } : {}),
               }))
@@ -121,6 +122,13 @@ function persistTabs(useSessionStore: Store): void {
             const actualKeys = [...eConvs.keys()].filter((k) => k.startsWith(`${t.id}`) || k === t.id)
             console.log(`[persist] engineSessionIds empty for engine tab=${t.id.slice(0, 8)} instances=${hPane.instances.length} expectedKeys=${JSON.stringify(expectedKeys.map((k) => k.slice(0, 16)))} actualKeysUnderTab=${JSON.stringify(actualKeys.map((k) => k.slice(0, 16)))}`)
           }
+          const { engineModelOverrides: eModels } = useSessionStore.getState()
+          const modelOverrides: Record<string, string> = {}
+          for (const inst of hPane.instances) {
+            const m = eModels.get(`${t.id}:${inst.id}`)
+            if (m && m.length > 0) modelOverrides[inst.id] = m
+          }
+          if (Object.keys(modelOverrides).length > 0) result.engineModelOverrides = modelOverrides
           return result
         })() : {}),
         ...(pane && pane.instances.length > 0 ? { terminalInstances: pane.instances } : {}),
@@ -157,7 +165,7 @@ function persistTabs(useSessionStore: Store): void {
     }
   }
 
-  const { isExpanded, fileEditorOpenDirs, editorGeometry, planGeometry } = useSessionStore.getState()
+  const { isExpanded, fileEditorOpenDirs, editorGeometry, planGeometry, agentDetailGeometry } = useSessionStore.getState()
 
   let activeTabIndex: number | null = null
   for (let i = 0; i < tabs.length; i++) {
@@ -173,6 +181,7 @@ function persistTabs(useSessionStore: Store): void {
     editorOpenDirs: fileEditorOpenDirs.size > 0 ? [...fileEditorOpenDirs] : undefined,
     editorGeometry,
     planGeometry,
+    agentDetailGeometry,
   }
   window.ion.saveTabs(data)
 
@@ -224,7 +233,7 @@ function scanForStuckTabs(useSessionStore: Store): void {
 export function setupPersistence(useSessionStore: Store): void {
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   useSessionStore.subscribe((state, prev) => {
-    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes || state.engineDraftInputs !== prev.engineDraftInputs || state.enginePermissionDenied !== prev.enginePermissionDenied) {
+    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.agentDetailGeometry !== prev.agentDetailGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes || state.engineDraftInputs !== prev.engineDraftInputs || state.enginePermissionDenied !== prev.enginePermissionDenied || state.engineModelOverrides !== prev.engineModelOverrides) {
       // Flush immediately when permissionDenied changes on any tab — this
       // state must survive a crash or force-quit (e.g. the desktop is killed
       // while an engine run is in progress and the AskUserQuestion / ExitPlanMode
@@ -237,7 +246,22 @@ export function setupPersistence(useSessionStore: Store): void {
           return p && t.id === p.id && t.permissionDenied !== p.permissionDenied
         })) ||
         state.enginePermissionDenied !== prev.enginePermissionDenied
-      if (permissionDeniedChanged) {
+
+      // Flush immediately when a CLI tab captures its first conversationId.
+      // The engine event slice already does this for engine tabs via
+      // __ionForceFlushTabs (engine-event-slice.ts:126–142). For CLI tabs,
+      // session_init sets conversationId inside the Zustand reducer
+      // (event-slice.ts), and the normal 100ms debounce creates a window
+      // where a hard kill (SIGUSR1 drain → app.exit, laptop lid close)
+      // drops the session ID — making the tab irrecoverable on restart
+      // (conversationId: null → sessionless blank tab path).
+      const conversationIdCaptured =
+        state.tabs !== prev.tabs && state.tabs.some((t, i) => {
+          const p = prev.tabs[i]
+          return p && t.id === p.id && !p.conversationId && !!t.conversationId
+        })
+
+      if (permissionDeniedChanged || conversationIdCaptured) {
         if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
         persistTabs(useSessionStore)
         return

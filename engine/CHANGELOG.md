@@ -13,6 +13,112 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.37.0](https://github.com/dsswift/ion/compare/engine-v1.36.0...engine-v1.37.0) (2026-06-05)
+
+### Features
+
+* **engine:** fall back to default model on unresolved tier alias (#174) ([4a9d7af](https://github.com/dsswift/ion/commit/4a9d7af0d9cc017df65de66fff33d3b49accda6d))
+
+## [1.36.0](https://github.com/dsswift/ion/compare/engine-v1.35.0...engine-v1.36.0) (2026-06-05)
+
+### Features
+
+* **engine:** wire task_created/completed for Cli and Api backends (#175) ([4d4bd26](https://github.com/dsswift/ion/commit/4d4bd2683849b2d8b271b7787c1a0266b4c001fb))
+* **engine:** configurable bash commands in plan mode ([d7e6c5f](https://github.com/dsswift/ion/commit/d7e6c5f7fa0dd2695e54a7f96809db586c0217b2))
+* **engine:** per-prompt bash allowlist additions (no session-state mutation) ([184a16f](https://github.com/dsswift/ion/commit/184a16f5b33f4add261be0f02f9a870efa2ed132))
+
+### Bug Fixes
+
+* **engine:** resolve tier aliases in agent spawner (#174) ([0d1425f](https://github.com/dsswift/ion/commit/0d1425f86353033a2fae8e1ad74422d6af7f0cb7))
+* **engine:** implement MCP compliance for CliBackend (#182) ([2cf94ea](https://github.com/dsswift/ion/commit/2cf94ea26c531e1bbfdfb6be789710af5744c5f4))
+* **engine:** replace single-slot currentCtx with ctxStack (#183) ([e5c4dbe](https://github.com/dsswift/ion/commit/e5c4dbe4e1e760fc195c915de279571ea26cc582))
+
+## [1.35.0](https://github.com/dsswift/ion/compare/engine-v1.34.1...engine-v1.35.0) (2026-06-04)
+
+### Features
+
+* **engine:** inject steer messages before end_turn exit ([3c5e534](https://github.com/dsswift/ion/commit/3c5e53418393f5cdacbb90ccc1e63d6b6fcd7e22))
+
+## [1.34.1](https://github.com/dsswift/ion/compare/engine-v1.34.0...engine-v1.34.1) (2026-06-03)
+
+### Bug Fixes
+
+* **engine:** preserve corrected agent display names ([af89801](https://github.com/dsswift/ion/commit/af89801870f9ee3be19e87aacd116d7ca3b5923b))
+* **engine:** structurally dedupe compaction summaries ([806f298](https://github.com/dsswift/ion/commit/806f2985cccca8a8614b4f759f7a8924f6f12dfb))
+* **engine:** pin compact_boundary wire and persistence contracts ([100c9fb](https://github.com/dsswift/ion/commit/100c9fb155bd0c931dd602b22c55dff60a28cf37))
+* **engine:** thread compact strategy through OnRequestCompactSummary ([781dc72](https://github.com/dsswift/ion/commit/781dc72cf1ec031a069d84e1bdeae63c368c3736))
+* **engine:** add proactive-path compact_boundary injection test ([2466d54](https://github.com/dsswift/ion/commit/2466d5443a0670918da9206dec244607810edc5f))
+* **engine:** cover FireCompactSummaryRequest fan-out return shapes ([7703d40](https://github.com/dsswift/ion/commit/7703d40647be26f34b8d7e347ccdc3d66cac448d))
+* **engine:** unwrap _payload in SDK runtime for string hook payloads (#170) ([88231df](https://github.com/dsswift/ion/commit/88231df66d2f624c0a5d680410c90e3d88360b66))
+* **engine:** deduplicate tool names in dispatched agent sessions (#171) ([9432f13](https://github.com/dsswift/ion/commit/9432f13fba62be4a6676196ce83135ea34707b94))
+
+## [1.34.0](https://github.com/dsswift/ion/compare/engine-v1.33.0...engine-v1.34.0) (2026-06-02)
+
+### Features
+
+* **engine:** aggregate dispatches into pager with array model ([5d9cf05](https://github.com/dsswift/ion/commit/5d9cf057a46f69302699867adcca7241f94ebd17))
+* **engine:** add dispatch conversation e2e test ([7465729](https://github.com/dsswift/ion/commit/74657294b60263f0a34ee072af997bef3ba4ffaf))
+* **engine:** support dynamic openai-compatible providers ([9274c88](https://github.com/dsswift/ion/commit/9274c88fb539f739ec57ee6e51cb158a48825276))
+* **engine:** add ext display name lookup for agents ([079e353](https://github.com/dsswift/ion/commit/079e353ae7d3fa55d036cd12bb09bbea8c862780))
+
+### Bug Fixes
+
+* **engine:** atomic AppendOrUpdate to prevent duplicate agent rows ([dd1eeef](https://github.com/dsswift/ion/commit/dd1eeef139540d45f1839bbf7909070cdb25457b))
+* **engine:** add compaction diagnostic logging and fix reactive TokensBefore bug ([f7b1783](https://github.com/dsswift/ion/commit/f7b17837d59245ded011230cf4276af512067cc9))
+* **engine:** bump conversation JSONL scanner limit from 1 MB to 32 MB ([f45f309](https://github.com/dsswift/ion/commit/f45f309e21bdd35844372e6adc2f27bd33b66473))
+* **engine:** fix stale session memory in compaction system ([8258794](https://github.com/dsswift/ion/commit/8258794518a9e2c7f5acf1eb6e0a342047aa85f7))
+* **engine:** preserve background dispatch agent visibility on run exit ([884d853](https://github.com/dsswift/ion/commit/884d8530f66423256399500f396afdca06105623))
+* **engine:** cap tool result size, persist model override, improve memory quality ([387190d](https://github.com/dsswift/ion/commit/387190d6dd79780fb3c04ea8a9fd3c6b854581e0))
+* **engine:** respect compaction boundaries in BuildContextPath ([2b8afc4](https://github.com/dsswift/ion/commit/2b8afc49f248d6e01d942ab2f484c2e003c160e3))
+* **engine:** seed lastModel from conversation on session resume ([74e324b](https://github.com/dsswift/ion/commit/74e324b6d1c2cda96c5e2c188a053509e7e36f32))
+* **engine:** prevent aggressive compaction on resumed conversations ([b5a58d7](https://github.com/dsswift/ion/commit/b5a58d7d6801780e63c85712f570e7c460032f6f))
+* **engine:** resolve planFilePath from session when ExitPlanMode runs outside plan mode ([79890a3](https://github.com/dsswift/ion/commit/79890a31cbb47f0867abd8b4e0cf280f2f4ddcab))
+* **engine:** restore provider registry after tests ([2e4b443](https://github.com/dsswift/ion/commit/2e4b44312a00869263953bb2ad0d624ece1e670a))
+
+## [1.33.0](https://github.com/dsswift/ion/compare/engine-v1.32.0...engine-v1.33.0) (2026-06-01)
+
+### Features
+
+* **engine:** add session memory and compaction system ([993a5f2](https://github.com/dsswift/ion/commit/993a5f241985dcb8cad819b31c82c76780088107))
+
+## [1.32.0](https://github.com/dsswift/ion/compare/engine-v1.31.2...engine-v1.32.0) (2026-06-01)
+
+### Features
+
+* **engine:** add plan mode fields to dispatch agent opts and result ([5249421](https://github.com/dsswift/ion/commit/5249421d9b155829c62a51993837f9afc14067e4))
+
+### Bug Fixes
+
+* **engine:** populate AgentID, simplify OnPlanProposal, add logging ([15c96a8](https://github.com/dsswift/ion/commit/15c96a8f949f3795b0f4658a26b316199d047765))
+
+## [1.31.2](https://github.com/dsswift/ion/compare/engine-v1.31.1...engine-v1.31.2) (2026-05-31)
+
+### Bug Fixes
+
+* **engine:** intercept exit plan mode in all modes ([30b094d](https://github.com/dsswift/ion/commit/30b094d034a74977351dceabdaecffa189045759))
+
+## [1.31.1](https://github.com/dsswift/ion/compare/engine-v1.31.0...engine-v1.31.1) (2026-05-31)
+
+### Bug Fixes
+
+* **engine:** extract rlimit init to platform-specific files for windows cross-compilation ([d2003cd](https://github.com/dsswift/ion/commit/d2003cd6a5508a2acb73ebc161f1b71df1893117))
+
+## [1.31.0](https://github.com/dsswift/ion/compare/engine-v1.30.1...engine-v1.31.0) (2026-05-31)
+
+### Features
+
+* **engine:** add ion-meta v2 with tool catalog, greeting, and three-mode dispatch ([61688af](https://github.com/dsswift/ion/commit/61688af40fb28d7b8695e5de9cf0b950e54757a4))
+* **engine:** add session context to sdk event types ([749d2c4](https://github.com/dsswift/ion/commit/749d2c4654d98c379b099f107cf2b39d08078b04))
+* **engine:** add agent dispatch lifecycle with redispatch ([f9fff27](https://github.com/dsswift/ion/commit/f9fff27fccee90c2193214071c6a96aac47d493a))
+* **engine:** persist and restore dispatch agent state ([9351d98](https://github.com/dsswift/ion/commit/9351d98f00b201bb82dd717975b62064c8037f20))
+* **engine:** add ion scope slash command support ([0d8a94b](https://github.com/dsswift/ion/commit/0d8a94b342870bc9e72f16490e8e9ad65d5d334d))
+* **engine:** add agent dispatch lifecycle hook tests ([3fb279e](https://github.com/dsswift/ion/commit/3fb279ead813f191ceb00c0b001becd64c119121))
+
+### Bug Fixes
+
+* **engine:** skip workspace watcher when cwd is ion home ([632f170](https://github.com/dsswift/ion/commit/632f170fdbc0bc5cc7be21513cfd94be9ee9dd6b))
+* **engine:** fix CI failures in integration tests and desktop test ([cbbf4a6](https://github.com/dsswift/ion/commit/cbbf4a63975f2c741fa88af0aa8d231323ac66c9))
+
 ## [1.30.1](https://github.com/dsswift/ion/compare/engine-v1.30.0...engine-v1.30.1) (2026-05-28)
 
 ### Bug Fixes

@@ -52,13 +52,21 @@ enum RemoteEvent: Codable, Sendable {
     case terminalSnapshot(tabId: String, instances: [TerminalInstanceInfo], activeInstanceId: String?, buffers: [String: String]?)
     // Engine events (structured)
     case engineAgentState(tabId: String, instanceId: String?, agents: [AgentStateUpdate])
-    case engineStatus(tabId: String, instanceId: String?, fields: StatusFields)
-    case engineWorkingMessage(tabId: String, instanceId: String?, message: String)
+    case engineStatus(tabId: String, instanceId: String?, fields: StatusFields, metadata: [String: AnyCodable]?)
+    case engineWorkingMessage(tabId: String, instanceId: String?, message: String, metadata: [String: AnyCodable]?)
     case engineToolStart(tabId: String, instanceId: String?, toolName: String, toolId: String)
     case engineToolEnd(tabId: String, instanceId: String?, toolId: String, result: String?, isError: Bool)
     case engineToolStalled(tabId: String, instanceId: String?, toolId: String, toolName: String, elapsed: Double)
+    /// Engine drained a mid-turn steer message into the conversation as
+    /// a user turn before the next LLM call. The desktop renders a
+    /// "Steer applied" divider into the engineMessages scrollback; iOS
+    /// mirrors the same divider so the user sees confirmation across
+    /// both clients. The body is not carried over the wire — the steer
+    /// message is already part of the conversation. See the Go-side
+    /// SteerInjectedEvent and the TS engine_steer_injected variant.
+    case engineSteerInjected(tabId: String, instanceId: String?, messageLength: Int)
     case engineError(tabId: String, instanceId: String?, message: String)
-    case engineNotify(tabId: String, instanceId: String?, message: String, level: String)
+    case engineNotify(tabId: String, instanceId: String?, message: String, level: String, metadata: [String: AnyCodable]?)
     case engineDialog(tabId: String, instanceId: String?, dialogId: String, method: String, title: String, options: [String]?, defaultValue: String?)
     case engineDialogResolved(tabId: String, instanceId: String?, dialogId: String)
     case engineTextDelta(tabId: String, instanceId: String?, text: String)
@@ -67,15 +75,27 @@ enum RemoteEvent: Codable, Sendable {
     case engineInstanceAdded(tabId: String, instanceId: String, label: String)
     case engineInstanceRemoved(tabId: String, instanceId: String)
     case engineInstanceMoved(sourceTabId: String, instanceId: String, targetTabId: String)
-    case engineHarnessMessage(tabId: String, instanceId: String?, message: String, source: String?)
-    case engineConversationHistory(tabId: String, instanceId: String?, messages: [EngineMessage])
+    /// `metadata` is an opaque harness-defined hints map the engine forwards
+    /// verbatim. iOS does not yet act on the field, but decoding it cleanly
+    /// here means future iOS handlers (e.g. dedupKey-based rendering) can
+    /// adopt the convention without a wire-protocol change. `AnyCodable`
+    /// is the same pass-through JSON helper used by `desktopSettingsSnapshot`.
+    case engineHarnessMessage(tabId: String, instanceId: String?, message: String, source: String?, metadata: [String: AnyCodable]?)
+    case engineConversationHistory(tabId: String, instanceId: String?, messages: [Message])
+    case agentConversationHistory(agentName: String, conversationId: String?, messages: [Message])
     case engineModelOverride(tabId: String, instanceId: String?, model: String)
     case engineProfiles(profiles: [EngineProfile])
+    /// State event: the engine session has entered or exited plan mode.
+    /// `planModeEnabled: true` is authoritative (model called EnterPlanMode
+    /// and the session confirmed). iOS uses this to insert a "Plan created"
+    /// lifecycle divider into the engine conversation. `planModeEnabled: false`
+    /// is a proposal — the actual exit is gated by the user-approval
+    /// chokepoint on the desktop (the "Implement" button).
+    case enginePlanModeChanged(tabId: String, instanceId: String?, planModeEnabled: Bool, planFilePath: String?, planSlug: String?)
     /// Workflow event from the engine: the model has proposed a plan-mode
-    /// transition (currently only kind="exit"). iOS does not yet act on
-    /// this — the desktop is the authoritative consumer that renders the
-    /// approval card — but iOS decodes the variant cleanly so the wire
-    /// protocol stays uniform across consumers. See
+    /// transition (currently only kind="exit"). iOS uses this to render
+    /// plan-proposal cards — the desktop is the authoritative consumer
+    /// that gates approval. See
     /// docs/architecture/adr/003-state-events-vs-workflow-events.md.
     case enginePlanProposal(tabId: String, instanceId: String?, kind: String, planFilePath: String?, planSlug: String?)
     /// Engine ↔ harness wire-protocol request emitted when the engine wants
@@ -190,6 +210,11 @@ enum RemoteEvent: Codable, Sendable {
     case fsFileContent(filePath: String, response: FsFileContentResponse)
     case fsImageContent(filePath: String, dataUrl: String?, error: String?)
     case fsWriteResult(filePath: String, response: FsWriteResultResponse)
+    /// Result of an `fsRename` command. iOS handles this by refreshing
+    /// the parent directory listing on success (so the new name appears
+    /// and the old entry disappears) and surfacing the error via
+    /// `fileRenameResult` on failure.
+    case fsRenameResult(oldPath: String, newPath: String, response: FsRenameResultResponse)
     // Command discovery events
     case discoverCommandsResponse(directory: String, commands: [DiscoveredSlashCommand])
     // Upload attachment result
@@ -235,6 +260,7 @@ enum RemoteEvent: Codable, Sendable {
         case engineToolStart = "engine_tool_start"
         case engineToolEnd = "engine_tool_end"
         case engineToolStalled = "engine_tool_stalled"
+        case engineSteerInjected = "engine_steer_injected"
         case engineError = "engine_error"
         case engineNotify = "engine_notify"
         case engineDialog = "engine_dialog"
@@ -247,8 +273,10 @@ enum RemoteEvent: Codable, Sendable {
         case engineInstanceMoved = "engine_instance_moved"
         case engineHarnessMessage = "engine_harness_message"
         case engineConversationHistory = "engine_conversation_history"
+        case agentConversationHistory = "agent_conversation_history"
         case engineModelOverride = "engine_model_override"
         case engineProfiles = "engine_profiles"
+        case enginePlanModeChanged = "engine_plan_mode_changed"
         case enginePlanProposal = "engine_plan_proposal"
         case engineEarlyStopDecisionRequest = "engine_early_stop_decision_request"
         case engineCommandRegistry = "engine_command_registry"
@@ -266,6 +294,7 @@ enum RemoteEvent: Codable, Sendable {
         case fsFileContent = "fs_file_content"
         case fsImageContent = "fs_image_content"
         case fsWriteResult = "fs_write_result"
+        case fsRenameResult = "fs_rename_result"
         case discoverCommandsResponse = "discover_commands_response"
         case uploadAttachmentResult = "upload_attachment_result"
         case tabAttachments = "tab_attachments"
@@ -288,6 +317,11 @@ enum RemoteEvent: Codable, Sendable {
         case directory, files, branch, isGitRepo, ahead, behind, stagedCount, unstagedCount
         case commits, totalCount, diff, fileName, graphLayout, hash, stats
         case entries, filePath, ok, error
+        // fs_rename_result payload — the command carries `oldPath`/`newPath`
+        // and the result echoes them so the iOS handler can refresh the
+        // parent directory listing without re-correlating with the
+        // outbound command.
+        case oldPath, newPath
         case commands
         case ts, buffered
         case id, name, path
@@ -296,9 +330,15 @@ enum RemoteEvent: Codable, Sendable {
         case attachments
         case sourceTabId, targetTabId
         case customName, customIcon, updatedAt, remoteDisplayUpdatedAt
+        // engine_plan_mode_changed — state event for plan-mode entry/exit.
+        case planModeEnabled
+        // engine_steer_injected — mid-turn steer drain confirmation.
+        // Mirrors EngineEvent.SteerMessageLength's JSON tag.
+        case steerMessageLength
         // engine_plan_proposal — workflow event for plan-mode proposals.
         // The engine emits these field names (no instanceId; the proposal
         // is always at the tab level, not per-instance).
+        // planFilePath and planSlug are shared with engine_plan_mode_changed.
         case planProposalKind, planFilePath, planSlug
         // engine_early_stop_decision_request — wire-protocol request the
         // engine emits when it wants an external opinion on continuation.
@@ -325,6 +365,15 @@ enum RemoteEvent: Codable, Sendable {
         // metadata (type, group, label, description, defaultValue);
         // `groups` is the ordered list of section descriptors.
         case settings, schema, groups
+        // Pass-through harness-defined hint map carried on the four
+        // user-visible engine events (status, working_message, notify,
+        // harness_message). iOS does not act on the field yet but
+        // decodes it cleanly so future handlers can adopt conventions
+        // like `metadata.dedupKey` without a wire change. See
+        // docs/protocol/server-events.md for well-known keys.
+        case metadata
+        case agentName
+        case conversationId
     }
 
     // MARK: - Decoder

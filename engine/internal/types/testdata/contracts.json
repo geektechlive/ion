@@ -17,6 +17,11 @@
       "retryable",
       "sessionId"
     ],
+    "model_fallback": [
+      "fallbackModel",
+      "reason",
+      "requestedModel"
+    ],
     "permission_request": [
       "options",
       "questionId",
@@ -52,6 +57,9 @@
       "skills",
       "tools",
       "version"
+    ],
+    "steer_injected": [
+      "messageLength"
     ],
     "stream_reset": null,
     "task_complete": [
@@ -116,6 +124,16 @@
     "commands",
     "defaultValue",
     "dialogId",
+    "dispatchAgent",
+    "dispatchCost",
+    "dispatchElapsed",
+    "dispatchExitCode",
+    "dispatchInputTokens",
+    "dispatchModel",
+    "dispatchOutputTokens",
+    "dispatchSessionId",
+    "dispatchTask",
+    "dispatchToolCount",
     "earlyStopBudget",
     "earlyStopContinuationCount",
     "earlyStopCumulativeOutput",
@@ -134,6 +152,9 @@
     "errorCode",
     "exitCode",
     "extensionName",
+    "fallbackModel",
+    "fallbackReason",
+    "fallbackRequestedModel",
     "fields",
     "httpStatus",
     "index",
@@ -149,6 +170,7 @@
     "message",
     "messagesAfter",
     "messagesBefore",
+    "metadata",
     "method",
     "options",
     "partialInput",
@@ -170,6 +192,7 @@
     "signal",
     "source",
     "stderrTail",
+    "steerMessageLength",
     "strategy",
     "summary",
     "text",
@@ -183,6 +206,7 @@
   ],
   "sharedTypes": {
     "AgentStateUpdate": [
+      "id",
       "metadata",
       "name",
       "status"
@@ -192,6 +216,7 @@
       "name"
     ],
     "EngineConfig": [
+      "claudeCompat",
       "extensions",
       "maxTokens",
       "model",
@@ -201,6 +226,27 @@
       "thinking",
       "workingDirectory",
       "workspaceWatchIgnore"
+    ],
+    "LlmContentBlock": [
+      "clearedBlocks",
+      "content",
+      "factCount",
+      "id",
+      "input",
+      "is_error",
+      "messagesAfter",
+      "messagesBefore",
+      "messagesSummarized",
+      "name",
+      "recentFiles",
+      "source",
+      "summary",
+      "text",
+      "thinking",
+      "tokensBefore",
+      "tool_use_id",
+      "trigger",
+      "type"
     ],
     "McpServerInfo": [
       "name",
@@ -236,6 +282,7 @@
       "id"
     ],
     "StatusFields": [
+      "backgroundAgents",
       "contextPercent",
       "contextWindow",
       "extensionName",

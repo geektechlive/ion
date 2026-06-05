@@ -39,11 +39,21 @@ func (g *ExtensionGroup) Close() {
 	}
 }
 
-// Tools merges tool definitions from all hosts.
+// Tools merges tool definitions from all hosts. Last-registered wins when
+// multiple hosts register the same tool name.
 func (g *ExtensionGroup) Tools() []ToolDefinition {
+	seen := make(map[string]int) // name -> index in all
 	var all []ToolDefinition
 	for _, h := range g.hosts {
-		all = append(all, h.Tools()...)
+		for _, t := range h.Tools() {
+			if idx, ok := seen[t.Name]; ok {
+				all[idx] = t
+				utils.Debug("ExtensionGroup", fmt.Sprintf("duplicate tool %q from host %q, last-registered wins", t.Name, h.Name()))
+			} else {
+				seen[t.Name] = len(all)
+				all = append(all, t)
+			}
+		}
 	}
 	return all
 }
@@ -209,21 +219,24 @@ func (g *ExtensionGroup) FireInput(ctx *Context, prompt string) (string, error) 
 	return prompt, nil
 }
 
-// FireBeforeAgentStart chains the system prompt through each host.
-// Last non-empty value wins.
-func (g *ExtensionGroup) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, error) {
-	var systemPrompt string
+// FireBeforeAgentStart chains the system prompt and agent name through each
+// host. Last non-empty value wins for each field independently.
+func (g *ExtensionGroup) FireBeforeAgentStart(ctx *Context, info AgentInfo) (string, string, error) {
+	var systemPrompt, agentName string
 	for _, h := range g.hosts {
-		sp, err := h.FireBeforeAgentStart(ctx, info)
+		sp, an, err := h.FireBeforeAgentStart(ctx, info)
 		if err != nil {
 			utils.Log("ExtensionGroup", fmt.Sprintf("FireBeforeAgentStart error: %v", err))
-			return systemPrompt, err
+			return systemPrompt, agentName, err
 		}
 		if sp != "" {
 			systemPrompt = sp
 		}
+		if an != "" {
+			agentName = an
+		}
 	}
-	return systemPrompt, nil
+	return systemPrompt, agentName, nil
 }
 
 // FirePerToolResult chains the result string through each host.
@@ -545,6 +558,24 @@ func (g *ExtensionGroup) FireSessionCompact(ctx *Context, info CompactionInfo) {
 			utils.Log("ExtensionGroup", fmt.Sprintf("FireSessionCompact error: %v", err))
 		}
 	}
+}
+
+// FireCompactSummaryRequest fans the hook out across every host and
+// returns the first non-empty summary string a host produced. When no
+// host provides a summary the engine falls back to its regex fact
+// extractor. The decision is logged so a developer reading
+// ~/.ion/engine.log can tell which path won — see runloop_compaction.go
+// for the corresponding "path=hook" / "path=regex" markers.
+func (g *ExtensionGroup) FireCompactSummaryRequest(ctx *Context, info CompactSummaryRequestInfo) (string, bool) {
+	for _, h := range g.hosts {
+		summary, ok := h.FireCompactSummaryRequest(ctx, info)
+		if ok && summary != "" {
+			utils.Log("ExtensionGroup", fmt.Sprintf("FireCompactSummaryRequest: host produced summary len=%d msgCount=%d", len(summary), info.MessageCount))
+			return summary, true
+		}
+	}
+	utils.Debug("ExtensionGroup", fmt.Sprintf("FireCompactSummaryRequest: no host produced a summary, falling through (msgCount=%d hosts=%d)", info.MessageCount, len(g.hosts)))
+	return "", false
 }
 
 func (g *ExtensionGroup) FirePermissionRequest(ctx *Context, info PermissionRequestInfo) {

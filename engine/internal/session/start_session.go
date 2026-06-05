@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
 	"github.com/dsswift/ion/engine/internal/modelconfig"
 	"github.com/dsswift/ion/engine/internal/permissions"
+	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/session/agents"
 	"github.com/dsswift/ion/engine/internal/session/extcontext"
 	"github.com/dsswift/ion/engine/internal/session/pending"
@@ -82,6 +84,10 @@ func (a *sessionAccessor) DeregisterAgentSpec(name string) {
 
 func (a *sessionAccessor) LookupAgentSpec(name string) (types.AgentSpec, bool) {
 	return a.s.agents.LookupSpec(name)
+}
+
+func (a *sessionAccessor) LookupExtDisplayName(name string) string {
+	return a.s.agents.LookupExtDisplayName(name)
 }
 
 func (a *sessionAccessor) ExtGroup() *extension.ExtensionGroup { return a.s.extGroup }
@@ -158,6 +164,27 @@ func (a *sessionAccessor) SearchHistory(query string, maxResults int) []extensio
 	return result
 }
 
+func (a *sessionAccessor) GetSessionMemory() string {
+	a.m.mu.RLock()
+	sm := a.s.sessionMemory
+	a.m.mu.RUnlock()
+	if sm == nil {
+		return ""
+	}
+	return sm.GetMemory()
+}
+
+func (a *sessionAccessor) SetSessionMemory(content string) {
+	a.m.mu.RLock()
+	sm := a.s.sessionMemory
+	a.m.mu.RUnlock()
+	if sm == nil {
+		utils.Log("Session", "SetSessionMemory: no session memory active, ignoring")
+		return
+	}
+	sm.SetMemory(content)
+}
+
 func (a *sessionAccessor) TranslateEvent(ev types.NormalizedEvent, contextWindow int) types.EngineEvent {
 	return translateToEngineEvent(ev, contextWindow)
 }
@@ -174,10 +201,46 @@ func (a *sessionAccessor) GetPlanModeState() (bool, string) {
 	return a.m.GetPlanModeState(a.key)
 }
 
+func (a *sessionAccessor) AppendOrUpdateAgentState(state types.AgentStateUpdate) string {
+	a.s.agents.AppendOrUpdate(state, func(existing *types.AgentStateUpdate) {
+		// Preserve and merge the structured dispatches array from previous
+		// dispatches. When the incoming state carries new dispatch entries
+		// (e.g. a re-dispatch of the same agent name), merge them with any
+		// existing entries rather than replacing.
+		var prevDispatches []interface{}
+		if existing.Metadata != nil {
+			if pd, ok := existing.Metadata["dispatches"].([]interface{}); ok {
+				prevDispatches = pd
+			}
+		}
+		existing.ID = state.ID
+		existing.Status = state.Status
+		existing.Metadata = state.Metadata
+		if len(prevDispatches) > 0 && existing.Metadata != nil {
+			if newDisp, ok := existing.Metadata["dispatches"].([]interface{}); ok {
+				existing.Metadata["dispatches"] = append(prevDispatches, newDisp...)
+			} else {
+				existing.Metadata["dispatches"] = prevDispatches
+			}
+		}
+	})
+	return state.ID
+}
+
+func (a *sessionAccessor) UpdateAgentStateByID(id string, updater func(*types.AgentStateUpdate)) {
+	a.s.agents.UpdateStateByID(id, updater)
+}
+
+func (a *sessionAccessor) EmitAgentSnapshot(reason string) {
+	snapshot := a.s.agents.MergedSnapshot()
+	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=%s", a.key, len(snapshot), reason))
+	a.m.emit(a.key, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
+}
+
 // newExtContext builds a fully-populated extension Context for the given session.
 // All functional callbacks are wired through the extcontext.SessionAccessor interface.
 func (m *Manager) newExtContext(s *engineSession, key string) *extension.Context {
-	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key})
+	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key}, s.dispatchRegistry)
 }
 
 // StartSession creates a new session with the given config.
@@ -202,13 +265,14 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	}
 
 	s := &engineSession{
-		key:            key,
-		config:         config,
-		conversationID:  config.SessionID,
-		agents:         agents.NewRegistry(),
-		childPIDs:      make(map[int]struct{}),
-		pending:        pending.New(),
-		maxQueueDepth:  32,
+		key:              key,
+		config:           config,
+		conversationID:   config.SessionID,
+		agents:           agents.NewRegistry(),
+		childPIDs:        make(map[int]struct{}),
+		pending:          pending.New(),
+		maxQueueDepth:    32,
+		dispatchRegistry: extcontext.NewDispatchRegistry(),
 	}
 
 	// Initialize process registry for extension-spawned subprocesses.
@@ -245,6 +309,58 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 
 	m.mu.Unlock()
 
+	// Rehydrate agent dispatch state from the conversation file if the
+	// session is resuming an existing conversation. This runs before
+	// extensions fire session_start so the agent registry is pre-populated
+	// with completed dispatches. When the extension later emits its fresh
+	// roster, MergedSnapshot deduplicates: engine-managed entries (with
+	// task, conversationId, elapsed) win over the extension's idle entries.
+	if s.conversationID != "" {
+		m.rehydrateDispatchState(s, key)
+
+		// Seed lastModel from the conversation file so ReconcileState emits
+		// the correct model before any prompt dispatches. Without this, a
+		// resumed session emits model="" on reconcile, causing the desktop to
+		// fall back to its preference default (which may differ from the
+		// conversation's actual model). This also seeds lastContextWindow so
+		// the context-percent denominator is correct from the first status.
+		if convModel, err := conversation.LoadLlmHeaderModel(s.conversationID, ""); err == nil && convModel != "" {
+			ctxWindow := conversation.DefaultContext
+			if info := providers.GetModelInfo(convModel); info != nil {
+				ctxWindow = info.ContextWindow
+			}
+			m.mu.Lock()
+			s.lastModel = convModel
+			s.lastContextWindow = ctxWindow
+			m.mu.Unlock()
+			utils.Log("Session", fmt.Sprintf("StartSession: key=%s seeded lastModel=%s contextWindow=%d from conversation=%s", key, convModel, ctxWindow, s.conversationID))
+		} else if err != nil {
+			utils.Debug("Session", fmt.Sprintf("StartSession: key=%s could not load conversation model conv=%s err=%v", key, s.conversationID, err))
+		}
+
+		// Initialize session memory for resumed conversations. The memory
+		// file (if it exists) is loaded from disk so the first compaction
+		// on this session can use the pre-existing summary as a zero-cost
+		// context restoration source. The memory updater starts via
+		// Start() and will be stopped by StopSession.
+		memoryDisabled := m.config != nil && m.config.Compaction != nil &&
+			m.config.Compaction.MemoryEnabled != nil && !*m.config.Compaction.MemoryEnabled
+		if !memoryDisabled {
+			home, _ := os.UserHomeDir()
+			convDir := filepath.Join(home, ".ion", "conversations")
+			sm := NewSessionMemory(s.conversationID, convDir, nil)
+			if sm.LoadMemory() {
+				utils.Log("Session", fmt.Sprintf("StartSession: key=%s loaded session memory for conv=%s", key, s.conversationID))
+			}
+			sm.Start()
+			m.mu.Lock()
+			s.sessionMemory = sm
+			m.mu.Unlock()
+		} else {
+			utils.Log("Session", fmt.Sprintf("StartSession: key=%s session memory disabled by config", key))
+		}
+	}
+
 	// Signal that session startup is in progress so consumers can mirror
 	// loading state. Events flow through the socket broadcast independently
 	// of the request-response ACK, so consumers receive these before
@@ -270,15 +386,17 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		}
 	}
 	// Load Claude Code–style skills from ~/.claude/skills (one subdir per
-	// skill, each with a SKILL.md file). These are discovered when
-	// enableClaudeCompat is configured; the loader is always attempted so
-	// that users who install Claude-style skills without a compatibility flag
-	// still get model-invocable skill awareness. A missing directory is a
-	// silent no-op (returns nil, nil).
-	if claudeSkills, err := skills.LoadClaudeSkillsDirectory(skillPaths.ClaudeUser); err == nil {
-		for _, sk := range claudeSkills {
-			skills.RegisterSkill(sk)
+	// skill, each with a SKILL.md file). Only attempted when the ClaudeCompat
+	// flag is set on the engine config. A missing directory is a silent no-op
+	// (returns nil, nil).
+	if config.ClaudeCompat {
+		if claudeSkills, err := skills.LoadClaudeSkillsDirectory(skillPaths.ClaudeUser); err == nil {
+			for _, sk := range claudeSkills {
+				skills.RegisterSkill(sk)
+			}
 		}
+	} else {
+		utils.Debug("Session", "skipping ~/.claude/skills/ (claudeCompat not set)")
 	}
 	if names := skills.ListSkillNames(); len(names) > 0 {
 		utils.Log("Session", fmt.Sprintf("loaded %d skills: %v", len(names), names))
@@ -397,7 +515,16 @@ func (m *Manager) loadAndWireExtensions(s *engineSession, key string, config typ
 		})
 		host.SetPersistentEmit(func(ev types.EngineEvent) {
 			if ev.Type == "engine_agent_state" {
+				// Cache the extension's roster, then re-emit a merged snapshot
+				// that includes engine-managed entries (dispatch state with
+				// task, conversationId, progress). Forwarding the extension's
+				// raw event would overwrite engine-managed entries on the
+				// desktop due to the complete-snapshot contract.
 				s.agents.CacheExtStates(ev.Agents)
+				merged := s.agents.MergedSnapshot()
+				utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=ext_emit_merged", capturedKey, len(merged)))
+				m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: merged})
+				return
 			}
 			if ev.Type == "engine_status" && ev.Fields != nil && ev.Fields.ExtensionName != "" {
 				m.mu.Lock()

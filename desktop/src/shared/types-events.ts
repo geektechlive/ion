@@ -5,6 +5,19 @@ export interface DiscoveredCommand {
   description: string
   scope: 'user' | 'project'
   source: 'command' | 'skill'
+  /**
+   * Which directory family this command was discovered from:
+   *   - `'ion'`    → `~/.ion/commands/` or `{project}/.ion/commands/`
+   *   - `'claude'` → `~/.claude/commands/`, `{project}/.claude/commands/`,
+   *                  or `~/.claude/skills/`
+   *
+   * Consumers use this to filter out `'claude'` entries when the
+   * `enableClaudeCompat` setting is disabled. Ion-native commands are
+   * always available; only Claude-compat entries are gated by the
+   * setting. See `desktop/src/main/ipc/sessions-list.ts` and
+   * `desktop/src/main/remote/handlers/tabs.ts` for the filter logic.
+   */
+  origin: 'ion' | 'claude'
 }
 
 // ─── CLI Backend Stream Event Types ───
@@ -146,3 +159,5 @@ export type NormalizedEvent =
   | { type: 'stream_reset' }
   | { type: 'compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
   | { type: 'tool_stalled'; toolId: string; toolName: string; elapsed: number }
+  | { type: 'steer_injected'; messageLength: number }
+  | { type: 'model_fallback'; requestedModel: string; fallbackModel: string; reason: string }
