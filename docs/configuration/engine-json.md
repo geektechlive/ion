@@ -16,7 +16,7 @@ Ion ships with no default model. Before the engine can run a prompt, you must ei
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"api"` | Backend mode. `"api"` for direct API calls, `"cli"` for CLI proxy. |
+| `backend` | string | `"api"` | Backend mode. `"api"` for direct API calls, `"cli"` for Claude CLI subprocess, `"codex"` for Codex CLI subprocess, `"hybrid"` for per-run routing by model provider (see [Hybrid Backend](../architecture/hybrid-backend.md)). |
 | `defaultModel` | string | `""` | Model identifier used when no `--model` override is passed. Required. The engine errors out if neither this field nor `--model` is set. |
 | `logLevel` | string | `""` | Log verbosity. One of `"debug"`, `"info"`, `"warn"`, `"error"`. Empty string uses the engine default. |
 

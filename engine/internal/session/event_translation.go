@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -359,9 +358,9 @@ func (m *Manager) handleRunError(runID string, err error) {
 // on the model that started it. We use s.lastModel (set in prompt_dispatch
 // when StartRun is called) to drive the resolution. If lastModel is empty
 // (no run yet), this is a no-op — matching the pre-hybrid behavior of
-// returning early when the backend wasn't CliBackend.
+// returning early when the backend wasn't a subprocess backend.
 func (m *Manager) fireCliTurnHooks(s *engineSession, key string, sOk bool, event types.NormalizedEvent) {
-	if _, isCli := m.resolvedBackend(s.lastModel).(*backend.CliBackend); !isCli {
+	if !isSubprocessBackend(m.resolvedBackend(s.lastModel)) {
 		return
 	}
 	if !sOk || s.extGroup == nil || s.extGroup.IsEmpty() {
