@@ -102,19 +102,24 @@ func (h *HybridBackend) InnerCli() *CliBackend { return h.cli }
 func (h *HybridBackend) InnerCodex() *CodexCliBackend { return h.codex }
 
 // chooseFor returns the inner backend that should handle a run for the
-// given model. The lookup goes through the canonical model→provider
-// resolver (providers.GetModelInfo); unknown models default to ApiBackend
-// so the user sees a clean provider error rather than the misleading
-// "model not available" surface CLI would emit.
+// given model. The lookup tries the model registry first (GetModelInfo),
+// then falls back to prefix-based provider resolution (ProviderNameForModel)
+// for models not yet in the registry (e.g. newly released gpt-* or o-series).
+// Unknown models default to ApiBackend so the user sees a clean provider
+// error rather than the misleading "model not available" surface CLI would
+// emit.
 func (h *HybridBackend) chooseFor(model string) RunBackend {
-	info := providers.GetModelInfo(model)
-	if info != nil {
-		switch info.ProviderID {
-		case "anthropic":
-			return h.cli
-		case "openai":
-			return h.codex
-		}
+	providerID := ""
+	if info := providers.GetModelInfo(model); info != nil {
+		providerID = info.ProviderID
+	} else {
+		providerID = providers.ProviderNameForModel(model)
+	}
+	switch providerID {
+	case "anthropic":
+		return h.cli
+	case "openai":
+		return h.codex
 	}
 	return h.api
 }
@@ -166,9 +171,13 @@ func (h *HybridBackend) recordRun(requestID string, inner RunBackend, model stri
 	case h.codex:
 		kind = "codex"
 	}
-	providerID := "<unknown>"
-	if info := providers.GetModelInfo(model); info != nil {
-		providerID = info.ProviderID
+	providerID := providers.ProviderNameForModel(model)
+	if providerID == "" {
+		if info := providers.GetModelInfo(model); info != nil {
+			providerID = info.ProviderID
+		} else {
+			providerID = "<unknown>"
+		}
 	}
 	utils.Log("Hybrid", fmt.Sprintf(
 		"StartRun: requestID=%s model=%s providerID=%s → %s (table size=%d)",

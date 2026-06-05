@@ -24,16 +24,19 @@ func (m *Manager) resolvedBackend(model string) backend.RunBackend {
 	if !ok {
 		return m.backend
 	}
-	info := providers.GetModelInfo(model)
-	if info != nil {
-		switch info.ProviderID {
-		case "anthropic":
-			utils.Debug("Session", "resolvedBackend: model="+model+" providerID=anthropic → inner CliBackend")
-			return h.InnerCli()
-		case "openai":
-			utils.Debug("Session", "resolvedBackend: model="+model+" providerID=openai → inner CodexCliBackend")
-			return h.InnerCodex()
-		}
+	providerID := ""
+	if info := providers.GetModelInfo(model); info != nil {
+		providerID = info.ProviderID
+	} else {
+		providerID = providers.ProviderNameForModel(model)
+	}
+	switch providerID {
+	case "anthropic":
+		utils.Debug("Session", "resolvedBackend: model="+model+" providerID=anthropic → inner CliBackend")
+		return h.InnerCli()
+	case "openai":
+		utils.Debug("Session", "resolvedBackend: model="+model+" providerID=openai → inner CodexCliBackend")
+		return h.InnerCodex()
 	}
 	utils.Debug("Session", "resolvedBackend: model="+model+" → inner ApiBackend (default)")
 	return h.InnerApi()
