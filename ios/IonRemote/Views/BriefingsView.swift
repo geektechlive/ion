@@ -4,16 +4,17 @@ import SwiftUI
 
 struct BriefingsView: View {
     @Environment(BriefingsStore.self) private var store
+    @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ZStack {
-                JarvisTheme.background.ignoresSafeArea()
+                theme.background.ignoresSafeArea()
                 Group {
                     if store.briefings.isEmpty {
                         ContentUnavailableView("No Briefings", systemImage: "newspaper")
-                            .foregroundStyle(JarvisTheme.textSecondary)
+                            .foregroundStyle(theme.textSecondary)
                     } else {
                         List {
                             ForEach(store.briefings) { item in
@@ -27,10 +28,10 @@ struct BriefingsView: View {
                                     }
                                     .listRowBackground(
                                         RoundedRectangle(cornerRadius: 10)
-                                            .fill(JarvisTheme.surfaceElevated.opacity(0.65))
+                                            .fill(theme.surfaceElevated.opacity(0.65))
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 10)
-                                                    .stroke(JarvisTheme.accent.opacity(0.12), lineWidth: 0.5)
+                                                    .stroke(theme.accent.opacity(0.12), lineWidth: 0.5)
                                             )
                                             .padding(.horizontal, 4)
                                     )
@@ -47,13 +48,13 @@ struct BriefingsView: View {
                     Text("B R I E F I N G S")
                         .font(.headline.weight(.black))
                         .kerning(3)
-                        .foregroundStyle(JarvisTheme.accent)
-                        .shadow(color: JarvisTheme.accent.opacity(0.9), radius: 4)
-                        .shadow(color: JarvisTheme.accent.opacity(0.6), radius: 10)
+                        .foregroundStyle(theme.accent)
+                        .shadow(color: theme.accent.opacity(0.9), radius: 4)
+                        .shadow(color: theme.accent.opacity(0.6), radius: 10)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
-                        .foregroundStyle(JarvisTheme.accent)
+                        .foregroundStyle(theme.accent)
                 }
             }
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
@@ -68,6 +69,7 @@ private struct BriefingRowView: View {
     let item: BriefingItem
 
     @Environment(BriefingsStore.self) private var store
+    @Environment(\.appTheme) private var theme
     @State private var isExpanded = false
 
     var body: some View {
@@ -75,24 +77,24 @@ private struct BriefingRowView: View {
             HStack(spacing: 8) {
                 if !item.isRead {
                     Circle()
-                        .fill(JarvisTheme.accent)
+                        .fill(theme.accent)
                         .frame(width: 7, height: 7)
                 }
                 Text(item.title)
                     .font(.headline)
-                    .foregroundStyle(JarvisTheme.textPrimary)
+                    .foregroundStyle(theme.textPrimary)
                 Spacer()
                 Text(item.receivedAt.relativeFormatted)
                     .font(.caption2)
-                    .foregroundStyle(JarvisTheme.textSecondary)
+                    .foregroundStyle(theme.textSecondary)
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                     .font(.caption2)
-                    .foregroundStyle(JarvisTheme.textSecondary)
+                    .foregroundStyle(theme.textSecondary)
             }
             if isExpanded {
                 Text(item.text)
                     .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(JarvisTheme.textPrimary)
+                    .foregroundStyle(theme.textPrimary)
                     .textSelection(.enabled)
             }
         }
