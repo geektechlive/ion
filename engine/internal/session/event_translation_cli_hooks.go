@@ -3,15 +3,14 @@ package session
 import (
 	"fmt"
 
-	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
-// fireCliTurnHooks fires turn_start / turn_end extension hooks for CLI
-// backend runs. No-op when the backend is not CliBackend or when the
-// session has no extension group.
+// fireCliTurnHooks fires turn_start / turn_end extension hooks for subprocess
+// backend runs (CliBackend and CodexCliBackend). No-op when the backend is not
+// a subprocess backend or when the session has no extension group.
 //
 // Turn boundaries are derived from the normalised event stream:
 //   - turn_start: first TextChunkEvent or ToolCallEvent after run start
@@ -25,9 +24,9 @@ import (
 // on the model that started it. We use s.lastModel (set in prompt_dispatch
 // when StartRun is called) to drive the resolution. If lastModel is empty
 // (no run yet), this is a no-op — matching the pre-hybrid behavior of
-// returning early when the backend wasn't CliBackend.
+// returning early when the backend wasn't a subprocess backend.
 func (m *Manager) fireCliTurnHooks(s *engineSession, key string, sOk bool, event types.NormalizedEvent) {
-	if _, isCli := m.resolvedBackend(s.lastModel).(*backend.CliBackend); !isCli {
+	if !isSubprocessBackend(m.resolvedBackend(s.lastModel)) {
 		return
 	}
 	if !sOk || s.extGroup == nil || s.extGroup.IsEmpty() {
