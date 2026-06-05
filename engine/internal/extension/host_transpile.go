@@ -73,6 +73,11 @@ func (h *Host) transpileTS(tsPath string, manifest *Manifest) (string, error) {
 		"--external:stream",
 		"--external:util",
 		"--external:node:*",
+		// Shim CJS globals that are not available in ESM scope.
+		// Required for any extension source that uses __dirname / __filename
+		// (common with path.join(__dirname, ...) patterns).
+		"--define:__dirname=import.meta.dirname",
+		"--define:__filename=import.meta.filename",
 	}
 	if manifest != nil {
 		for _, dep := range manifest.External {
