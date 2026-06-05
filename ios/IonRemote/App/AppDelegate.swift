@@ -41,13 +41,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     // MARK: - Foreground delivery
 
-    /// Suppress notifications when the app is in the foreground.
+    /// Process briefings silently when the app is in the foreground; suppress banner.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Don't show a banner if the user is already looking at the app.
+        Self.handleBriefingPayload(notification.request.content.userInfo)
         completionHandler([])
     }
 
@@ -58,10 +58,26 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let userInfo = response.notification.request.content.userInfo
+        Self.handleBriefingPayload(userInfo, openSheet: true)
         if let tabId = userInfo["tabId"] as? String {
             sessionViewModel?.navigateToTab(tabId)
         }
         completionHandler()
+    }
+
+    // MARK: - Briefings
+
+    private static func handleBriefingPayload(_ userInfo: [AnyHashable: Any], openSheet: Bool = false) {
+        guard let briefingId = userInfo["briefingId"] as? String,
+              let briefingText = userInfo["briefingText"] as? String else { return }
+        let title = userInfo["briefingTitle"] as? String ?? "Morning Brief"
+        let payload: [String: Any] = [
+            "briefingId": briefingId,
+            "briefingTitle": title,
+            "briefingText": briefingText,
+            "openSheet": openSheet,
+        ]
+        NotificationCenter.default.post(name: .briefingFromPush, object: nil, userInfo: payload)
     }
 
     // MARK: - Private
@@ -81,4 +97,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
     }
+}
+
+extension Notification.Name {
+    static let briefingFromPush = Notification.Name("briefingFromPush")
 }
