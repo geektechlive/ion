@@ -78,8 +78,6 @@ struct AgentBarRow: View {
         }
     }
 
-                Spacer()
-
     private var headerRow: some View {
         HStack(spacing: 6) {
             // Agent name pill — never wraps
