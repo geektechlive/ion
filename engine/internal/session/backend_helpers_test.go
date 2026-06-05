@@ -128,16 +128,16 @@ func TestResolvedBackend_Hybrid_ClaudeRoutesToCli(t *testing.T) {
 	}
 }
 
-func TestResolvedBackend_Hybrid_OpenAIRoutesToApi(t *testing.T) {
+func TestResolvedBackend_Hybrid_OpenAIRoutesToCodex(t *testing.T) {
 	registerSessionTestModels(t)
 	hybrid := backend.NewHybridBackend()
 	mgr := NewManager(hybrid)
 	got := mgr.resolvedBackend("gpt-session-test")
-	if _, ok := got.(*backend.ApiBackend); !ok {
-		t.Fatalf("expected hybrid + gpt-* to resolve to *ApiBackend, got %T", got)
+	if _, ok := got.(*backend.CodexCliBackend); !ok {
+		t.Fatalf("expected hybrid + gpt-* to resolve to *CodexCliBackend, got %T", got)
 	}
-	if got != hybrid.InnerApi() {
-		t.Fatalf("expected exactly the hybrid's inner ApiBackend, got different pointer")
+	if got != hybrid.InnerCodex() {
+		t.Fatalf("expected exactly the hybrid's inner CodexCliBackend, got different pointer")
 	}
 }
 

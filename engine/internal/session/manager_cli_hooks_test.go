@@ -48,8 +48,8 @@ func TestFireBeforePromptCli_ModifiesPromptAndSystem(t *testing.T) {
 	if opts.Prompt != "rewritten by extension" {
 		t.Errorf("expected prompt rewritten, got %q", opts.Prompt)
 	}
-	if opts.AppendSystemPrompt != "injected system prompt" {
-		t.Errorf("expected system prompt injected, got %q", opts.AppendSystemPrompt)
+	if opts.SystemPrompt != "injected system prompt" {
+		t.Errorf("expected system prompt injected, got %q", opts.SystemPrompt)
 	}
 }
 
@@ -74,11 +74,11 @@ func TestFireBeforePromptCli_AppendsToExistingSystem(t *testing.T) {
 	if opts.Prompt != "keep this" {
 		t.Errorf("expected prompt unchanged, got %q", opts.Prompt)
 	}
-	if !strings.Contains(opts.AppendSystemPrompt, "existing") {
-		t.Error("expected existing system prompt preserved")
+	if opts.AppendSystemPrompt != "existing" {
+		t.Errorf("expected existing AppendSystemPrompt preserved, got %q", opts.AppendSystemPrompt)
 	}
-	if !strings.Contains(opts.AppendSystemPrompt, "extra") {
-		t.Error("expected new system prompt appended")
+	if opts.SystemPrompt != "extra" {
+		t.Errorf("expected new system prompt in SystemPrompt, got %q", opts.SystemPrompt)
 	}
 }
 
