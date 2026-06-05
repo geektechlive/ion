@@ -150,6 +150,14 @@ Before flagging an engine change as a contract violation, ask: *would this break
 
 Use the external-consumer simulation, not the in-repo caller search, to decide.
 
+### The typed-event corollary
+
+When the engine has signal to communicate, it emits a typed `NormalizedEvent` variant. That emission is the engine's *complete* fulfillment of its signaling obligation for that signal. The engine does not also owe a parallel surface in stream content (no appending to `TaskCompleteEvent.Result`, no mutating `TextChunkEvent`, no synthetic system messages, no log-line-as-source-of-truth). Doing any of that would force every consumer through one specific UI-shaped interpretation and would corrupt headless pipelines that parse stream content as the LLM's verbatim output.
+
+Consequence: when a reviewer asks *"but a headless user who isn't subscribed to event X wouldn't notice Y"* — that is the engine working as designed. The headless user receives the JSON event stream; the typed event is in it. Their orchestration may abort, retry, notify, ignore, or do anything else. The engine has no opinion. Reference implementations in this repo (desktop, iOS) choose their own opinionated rendering; that is **one consumer's policy**, not the engine's recommendation.
+
+This applies equally to warnings (model fallback, deprecation notices), advisories (rate limits, retries, context compaction), and state transitions (agent lifecycle, plan-mode changes). Pick the right event shape, emit it once, and stop. Do not double-surface.
+
 ### Consequences (the operational rules that flow from the framing above)
 
 - **Do not require an in-repo consumer before adding engine API surface.** If a hook, protocol field, or SDK method is useful to external consumers, it belongs in the engine — even if desktop and iOS don't use it yet. The absence of desktop/iOS usage is not evidence of premature code; it is evidence that the reference implementations haven't caught up.
@@ -180,6 +188,7 @@ Desktop and iOS are co-equal clients. When a desktop change touches a feature th
 | Thinking indicator / interrupt button | Activity indicator / interrupt button | Real-time events (`engineTextDelta`, `tabStatus`) |
 | Tab context menu (TabStripTabContextMenu) | Tab context menu (TabRowContextMenu) | Actions operate on `RemoteTabState` fields; session identity via `snapshot.ts` → `RemoteTabState.conversationId` (CLI) and `StatusFields.sessionId` (engine) |
 | Desktop Settings dialog (SettingsDialog categories) | Desktop Settings detail (DesktopSettingsView sections) | `projectable-settings.ts` allowlist → `desktop_settings_snapshot` event (settings + schema + groups) → `DesktopSettingsView` auto-renders sections. iOS group IDs **must** match the desktop's `CATEGORIES` array; renaming a desktop category requires updating `PROJECTABLE_GROUP_LABELS` and the test in `projectable-settings.test.ts`. Adding a new user-editable desktop preference requires a parallel entry in `PROJECTABLE_SETTINGS_DATA` unless the setting is local-machine-only (font, path, secret). |
+| Model fallback indicator (EngineStatusBar per-instance ⚠) | Model fallback indicator (EngineInstanceBar per-instance ⚠) | `snapshot.ts` → `RemoteTabState.engineInstances[i].modelFallback`. Desktop populates `engineModelFallbacks` from the `engine_model_fallback` event; the snapshot poller projects each entry onto the corresponding `engineInstances[i]` and iOS reads it from the snapshot. Cleared on the next idle transition (per-instance). |
 
 ### When to skip iOS
 
@@ -293,6 +302,63 @@ Specifically forbidden as plan resolutions for *any* finding you can fix in the 
 A valid plan resolution is one of: change code, change a contract, delete code, add a test that pins behavior, or explicitly decide to do nothing with a stated rationale. "Document the problem" is not a resolution.
 
 The `ion--review-changes.md` and `ion--align.md` commands enforce this rule at plan-generation time. Reviewers should reject any plan that violates it.
+
+## Operator premises — verify before acting
+
+Operator requests routinely contain **factual premises about the codebase** — "we only support X", "the only place that happens is Y", "this field is unused", "feature Z doesn't exist yet". These premises are frequently wrong. The author of this repository is wrong about them sometimes; new contributors are wrong about them more often. **Treat every premise as a claim to be verified, not as ground truth.**
+
+The failure mode this rule prevents: the operator states a premise, the agent silently accepts it, and the agent then refactors, deletes, restricts, or "fixes" code based on a misunderstanding the operator would have corrected if asked. By the time the operator sees the change, the wrong work is done.
+
+### When this rule fires
+
+Any operator request that asserts a concrete fact about the codebase. Common signals:
+
+- "we only support …" / "the only … is …" / "X is the only place that …"
+- "we don't have …" / "there's no …" / "X doesn't exist yet"
+- "X always does Y" / "X never does Y"
+- "the file picker only accepts …" / "the engine only emits …" / "the SDK only exposes …"
+- Any naming, shape, count, or scope claim about events, fields, hooks, tools, file types, config keys, protocol messages, or supported inputs.
+
+The trigger is **the presence of a factual claim**, not the operator's tone or confidence. A confidently stated wrong premise is the most dangerous kind.
+
+### What verification looks like
+
+Before designing or implementing anything that depends on the premise:
+
+1. **Locate the ground-truth source.** Find the code, contract, or doc that proves or disproves the claim — the actual file filter, the actual event variant list, the actual SDK surface, the actual permission list.
+2. **Compare the premise to ground truth.** Be specific: "the operator said *only* `index.ts` and `extension.ts`; the manifest loader at `engine/internal/extension/manifest.go` accepts `<actual list>`."
+3. **Decide based on the comparison, not the premise.**
+
+This step is not "extra rigor." It is the first step of the work. Skipping it is a defect.
+
+### What to do when the premise is wrong
+
+**Stop and surface the discrepancy to the operator before doing any of the requested work.** Do not:
+
+- Silently implement what was asked, hoping the operator was right.
+- Silently implement the "corrected" version you think they meant.
+- Refactor, narrow, delete, or restrict existing functionality to match the (wrong) premise.
+
+Instead, respond with a short message that contains:
+
+1. **The premise as stated.** ("You said we only support `index.ts` and `extension.ts`.")
+2. **The ground truth.** ("The engine actually accepts `<list>`, loaded via `<path>`.")
+3. **A direct question.** ("Do you still want the picker restricted to the two filenames, or should it match the engine's full set?")
+
+Only proceed once the operator confirms which version of reality the change should target.
+
+### What this rule is not
+
+- It is **not** an excuse to pepper the operator with questions about every adjective in their request. The trigger is a verifiable factual claim about the codebase, not stylistic ambiguity ("make it pretty") or judgment calls ("pick a good default").
+- It is **not** a license to refuse work. The expected outcome is *clarification in seconds*, then the right work — not an extended debate.
+- It is **not** limited to the author. New contributors and external developers will hit this more often than the author does. The rule exists because *any* operator can be wrong about *any* codebase fact, and the agent is the last line of defense against acting on the wrong fact.
+
+### Anti-patterns
+
+- "The operator said X, so I'll implement X." — Without verifying X against the code, this is the exact failure mode the rule exists to prevent.
+- "I noticed the premise is wrong, but I implemented what they asked anyway and noted it in the response." — Too late. The wrong work is done. Surface the discrepancy *before* writing code, not after.
+- "I noticed the premise is wrong, so I implemented what I thought they really meant." — Also wrong. Confirm with the operator which version is correct; do not silently substitute your interpretation.
+- "The premise is *probably* right, I'll skip verification." — The premises that look most obviously right are the ones where verification is cheapest and the cost of being wrong is highest. Verify anyway.
 
 ## Solution quality — no cheap substitutes
 

@@ -271,6 +271,40 @@ No additional fields.
 
 ---
 
+### model_fallback
+
+Workflow event emitted once per run when the requested model could not be
+resolved to a provider and the engine fell back to its configured
+`defaultModel`. Informational only — the run continues normally on the
+fallback model. The event is the engine's complete signaling surface for
+this condition; the engine never mutates stream content
+(`TaskCompleteEvent.Result`, `TextChunkEvent`) to communicate the
+fallback. Consumers may surface this however they wish — render a UI
+warning, abort a downstream orchestration, log a metric, or ignore the
+event entirely. See [CLAUDE.md § "The typed-event corollary"](https://github.com/dsswift/ion/blob/main/CLAUDE.md).
+
+Snapshot semantics: workflow signal, not state. The event fires once at
+the swap site and is not retained or replayed on reconnect. Consumers
+that need sticky UI must project the fact into their own snapshot state.
+
+When the engine has no `defaultModel` configured and the requested model
+is unresolvable, **no** `model_fallback` event is emitted — the engine
+falls through to the existing `error` event with `errorCode: "invalid_model"`,
+which already carries the actionable hard-fail message.
+
+| Field            | Type              | Description |
+|------------------|-------------------|-------------|
+| `type`           | `"model_fallback"` | Event type |
+| `requestedModel` | string            | The model string the run was started with (e.g. an unconfigured tier alias like `"standard"`). |
+| `fallbackModel`  | string            | The engine's configured `defaultModel` that the run will actually use. Never empty when this event is emitted. |
+| `reason`         | string            | Short machine-readable code. Currently always `"no_provider_found"`; reserved for future fallback triggers. |
+
+**Produced from:** `ModelFallbackEvent` in
+[`engine/internal/types/normalized_event.go`](https://github.com/dsswift/ion/blob/main/engine/internal/types/normalized_event.go),
+emitted at the model-fallback swap site in `runloop.go`.
+
+---
+
 ## Normalization Pipeline
 
 The normalizer processes raw events by inspecting the top-level `type` field:

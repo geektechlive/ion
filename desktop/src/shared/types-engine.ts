@@ -184,6 +184,16 @@ export type EngineEvent =
   // already part of the conversation. See
   // engine/internal/types/normalized_event.go (SteerInjectedEvent).
   | { type: 'engine_steer_injected'; steerMessageLength: number }
+  // engine_model_fallback — workflow signal emitted by the engine when
+  // it fell back to its configured defaultModel because the requested
+  // model didn't resolve to a provider. Mirrors the underlying
+  // ModelFallbackEvent NormalizedEvent variant. The desktop renders a
+  // small ⚠ glyph on the affected engine instance pill via the
+  // engineModelFallbacks store map; iOS receives the fact through the
+  // snapshot path (RemoteTabState.engineInstances[i].modelFallback)
+  // rather than as a live RemoteEvent. See CLAUDE.md §
+  // "The typed-event corollary" for the broader rule.
+  | { type: 'engine_model_fallback'; fallbackRequestedModel: string; fallbackModel: string; fallbackReason: string }
   | { type: 'engine_extension_died'; extensionName: string; exitCode: number | null; signal: string | null }
   | { type: 'engine_extension_respawned'; extensionName: string; attemptNumber: number }
   | { type: 'engine_events_dropped'; count: number }

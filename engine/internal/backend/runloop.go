@@ -39,38 +39,14 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		earlyStop.maxContinuations, earlyStop.diminishingDelta, earlyStop.source, opts.IsSubagent,
 	))
 
-	// Resolve provider
-	model := opts.Model
-	if model == "" {
-		msg := "no model configured: set defaultModel in ~/.ion/engine.json or pass --model. See docs/configuration/engine-json.md."
-		utils.Error("ApiBackend", msg)
-		b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{
-			ErrorMessage: msg,
-			ErrorCode:    "no_model_configured",
-		}})
-		b.emitError(run, fmt.Errorf("%s", msg))
-		b.emitExit(run.requestID, intPtr(1), nil, opts.SessionID)
-		return
-	}
-
-	provider := b.resolveProvider(model)
-	if provider == nil && run.cfg != nil && run.cfg.DefaultModel != "" && run.cfg.DefaultModel != model {
-		// Graceful degradation: the requested model (e.g. an unrecognized
-		// tier alias like "standard") didn't resolve. Fall back to the
-		// engine's default model instead of hard-failing.
-		utils.Warn("ApiBackend", fmt.Sprintf("model %q not found, falling back to default %q", model, run.cfg.DefaultModel))
-		model = run.cfg.DefaultModel
-		opts.Model = model
-		provider = b.resolveProvider(model)
-	}
+	// Resolve provider — applies the engine's graceful-degradation
+	// policy (fall back to DefaultModel when the requested model is
+	// unknown) and emits ModelFallbackEvent on the swap path. See
+	// runloop_provider_resolve.go for the full contract; on any
+	// non-recoverable failure the helper has already emitted the
+	// appropriate ErrorEvent + exit and we just return.
+	provider, model := b.resolveProviderForRun(run, &opts)
 	if provider == nil {
-		utils.Error("ApiBackend", fmt.Sprintf("no provider for model %q", model))
-		b.emit(run, types.NormalizedEvent{Data: &types.ErrorEvent{
-			ErrorMessage: fmt.Sprintf("no provider found for model %q", model),
-			ErrorCode:    "invalid_model",
-		}})
-		b.emitError(run, fmt.Errorf("no provider found for model %q", model))
-		b.emitExit(run.requestID, intPtr(1), nil, opts.SessionID)
 		return
 	}
 

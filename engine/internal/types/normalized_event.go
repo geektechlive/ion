@@ -26,6 +26,7 @@ const (
 	EventCompacting        = "compacting"
 	EventToolStalled       = "tool_stalled"
 	EventSteerInjected     = "steer_injected"
+	EventModelFallback     = "model_fallback"
 )
 
 // NormalizedEventData is the interface satisfied by all canonical event variants.
@@ -108,6 +109,8 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &ToolStalledEvent{}
 	case EventSteerInjected:
 		target = &SteerInjectedEvent{}
+	case EventModelFallback:
+		target = &ModelFallbackEvent{}
 	default:
 		return fmt.Errorf("unknown normalized event type: %q", peek.Type)
 	}
@@ -405,3 +408,30 @@ type SteerInjectedEvent struct {
 }
 
 func (SteerInjectedEvent) eventType() string { return EventSteerInjected }
+
+// ModelFallbackEvent is emitted once per run when the requested model
+// could not be resolved to a provider and the engine fell back to the
+// configured DefaultModel. Informational only — the run continues
+// normally on the fallback model. Consumers (clients, parent extensions)
+// may surface this however they wish; the engine never mutates stream
+// content to communicate it.
+//
+// Workflow signal, not a state snapshot. It fires once at the swap site
+// and is not replayed on reconnect; the engine does not retain it in any
+// snapshot. Consumers that need sticky UI must project the fact into
+// snapshot state at their own layer.
+type ModelFallbackEvent struct {
+	// RequestedModel is the model string the run was started with (e.g.
+	// a tier alias like "standard" that didn't resolve to a configured tier).
+	RequestedModel string `json:"requestedModel"`
+	// FallbackModel is the engine's configured DefaultModel that the run
+	// will actually use instead. Never empty when this event is emitted —
+	// if there is no default to fall back to, the event is not emitted
+	// and the engine returns the existing no_provider_found error.
+	FallbackModel string `json:"fallbackModel"`
+	// Reason is a short machine-readable code. Currently always
+	// "no_provider_found"; reserved for future fallback triggers.
+	Reason string `json:"reason"`
+}
+
+func (ModelFallbackEvent) eventType() string { return EventModelFallback }

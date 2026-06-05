@@ -1,8 +1,11 @@
 package session
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -191,5 +194,112 @@ func TestReconcileState_UnknownSessionNoEmit(t *testing.T) {
 
 	if emitted {
 		t.Fatal("expected no events for unknown session reconcile")
+	}
+}
+
+// TestAgentLifecycle_ModelFallbackDoesNotPerturbSnapshots locks in the
+// snapshot contract across the new ModelFallbackEvent termination path:
+// when a dispatched specialist receives a ModelFallbackEvent from the
+// child backend before completing, the parent's engine_agent_state
+// snapshot sequence must still be exactly the canonical two emissions
+// (running at start, done at completion). The fallback event is a
+// workflow signal — it must not trigger an extra agent_state snapshot
+// nor leave the agent in "running" status after termination.
+//
+// This pins docs/architecture/agent-state.md against the new termination
+// path introduced by the grand-surfing-moth plan.
+func TestAgentLifecycle_ModelFallbackDoesNotPerturbSnapshots(t *testing.T) {
+	// Stub child emits a ModelFallbackEvent followed by TaskCompleteEvent.
+	// The spawner's OnNormalized handler must ignore the fallback event
+	// for agent_state purposes and emit exactly two snapshots: running
+	// at start, done at completion.
+	stub := &childStubBackend{
+		resultText:        "specialist done",
+		emitModelFallback: true,
+	}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	if _, err := mgr.StartSession("lifecycle-fallback", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	captured := captureAgentStateEvents(mgr)
+
+	mgr.mu.Lock()
+	s := mgr.sessions["lifecycle-fallback"]
+	mgr.mu.Unlock()
+
+	// Hook-capturing group lets the spawner fire agent_start / agent_end
+	// without panicking; the test doesn't assert on hook ordering, only
+	// on snapshot emissions.
+	group, _ := installHookCapturingGroup(t)
+	mgr.mu.Lock()
+	s.extGroup = group
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "lifecycle-fallback", "claude-opus-4-7", group, runCfg)
+	if runCfg.AgentSpawner == nil {
+		t.Fatal("AgentSpawner not installed")
+	}
+
+	_, spawnErr := runCfg.AgentSpawner(
+		context.Background(),
+		"specialist",
+		"task",
+		"",
+		"/tmp",
+		"claude-sonnet-4-6",
+	)
+	if spawnErr != nil {
+		t.Fatalf("spawner returned error: %v", spawnErr)
+	}
+
+	// Give the goroutine a brief moment to flush the final snapshot —
+	// the spawner emits agent_state after onExit on its own goroutine,
+	// not synchronously with the spawner closure return.
+	time.Sleep(50 * time.Millisecond)
+
+	// Snapshot count: the spawner emits one running snapshot at start
+	// (reason=agent_start) and one terminal snapshot at end
+	// (reason=agent_end). The intervening ModelFallbackEvent must not
+	// trigger an additional emission.
+	snapshots := *captured
+	if len(snapshots) != 2 {
+		var summary []string
+		for _, snap := range snapshots {
+			row := ""
+			for _, a := range snap.Agents {
+				row += a.Name + "=" + a.Status + " "
+			}
+			summary = append(summary, "["+row+"]")
+		}
+		t.Fatalf("expected exactly 2 agent_state snapshots (running → done) across the fallback path, got %d: %v", len(snapshots), summary)
+	}
+
+	// The spawner generates the agent name from the unique dispatch ID
+	// (e.g. "agent-1") because the test registered no spec named
+	// "specialist". Locate by single-entry-snapshot rather than by name.
+	if len(snapshots[0].Agents) != 1 {
+		t.Fatalf("first snapshot should contain exactly 1 agent, got %d: %+v", len(snapshots[0].Agents), snapshots[0].Agents)
+	}
+	if len(snapshots[1].Agents) != 1 {
+		t.Fatalf("final snapshot should contain exactly 1 agent, got %d: %+v", len(snapshots[1].Agents), snapshots[1].Agents)
+	}
+
+	// First snapshot: agent is running.
+	if got := snapshots[0].Agents[0].Status; got != "running" {
+		t.Errorf("first snapshot status = %q, want %q", got, "running")
+	}
+
+	// Final snapshot: agent is done, never orphaned in running.
+	finalStatus := snapshots[1].Agents[0].Status
+	if finalStatus == "running" {
+		t.Errorf("agent still running in final snapshot (snapshot contract violated): %+v", snapshots[1].Agents[0])
+	}
+	if finalStatus != "done" {
+		t.Errorf("final snapshot status = %q, want %q", finalStatus, "done")
 	}
 }

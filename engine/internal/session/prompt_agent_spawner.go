@@ -284,7 +284,24 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 				runOpts.AllowedTools = spec.Tools
 			}
 		}
-		child.StartRun(childRequestID, runOpts)
+
+		// Thread the engine's DefaultModel into the child run so the
+		// existing fallback at runloop.go fires when the child's model
+		// (e.g. a tier alias like "standard" that wasn't configured in
+		// models.json) doesn't resolve to a provider. Without this,
+		// children start with cfg=nil and the runloop's fallback guard
+		// short-circuits — the child hard-fails with "no provider found".
+		// Always pass a child RunConfig, even when DefaultModel is empty;
+		// the runloop guard at line 57 still short-circuits in that case
+		// and the existing no_provider_found error wins. This is the
+		// chosen behaviour — see plan §2 "Default-also-missing case".
+		var childDefaultModel string
+		if m.config != nil {
+			childDefaultModel = m.config.DefaultModel
+		}
+		utils.Log("Session", fmt.Sprintf("child run config: defaultModelThreaded=%q source=spawner sessionKey=%s requestedModel=%q", childDefaultModel, capturedKey, childModel))
+		childRunCfg := &backend.RunConfig{DefaultModel: childDefaultModel}
+		startChildRun(child, childRequestID, runOpts, childRunCfg)
 
 		// Wait for child to finish OR parent context to cancel.
 		doneCh := make(chan struct{})

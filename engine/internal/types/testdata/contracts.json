@@ -17,6 +17,11 @@
       "retryable",
       "sessionId"
     ],
+    "model_fallback": [
+      "fallbackModel",
+      "reason",
+      "requestedModel"
+    ],
     "permission_request": [
       "options",
       "questionId",
@@ -147,6 +152,9 @@
     "errorCode",
     "exitCode",
     "extensionName",
+    "fallbackModel",
+    "fallbackReason",
+    "fallbackRequestedModel",
     "fields",
     "httpStatus",
     "index",

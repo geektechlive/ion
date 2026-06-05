@@ -181,6 +181,23 @@ export function handleEngineStatusEvent(
     if (enginePermissionDeniedUpdate) {
       returnPatch.enginePermissionDenied = enginePermissionDeniedUpdate
     }
+
+    // Auto-clear the model-fallback indicator on the idle transition.
+    // The fallback indicator is a workflow signal — once the affected
+    // run completes (state=idle), the user has seen the ⚠ glyph and
+    // the next dispatch starts fresh. No wall-clock timer: per
+    // docs/architecture/agent-state.md, clients do not invent retention
+    // rules. If the run never completes, the indicator stays sticky.
+    //
+    // Defensive: pre-existing test harnesses don't always initialize
+    // engineModelFallbacks on their mock state object. Production
+    // initializes it in sessionStore.ts, but the guard keeps this
+    // helper compatible with leaner test scaffolding.
+    if (isIdle && state.engineModelFallbacks?.has(key)) {
+      const fallbacks = new Map(state.engineModelFallbacks)
+      fallbacks.delete(key)
+      returnPatch.engineModelFallbacks = fallbacks
+    }
     if (needsTabUpdate) {
       const tabs = state.tabs.map((t) => {
         if (t.id !== tabId) return t

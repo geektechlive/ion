@@ -28,6 +28,15 @@ import XCTest
 ///     engine-internal marker, not a renderer input. If a future iOS
 ///     feature ever needs to walk `LlmMessage` blocks (e.g. a compaction
 ///     transcript reader), add the Swift mirror at that point.
+///   - `ModelFallbackEvent` is intentionally not decoded as a live
+///     RemoteEvent on iOS. The engine emits `model_fallback` as a
+///     workflow signal at the swap site; the desktop projects it onto
+///     its session store and forwards the *fact* to iOS via the
+///     snapshot path (RemoteTabState.engineInstances[i].modelFallback).
+///     iOS reads from the snapshot only — there is no live RemoteEvent
+///     variant for this signal. If a future iOS feature needs the live
+///     event (e.g. per-instance toast notifications), add the Swift
+///     case at that point. See the grand-surfing-moth plan, §4.
 final class ContractSyncTests: XCTestCase {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()

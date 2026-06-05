@@ -155,6 +155,23 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 			}
 		}
 
+		// Thread the engine's DefaultModel into the child run config so the
+		// runloop fallback (runloop.go:57) fires when the child's model
+		// doesn't resolve to a provider. Without this, dispatched children
+		// hard-fail with "no provider found" when the requested model is
+		// an unconfigured tier alias. Mirrors the spawner-side fix in
+		// prompt_agent_spawner.go. See plan §1 "Secondary path note".
+		var dispatchDefaultModel string
+		if engCfg := sa.EngineConfig(); engCfg != nil {
+			dispatchDefaultModel = engCfg.DefaultModel
+		}
+		if childCfg == nil {
+			childCfg = &backend.RunConfig{DefaultModel: dispatchDefaultModel}
+		} else if childCfg.DefaultModel == "" {
+			childCfg.DefaultModel = dispatchDefaultModel
+		}
+		utils.Log("Session", fmt.Sprintf("child run config: defaultModelThreaded=%q source=dispatch sessionKey=%s requestedModel=%q", dispatchDefaultModel, sa.SessionKey(), model))
+
 		// Shared mutable state for the event handler closure.
 		var totalCost float64
 		var totalInputTokens, totalOutputTokens int

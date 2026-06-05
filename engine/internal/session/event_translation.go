@@ -571,6 +571,22 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 		// to be echoed back over the wire.
 		return types.EngineEvent{Type: "engine_steer_injected", SteerMessageLength: e.MessageLength}
 
+	case *types.ModelFallbackEvent:
+		// Surface the model-fallback workflow signal as a typed engine
+		// event so clients can render an indicator. The desktop and iOS
+		// renderers display a small ⚠ glyph on the affected engine
+		// instance pill; headless harnesses may abort, retry, or route
+		// elsewhere. The engine has no opinion — see CLAUDE.md §
+		// "The typed-event corollary" for the rule that the typed event
+		// is the engine's *complete* signaling surface (no parallel
+		// stream-content mutation).
+		return types.EngineEvent{
+			Type:                   "engine_model_fallback",
+			FallbackRequestedModel: e.RequestedModel,
+			FallbackModel:          e.FallbackModel,
+			FallbackReason:         e.Reason,
+		}
+
 	default:
 		return types.EngineEvent{}
 	}

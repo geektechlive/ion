@@ -82,6 +82,19 @@ type EngineEvent struct {
 	// SteerInjectedEvent for the underlying normalized variant.
 	SteerMessageLength int `json:"steerMessageLength,omitempty"`
 
+	// engine_model_fallback — workflow signal emitted when the engine
+	// fell back to its configured defaultModel because the requested
+	// model didn't resolve to a provider. Mirrors the underlying
+	// ModelFallbackEvent NormalizedEvent variant. Fields are surfaced
+	// distinctly (not packed into Metadata) so a typed client like the
+	// desktop or iOS doesn't have to parse an opaque map to learn the
+	// fallback decision. Consumers may surface a status indicator,
+	// abort orchestration, log a metric, or ignore the event — see
+	// CLAUDE.md § "The typed-event corollary".
+	FallbackRequestedModel string `json:"fallbackRequestedModel,omitempty"`
+	FallbackModel          string `json:"fallbackModel,omitempty"`
+	FallbackReason         string `json:"fallbackReason,omitempty"`
+
 	// engine_dead
 	ExitCode   *int     `json:"exitCode,omitempty"`
 	Signal     *string  `json:"signal,omitempty"`
