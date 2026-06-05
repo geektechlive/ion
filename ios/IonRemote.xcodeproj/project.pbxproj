@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1B2C3D4E5F60001000802AA /* BriefingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000803AA /* BriefingsStore.swift */; };
+		A1B2C3D4E5F60001000804AA /* BriefingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000805AA /* BriefingsView.swift */; };
+		A1B2C3D4E5F60001000810AA /* BriefingItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000811AA /* BriefingItem.swift */; };
 		A1B2C3D4E5F60001000001AA /* IonRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000002AA /* IonRemoteApp.swift */; };
 		A1B2C3D4E5F60001000003AA /* NormalizedEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */; };
 		A1B2C3D4E5F60001000005AA /* RemoteTabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */; };
@@ -185,6 +188,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A1B2C3D4E5F60001000803AA /* BriefingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefingsStore.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000805AA /* BriefingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefingsView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001000811AA /* BriefingItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefingItem.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000002AA /* IonRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IonRemoteApp.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000901AA /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEvent.swift; sourceTree = "<group>"; };
@@ -414,6 +420,8 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F60001000004AA /* NormalizedEvent.swift */,
+				A1B2C3D4E5F60001000811AA /* BriefingItem.swift */,
+				A1B2C3D4E5F60001000803AA /* BriefingsStore.swift */,
 				A1B2C3D4E5F60001000231AA /* NormalizedEvent+Lifecycle.swift */,
 				A1B2C3D4E5F60001000233AA /* NormalizedEvent+Stream.swift */,
 				A1B2C3D4E5F60001000235AA /* NormalizedEvent+Permission.swift */,
@@ -526,6 +534,7 @@
 					A1B2C3D4E5F60001003001AA /* EngineToolGroupRow.swift */,
 					A1B2C3D4E5F60001003005AA /* AgentTurnRow.swift */,
 					A1B2C3D4E5F60001003003AA /* EngineDialogSheet.swift */,
+					A1B2C3D4E5F60001000805AA /* BriefingsView.swift */,
 					A1B2C3D4E5F60001004003AA /* AttachmentChipsView.swift */,
 					A1B2C3D4E5F60001005303AA /* AttachmentImagePreview.swift */,
 					A1B2C3D4E5F60001004005AA /* FilePickerSheet.swift */,
@@ -766,6 +775,9 @@
 			files = (
 				A1B2C3D4E5F60001000001AA /* IonRemoteApp.swift in Sources */,
 				A1B2C3D4E5F60001000003AA /* NormalizedEvent.swift in Sources */,
+				A1B2C3D4E5F60001000802AA /* BriefingsStore.swift in Sources */,
+				A1B2C3D4E5F60001000804AA /* BriefingsView.swift in Sources */,
+				A1B2C3D4E5F60001000810AA /* BriefingItem.swift in Sources */,
 				A1B2C3D4E5F60001000005AA /* RemoteTabState.swift in Sources */,
 				A1B2C3D4E5F60001000007AA /* RemoteCommand.swift in Sources */,
 				A1B2C3D4E5F60001005306AA /* RemoteCommand+Encode.swift in Sources */,

@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct IonRemoteApp: App {
@@ -15,12 +16,20 @@ struct IonRemoteApp: App {
         WindowGroup {
             ContentView()
                 .environment(viewModel)
+                .environment(viewModel.briefingsStore)
                 .environment(\.appTheme, themeManager)
                 .preferredColorScheme(themeManager.preferredColorScheme)
                 .tint(themeManager.accent)
                 .onAppear {
                     appDelegate.sessionViewModel = viewModel
                     DiagnosticLog.log("[IonRemoteApp] theme injected — id: \(themeManager.selectedThemeId), accent: \(themeManager.accent)")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .briefingFromPush)) { note in
+                    guard let info = note.userInfo,
+                          let briefingId = info["briefingId"] as? String,
+                          let title = info["briefingTitle"] as? String,
+                          let text = info["briefingText"] as? String else { return }
+                    viewModel.briefingsStore.receive(briefingId: briefingId, title: title, text: text)
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
@@ -33,6 +42,23 @@ struct IonRemoteApp: App {
                         // were backgrounded, so we can't trust cached state.
                         if viewModel.showGitInfoInTabList {
                             viewModel.requestAllGitChanges()
+                        }
+                        // Scan delivered notifications and write directly to the
+                        // store. TabListView.onReceive is only active when
+                        // connected, so we can't rely on the NotificationCenter
+                        // path alone during the reconnect phase.
+                        UNUserNotificationCenter.current().getDeliveredNotifications { notes in
+                            for note in notes {
+                                let ui = note.request.content.userInfo
+                                guard let briefingId = ui["briefingId"] as? String,
+                                      let briefingText = ui["briefingText"] as? String else { continue }
+                                let title = note.request.content.title.isEmpty
+                                    ? "Briefing" : note.request.content.title
+                                DispatchQueue.main.async {
+                                    viewModel.briefingsStore.receive(
+                                        briefingId: briefingId, title: title, text: briefingText)
+                                }
+                            }
                         }
                     case .background:
                         // Stop transport but preserve all state (tabs, messages,
