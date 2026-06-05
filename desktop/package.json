@@ -68,7 +68,7 @@
   },
   "build": {
     "appId": "com.sprague.ion.desktop",
-    "productName": "Ion",
+    "productName": "Jarvis",
     "directories": {
       "output": "release"
     },

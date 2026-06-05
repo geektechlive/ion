@@ -125,7 +125,7 @@ export function wireEngineBridgeEvents(): void {
             toolName: denial.toolName,
             toolInput: denial.toolInput,
             options: [],
-          }, true, { title: 'Ion needs your attention', body: pushBody })
+          }, true, { title: 'Jarvis needs your attention', body: pushBody })
         }
       }
 
@@ -233,7 +233,7 @@ export function wireRemoteSessionPlaneForwarding(): void {
     if (remoteEvent) {
       const needsPush = event.type === 'permission_request'
       if (needsPush) {
-        const pushTitle = 'Ion needs your attention'
+        const pushTitle = 'Jarvis needs your attention'
         const pushBody = event.toolName === 'AskUserQuestion'
           ? 'Question waiting for your answer'
           : event.toolName === 'ExitPlanMode'
@@ -381,7 +381,7 @@ export function wireRemoteSessionPlaneForwarding(): void {
             toolName: 'ExitPlanMode',
             toolInput,
             options: [],
-          }, true, { title: 'Ion needs your attention', body: 'Plan ready for your review' })
+          }, true, { title: 'Jarvis needs your attention', body: 'Plan ready for your review' })
         }
 
         // Forward AskUserQuestion denials the same way. The engine records
@@ -400,7 +400,7 @@ export function wireRemoteSessionPlaneForwarding(): void {
             toolName: 'AskUserQuestion',
             toolInput: askDenial.toolInput,
             options: [],
-          }, true, { title: 'Ion needs your attention', body: 'Question waiting for your answer' })
+          }, true, { title: 'Jarvis needs your attention', body: 'Question waiting for your answer' })
         }
         break
       }
@@ -487,7 +487,7 @@ export function wireRemoteSessionPlaneForwarding(): void {
         }
       }
     }
-    const pushTitle = 'Ion needs your attention'
+    const pushTitle = 'Jarvis needs your attention'
     const pushBody = data.toolName === 'AskUserQuestion'
       ? 'Question waiting for your answer'
       : data.toolName === 'ExitPlanMode'
