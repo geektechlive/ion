@@ -13,6 +13,12 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.37.0](https://github.com/dsswift/ion/compare/engine-v1.36.0...engine-v1.37.0) (2026-06-05)
+
+### Features
+
+* **engine:** fall back to default model on unresolved tier alias (#174) ([4a9d7af](https://github.com/dsswift/ion/commit/4a9d7af0d9cc017df65de66fff33d3b49accda6d))
+
 ## [1.36.0](https://github.com/dsswift/ion/compare/engine-v1.35.0...engine-v1.36.0) (2026-06-05)
 
 ### Features

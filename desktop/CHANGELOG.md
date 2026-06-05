@@ -10,6 +10,18 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.51.0](https://github.com/dsswift/ion/compare/desktop-v1.50.0...desktop-v1.51.0) (2026-06-05)
+
+### Features
+
+* **engine:** fall back to default model on unresolved tier alias (#174) ([4a9d7af](https://github.com/dsswift/ion/commit/4a9d7af0d9cc017df65de66fff33d3b49accda6d))
+* **desktop:** forward slash frontmatter model hint to runoptions ([0466f43](https://github.com/dsswift/ion/commit/0466f43d9faff56c85fa9e7ddfc8387fc02dfe63))
+* **desktop:** show yaml frontmatter in markdown preview ([6e3ebb9](https://github.com/dsswift/ion/commit/6e3ebb972fb0a16926118c8caf874d8fe0e9985e))
+
+### Bug Fixes
+
+* **desktop:** show ion-native slash commands when claude-compat off ([1481e56](https://github.com/dsswift/ion/commit/1481e560f3c6e39d89fbba410f07cfc2c3e262e2))
+
 ## [1.50.0](https://github.com/dsswift/ion/compare/desktop-v1.49.0...desktop-v1.50.0) (2026-06-05)
 
 ### Features
