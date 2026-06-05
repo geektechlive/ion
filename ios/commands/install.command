@@ -150,6 +150,7 @@ for r in results:
   local line
   line=$(xcrun xctrace list devices 2>/dev/null \
     | grep -v "Simulator" \
+    | grep -vi "watch" \
     | grep -v "^==" \
     | grep -v "^$" \
     | grep -vE "^$(scutil --get ComputerName 2>/dev/null || hostname -s)" \
