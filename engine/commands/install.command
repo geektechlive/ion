@@ -16,7 +16,7 @@ mkdir -p "$BIN_DIR"
 # Stop running engine daemon so the new binary takes effect on next start
 ENGINE_PID=""
 if [[ -S "$ION_HOME/engine.sock" ]]; then
-  ENGINE_PID=$(lsof -t "$ION_HOME/engine.sock" 2>/dev/null | head -1)
+  ENGINE_PID=$(lsof -t "$ION_HOME/engine.sock" 2>/dev/null | head -1 || true)
 fi
 if [[ -z "$ENGINE_PID" ]]; then
   ENGINE_PID=$(pgrep -f "ion serve" 2>/dev/null | head -1 || true)
