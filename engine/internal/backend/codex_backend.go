@@ -251,12 +251,13 @@ func (b *CodexCliBackend) runProcess(ctx context.Context, run *codexRun, opts ty
 		args = append(args, "-m", opts.Model)
 	}
 
-	// Session resume: if a prior thread_id is supplied, ask Codex to resume it.
-	// The thread_id is populated from the previous run's thread.started event
-	// and passed back via OnExit → session manager → opts.SessionID.
-	if opts.SessionID != "" {
-		args = append(args, "resume", opts.SessionID)
-	}
+	// Session resume is intentionally disabled for v1. The session manager
+	// stores a single session ID per key regardless of which backend handled
+	// it, so opts.SessionID may carry a Claude or ApiBackend conversation ID
+	// that is meaningless to Codex. We always start a fresh thread and emit
+	// the thread_id via OnExit so a future resume path can be wired once the
+	// session manager handles per-backend session IDs.
+	// TODO: enable resume when backend-scoped session IDs are implemented.
 
 	args = append(args, promptText)
 
