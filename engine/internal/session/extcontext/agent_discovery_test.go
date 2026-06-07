@@ -8,6 +8,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
+	"github.com/dsswift/ion/engine/internal/resource"
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -56,6 +57,13 @@ func (a *agentDiscoveryTestAccessor) GetPlanModeState() (bool, string) { return 
 func (a *agentDiscoveryTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string { return "" }
 func (a *agentDiscoveryTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate))  {}
 func (a *agentDiscoveryTestAccessor) EmitAgentSnapshot(_ string) {}
+func (a *agentDiscoveryTestAccessor) ResourceBroker() *resource.Broker       { return nil }
+func (a *agentDiscoveryTestAccessor) GlobalResourceBroker() *resource.Broker { return nil }
+func (a *agentDiscoveryTestAccessor) BroadcastNotification(_ types.NotifyOpts)       {}
+func (a *agentDiscoveryTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
+func (a *agentDiscoveryTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
+	return nil
+}
 
 // writeAgentFile creates a minimal .md agent file in dir/agents/<name>.md
 // with valid frontmatter.

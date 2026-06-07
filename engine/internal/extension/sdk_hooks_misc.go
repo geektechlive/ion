@@ -113,3 +113,17 @@ func (s *SDK) FirePeerExtensionRespawned(ctx *Context, info PeerExtensionInfo) e
 	s.fire(HookPeerExtensionRespawned, ctx, info)
 	return nil
 }
+
+// SessionMessageInfo is the payload for the session_message hook.
+type SessionMessageInfo struct {
+	SenderSessionKey string                 `json:"senderSessionKey"`
+	Kind             string                 `json:"kind"`
+	Payload          map[string]interface{} `json:"payload"`
+}
+
+// FireSessionMessage fires the session_message hook on receiving
+// sessions when another session sends a cross-session message.
+func (s *SDK) FireSessionMessage(ctx *Context, info SessionMessageInfo) error {
+	s.fire(HookSessionMessage, ctx, info)
+	return nil
+}
