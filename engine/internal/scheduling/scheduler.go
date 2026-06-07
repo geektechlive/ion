@@ -90,6 +90,20 @@ type hostJobKey struct {
 	id   string
 }
 
+// extensionJobKey groups jobs by extension name + job ID for
+// concurrency coordination. All hosts of the same extension with the
+// same job ID share one extensionJobKey.
+type extensionJobKey struct {
+	name string // host.Name()
+	id   string // job.JobID
+}
+
+// hostJobEntry pairs a host with a job for the group-then-fire pass.
+type hostJobEntry struct {
+	host *extension.Host
+	job  extension.ScheduleJob
+}
+
 // Config holds the engine-config-controlled defaults for the
 // scheduler. All fields zero-valued to inherit engine defaults.
 type Config struct {
@@ -229,14 +243,20 @@ func (s *Scheduler) runLoop() {
 	}
 }
 
-// tickOnce performs a single pass over every registered job. Public
-// for tests so they can step the scheduler deterministically.
+// tickOnce performs a single pass over every registered job. Jobs are
+// grouped by (extensionName, jobID) for concurrency coordination.
+// In "single" mode (the default), only the first alive host in each
+// group fires. In "all" mode, every host fires independently.
+// Public for tests so they can step the scheduler deterministically.
 func (s *Scheduler) tickOnce() {
 	now := s.now()
 	s.mu.RLock()
 	hosts := append([]*extension.Host(nil), s.hosts...)
 	resolve := s.resolve
 	s.mu.RUnlock()
+
+	// Group jobs by (extensionName, jobID) for concurrency coordination.
+	groups := make(map[extensionJobKey][]hostJobEntry)
 	for _, h := range hosts {
 		decls := h.AsyncRegistry().List(asyncreg.KindSchedule)
 		for _, d := range decls {
@@ -244,7 +264,30 @@ func (s *Scheduler) tickOnce() {
 			if !ok {
 				continue
 			}
-			s.maybeFire(h, job, now, resolve)
+			key := extensionJobKey{name: h.Name(), id: job.JobID}
+			groups[key] = append(groups[key], hostJobEntry{host: h, job: job})
+		}
+	}
+
+	// Fire each group according to its concurrency mode.
+	for _, entries := range groups {
+		if len(entries) == 0 {
+			continue
+		}
+		concurrency := entries[0].job.Concurrency
+		if concurrency == "all" {
+			// All mode: fire on every host (opt-in behavior).
+			for _, e := range entries {
+				s.maybeFire(e.host, e.job, now, resolve)
+			}
+		} else {
+			// Single mode (default): fire on the first alive host only.
+			for _, e := range entries {
+				if !e.host.Dead() {
+					s.maybeFire(e.host, e.job, now, resolve)
+					break
+				}
+			}
 		}
 	}
 }

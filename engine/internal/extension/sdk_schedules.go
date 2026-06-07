@@ -64,6 +64,11 @@ type ScheduleJob struct {
 	// time; false skips the fire and emits engine_schedule_skipped with
 	// reason="disabled". Empty means "always enabled".
 	EnabledRefName string `json:"enabledRefName,omitempty"`
+	// Concurrency controls how many extension instances handle this
+	// trigger when multiple sessions load the same extension.
+	// "single" (default when empty): one instance fires per tick.
+	// "all": every instance fires independently.
+	Concurrency string `json:"concurrency,omitempty"`
 }
 
 // ID satisfies the asyncreg.Declaration interface. Schedule jobs use
@@ -108,6 +113,12 @@ func (j ScheduleJob) Validate() error {
 	}
 	if j.TimeoutMs < 0 {
 		return fmt.Errorf("schedule timeoutMs must be >= 0 (got %d)", j.TimeoutMs)
+	}
+	switch j.Concurrency {
+	case "", "single", "all":
+		// valid
+	default:
+		return fmt.Errorf("unknown schedule concurrency %q (use \"single\" or \"all\")", j.Concurrency)
 	}
 	return nil
 }

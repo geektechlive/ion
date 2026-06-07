@@ -163,6 +163,25 @@ ion.registerTool({
   },
 })
 
+// Register an interval with concurrency='all' mode. Used by the
+// scheduler e2e tests to verify both concurrency modes.
+ion.registerTool({
+  name: 'async_canary_register_all_mode_interval',
+  description: 'Register a 1s interval with concurrency=all',
+  parameters: { type: 'object', properties: {} },
+  execute: async () => {
+    await ion.schedule.interval({
+      id: 'async-canary-all-mode',
+      intervalMs: 1000,
+      concurrency: 'all',
+      handler: async () => {
+        log.info('all-mode tick')
+      },
+    })
+    return { content: 'ok' }
+  },
+})
+
 // Register an interval whose enabled predicate is always false. Used
 // by the scheduler e2e tests to verify engine_schedule_skipped fires
 // with reason='disabled'.
