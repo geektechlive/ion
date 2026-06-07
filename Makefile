@@ -1,5 +1,11 @@
 .PHONY: default desktop engine relay relay-local ios ios-check ios-test desktop-test engine-test test test-all clean check-file-sizes check-contracts claude-symlinks hooks
 
+# Homebrew installs node/npm under /opt/homebrew/bin on Apple Silicon.
+# Make runs recipes with /bin/sh which only has /usr/bin:/bin in PATH,
+# so node/npm are not found unless we add the Homebrew prefix here.
+# The export propagates to every recipe in this Makefile.
+export PATH := /opt/homebrew/bin:$(PATH)
+
 default: engine
 
 engine:
