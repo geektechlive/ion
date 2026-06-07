@@ -39,19 +39,19 @@ import type { IonContext } from '../sdk/ion-sdk'
  * system prompt; the engine's agent-discovery walk also enumerates it,
  * but no caller dispatches to it.
  */
-export const SPECIALISTS: readonly { name: string; displayName: string; type: string }[] = [
+export const SPECIALISTS: readonly { name: string; displayName: string; type: string; color: string }[] = [
   // Mode-shaped agents (the orchestrator routes to these based on intent).
-  { name: 'ion-tutor',           displayName: 'Tutor',              type: 'specialist' },
-  { name: 'extension-improver',  displayName: 'Extension Improver', type: 'specialist' },
-  { name: 'extension-builder',   displayName: 'Extension Builder',  type: 'specialist' },
+  { name: 'ion-tutor',           displayName: 'Tutor',              type: 'specialist', color: '#2e8b57' },
+  { name: 'extension-improver',  displayName: 'Extension Improver', type: 'specialist', color: '#b45a28' },
+  { name: 'extension-builder',   displayName: 'Extension Builder',  type: 'specialist', color: '#6432b4' },
   // Knowledge-shaped specialists (one per topical surface; used when a
   // conversation goes deep on one area).
-  { name: 'extension-architect', displayName: 'Extension Architect', type: 'specialist' },
-  { name: 'agent-designer', displayName: 'Agent Designer', type: 'specialist' },
-  { name: 'skill-author', displayName: 'Skill Author', type: 'specialist' },
-  { name: 'hook-specialist', displayName: 'Hook Specialist', type: 'specialist' },
-  { name: 'testing-guide', displayName: 'Testing Guide', type: 'specialist' },
-  { name: 'orchestration-designer', displayName: 'Orchestration Designer', type: 'specialist' },
+  { name: 'extension-architect', displayName: 'Extension Architect', type: 'specialist', color: '#1e7896' },
+  { name: 'agent-designer',      displayName: 'Agent Designer',     type: 'specialist', color: '#c83264' },
+  { name: 'skill-author',        displayName: 'Skill Author',       type: 'specialist', color: '#8c6e14' },
+  { name: 'hook-specialist',     displayName: 'Hook Specialist',    type: 'specialist', color: '#3c5ab4' },
+  { name: 'testing-guide',       displayName: 'Testing Guide',      type: 'specialist', color: '#1e966e' },
+  { name: 'orchestration-designer', displayName: 'Orchestration Designer', type: 'specialist', color: '#964b1e' },
 ] as const
 
 interface ActiveEntry {
@@ -167,6 +167,7 @@ interface PanelAgent {
     visibility: string
     invited: boolean
     type: string
+    color: string
     startTime?: number
     elapsed?: number
     lastWork?: string
@@ -190,6 +191,7 @@ function buildAgentList(sessionKey: string): PanelAgent[] {
           visibility: 'sticky',
           invited: true,
           type: s.type,
+          color: s.color,
           startTime: entry.startTime,
           lastWork: entry.lastWork,
         },
@@ -203,6 +205,7 @@ function buildAgentList(sessionKey: string): PanelAgent[] {
         visibility: 'sticky',
         invited: true,
         type: s.type,
+        color: s.color,
         lastWork,
       },
     }
