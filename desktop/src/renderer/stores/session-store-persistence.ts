@@ -129,6 +129,13 @@ function persistTabs(useSessionStore: Store): void {
             if (m && m.length > 0) modelOverrides[inst.id] = m
           }
           if (Object.keys(modelOverrides).length > 0) result.engineModelOverrides = modelOverrides
+          const { enginePermissionModes: eModes } = useSessionStore.getState()
+          const permModes: Record<string, 'auto' | 'plan'> = {}
+          for (const inst of hPane.instances) {
+            const m = eModes.get(`${t.id}:${inst.id}`)
+            if (m && m !== 'auto') permModes[inst.id] = m
+          }
+          if (Object.keys(permModes).length > 0) result.enginePermissionModes = permModes
           return result
         })() : {}),
         ...(pane && pane.instances.length > 0 ? { terminalInstances: pane.instances } : {}),
@@ -233,7 +240,7 @@ function scanForStuckTabs(useSessionStore: Store): void {
 export function setupPersistence(useSessionStore: Store): void {
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   useSessionStore.subscribe((state, prev) => {
-    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.agentDetailGeometry !== prev.agentDetailGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes || state.engineDraftInputs !== prev.engineDraftInputs || state.enginePermissionDenied !== prev.enginePermissionDenied || state.engineModelOverrides !== prev.engineModelOverrides) {
+    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.agentDetailGeometry !== prev.agentDetailGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes || state.engineDraftInputs !== prev.engineDraftInputs || state.enginePermissionDenied !== prev.enginePermissionDenied || state.engineModelOverrides !== prev.engineModelOverrides || state.enginePermissionModes !== prev.enginePermissionModes) {
       // Flush immediately when permissionDenied changes on any tab — this
       // state must survive a crash or force-quit (e.g. the desktop is killed
       // while an engine run is in progress and the AskUserQuestion / ExitPlanMode

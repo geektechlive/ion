@@ -226,9 +226,14 @@ export function ConversationView() {
           )}
         </AnimatePresence>
 
-        {/* Permission denied fallback card */}
+        {/* Permission denied fallback card.
+            Hidden while the tab is running — after the user sends feedback,
+            answers a question, or clicks Implement, the card must stay hidden
+            until the agent finishes the new turn. Without this, stale heartbeat
+            ticks can re-synthesize task_complete with old permissionDenials
+            before prompt_dispatch clears the engine's lastPermissionDenials. */}
         <AnimatePresence>
-          {tab.permissionDenied && permissionDeniedHandlers && (
+          {tab.permissionDenied && permissionDeniedHandlers && !isRunning && (
             <PermissionDeniedCard
               tools={tab.permissionDenied.tools}
               tabId={tab.id}

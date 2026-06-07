@@ -86,6 +86,7 @@ function buildHarness() {
     engineModelOverrides: new Map(),
     engineConversationIds: new Map(),
     enginePermissionDenied: new Map(),
+    enginePermissionModes: new Map(),
     closeTab: vi.fn(),
   }
   const set = (partial: any) => {

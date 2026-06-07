@@ -200,6 +200,7 @@ function buildHarness(initialTab: TabState) {
     engineMessages: new Map(),
     engineDraftInputs: new Map(),
     enginePermissionDenied: new Map(),
+    enginePermissionModes: new Map(),
     fileExplorerOpenDirs: new Set(),
     fileEditorOpenDirs: new Set(),
   }

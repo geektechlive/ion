@@ -85,6 +85,7 @@ function buildHarness() {
     engineModelOverrides: new Map([['srcTab:inst1', 'claude-3']]),
     engineConversationIds: new Map([['srcTab:inst1', ['conv-abc']]]),
     enginePermissionDenied: new Map([['srcTab:inst1', { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }] }]]),
+    enginePermissionModes: new Map([['srcTab:inst1', 'auto' as const]]),
     closeTab: vi.fn(),
   }
 

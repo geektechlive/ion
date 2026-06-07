@@ -25,24 +25,28 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
     setPermissionMode: (mode, source) => {
       const { activeTabId } = get()
-      set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === activeTabId ? { ...t, permissionMode: mode } : t
-        ),
-      }))
-      // Engine tabs are keyed by `tabId:instanceId` in the engine.
-      // The generic setPermissionMode path uses bare tabId which
-      // silently misses the engine session. Route through the
-      // compound-key bridge path for engine tabs.
       const activeTab = get().tabs.find((t) => t.id === activeTabId)
       if (activeTab?.isEngine) {
+        // Engine tabs: write to per-instance enginePermissionModes instead of
+        // the parent tab.permissionMode, which is shared by all siblings.
         const pane = get().enginePanes.get(activeTabId)
         const instanceId = pane?.activeInstanceId
         if (instanceId) {
           const compoundKey = `${activeTabId}:${instanceId}`
+          set((s) => {
+            const modes = new Map(s.enginePermissionModes)
+            modes.set(compoundKey, mode)
+            return { enginePermissionModes: modes }
+          })
           window.ion.engineSetPlanMode(compoundKey, mode === 'plan')
         }
       } else {
+        // CLI tabs: set on the parent tab as before.
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === activeTabId ? { ...t, permissionMode: mode } : t
+          ),
+        }))
         window.ion.setPermissionMode(activeTabId, mode, source)
       }
       // Auto-switch to the plan model when entering plan mode
@@ -327,6 +331,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         const engineMessages = new Map(get().engineMessages)
         const engineDraftInputs = new Map(get().engineDraftInputs)
         const enginePermissionDenied = new Map(get().enginePermissionDenied)
+        const enginePermissionModes = new Map(get().enginePermissionModes)
         const enginePanes = new Map(get().enginePanes)
         for (const k of engineAgentStates.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineAgentStates.delete(k)
         for (const k of engineStatusFields.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineStatusFields.delete(k)
@@ -339,8 +344,9 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         for (const k of engineMessages.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineMessages.delete(k)
         for (const k of engineDraftInputs.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineDraftInputs.delete(k)
         for (const k of enginePermissionDenied.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePermissionDenied.delete(k)
+        for (const k of enginePermissionModes.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePermissionModes.delete(k)
         enginePanes.delete(tabId)
-        set({ engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineConversationIds, engineMessages, engineDraftInputs, enginePermissionDenied, enginePanes })
+        set({ engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineConversationIds, engineMessages, engineDraftInputs, enginePermissionDenied, enginePermissionModes, enginePanes })
       }
       if (closingTab) {
         const dir = closingTab.workingDirectory

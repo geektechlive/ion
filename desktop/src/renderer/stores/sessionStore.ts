@@ -67,6 +67,9 @@ const initialState = {
   // `State` (session-store-types.ts) for the full rationale. Mirrors the
   // other per-instance maps (engineMessages, engineDraftInputs, etc.).
   enginePermissionDenied: new Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null>(),
+  // Per-engine-instance plan/auto mode. Keyed by `${tabId}:${instanceId}`.
+  // Source of truth for engine tabs; parent tab.permissionMode stays 'auto'.
+  enginePermissionModes: new Map<string, 'auto' | 'plan'>(),
   resources: {} as Record<string, import('../../shared/types-engine').ResourceItem[]>,
   resourceSubscriptions: {} as Record<string, string>,
   readResourceIds: new Set<string>(),

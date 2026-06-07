@@ -205,7 +205,12 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               customTitle: t.customTitle,
               status: (t.isEngine && anyInstanceRunning && t.status !== 'running' && t.status !== 'connecting') ? 'running' : t.status,
               workingDirectory: t.workingDirectory,
-              permissionMode: t.permissionMode,
+              permissionMode: (function() {
+                if (t.isEngine && activeEngineInstanceId && s.enginePermissionModes && s.enginePermissionModes.get) {
+                  return s.enginePermissionModes.get(t.id + ':' + activeEngineInstanceId) || 'auto';
+                }
+                return t.permissionMode;
+              })(),
               permissionQueue: queue,
               contextTokens: t.contextTokens,
               messageCount: msgs.length,

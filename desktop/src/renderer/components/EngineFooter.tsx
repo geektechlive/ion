@@ -40,9 +40,14 @@ export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engine
   const popoverLayer = usePopoverLayer()
   const setEngineModel = useSessionStore((s) => s.setEngineModel)
   const engineDefaultModel = usePreferencesStore((s) => s.engineDefaultModel)
-  const permissionMode = useSessionStore(
-    (s) => s.tabs.find((t) => t.id === activeTabId)?.permissionMode ?? 'auto',
-  )
+  const permissionMode = useSessionStore((s) => {
+    const pane = s.enginePanes.get(activeTabId)
+    const instanceId = pane?.activeInstanceId
+    if (instanceId) {
+      return s.enginePermissionModes.get(`${activeTabId}:${instanceId}`) ?? 'auto'
+    }
+    return 'auto'
+  })
   const setPermissionMode = useSessionStore((s) => s.setPermissionMode)
 
   const [hover, setHover] = useState(false)

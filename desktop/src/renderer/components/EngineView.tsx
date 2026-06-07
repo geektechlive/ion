@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { useColors } from '../theme'
-import { formatImplementDivider } from '../../shared/clear-divider'
+import { runHandleImplement } from './EngineView-implement'
 import { EngineDialog } from './EngineDialog'
 import { EngineStatusBar } from './EngineStatusBar'
 import { AgentPanel } from './AgentPanel'
@@ -238,88 +238,10 @@ export function EngineView({ tabId }: EngineViewProps) {
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt])
 
   const handleImplement = useCallback(async (clearContext: boolean = false) => {
-    console.log(`[EngineView] handleImplement: tab=${tabId.slice(0, 8)} key=${key} clearContext=${clearContext}`)
-    clearPermissionDenied()
-
-    // Insert an "Implementing plan" divider so the user can see the
-    // boundary between planning and implementation phases — mirrors the
-    // CLI tab path in usePermissionDeniedHandlers.ts.
-    if (key) {
-      useSessionStore.getState().addEngineSystemMessage(key, formatImplementDivider(new Date()))
-    }
-
-    // Switch to auto mode — for engine tabs this calls
-    // engineSetPlanMode(compoundKey, false) internally (tab-slice.ts:38-43).
-    // This drops the plan-mode system prompt and restricted tool list on
-    // the engine side without destroying the conversation, regardless of
-    // whether we follow the clear-context path below.
-    useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
-
-    // Honor the per-click `clearContext` argument. Engine tabs do not yet
-    // have a per-instance reset IPC (no `engineResetSession` exists), so
-    // when clearContext=true the renderer logs a warning and falls
-    // through to the default no-reset behavior. The CLI-tab and iOS
-    // paths fully honor the flag. The "Implement, clear context" button
-    // is revealed in PermissionDeniedCard by the
-    // `showImplementClearContext` preference.
-    if (clearContext) {
-      console.warn(`[EngineView] handleImplement: clearContext=true is not yet supported for engine tabs — staying in the same engine-instance conversation. CLI tabs and iOS CLI tabs honor this action. Tracking engine API gap as a follow-up (no engineResetSession IPC).`)
-    } else {
-      console.log(`[EngineView] handleImplement: clearContext=false — preserving engine-instance conversation`)
-    }
-
-    // Auto-switch to the implementation model if the split feature is enabled
-    const { planModelSplitEnabled, implementModeModel } = usePreferencesStore.getState()
-    if (planModelSplitEnabled && implementModeModel) {
-      useSessionStore.getState().setTabModel(tabId, implementModeModel)
-    }
-
-    // Auto-move tab to in-progress group if designated
-    const { inProgressGroupId, tabGroupMode, autoGroupMovement } = usePreferencesStore.getState()
-    const tab = useSessionStore.getState().tabs.find(t => t.id === tabId)
-    if (autoGroupMovement && inProgressGroupId && tabGroupMode === 'manual' && tab && tab.groupId !== inProgressGroupId) {
-      if (tab.groupPinned) {
-        console.log(`[EngineView] auto-move suppressed: tab=${tabId.slice(0, 8)} pinned=true`)
-      } else {
-        useSessionStore.getState().moveTabToGroup(tabId, inProgressGroupId)
-      }
-    }
-
-    // Extract plan file path: tab state (engine event) > denial toolInput
-    let planFilePath: string | null = tabPlanFilePath || null
-    if (!planFilePath && permissionDenied?.tools) {
-      const exitDenial = permissionDenied.tools.find(
-        (t: { toolName: string; toolInput?: Record<string, unknown> }) =>
-          t.toolName === 'ExitPlanMode' && t.toolInput
-      )
-      if (exitDenial?.toolInput?.planFilePath) {
-        planFilePath = exitDenial.toolInput.planFilePath as string
-      }
-    }
-
-    // Read plan content
-    let planContent: string | null = null
-    if (planFilePath) {
-      try {
-        const result = await window.ion.readPlan(planFilePath)
-        planContent = result.content
-      } catch (err) {
-        console.warn('[EngineView] Failed to read plan file:', err)
-      }
-    }
-
-    // Clear the tab-level planFilePath now that we've read it
-    useSessionStore.setState((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.id === tabId ? { ...t, planFilePath: null } : t
-      ),
-    }))
-
-    const implementPrompt = planContent
-      ? `Implement the following plan:\n\n${planContent}`
-      : 'Implement the plan.'
-    console.log(`[EngineView] submitting implement prompt: tab=${tabId.slice(0, 8)} promptLen=${implementPrompt.length}`)
-    submitEnginePrompt(tabId, implementPrompt, undefined, undefined, undefined, true)
+    await runHandleImplement(
+      { tabId, key, clearPermissionDenied, submitEnginePrompt, tabPlanFilePath, permissionDenied },
+      clearContext,
+    )
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt, tabPlanFilePath, permissionDenied])
 
   const handleImplementAndUnpin = useCallback(async (clearContext: boolean = false) => {
@@ -521,9 +443,17 @@ export function EngineView({ tabId }: EngineViewProps) {
           Rendered between the scrollable conversation area and the agent
           panel so the question sits directly above the input where users
           expect it. Wired to the engine's submitEnginePrompt so the answer
-          becomes a new prompt on the active engine instance. */}
+          becomes a new prompt on the active engine instance.
+
+          Hidden while the tab is running — after the user sends feedback,
+          answers a question, or clicks Implement, the tab transitions to
+          running/connecting and the card must stay hidden until the agent
+          finishes the new turn. Without this, stale heartbeat ticks from
+          the engine can re-populate instance.permissionDenied via
+          handleEngineStatusEvent before prompt_dispatch clears the
+          engine's lastPermissionDenials. */}
       <AnimatePresence>
-        {permissionDenied && (
+        {permissionDenied && !isRunning && (
           <PermissionDeniedCard
             tools={permissionDenied.tools}
             tabId={tabId}
@@ -532,6 +462,7 @@ export function EngineView({ tabId }: EngineViewProps) {
             messages={messages}
             tabPlanFilePath={tabPlanFilePath}
             tabGroupPinned={tabGroupPinned}
+            supportsContextClear={false}
             onDismiss={clearPermissionDenied}
             onAnswer={handleAnswerDenial}
             onImplement={handleImplement}

@@ -308,7 +308,15 @@ function handleStatusEvent(
       ctx.bridge.updateSessionConversationId(tabId, event.fields.sessionId)
     }
 
-    if (tab.status === 'completed' || tab.status === 'idle') {
+    if (tab.status === 'completed' || tab.status === 'idle' || tab.status === 'connecting') {
+      // 'completed' / 'idle': already synthesized task_complete for this
+      // idle transition — skip duplicates from cost-only heartbeat ticks.
+      // 'connecting': submitPrompt has been called (new prompt in flight)
+      // but the engine hasn't responded with state='running' yet. Any
+      // engine_status(idle + denials) in this window is stale — the engine
+      // is about to clear its lastPermissionDenials in prompt_dispatch.
+      // Synthesizing a task_complete here would resurrect a dismissed
+      // ExitPlanMode / AskUserQuestion card.
       log(`engine_status: skipping idle for ${tab.status} tab ${tabId}`)
       return
     }

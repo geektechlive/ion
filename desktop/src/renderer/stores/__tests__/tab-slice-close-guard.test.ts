@@ -137,6 +137,7 @@ function buildHarness(tabs: any[]): Harness {
     engineModelOverrides: new Map(),
     engineConversationIds: new Map(),
     enginePermissionDenied: new Map(),
+    enginePermissionModes: new Map(),
     terminalPanes: new Map(),
     terminalOpenTabIds: new Set(),
     fileExplorerOpenDirs: new Set(),

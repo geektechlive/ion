@@ -97,6 +97,11 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         overrides.set(key, initialModel)
         set({ engineModelOverrides: overrides })
       }
+      // Initialize per-instance permission mode to 'auto'. Engine sessions
+      // start in auto mode; extensions call ctx.SetPlanMode to enter plan mode.
+      const modes = new Map(get().enginePermissionModes)
+      modes.set(key, 'auto')
+      set({ enginePermissionModes: modes })
       if (profile) {
         window.ion.engineStart(key, {
           profileId: profile.id,
@@ -177,6 +182,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       const engineUsage = new Map(get().engineUsage)
       const engineDraftInputs = new Map(get().engineDraftInputs)
       const enginePermissionDenied = new Map(get().enginePermissionDenied)
+      const enginePermissionModes = new Map(get().enginePermissionModes)
       engineMessages.delete(key)
       engineAgentStates.delete(key)
       engineStatusFields.delete(key)
@@ -187,9 +193,10 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       engineUsage.delete(key)
       engineDraftInputs.delete(key)
       enginePermissionDenied.delete(key)
+      enginePermissionModes.delete(key)
       const engineModelOverrides = new Map(get().engineModelOverrides)
       engineModelOverrides.delete(key)
-      set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, engineModelOverrides, enginePermissionDenied })
+      set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, engineModelOverrides, enginePermissionDenied, enginePermissionModes })
     },
 
     resetEngineInstance: (tabId, instanceId) => {
@@ -239,7 +246,11 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         content: formatSessionStartDivider(new Date()),
         timestamp: Date.now(),
       }])
-      set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, enginePermissionDenied })
+      // Reset per-instance permission mode back to 'auto'. A reset clears the
+      // conversation; extensions re-enter plan mode via ctx.SetPlanMode.
+      const enginePermissionModes = new Map(get().enginePermissionModes)
+      enginePermissionModes.set(key, 'auto')
+      set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, enginePermissionDenied, enginePermissionModes })
     },
 
     selectEngineInstance: (tabId, instanceId) => {
@@ -264,6 +275,10 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       const convChain = get().engineConversationIds.get(key)
       const lastConvId = convChain?.[convChain.length - 1]
 
+      // Resolve the per-instance permission mode so the footer dropdown
+      // reflects this subtab's mode immediately on switch.
+      const instancePermissionMode = get().enginePermissionModes.get(key) ?? 'auto'
+
       if (instanceState) {
         // Map instance state to tab.status — mirrors the logic in
         // engine-event-status.ts:167-181.
@@ -286,7 +301,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
           enginePanes: panes,
           tabs: state.tabs.map((t) => {
             if (t.id !== tabId) return t
-            const updates: Partial<typeof t> = { status: newStatus }
+            const updates: Partial<typeof t> = { status: newStatus, permissionMode: instancePermissionMode }
             if (lastConvId && t.conversationId !== lastConvId) {
               updates.conversationId = lastConvId
               updates.lastKnownSessionId = lastConvId
@@ -297,19 +312,26 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       } else {
         // No status entry yet (instance just created, no events
         // received) — update panes and conversationId only, leave
-        // tab.status unchanged.
+        // tab.status unchanged. Still reconcile permissionMode.
         console.log(`[selectEngineInstance] tab=${tabId.slice(0, 8)} instance=${instanceId} noStatusEntry, panes only`)
         if (lastConvId) {
           set((state) => ({
             enginePanes: panes,
             tabs: state.tabs.map((t) => {
               if (t.id !== tabId) return t
-              if (t.conversationId === lastConvId) return { ...t }
-              return { ...t, conversationId: lastConvId, lastKnownSessionId: lastConvId }
+              if (t.conversationId === lastConvId && t.permissionMode === instancePermissionMode) return { ...t }
+              return { ...t, conversationId: lastConvId, lastKnownSessionId: lastConvId, permissionMode: instancePermissionMode }
             }),
           }))
         } else {
-          set({ enginePanes: panes })
+          set((state) => ({
+            enginePanes: panes,
+            tabs: state.tabs.map((t) => {
+              if (t.id !== tabId) return t
+              if (t.permissionMode === instancePermissionMode) return { ...t }
+              return { ...t, permissionMode: instancePermissionMode }
+            }),
+          }))
         }
       }
     },
@@ -361,6 +383,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       const engineModelOverrides = new Map(state.engineModelOverrides)
       const engineConversationIds = new Map(state.engineConversationIds)
       const enginePermissionDenied = new Map(state.enginePermissionDenied)
+      const enginePermissionModes = new Map(state.enginePermissionModes)
 
       const rekey = <V>(m: Map<string, V>) => {
         if (m.has(oldKey)) { m.set(newKey, m.get(oldKey)!); m.delete(oldKey) }
@@ -377,6 +400,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       rekey(engineModelOverrides)
       rekey(engineConversationIds)
       rekey(enginePermissionDenied)
+      rekey(enginePermissionModes)
 
       // Update enginePanes: remove from source, add to target
       const enginePanes = new Map(state.enginePanes)
@@ -410,6 +434,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         engineModelOverrides,
         engineConversationIds,
         enginePermissionDenied,
+        enginePermissionModes,
       })
 
       // Close source tab if it's now empty. If the source tab still
@@ -448,11 +473,9 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
       // Sync plan mode to the engine session via compound key before
-      // submitting the prompt. The engine session is keyed by
-      // `tabId:instanceId`; the generic setPermissionMode path uses
-      // bare tabId which silently misses the engine session.
-      const currentTab = get().tabs.find(t => t.id === tabId)
-      const isPlanMode = currentTab?.permissionMode === 'plan'
+      // submitting the prompt. Read from the per-instance enginePermissionModes
+      // map (not tab.permissionMode, which is shared by all siblings).
+      const isPlanMode = get().enginePermissionModes.get(key) === 'plan'
       window.ion.engineSetPlanMode(key, isPlanMode)
       // Build a FileAttachment list from the encoded image attachments so
       // the user-message bubble can render images inline. The path is the

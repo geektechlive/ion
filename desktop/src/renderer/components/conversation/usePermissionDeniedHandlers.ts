@@ -80,6 +80,23 @@ export function buildPermissionDeniedHandlers(
 
   const onImplement = async (clearContext: boolean = false) => {
     dismissPermissionDenied()
+
+    // Do NOT set tab.status eagerly here. The renderer's tab.status has
+    // no effect on the main-process heartbeat guard (engine-control-plane-
+    // events.ts:311 reads its own tab entry, not the renderer store). The
+    // main-process tab is already 'completed' at this point, which is
+    // sufficient to suppress stale denial re-promotion.
+    //
+    // Setting 'connecting' caused sendMessage to silently drop the
+    // implement prompt (sendMessage guards on status==='connecting').
+    // Setting 'running' caused sendMessage to route the prompt through
+    // steer() instead of prompt() (sendMessage treats running as isBusy).
+    // Both are wrong — sendMessage must see a non-busy, non-connecting
+    // status so it dispatches via window.ion.prompt().
+    //
+    // sendMessage itself sets 'connecting' at dispatch time (line ~157),
+    // which is the correct transition point.
+
     // Switch to auto mode for implementation
     useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
 
@@ -142,7 +159,7 @@ export function buildPermissionDeniedHandlers(
             ? {
                 ...t,
                 messages: [
-                  ...t.messages,
+                  ...(t.messages ?? []),
                   {
                     id: nextMsgId(),
                     role: 'system' as const,
@@ -180,7 +197,7 @@ export function buildPermissionDeniedHandlers(
             ? {
                 ...t,
                 messages: [
-                  ...t.messages,
+                  ...(t.messages ?? []),
                   {
                     id: nextMsgId(),
                     role: 'system' as const,

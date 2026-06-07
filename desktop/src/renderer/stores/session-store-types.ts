@@ -100,6 +100,24 @@ export interface State {
    * iOS card path continues to work unchanged at the tab level.
    */
   enginePermissionDenied: Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null>
+  /**
+   * Per-engine-instance permission mode, keyed by the compound
+   * `${tabId}:${instanceId}` key. Engine sub-tabs are independent
+   * sub-conversations; storing mode per-instance (vs. on the parent
+   * `tab.permissionMode`) prevents siblings from sharing plan mode
+   * state when the user toggles one of them.
+   *
+   * The parent `tab.permissionMode` stays 'auto' for engine tabs and
+   * is only meaningful for CLI tabs. All engine UI and prompt
+   * submission reads from this map instead.
+   *
+   * Follows the same compound-key lifecycle as `enginePermissionDenied`:
+   * initialized in `addEngineInstance`, deleted in `removeEngineInstance`,
+   * reset in `resetEngineInstance`, rekeyed in `moveEngineInstance`,
+   * reconciled to parent in `selectEngineInstance`, persisted and
+   * restored per-instance.
+   */
+  enginePermissionModes: Map<string, 'auto' | 'plan'>
 
   /**
    * Resource subsystem state (D-007). Resources keyed by kind — each entry
