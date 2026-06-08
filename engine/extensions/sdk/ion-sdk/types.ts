@@ -671,6 +671,33 @@ export interface IonContext {
      *  Same extension type only — the engine enforces this. */
     send(targetKey: string, kind: string, payload: Record<string, unknown>): Promise<void>
   }
+
+  /**
+   * Run an operation on exactly one instance when multiple sessions load the
+   * same extension simultaneously.
+   *
+   * All instances call `runOnce`. The engine picks one winner; the others
+   * skip `fn` and return `{ executed: false }`. The winner runs `fn` and
+   * returns `{ executed: true, result }`. If `fn` throws, the lock releases
+   * immediately so the next caller can retry.
+   *
+   * Scoped per extension path — `ion-dev` and `chief-of-staff` have
+   * independent namespaces even if they use the same `id`.
+   *
+   * @param id      Operation identifier. Unique within this extension.
+   * @param opts    Debounce options. Defaults to 60-second window.
+   * @param fn      Async function to execute on the winning instance only.
+   *
+   * @example
+   * ```ts
+   * ion.on('session_start', async (ctx) => {
+   *   await ctx.runOnce('git-sync', { debounceMs: 300_000 }, async () => {
+   *     await gitPullRebase()
+   *   })
+   * })
+   * ```
+   */
+  runOnce<T = void>(id: string, opts: RunOnceOpts, fn: () => Promise<T>): Promise<RunOnceResult<T>>
 }
 
 /** Describes a session as returned by ctx.sessions.list(). */
@@ -703,6 +730,49 @@ export interface ElicitResult {
   response?: Record<string, unknown>
   /** True when the user cancelled or the request timed out. */
   cancelled: boolean
+}
+
+/**
+ * Options for {@link IonContext.runOnce}.
+ */
+export interface RunOnceOpts {
+  /**
+   * Debounce window in milliseconds. After a successful execution, the
+   * engine suppresses re-execution for this many ms.
+   *
+   * - `debounceMs > 0` (default 60000): suppress within the window. After
+   *   it expires the next caller wins. The window only applies while at
+   *   least one session of the extension is alive — when all sessions
+   *   close, the entry clears regardless of remaining TTL.
+   * - `debounceMs = 0`: run once per extension lifecycle. Resets when all
+   *   sessions for this extension stop.
+   *
+   * @default 60000
+   */
+  debounceMs?: number
+}
+
+/**
+ * Return value from {@link IonContext.runOnce}.
+ */
+export interface RunOnceResult<T = void> {
+  /**
+   * True when this instance ran `fn` and it completed. False when the
+   * engine decided another instance should handle it (or already has).
+   */
+  executed: boolean
+  /**
+   * Why execution was skipped. Only present when `executed` is false.
+   * - `"in_progress"`: another instance is currently running the operation.
+   * - `"debounced"`: the operation ran recently enough to be within the window.
+   * - `"already_ran"`: debounceMs=0 and the operation already ran this lifecycle.
+   */
+  reason?: 'in_progress' | 'debounced' | 'already_ran'
+  /**
+   * The return value of `fn`, when `executed` is true and `fn` returned
+   * a value.
+   */
+  result?: T
 }
 
 /**

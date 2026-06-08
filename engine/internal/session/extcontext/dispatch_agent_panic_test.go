@@ -93,6 +93,8 @@ func (p *panicTestAccessor) ListAllSessions() []extension.SessionListEntry { ret
 func (p *panicTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil
 }
+func (p *panicTestAccessor) RunOnceCheck(_ string, _ int64) (bool, string) { return true, "" }
+func (p *panicTestAccessor) RunOnceComplete(_ string, _ bool)              {}
 
 // TestRecoverBackgroundDispatchPanic_SynthesizesTerminalState is the
 // invariant test for the silent-wedge defect. A background dispatch

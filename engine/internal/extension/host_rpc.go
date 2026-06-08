@@ -128,6 +128,10 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 	if h.handleAsyncRPC(method, id, raw) {
 		return
 	}
+	// runOnce dedup RPCs live in host_rpc_run_once.go.
+	if h.handleRunOnceRPC(method, id, raw) {
+		return
+	}
 	switch method {
 	case "ext/register_process":
 		var req struct {

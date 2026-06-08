@@ -100,6 +100,18 @@ type SessionAccessor interface {
 	// same extension type. Returns an error if the target doesn't exist,
 	// has a different extension type, or has no session_message hook.
 	SendToSession(senderKey, targetKey, kind string, payload map[string]interface{}) error
+
+	// RunOnceCheck is the dedup coordinator for ctx.runOnce. It returns
+	// Execute=true when this instance should run the operation (and the
+	// engine has marked it as running). Returns Execute=false with a
+	// reason when another instance is already running it or it ran
+	// recently enough to be debounced.
+	RunOnceCheck(operationID string, debounceMs int64) (execute bool, reason string)
+
+	// RunOnceComplete records the completion of a runOnce operation.
+	// failed=true clears the running flag without updating lastRun so
+	// the next caller can retry immediately.
+	RunOnceComplete(operationID string, failed bool)
 }
 
 // NewExtContext builds a fully-populated extension.Context by delegating all
@@ -295,6 +307,15 @@ func NewExtContext(sa SessionAccessor, registries ...*DispatchRegistry) *extensi
 
 	ctx.SendToSession = func(targetKey string, kind string, payload map[string]interface{}) error {
 		return sa.SendToSession(sa.SessionKey(), targetKey, kind, payload)
+	}
+
+	ctx.RunOnceCheck = func(operationID string, debounceMs int64) (bool, string) {
+		execute, reason := sa.RunOnceCheck(operationID, debounceMs)
+		return execute, reason
+	}
+
+	ctx.RunOnceComplete = func(operationID string, failed bool) {
+		sa.RunOnceComplete(operationID, failed)
 	}
 
 	// Populate extension config if available.

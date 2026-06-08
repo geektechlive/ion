@@ -220,6 +220,18 @@ type Context struct {
 	// hook registered; if not, the engine returns an error. Same extension
 	// type only — the engine enforces this by comparing extension names.
 	SendToSession func(targetKey string, kind string, payload map[string]interface{}) error
+
+	// RunOnceCheck coordinates cross-instance dedup for ctx.runOnce.
+	// Returns (execute=true, "") when this instance wins the dedup check.
+	// Returns (execute=false, reason) when another instance is running or
+	// the operation was run recently enough to be debounced.
+	// reason values: "in_progress", "debounced", "already_ran"
+	RunOnceCheck func(operationID string, debounceMs int64) (execute bool, reason string)
+
+	// RunOnceComplete records the outcome of a runOnce operation.
+	// failed=true releases the lock without updating lastRun so the next
+	// instance can retry immediately instead of waiting for debounce expiry.
+	RunOnceComplete func(operationID string, failed bool)
 }
 
 // SessionListEntry describes a session as returned by ListSessions.

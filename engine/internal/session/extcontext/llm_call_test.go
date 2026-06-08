@@ -82,6 +82,8 @@ func (a *llmCallTestAccessor) ListAllSessions() []extension.SessionListEntry { r
 func (a *llmCallTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil
 }
+func (a *llmCallTestAccessor) RunOnceCheck(_ string, _ int64) (bool, string) { return true, "" }
+func (a *llmCallTestAccessor) RunOnceComplete(_ string, _ bool)              {}
 
 // registerMockProvider registers a MockProvider for the given model under
 // a fixed provider id. Returns the mock so the test can inspect recorded

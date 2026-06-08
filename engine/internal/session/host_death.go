@@ -72,6 +72,17 @@ func (m *Manager) handleHostDeath(key string, h *extension.Host) {
 	// gracefully (mark dependent state as stale, etc.).
 	m.firePeerExtensionDied(key, h, exitCode, signal)
 
+	// Release any runOnce leases this host was holding. If the host crashed
+	// mid-operation without sending run_once_complete, the running flag
+	// would otherwise block all other instances until debounce expiry.
+	// Releasing here lets the next instance retry immediately.
+	extDir := h.ExtensionDir()
+	if extDir != "" {
+		for _, opID := range m.runOnce.runningIDs(extDir) {
+			m.runOnce.releaseRunning(extDir, opID)
+		}
+	}
+
 	// If no run is active, respawn immediately. Otherwise the manager's
 	// handleRunExit will call respawnDeadExtensions after the run ends.
 	if !turnActive {

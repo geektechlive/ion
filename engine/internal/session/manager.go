@@ -74,6 +74,13 @@ type Manager struct {
 	// one repo tree consume N * dirs kqueue FDs, exhausting the
 	// per-process file descriptor limit.
 	watchers *watcherPool
+
+	// runOnce is the Manager-level registry for cross-instance dedup.
+	// Extensions call ctx.runOnce(id, opts, fn) to run an operation on
+	// only one instance when multiple sessions load the same extension.
+	// Entries clear automatically when the last session for an extension
+	// path stops. See run_once.go.
+	runOnce *runOnceRegistry
 }
 
 // SetConfig stores the engine runtime config for applying defaults.
@@ -126,6 +133,7 @@ func NewManager(b backend.RunBackend) *Manager {
 		globalBroker:      resource.NewBroker(),
 		heartbeatStop:     make(chan struct{}),
 		heartbeatInterval: DefaultSessionStatusHeartbeatInterval,
+		runOnce:           newRunOnceRegistry(),
 	}
 
 	b.OnNormalized(m.handleNormalizedEvent)
@@ -331,7 +339,26 @@ func (m *Manager) StopSession(key string) error {
 	sm := s.sessionMemory
 
 	delete(m.sessions, key)
+
+	// If no remaining sessions use the same extension directory, purge all
+	// runOnce entries for that extension. The debounce window only applies
+	// while at least one session of the extension is alive. We check while
+	// still holding the write lock so the count is authoritative.
+	var purgeExtDir string
+	if s.extGroup != nil && !s.extGroup.IsEmpty() {
+		if hosts := s.extGroup.Hosts(); len(hosts) > 0 {
+			extDir := hosts[0].ExtensionDir()
+			if extDir != "" && m.extensionDirSessionCount(extDir) == 0 {
+				purgeExtDir = extDir
+			}
+		}
+	}
+
 	m.mu.Unlock()
+
+	if purgeExtDir != "" {
+		m.runOnce.purgeExtension(purgeExtDir)
+	}
 
 	// Stop session memory background summarizer before other cleanup so
 	// any in-flight goroutine drains cleanly.

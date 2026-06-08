@@ -65,6 +65,8 @@ func (a *agentDiscoveryTestAccessor) ListAllSessions() []extension.SessionListEn
 func (a *agentDiscoveryTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil
 }
+func (a *agentDiscoveryTestAccessor) RunOnceCheck(_ string, _ int64) (bool, string) { return true, "" }
+func (a *agentDiscoveryTestAccessor) RunOnceComplete(_ string, _ bool)              {}
 
 // writeAgentFile creates a minimal .md agent file in dir/agents/<name>.md
 // with valid frontmatter.

@@ -1,3 +1,4 @@
+// @file-size-exception: SDK runtime plumbing. Single cohesive module: JSON-RPC transport, context builder, hook/tool/command dispatch, and all ctx.* method implementations. Splitting would scatter cross-cutting concerns (request(), buildContext, startListening) across multiple files with no clean seam.
 // Ion Extension SDK -- runtime.
 // JSON-RPC 2.0 plumbing over stdin/stdout, hook/tool/command dispatch,
 // context builder, console redirect, native logger, and the public
@@ -43,6 +44,8 @@ import type {
   NotifyOpts,
   ProcessInfo,
   RecallAgentOpts,
+  RunOnceOpts,
+  RunOnceResult,
   SessionListEntry,
   SandboxProfile,
   SandboxWrapResult,
@@ -327,6 +330,29 @@ function buildContext(ctxData: any): IonContext {
       async send(targetKey: string, kind: string, payload: Record<string, unknown>): Promise<void> {
         await request('ext/send_to_session', { targetKey, kind, payload })
       },
+    },
+    async runOnce<T = void>(
+      id: string,
+      opts: RunOnceOpts,
+      fn: () => Promise<T>,
+    ): Promise<RunOnceResult<T>> {
+      const debounceMs = typeof opts?.debounceMs === 'number' ? opts.debounceMs : 60000
+      const check = await request('ext/run_once_check', { id, debounceMs })
+      if (!check?.execute) {
+        return {
+          executed: false,
+          reason: (check?.reason as RunOnceResult<T>['reason']) ?? 'debounced',
+        }
+      }
+      try {
+        const result = await fn()
+        await request('ext/run_once_complete', { id, failed: false })
+        return { executed: true, result }
+      } catch (err) {
+        // Release the lock on failure so the next instance can retry.
+        await request('ext/run_once_complete', { id, failed: true }).catch(() => {})
+        throw err
+      }
     },
   }
 }
