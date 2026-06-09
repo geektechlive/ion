@@ -45,7 +45,7 @@ final class VoiceService {
     var hasPending: Bool { pendingText != nil }
 
     // ElevenLabs — Paul Bettany voice
-    private static let keychainService = "com.geektechlive.ionremote.elevenlabs"
+    private static let keychainService = "com.ion.remote.elevenlabs"
     private static let voiceID = "UolWdrj5vmGn5b1zzgvS"
 
     // swiftlint:disable line_length
