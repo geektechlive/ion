@@ -152,6 +152,7 @@ final class SessionViewModel {
     var engineMessages: [String: [Message]] = [:]         // compoundKey -> messages
     var engineConversationLoaded: Set<String> = []               // compoundKeys that have loaded history
     var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
+    var lastSpokenEngineMessageCount: [String: Int] = [:]        // compoundKey -> message count at last TTS call
     // Agent dispatch conversation history (per conversationId for dispatch pager)
     var agentConversationMessages: [String: [Message]] = [:]     // conversationId -> messages
     var agentConversationLoading: Set<String> = []               // conversationIds currently loading

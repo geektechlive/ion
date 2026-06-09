@@ -37,6 +37,9 @@ extension SessionViewModel {
             activeTools.removeValue(forKey: key)
         }
         engineConversationLoaded = engineConversationLoaded.filter { $0 != tabId && !$0.hasPrefix("\(tabId):") }
+        for key in lastSpokenEngineMessageCount.keys where key == tabId || key.hasPrefix("\(tabId):") {
+            lastSpokenEngineMessageCount.removeValue(forKey: key)
+        }
         // Drafts are local-only state — clean them up when the tab is closed
         // (don't survive tab close; do survive disconnect / restart).
         clearTabDraft(tabId)
@@ -73,6 +76,24 @@ extension SessionViewModel {
                     activeTools.removeValue(forKey: key)
                 }
 
+                // Engine tab TTS: speak the last assistant response once per turn.
+                // tab_status:idle fires exactly once at turn end — engine_message_end
+                // fires once per sub-message (multiple times when tool calls are involved),
+                // so triggering there causes repeated speech.
+                // De-duplicate with lastSpokenEngineMessageCount so repeated idle events
+                // (reconnects, upstream re-delivery) don't re-speak the same response.
+                if status == .idle {
+                    let key = engineCompoundKey(tabId: tabId)
+                    let msgs = engineMessages[key] ?? []
+                    let prevCount = lastSpokenEngineMessageCount[key] ?? 0
+                    if let last = msgs.last(where: { $0.role == .assistant }),
+                       msgs.count > prevCount,
+                       !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        lastSpokenEngineMessageCount[key] = msgs.count
+                        DiagnosticLog.log("VOICE-TTS: tabIdle speaking \(last.content.count) chars tabId=\(tabId.prefix(8))")
+                        voiceService.speak(text: last.content, messageId: last.id, tabId: tabId)
+                    }
+                }
             }
         }
         // Track idle-since timestamp for sidebar display

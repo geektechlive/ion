@@ -162,19 +162,10 @@ extension SessionViewModel {
 
         engineTurnHasText.remove(key)
 
-        // TTS: speak the completed assistant message.
-        // The ion CliBackend path delivers text via engine_text_delta +
-        // engine_message_end — it does NOT send task_complete, so
-        // handleTaskComplete never fires on this path. Trigger TTS here instead.
-        // VoiceService.speak guards isEnabled internally; safe to call unconditionally.
-        if let last = engineMessages[key]?.last(where: { $0.role == .assistant }),
-           !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            DiagnosticLog.log("VOICE-TTS: engineMessageEnd speaking \(last.content.count) chars tabId=\(tabId.prefix(8))")
-            voiceService.speak(text: last.content, messageId: last.id, tabId: tabId)
-        } else {
-            let charCount = engineMessages[key]?.last(where: { $0.role == .assistant })?.content.count ?? -1
-            DiagnosticLog.log("VOICE-TTS: engineMessageEnd not speaking tabId=\(tabId.prefix(8)) chars=\(charCount)")
-        }
+        // TTS is triggered by tab_status:idle (once per turn) rather than here.
+        // engine_message_end fires once per sub-message, which means multiple
+        // times per turn when tool calls are involved — triggering here causes
+        // repeated speech. handleTabStatus handles TTS for engine tabs.
     }
 
     @MainActor
