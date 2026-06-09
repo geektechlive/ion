@@ -168,7 +168,7 @@ extension SessionViewModel {
         // handleTaskComplete never fires on this path. Trigger TTS here instead.
         // VoiceService.speak guards isEnabled internally; safe to call unconditionally.
         if let last = engineMessages[key]?.last(where: { $0.role == .assistant }),
-           last.content.trimmingCharacters(in: .whitespacesAndNewlines).count > 20 {
+           !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             DiagnosticLog.log("VOICE-TTS: engineMessageEnd speaking \(last.content.count) chars tabId=\(tabId.prefix(8))")
             voiceService.speak(text: last.content, messageId: last.id, tabId: tabId)
         } else {
