@@ -32,6 +32,9 @@ extension SessionViewModel {
         for key in engineMessages.keys where key == tabId || key.hasPrefix("\(tabId):") {
             engineMessages.removeValue(forKey: key)
         }
+        for key in lastSpokenEngineMessageCount.keys where key == tabId || key.hasPrefix("\(tabId):") {
+            lastSpokenEngineMessageCount.removeValue(forKey: key)
+        }
         for key in activeTools.keys where key.hasPrefix("\(tabId):") || key == tabId {
             activeTools.removeValue(forKey: key)
         }
@@ -70,6 +73,20 @@ extension SessionViewModel {
                 activeTools.removeValue(forKey: tabId)
                 for key in activeTools.keys where key.hasPrefix("\(tabId):") {
                     activeTools.removeValue(forKey: key)
+                }
+                // Engine tab TTS — speak when a turn completes.
+                // Engine tabs never receive task_complete; tab_status:idle is the turn-end signal.
+                if status == .idle || status == .completed {
+                    let key = engineCompoundKey(tabId: tabId)
+                    let msgs = engineMessages[key] ?? []
+                    let prevCount = lastSpokenEngineMessageCount[key] ?? 0
+                    if let last = msgs.last(where: { $0.role == .assistant }),
+                       msgs.count > prevCount,
+                       last.content.trimmingCharacters(in: .whitespacesAndNewlines).count > 20 {
+                        lastSpokenEngineMessageCount[key] = msgs.count
+                        DiagnosticLog.log("VOICE-TTS: engine idle tabId=\(tabId.prefix(8)) chars=\(last.content.count)")
+                        voiceService.speak(text: last.content, messageId: nil, tabId: tabId)
+                    }
                 }
             }
         }
