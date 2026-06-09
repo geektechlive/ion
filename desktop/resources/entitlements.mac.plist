@@ -14,5 +14,8 @@
   <!-- Required for microphone access (voice input via Whisper) -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- Required for outbound TCP connections (remote engine via ION_DESKTOP_ENGINE_SOCKET) -->
+  <key>com.apple.security.network.client</key>
+  <true/>
 </dict>
 </plist>
