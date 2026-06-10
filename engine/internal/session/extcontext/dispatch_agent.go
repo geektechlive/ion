@@ -61,10 +61,14 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 		agentName := opts.Name
 		key := sa.SessionKey()
 
-		// Look up the spec to get a display name
+		// Look up the spec to get a display name and tool restrictions.
 		displayName := agentName
-		if spec, ok := sa.LookupAgentSpec(agentName); ok && spec.Description != "" {
-			displayName = spec.Description
+		var specTools []string
+		if spec, ok := sa.LookupAgentSpec(agentName); ok {
+			if spec.Description != "" {
+				displayName = spec.Description
+			}
+			specTools = spec.Tools
 		}
 		// Fallback: inherit the display name from the extension's cached roster.
 		// Extensions provide displayName via roster metadata, not via AgentSpec.
@@ -291,6 +295,9 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 			Prompt:      opts.Task,
 			Model:       model,
 			ProjectPath: projectPath,
+		}
+		if len(specTools) > 0 {
+			runOpts.AllowedTools = specTools
 		}
 		if opts.SystemPrompt != "" {
 			runOpts.AppendSystemPrompt = opts.SystemPrompt
