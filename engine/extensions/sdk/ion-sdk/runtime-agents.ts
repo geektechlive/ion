@@ -67,7 +67,7 @@ export function splitFrontmatter(content: string): SplitFrontmatter {
     return { fields: {}, body: content.replace(/^\s+/, '') }
   }
   const fields: Record<string, string | string[] | undefined> = {}
-  for (const line of match[1].split('\n')) {
+  for (const line of (match[1] ?? '').split('\n')) {
     const colon = line.indexOf(':')
     if (colon < 0) continue
     const key = line.slice(0, colon).trim()
@@ -123,12 +123,12 @@ export function doRegisterAgentTools(
       name,
       path: join(agentsDir, file),
       source: 'extension',
-      parent,
-      description,
-      model: fm.model as string | undefined,
-      tools: fm.tools as string[] | undefined,
-      systemPrompt: body || undefined,
-      meta: Object.keys(meta).length > 0 ? meta : undefined,
+      ...(parent !== undefined ? { parent } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(fm.model !== undefined ? { model: fm.model as string } : {}),
+      ...(fm.tools !== undefined ? { tools: fm.tools as string[] } : {}),
+      ...(body ? { systemPrompt: body } : {}),
+      ...(Object.keys(meta).length > 0 ? { meta } : {}),
     }
 
     // Default filter: exclude root agents (no parent) — they ARE the
@@ -192,17 +192,12 @@ export function doRegisterAgentTools(
           sysPromptLen: dispatchSystemPrompt?.length ?? 0,
           taskLen: taskStr.length,
         })
-        const result = await ctx.dispatchAgent({
-          name,
-          task: taskStr,
-          // Pass `undefined` cleanly when missing — both fields are
-          // optional on DispatchAgentOpts. The engine's dispatch path
-          // already falls back to the session default model when
-          // `model` is empty, and skips the AppendSystemPrompt wiring
-          // when `systemPrompt` is empty.
-          systemPrompt: dispatchSystemPrompt,
-          model: dispatchModel,
-        })
+        // Build opts without undefined-valued optional fields so
+        // exactOptionalPropertyTypes-strict consumers compile cleanly.
+        const dispatchOpts: Parameters<typeof ctx.dispatchAgent>[0] = { name, task: taskStr }
+        if (dispatchSystemPrompt !== undefined) dispatchOpts.systemPrompt = dispatchSystemPrompt
+        if (dispatchModel !== undefined) dispatchOpts.model = dispatchModel
+        const result = await ctx.dispatchAgent(dispatchOpts)
         return { content: result.output, isError: result.exitCode !== 0 }
       },
     })

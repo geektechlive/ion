@@ -178,8 +178,8 @@ export const scheduleApi: ScheduleApi = {
       id: opts.id,
       kind: 'daily',
       time: opts.time,
-      tz: opts.tz,
-      timeoutMs: opts.timeoutMs,
+      ...(opts.tz !== undefined ? { tz: opts.tz } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       enabledRefName: stashEnabled(opts.id, opts.enabled),
     }, opts.handler)
   },
@@ -189,8 +189,8 @@ export const scheduleApi: ScheduleApi = {
       kind: 'weekly',
       time: opts.time,
       dayOfWeek: opts.dayOfWeek,
-      tz: opts.tz,
-      timeoutMs: opts.timeoutMs,
+      ...(opts.tz !== undefined ? { tz: opts.tz } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       enabledRefName: stashEnabled(opts.id, opts.enabled),
     }, opts.handler)
   },
@@ -199,7 +199,7 @@ export const scheduleApi: ScheduleApi = {
       id: opts.id,
       kind: 'interval',
       intervalMs: opts.intervalMs,
-      timeoutMs: opts.timeoutMs,
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       enabledRefName: stashEnabled(opts.id, opts.enabled),
     }, opts.handler)
   },
@@ -321,6 +321,6 @@ function normaliseWebhookResponse(resp: WebhookResponse | undefined | void): Web
   return {
     status: typeof resp.status === 'number' ? resp.status : 200,
     body: typeof resp.body === 'string' ? resp.body : '',
-    headers: resp.headers ?? undefined,
+    ...(resp.headers !== undefined ? { headers: resp.headers } : {}),
   }
 }

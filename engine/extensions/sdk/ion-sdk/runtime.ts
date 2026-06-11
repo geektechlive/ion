@@ -535,7 +535,7 @@ export function createIon(): IonSDK {
   process.nextTick(() => startListening())
 
   return {
-    on(hook, handler) {
+    on(hook: string, handler: (ctx: IonContext, payload?: any) => any) {
       hooks.set(hook, handler)
     },
     registerTool(def) {
