@@ -256,6 +256,13 @@ function buildContext(ctxData: any): IonContext {
     async deregisterAgentSpec(name: string): Promise<void> {
       await request('ext/deregister_agent_spec', { name })
     },
+    async setSessionMemory(content: string): Promise<void> {
+      await request('ext/set_session_memory', { content })
+    },
+    async getSessionMemory(): Promise<string> {
+      const result = await request('ext/get_session_memory', {})
+      return (result as { content?: string })?.content || ''
+    },
     async elicit(opts: ElicitOptions): Promise<ElicitResult> {
       const result = await request('ext/elicit', opts || {})
       return {

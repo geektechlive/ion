@@ -631,6 +631,24 @@ export interface IonContext {
    * ```
    */
   llmCall(opts: LLMCallOpts): Promise<LLMCallResult>
+
+  /**
+   * Persist a summary string as background session memory for this session.
+   * The engine injects it as `--append-system-prompt` on subsequent CliBackend
+   * agent loop invocations so context is available across turns without
+   * consuming the conversation window on each turn.
+   *
+   * The content replaces any previously stored session memory — this is a
+   * set operation, not an append. Pass an empty string to clear.
+   */
+  setSessionMemory(content: string): Promise<void>
+
+  /**
+   * Read the session memory previously stored by {@link IonContext.setSessionMemory}.
+   * Returns an empty string when no session memory has been stored for
+   * the current session.
+   */
+  getSessionMemory(): Promise<string>
 }
 
 /** Options for {@link IonContext.sendPrompt}. */
