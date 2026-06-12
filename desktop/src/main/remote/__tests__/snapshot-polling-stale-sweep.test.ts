@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('electron', () => ({ app: { getPath: vi.fn() }, ipcMain: { on: vi.fn(), handle: vi.fn() } }))
+
 import { pickStaleKeysForQuery, STALE_STATUS_THRESHOLD_MS } from '../snapshot-polling'
 
 /**
