@@ -6,6 +6,7 @@ import { useColors } from '../theme'
 import { runHandleImplement } from './EngineView-implement'
 import { EngineDialog } from './EngineDialog'
 import { EngineTabStrip } from './EngineTabStrip'
+import { EngineNotificationToasts } from './EngineNotificationToasts'
 import { AgentPanel } from './AgentPanel'
 import { PermissionDeniedCard } from './PermissionDeniedCard'
 import { ArrowDown } from '@phosphor-icons/react'
@@ -172,24 +173,22 @@ export function EngineView({ tabId }: EngineViewProps) {
     }
   }, [tabId, tabsReady])
 
-  // Auto-dismiss notifications after 5s
-  useEffect(() => {
-    if (notifications.length === 0) return
-    const timer = setTimeout(() => {
-      useSessionStore.setState(state => {
-        const p = state.enginePanes.get(tabId)
-        const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-        if (!k) return {}
-        const notifs = new Map(state.engineNotifications)
-        const keyNotifs = notifs.get(k) || []
-        if (keyNotifs.length > 0) {
-          notifs.set(k, keyNotifs.slice(1))
-        }
-        return { engineNotifications: notifs }
-      })
-    }, 5000)
-    return () => clearTimeout(timer)
-  }, [notifications.length, tabId])
+  // Dismiss a single toast notification by id. Called by both the X
+  // button and each toast's own auto-dismiss timer (see
+  // EngineNotificationToasts.tsx for why timers are per-toast rather
+  // than one shared head-removal timer).
+  const dismissNotification = useCallback((id: string) => {
+    useSessionStore.setState(state => {
+      const p = state.enginePanes.get(tabId)
+      const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
+      if (!k) return {}
+      const notifs = new Map(state.engineNotifications)
+      const keyNotifs = notifs.get(k) || []
+      if (keyNotifs.length === 0) return {}
+      notifs.set(k, keyNotifs.filter(n => n.id !== id))
+      return { engineNotifications: notifs }
+    })
+  }, [tabId])
 
   const handleAbort = useCallback(() => {
     console.log(`[EngineView] handleAbort: key=${key} isRunning=${isRunning} hasRunningChildren=${hasRunningChildren} tabStatus=${tabStatus}`)
@@ -525,32 +524,9 @@ export function EngineView({ tabId }: EngineViewProps) {
           into the single unified `StatusBar` mounted at the app root.
           See `App.tsx`. */}
 
-      {/* Notification toasts */}
-      <AnimatePresence>
-        {notifications.slice(0, 3).map((notif) => (
-          <motion.div
-            key={notif.id}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            style={{
-              position: 'absolute',
-              bottom: 32, right: 12,
-              maxWidth: 300,
-              padding: '8px 12px',
-              borderRadius: 8,
-              fontSize: 12,
-              background: notif.level === 'error' ? 'rgba(200,50,50,0.9)' :
-                notif.level === 'warning' ? 'rgba(180,140,30,0.9)' :
-                  'rgba(60,60,55,0.95)',
-              color: '#fff',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-            }}
-          >
-            {notif.message}
-          </motion.div>
-        ))}
-      </AnimatePresence>
+      {/* Notification toasts — vertically stacked, individually
+          dismissable. See EngineNotificationToasts.tsx. */}
+      <EngineNotificationToasts notifications={notifications} onDismiss={dismissNotification} />
 
       {/* Dialog overlay */}
       <EngineDialog tabId={tabId} />
