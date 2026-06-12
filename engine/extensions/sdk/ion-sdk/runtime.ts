@@ -362,6 +362,7 @@ function buildContext(ctxData: any): IonContext {
         throw err
       }
     },
+    resources: buildResourcesAPI(),
   }
 }
 
