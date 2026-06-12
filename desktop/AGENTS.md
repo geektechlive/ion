@@ -4,6 +4,14 @@
 
 > **Role in the consumer landscape.** This application is **a reference implementation** of how to consume the Ion Engine — one careful interpretation, not the canonical consumer set. The engine's real consumers are external SDK users, custom harnesses, and third-party clients. The desktop demonstrates engine features at the highest quality bar so external developers can learn from it; it does not demonstrate every engine feature, nor should it. When the engine ships a hook, field, or event variant the desktop does not consume, that is the expected default. See root [`AGENTS.md`](../AGENTS.md) § "Engine consumers".
 
+## View readiness principle
+
+Every view must be complete and correct the moment it renders. When a user navigates to a conversation, opens a panel, or switches tabs, every visible element (badge counts, list items, status indicators, metadata) must reflect the current truth immediately. No loading placeholders for data that the application already has. No counts that update after the user sees them. No lists that populate seconds after the panel opens.
+
+If the data is available in the store, the view reads it synchronously. If the data requires a fetch, the fetch must complete before the view renders, or the view must show a loading state that is visually distinct from "zero items." A badge that shows "1" and then changes to "3" after a network round-trip is a bug, not a loading sequence.
+
+This applies to every surface: tab status dots, attachment counts, notification badges, engine state indicators, resource lists, and permission queues. The snapshot is the mechanism that delivers truth from desktop to iOS. If a piece of information is visible in a view, it must be in the snapshot (or derivable from snapshot data) so iOS has it before the view renders.
+
 ## Commands
 
 ```bash
@@ -122,6 +130,12 @@ Shared types (`NormalizedEvent`, `StatusFields`, `EngineConfig`, etc.) are mirro
 3. Run `npm test` — the contract sync test will fail if your map doesn't match the Go manifest.
 
 If a Go struct gained a field you don't have, the test says `"Go-only: [fieldName]"`. If you have a field Go doesn't, it says `"TS-only: [fieldName]"`. Fields intentionally TS-only (like `StatusFields.backend`) are excluded from the map with a comment.
+
+## Notifications panel
+
+The TabStrip contains a bell icon for global notifications (workspace-scoped resources). The NotificationsPanel popover shows briefing resources sorted newest-first with read/unread tracking. When the user reads a briefing, the desktop sends a `mark_read` delta through the engine so iOS reflects the same state.
+
+Session-scoped resources appear in the per-conversation attachments panel (ConversationAttachmentsSheet on iOS, equivalent on desktop).
 
 ## Done criteria
 
