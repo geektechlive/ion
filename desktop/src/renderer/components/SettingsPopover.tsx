@@ -180,12 +180,13 @@ export function SettingsPopover() {
       const paths = allIds.map((id) => `${homeDir}/.ion/conversations/${id}.jsonl`)
       payload = paths.join('\n')
     } else {
-      if (!tab.conversationId) return
+      const sessionId = tab.conversationId || tab.lastKnownSessionId
+      if (!sessionId) return
       if (backend === 'api') {
-        payload = `${homeDir}/.ion/conversations/${tab.conversationId}.jsonl`
+        payload = `${homeDir}/.ion/conversations/${sessionId}.jsonl`
       } else {
         const encodedPath = tab.workingDirectory.replace(/[/.]/g, '-')
-        payload = `${homeDir}/.claude/projects/${encodedPath}/${tab.conversationId}.jsonl`
+        payload = `${homeDir}/.claude/projects/${encodedPath}/${sessionId}.jsonl`
       }
     }
 
@@ -215,9 +216,10 @@ export function SettingsPopover() {
       console.debug('[SettingsPopover] copySessionId: engine tab, copying', allIds.length, 'id(s)')
       payload = allIds.join('\n')
     } else {
-      if (!tab.conversationId) return
+      const sessionId = tab.conversationId || tab.lastKnownSessionId
+      if (!sessionId) return
       console.debug('[SettingsPopover] copySessionId: non-engine tab, copying single id')
-      payload = tab.conversationId
+      payload = sessionId
     }
 
     navigator.clipboard.writeText(payload)
@@ -242,9 +244,15 @@ export function SettingsPopover() {
     if (activeTab.isEngine) {
       const pane = enginePanes.get(activeTab.id)
       const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
-      return !!(inst?.statusFields?.sessionId)
+      // Enable when either the live engine has reported a sessionId OR the
+      // instance has persisted historical conversation IDs (restored tabs
+      // before the engine reconnects, or tabs where an extension failed at
+      // startup). The copy handlers already merge both sources.
+      return !!(inst?.statusFields?.sessionId || (inst?.conversationIds?.length ?? 0) > 0)
     }
-    return !!activeTab.conversationId
+    // CLI tabs: also check lastKnownSessionId so restored tabs with
+    // historical data have the buttons enabled before reactivation.
+    return !!(activeTab.conversationId || activeTab.lastKnownSessionId)
   })()
 
   return (
