@@ -118,10 +118,11 @@ const (
 	HookElicitationResult  = "elicitation_result"
 
 	// Plan mode hooks
-	HookPlanModePrompt      = "plan_mode_prompt"
-	HookBeforePlanModeEnter = "before_plan_mode_enter"
-	HookBeforePlanModeExit  = "before_plan_mode_exit"
-	HookSystemInject        = "system_inject"
+	HookPlanModePrompt         = "plan_mode_prompt"
+	HookBeforePlanModeEnter    = "before_plan_mode_enter"
+	HookBeforePlanModeExit     = "before_plan_mode_exit"
+	HookBeforePlanModeAutoExit = "before_plan_mode_auto_exit"
+	HookSystemInject           = "system_inject"
 
 	// Context injection hooks
 	HookContextInject = "context_inject"
@@ -152,6 +153,12 @@ const (
 	HookWebhookDeregistered  = "webhook_deregistered"
 	HookScheduleRegistered   = "schedule_registered"
 	HookScheduleDeregistered = "schedule_deregistered"
+
+	// Cross-session messaging hook. Fires when another session of the
+	// same extension type sends a message via ctx.sessions.send().
+	// The receiving extension can react: abort, inject context, emit
+	// a harness message, or ignore.
+	HookSessionMessage = "session_message"
 )
 
 // SDK is the extension hook registry. It manages hook handlers, tools,
