@@ -162,3 +162,4 @@ export type NormalizedEvent =
   | { type: 'tool_stalled'; toolId: string; toolName: string; elapsed: number }
   | { type: 'steer_injected'; messageLength: number }
   | { type: 'model_fallback'; requestedModel: string; fallbackModel: string; reason: string }
+  | { type: 'run_stalled'; stalledDuration: number; lastActivity?: string }

@@ -277,6 +277,11 @@ export type EngineEvent =
   // already part of the conversation. See
   // engine/internal/types/normalized_event.go (SteerInjectedEvent).
   | { type: 'engine_steer_injected'; steerMessageLength: number }
+  // engine_run_stalled — advisory event emitted by the run-progress watchdog
+  // when a run records no forward progress for longer than the configured
+  // RunStall threshold. The authoritative completion signal is the follow-up
+  // task_complete; this event is for observability only.
+  | { type: 'engine_run_stalled'; runStalledDuration: number; runStalledLastActivity?: string }
   // engine_model_fallback — workflow signal emitted by the engine when
   // it fell back to its configured defaultModel because the requested
   // model didn't resolve to a provider. Mirrors the underlying

@@ -15,6 +15,7 @@
  *     engine_dead, engine_error
  *     engine_extension_died, engine_extension_respawned,
  *     engine_extension_dead_permanent, engine_events_dropped
+ *     engine_run_stalled
  *     engine_compacting
  *     engine_plan_mode_changed
  *     engine_steer_injected
@@ -384,6 +385,10 @@ export function handleMessageEvents(
         notifications.set(key, keyNotifications)
         return { engineNotifications: notifications }
       })
+      return true
+    }
+    case 'engine_run_stalled': {
+      console.log(`[engine] run_stalled key=${key} duration=${event.runStalledDuration} lastActivity=${event.runStalledLastActivity ?? 'unknown'}`)
       return true
     }
     case 'engine_compacting': {
