@@ -84,9 +84,14 @@ extension SessionViewModel {
             }
             connectionQuality.transportState = transport?.state ?? .disconnected
 
-        case .snapshot(let snapshotTabs, let recentDirs, let snapshotGroupMode, let snapshotGroups, let snapshotPreferredModel, let snapshotEngineDefaultModel, let snapshotAvailableModels, let snapshotCustomName, let snapshotCustomIcon, let snapshotRemoteDisplayUpdatedAt):
+        case .snapshot(let snapshotTabs, let recentDirs, let snapshotGroupMode, let snapshotGroups, let snapshotPreferredModel, let snapshotEngineDefaultModel, let snapshotAvailableModels, let snapshotCustomName, let snapshotCustomIcon, let snapshotRemoteDisplayUpdatedAt, let snapshotResources):
             handleSnapshot(snapshotTabs: snapshotTabs, recentDirs: recentDirs, groupMode: snapshotGroupMode, groups: snapshotGroups, preferredModel: snapshotPreferredModel, engineDefaultModel: snapshotEngineDefaultModel, availableModels: snapshotAvailableModels)
             applySnapshotRemoteDisplay(customName: snapshotCustomName, customIcon: snapshotCustomIcon, updatedAt: snapshotRemoteDisplayUpdatedAt)
+            if let snapshotResources {
+                for (kind, rawItems) in snapshotResources {
+                    resourceStore.applySnapshot(kind: kind, rawItems: rawItems)
+                }
+            }
 
         case .remoteDisplay(let customName, let customIcon, let updatedAt):
             applyLiveRemoteDisplay(customName: customName, customIcon: customIcon, updatedAt: updatedAt)
@@ -457,6 +462,8 @@ extension SessionViewModel {
             resourceStore.applyDelta(kind: kind, rawDelta: rawDelta)
         case .engineNotification:
             break
+        case .resourceContent(let resourceId, let kind, let content):
+            resourceStore.updateContent(kind: kind, resourceId: resourceId, content: content)
 
         case .engineIntercept(let tabId, let instanceId, let level, let title, let message, _, _):
             handleEngineIntercept(tabId: tabId, instanceId: instanceId, level: level, title: title, message: message)

@@ -175,20 +175,18 @@ struct ConversationStatusBar: View {
                 }
             }
 
-            // Attachments button (conversation tabs only)
-            if !isEngine {
-                Button(action: onTapAttachments) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "paperclip")
-                        if attachmentCount > 0 {
-                            Text("\(attachmentCount)")
-                                .fontWeight(.medium)
-                        }
+            // Attachments button
+            Button(action: onTapAttachments) {
+                HStack(spacing: 3) {
+                    Image(systemName: "paperclip")
+                    if attachmentCount > 0 {
+                        Text("\(attachmentCount)")
+                            .fontWeight(.medium)
                     }
-                    .foregroundStyle(attachmentCount > 0 ? theme.accent : .secondary)
                 }
-                .buttonStyle(.plain)
+                .foregroundStyle(attachmentCount > 0 ? theme.accent : .secondary)
             }
+            .buttonStyle(.plain)
 
             // Context usage (only when data is available)
             if let pct = resolvedContextPercent {

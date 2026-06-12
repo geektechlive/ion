@@ -47,7 +47,7 @@ struct TabListView: View {
             SettingsView()
         }
         .sheet(isPresented: $showNotifications) {
-            NotificationsView(resourceStore: viewModel.resourceStore)
+            NotificationsView(resourceStore: viewModel.resourceStore, viewModel: viewModel)
         }
         .onAppear {
             // Always refresh git info for every tab dir on appear — covers

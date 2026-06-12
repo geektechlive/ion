@@ -12,7 +12,7 @@ extension DiagnosticLog {
         case .heartbeat:
             return // skip — fires every few seconds
 
-        case .snapshot(let tabs, let dirs, let groupMode, _, _, _, _, _, _, _):
+        case .snapshot(let tabs, let dirs, let groupMode, _, _, _, _, _, _, _, _):
             log("EVENT: snapshot tabs=\(tabs.count) dirs=\(dirs.count) groupMode=\(groupMode ?? "nil")")
 
         case .tabCreated(let tab):
@@ -296,6 +296,9 @@ extension DiagnosticLog {
 
         case .engineIntercept(let tabId, let instId, let level, let title, _, _, _):
             log("EVENT: engineIntercept tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") level=\(level) title=\(title.prefix(60))")
+
+        case .resourceContent(let resourceId, let kind, let content):
+            log("EVENT: resourceContent resourceId=\(resourceId.prefix(12)) kind=\(kind) contentLen=\(content.count)")
         }
     }
 }

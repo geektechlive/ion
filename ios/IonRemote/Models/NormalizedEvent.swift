@@ -11,7 +11,7 @@ struct RemoteTabGroup: Codable, Identifiable, Sendable {
 }
 
 enum RemoteEvent: Codable, Sendable {
-    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?, availableModels: [RemoteModelEntry]?, customName: String?, customIcon: String?, remoteDisplayUpdatedAt: Date?)
+    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?, availableModels: [RemoteModelEntry]?, customName: String?, customIcon: String?, remoteDisplayUpdatedAt: Date?, resources: [String: [[String: AnyCodable]]]?)
     case tabCreated(tab: RemoteTabState)
     case tabClosed(tabId: String)
     case tabStatus(tabId: String, status: TabStatus)
@@ -309,6 +309,12 @@ enum RemoteEvent: Codable, Sendable {
     // Diagnostic log request from desktop
     case requestDiagnosticLogs
 
+    /// Full content for a single resource item, fetched on demand.
+    /// Sent by the desktop in response to a `request_resource_content`
+    /// command when the user taps a briefing card to expand it. iOS
+    /// calls `ResourceStore.updateContent` to populate the item's body.
+    case resourceContent(resourceId: String, kind: String, content: String)
+
     // MARK: - Codable keys
 
     enum TypeKey: String, Codable {
@@ -396,6 +402,7 @@ enum RemoteEvent: Codable, Sendable {
         case uploadAttachmentResult = "upload_attachment_result"
         case tabAttachments = "tab_attachments"
         case requestDiagnosticLogs = "request_diagnostic_logs"
+        case resourceContent = "resource_content"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -499,6 +506,17 @@ enum RemoteEvent: Codable, Sendable {
         case metadata
         case agentName
         case conversationId
+        // resource_content — lazy-loaded full body for a single resource item.
+        // Sent by desktop in response to request_resource_content.
+        // `resourceId` and `kind` are the desktop wire keys; `resourceKind` is
+        // the engine-side key used by engine_resource_snapshot / engine_resource_delta.
+        // Do NOT conflate them — resource_content uses "kind", not "resourceKind".
+        case resourceId
+        case kind
+        // resources — workspace-scoped resource manifest in snapshot.
+        // Carries metadata-only items (id, kind, title, createdAt, read).
+        // Full content is fetched on demand via request_resource_content.
+        case resources
     }
 
     // MARK: - Decoder

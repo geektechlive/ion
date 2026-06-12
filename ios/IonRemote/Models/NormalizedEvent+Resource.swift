@@ -64,6 +64,14 @@ extension RemoteEvent {
                 notifyScope: notifyScope
             )
 
+        case .resourceContent:
+            let resourceId = try container.decode(String.self, forKey: .resourceId)
+            // Desktop sends "kind" (not "resourceKind") in resource_content responses.
+            // "resourceKind" is the engine-side key for engine_resource_snapshot/delta.
+            let kind = try container.decode(String.self, forKey: .kind)
+            let content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+            return .resourceContent(resourceId: resourceId, kind: kind, content: content)
+
         default:
             return nil
         }
@@ -98,6 +106,13 @@ extension RemoteEvent {
             try container.encode(notifyBody, forKey: .notifyBody)
             try container.encodeIfPresent(notifySound, forKey: .notifySound)
             try container.encodeIfPresent(notifyScope, forKey: .notifyScope)
+            return true
+
+        case .resourceContent(let resourceId, let kind, let content):
+            try container.encode(TypeKey.resourceContent, forKey: .type)
+            try container.encode(resourceId, forKey: .resourceId)
+            try container.encode(kind, forKey: .resourceKind)
+            try container.encode(content, forKey: .content)
             return true
 
         default:

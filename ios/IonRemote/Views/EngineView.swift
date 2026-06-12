@@ -18,6 +18,7 @@ struct EngineView: View {
     @State private var showTerminal = false
     @State var pendingAttachments: [PendingAttachment] = []
     @State private var showAttachMenu = false
+    @State private var showAttachments = false
     @State private var showFilePicker = false
     @State private var showPhotoPicker = false
     @State private var showDocumentPicker = false
@@ -87,6 +88,10 @@ struct EngineView: View {
 
     private var engineMsgs: [Message] {
         viewModel.engineInstance(tabId: tabId, instanceId: activeInstanceId)?.messages ?? []
+    }
+
+    private var engineAttachmentCount: Int {
+        countConversationAttachments(engineMsgs, desktopCache: viewModel.tabAttachmentCache[tabId])
     }
 
     private enum GroupedItem: Identifiable {
@@ -526,7 +531,7 @@ struct EngineView: View {
                     isRunning: isRunning,
                     permissionMode: viewModel.tab(for: tabId)?.permissionMode,
                     availableModels: viewModel.availableModels,
-                    attachmentCount: 0,
+                    attachmentCount: engineAttachmentCount,
                     onSelectModel: { model in
                         viewModel.setEngineModel(tabId: tabId, model: model)
                     },
@@ -535,7 +540,9 @@ struct EngineView: View {
                         let newMode: PermissionMode = current == .plan ? .auto : .plan
                         viewModel.setPermissionMode(tabId: tabId, mode: newMode)
                     },
-                    onTapAttachments: {},
+                    onTapAttachments: {
+                        showAttachments = true
+                    },
                     isEngine: true,
                     extensionName: fields.extensionName,
                     statusState: fields.state,
@@ -699,6 +706,10 @@ struct EngineView: View {
                 addFileAttachment(path: path, name: name)
             }
             .environment(viewModel)
+        }
+        .sheet(isPresented: $showAttachments) {
+            ConversationAttachmentsSheet(tabId: tabId)
+                .environment(viewModel)
         }
         .onChange(of: viewModel.pendingUploadResults) { _, results in
             consumeUploadResults(results)

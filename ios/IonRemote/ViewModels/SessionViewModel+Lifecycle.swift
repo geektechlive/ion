@@ -302,6 +302,10 @@ extension SessionViewModel {
         tabGroups = []
         connectionQuality.reset()
         connectionQuality.transportState = .disconnected
+        // Wipe resource store so stale items from the old desktop don't
+        // bleed into the new pairing. Persistence files are deleted so the
+        // next launch also starts clean for this device.
+        resourceStore.wipe()
     }
 
     // MARK: - Layout Cache
