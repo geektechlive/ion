@@ -8,7 +8,7 @@ interface Props {
   tabId: string
 }
 
-export function TerminalStatusBar({ tabId }: Props) {
+export function TerminalTabStrip({ tabId }: Props) {
   const colors = useColors()
   const pane = useSessionStore((s) => s.terminalPanes.get(tabId))
   const terminalTallTabId = useSessionStore((s) => s.terminalTallTabId)

@@ -10,6 +10,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
 	"github.com/dsswift/ion/engine/internal/providers"
+	"github.com/dsswift/ion/engine/internal/resource"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/tests/helpers"
 )
@@ -26,6 +27,7 @@ type llmCallTestAccessor struct {
 }
 
 func (a *llmCallTestAccessor) SessionKey() string       { return "test-session" }
+func (a *llmCallTestAccessor) ConversationID() string   { return "" }
 func (a *llmCallTestAccessor) WorkingDirectory() string { return "/tmp" }
 func (a *llmCallTestAccessor) Emit(ev types.EngineEvent) {
 	a.mu.Lock()
@@ -73,6 +75,16 @@ func (a *llmCallTestAccessor) GetPlanModeState() (bool, string)    { return fals
 func (a *llmCallTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string { return "" }
 func (a *llmCallTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate))  {}
 func (a *llmCallTestAccessor) EmitAgentSnapshot(_ string) {}
+func (a *llmCallTestAccessor) ResourceBroker() *resource.Broker       { return nil }
+func (a *llmCallTestAccessor) GlobalResourceBroker() *resource.Broker { return nil }
+func (a *llmCallTestAccessor) BroadcastNotification(_ types.NotifyOpts)        {}
+func (a *llmCallTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)    {}
+func (a *llmCallTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
+func (a *llmCallTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
+	return nil
+}
+func (a *llmCallTestAccessor) RunOnceCheck(_ string, _ int64) (bool, string) { return true, "" }
+func (a *llmCallTestAccessor) RunOnceComplete(_ string, _ bool)              {}
 
 // registerMockProvider registers a MockProvider for the given model under
 // a fixed provider id. Returns the mock so the test can inspect recorded

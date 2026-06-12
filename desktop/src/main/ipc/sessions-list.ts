@@ -328,4 +328,20 @@ export function registerSessionsListIpc(): void {
       return { messages: [], total: 0, hasMore: false }
     }
   })
+
+  ipcMain.handle(IPC.LOAD_CHAIN_HISTORY, async (_e, sessionIds: string[]) => {
+    log(`IPC LOAD_CHAIN_HISTORY count=${Array.isArray(sessionIds) ? sessionIds.length : 'invalid'}`)
+    try {
+      if (!Array.isArray(sessionIds) || sessionIds.some((id) => !isValidSessionId(id))) {
+        log('LOAD_CHAIN_HISTORY: rejected invalid sessionIds')
+        return []
+      }
+      const result = await sessionPlane.loadChainHistory(sessionIds)
+      log(`LOAD_CHAIN_HISTORY: returned ${result.length} messages for ${sessionIds.length} sessions`)
+      return result
+    } catch (err) {
+      log(`LOAD_CHAIN_HISTORY error: ${err}`)
+      return []
+    }
+  })
 }

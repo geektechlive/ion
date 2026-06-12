@@ -1,8 +1,9 @@
-import type { TabStatus, TabState, EngineInstance } from '../../../shared/types'
+import type { TabStatus, TabState, EngineInstance, ConversationInstance } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { makeLocalTab, nextMsgId } from '../session-store-helpers'
 import { formatSessionStartDivider } from '../../../shared/clear-divider'
+import { createEngineSubmitActions } from './engine-slice-submit'
 
 export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -62,7 +63,36 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       }, 0)
       const label = `${labelBase} ${maxNum + 1}`
       const id = crypto.randomUUID().slice(0, 8)
-      const instance: EngineInstance = { id, label }
+
+      // Resolve initial model so it's available on the instance immediately
+      // for iOS sync. engine_status will update this on the first status event.
+      const prefs = usePreferencesStore.getState()
+      const initialModel = prefs.engineDefaultModel || prefs.preferredModel || null
+
+      // Session-start divider as the first message for this instance.
+      // This is the only place it is created — on tab restoration,
+      // addEngineInstance is skipped (instances already exist in enginePanes
+      // from the restored snapshot), so no duplicate is produced.
+      const startDivider = {
+        id: nextMsgId(),
+        role: 'system' as const,
+        content: formatSessionStartDivider(new Date()),
+        timestamp: Date.now(),
+      }
+
+      const instance: EngineInstance & ConversationInstance = {
+        id,
+        label,
+        messages: [startDivider],
+        modelOverride: initialModel,
+        permissionMode: 'auto',
+        permissionDenied: null,
+        conversationIds: [],
+        draftInput: '',
+        agentStates: [],
+        statusFields: null,
+        planFilePath: null,
+      }
       panes.set(tabId, {
         instances: [...pane.instances, instance],
         activeInstanceId: id,
@@ -73,30 +103,8 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
           t.id === tabId ? { ...t, status: 'connecting' as TabStatus } : t
         ),
       }))
+
       const key = `${tabId}:${id}`
-      // Seed the session-start divider as the first message for this instance.
-      // This is the only place it is created — on tab restoration,
-      // addEngineInstance is skipped (instances already exist and
-      // engineMessages is pre-populated from persisted data), so no
-      // duplicate is produced.
-      set((state) => {
-        const messages = new Map(state.engineMessages)
-        messages.set(key, [{
-          id: nextMsgId(),
-          role: 'system' as const,
-          content: formatSessionStartDivider(new Date()),
-          timestamp: Date.now(),
-        }])
-        return { engineMessages: messages }
-      })
-      // Eagerly set the model override so it's available for iOS sync
-      const prefs = usePreferencesStore.getState()
-      const initialModel = prefs.engineDefaultModel || prefs.preferredModel || ''
-      if (initialModel) {
-        const overrides = new Map(get().engineModelOverrides)
-        overrides.set(key, initialModel)
-        set({ engineModelOverrides: overrides })
-      }
       if (profile) {
         window.ion.engineStart(key, {
           profileId: profile.id,
@@ -110,23 +118,40 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
               const keyNotifs = [...(notifications.get(key) || [])]
               keyNotifs.push({ id: nextMsgId(), message: `Extension error: ${result.error}`, level: 'error', timestamp: Date.now() })
               notifications.set(key, keyNotifs)
-              const messages = new Map(state.engineMessages)
-              const msgs = [...(messages.get(key) || [])]
-              msgs.push({ id: nextMsgId(), role: 'system' as const, content: `Failed to start engine: ${result.error}`, timestamp: Date.now() })
-              messages.set(key, msgs)
+              // Write error message onto instance
+              const [tabIdInner, instanceId] = key.split(':')
+              const enginePanes = new Map(state.enginePanes)
+              const paneInner = enginePanes.get(tabIdInner)
+              if (paneInner) {
+                const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
+                if (idx !== -1) {
+                  const instances = paneInner.instances.slice()
+                  const msgs = [...(instances[idx].messages || []), { id: nextMsgId(), role: 'system' as const, content: `Failed to start engine: ${result.error}`, timestamp: Date.now() }]
+                  instances[idx] = { ...instances[idx], messages: msgs }
+                  enginePanes.set(tabIdInner, { ...paneInner, instances })
+                }
+              }
               const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'idle' as const } : t)
-              return { engineNotifications: notifications, engineMessages: messages, tabs }
+              return { engineNotifications: notifications, enginePanes, tabs }
             })
           }
         }).catch((err: any) => {
           console.error(`[engine] Start error: ${err.message}`)
           set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
-            msgs.push({ id: nextMsgId(), role: 'system' as const, content: `Engine start failed: ${err.message}`, timestamp: Date.now() })
-            messages.set(key, msgs)
+            const [tabIdInner, instanceId] = key.split(':')
+            const enginePanes = new Map(state.enginePanes)
+            const paneInner = enginePanes.get(tabIdInner)
+            if (paneInner) {
+              const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
+              if (idx !== -1) {
+                const instances = paneInner.instances.slice()
+                const msgs = [...(instances[idx].messages || []), { id: nextMsgId(), role: 'system' as const, content: `Engine start failed: ${err.message}`, timestamp: Date.now() }]
+                instances[idx] = { ...instances[idx], messages: msgs }
+                enginePanes.set(tabIdInner, { ...paneInner, instances })
+              }
+            }
             const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'idle' as const } : t)
-            return { engineMessages: messages, tabs }
+            return { enginePanes, tabs }
           })
         })
       } else {
@@ -153,35 +178,34 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         : pane.activeInstanceId
       if (remaining.length === 0) {
         panes.delete(tabId)
+        // The user explicitly closed the last engine sub-tab via the
+        // EngineInstanceCloseConfirmDialog, and engineAbort fired
+        // above for the corresponding key. The closeTab guard reads
+        // instance.statusFields / instance.agentStates on the instance;
+        // by the time it runs the abort will have started flipping
+        // those entries to idle. If a race window exists, the guard
+        // logs a refusal and the tab stays open — the user can
+        // re-attempt close once children finish aborting.
         get().closeTab(tabId)
         set({ enginePanes: panes })
       } else {
         panes.set(tabId, { instances: remaining, activeInstanceId: activeId })
         set({ enginePanes: panes })
       }
-      const engineMessages = new Map(get().engineMessages)
-      const engineAgentStates = new Map(get().engineAgentStates)
-      const engineStatusFields = new Map(get().engineStatusFields)
+      // ConversationInstance fields are carried on the instance object itself
+      // and are gone when the instance is removed from panes above.
+      // Clean up the non-ConversationInstance compound-keyed Maps.
       const engineWorkingMessages = new Map(get().engineWorkingMessages)
       const engineNotifications = new Map(get().engineNotifications)
       const engineDialogs = new Map(get().engineDialogs)
       const enginePinnedPrompt = new Map(get().enginePinnedPrompt)
       const engineUsage = new Map(get().engineUsage)
-      const engineDraftInputs = new Map(get().engineDraftInputs)
-      const enginePermissionDenied = new Map(get().enginePermissionDenied)
-      engineMessages.delete(key)
-      engineAgentStates.delete(key)
-      engineStatusFields.delete(key)
       engineWorkingMessages.delete(key)
       engineNotifications.delete(key)
       engineDialogs.delete(key)
       enginePinnedPrompt.delete(key)
       engineUsage.delete(key)
-      engineDraftInputs.delete(key)
-      enginePermissionDenied.delete(key)
-      const engineModelOverrides = new Map(get().engineModelOverrides)
-      engineModelOverrides.delete(key)
-      set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, engineModelOverrides, enginePermissionDenied })
+      set({ engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage })
     },
 
     resetEngineInstance: (tabId, instanceId) => {
@@ -199,39 +223,53 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       // engineAbort tears down the engine session keyed by `${tabId}:${instanceId}`.
       // Same primitive removeEngineInstance uses; here we keep the pane entry.
       window.ion.engineAbort(key).catch(() => {})
-      // Wipe per-instance state Maps. Same list as removeEngineInstance —
-      // every Map keyed by `${tabId}:${instanceId}` must be cleared so the
-      // next prompt starts from a clean slate.
-      const engineMessages = new Map(get().engineMessages)
-      const engineAgentStates = new Map(get().engineAgentStates)
-      const engineStatusFields = new Map(get().engineStatusFields)
+
+      // Fresh divider message for the reset boundary.
+      const divider = {
+        id: nextMsgId(),
+        role: 'system' as const,
+        content: formatSessionStartDivider(new Date()),
+        timestamp: Date.now(),
+      }
+
+      // Write ConversationInstance zero values directly onto the instance.
+      // Clear the conversation ID chain — the reset starts a fresh engine
+      // session; the old chain must not carry over or the next engine_status
+      // sessionId append would extend stale history instead of starting a
+      // new chain. The new session ID arrives via engine_status after the
+      // engine restarts and is appended there.
+      panes.set(tabId, {
+        ...pane,
+        instances: pane.instances.map((i) => {
+          if (i.id !== instanceId) return i
+          return {
+            ...i,
+            messages: [divider],
+            modelOverride: i.modelOverride,  // preserve model selection across reset
+            permissionMode: 'auto' as const,
+            permissionDenied: null,
+            conversationIds: [],
+            draftInput: '',
+            agentStates: [],
+            statusFields: null,
+            planFilePath: null,
+          }
+        }),
+      })
+
+      // Clean up non-ConversationInstance compound-keyed Maps.
       const engineWorkingMessages = new Map(get().engineWorkingMessages)
       const engineNotifications = new Map(get().engineNotifications)
       const engineDialogs = new Map(get().engineDialogs)
       const enginePinnedPrompt = new Map(get().enginePinnedPrompt)
       const engineUsage = new Map(get().engineUsage)
-      const engineDraftInputs = new Map(get().engineDraftInputs)
-      const enginePermissionDenied = new Map(get().enginePermissionDenied)
-      engineMessages.delete(key)
-      engineAgentStates.delete(key)
-      engineStatusFields.delete(key)
       engineWorkingMessages.delete(key)
       engineNotifications.delete(key)
       engineDialogs.delete(key)
       enginePinnedPrompt.delete(key)
       engineUsage.delete(key)
-      engineDraftInputs.delete(key)
-      enginePermissionDenied.delete(key)
-      // Seed a fresh "Session started" divider so the renderer shows the
-      // user where the reset boundary fell. Mirrors the seed in
-      // addEngineInstance — the same divider helper, the same insertion site.
-      engineMessages.set(key, [{
-        id: nextMsgId(),
-        role: 'system' as const,
-        content: formatSessionStartDivider(new Date()),
-        timestamp: Date.now(),
-      }])
-      set({ engineMessages, engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineDraftInputs, enginePermissionDenied })
+
+      set({ enginePanes: panes, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage })
     },
 
     selectEngineInstance: (tabId, instanceId) => {
@@ -246,15 +284,18 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       // tab status stays frozen at whatever the *previous* instance
       // last set — e.g. stuck 'running' after switching to an idle
       // instance.
-      const key = `${tabId}:${instanceId}`
-      const statusFields = get().engineStatusFields.get(key)
-      const instanceState = statusFields?.state
-      const denial = get().enginePermissionDenied.get(key)
+      const instance = pane.instances.find((i) => i.id === instanceId)
+      const instanceState = instance?.statusFields?.state
+      const denial = instance?.permissionDenied
 
       // Also sync conversationId so the status bar footer shows the
       // correct conversation for the newly-active instance.
-      const convChain = get().engineConversationIds.get(key)
-      const lastConvId = convChain?.[convChain.length - 1]
+      const convChain = instance?.conversationIds
+      const lastConvId = convChain && convChain.length > 0 ? convChain[convChain.length - 1] : undefined
+
+      // Resolve the per-instance permission mode so the footer dropdown
+      // reflects this subtab's mode immediately on switch.
+      const instancePermissionMode = instance?.permissionMode ?? 'auto'
 
       if (instanceState) {
         // Map instance state to tab.status — mirrors the logic in
@@ -278,7 +319,7 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
           enginePanes: panes,
           tabs: state.tabs.map((t) => {
             if (t.id !== tabId) return t
-            const updates: Partial<typeof t> = { status: newStatus }
+            const updates: Partial<typeof t> = { status: newStatus, permissionMode: instancePermissionMode }
             if (lastConvId && t.conversationId !== lastConvId) {
               updates.conversationId = lastConvId
               updates.lastKnownSessionId = lastConvId
@@ -289,19 +330,26 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       } else {
         // No status entry yet (instance just created, no events
         // received) — update panes and conversationId only, leave
-        // tab.status unchanged.
+        // tab.status unchanged. Still reconcile permissionMode.
         console.log(`[selectEngineInstance] tab=${tabId.slice(0, 8)} instance=${instanceId} noStatusEntry, panes only`)
         if (lastConvId) {
           set((state) => ({
             enginePanes: panes,
             tabs: state.tabs.map((t) => {
               if (t.id !== tabId) return t
-              if (t.conversationId === lastConvId) return { ...t }
-              return { ...t, conversationId: lastConvId, lastKnownSessionId: lastConvId }
+              if (t.conversationId === lastConvId && t.permissionMode === instancePermissionMode) return { ...t }
+              return { ...t, conversationId: lastConvId, lastKnownSessionId: lastConvId, permissionMode: instancePermissionMode }
             }),
           }))
         } else {
-          set({ enginePanes: panes })
+          set((state) => ({
+            enginePanes: panes,
+            tabs: state.tabs.map((t) => {
+              if (t.id !== tabId) return t
+              if (t.permissionMode === instancePermissionMode) return { ...t }
+              return { ...t, permissionMode: instancePermissionMode }
+            }),
+          }))
         }
       }
     },
@@ -340,37 +388,28 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       const newKey = `${targetTabId}:${instanceId}`
       console.log(`[engine] moveEngineInstance: ${oldKey} -> ${newKey}`)
 
-      // Re-key all compound-keyed Maps
-      const engineMessages = new Map(state.engineMessages)
-      const engineAgentStates = new Map(state.engineAgentStates)
-      const engineStatusFields = new Map(state.engineStatusFields)
+      // The instance object carries all ConversationInstance fields — it moves
+      // with the instance when we update enginePanes. No per-field Map rekeying
+      // is needed for the migrated fields.
+      //
+      // Rekey the non-ConversationInstance compound-keyed Maps.
       const engineWorkingMessages = new Map(state.engineWorkingMessages)
       const engineNotifications = new Map(state.engineNotifications)
       const engineDialogs = new Map(state.engineDialogs)
       const enginePinnedPrompt = new Map(state.enginePinnedPrompt)
       const engineUsage = new Map(state.engineUsage)
-      const engineDraftInputs = new Map(state.engineDraftInputs)
-      const engineModelOverrides = new Map(state.engineModelOverrides)
-      const engineConversationIds = new Map(state.engineConversationIds)
-      const enginePermissionDenied = new Map(state.enginePermissionDenied)
 
       const rekey = <V>(m: Map<string, V>) => {
         if (m.has(oldKey)) { m.set(newKey, m.get(oldKey)!); m.delete(oldKey) }
       }
-      rekey(engineMessages)
-      rekey(engineAgentStates)
-      rekey(engineStatusFields)
       rekey(engineWorkingMessages)
       rekey(engineNotifications)
       rekey(engineDialogs)
       rekey(enginePinnedPrompt)
       rekey(engineUsage)
-      rekey(engineDraftInputs)
-      rekey(engineModelOverrides)
-      rekey(engineConversationIds)
-      rekey(enginePermissionDenied)
 
-      // Update enginePanes: remove from source, add to target
+      // Update enginePanes: remove from source, add to target.
+      // The instance object (with all ConversationInstance fields) moves as-is.
       const enginePanes = new Map(state.enginePanes)
       const sourceRemaining = sourcePaneRaw.instances.filter((i) => i.id !== instanceId)
       if (sourceRemaining.length === 0) {
@@ -390,21 +429,17 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
 
       set({
         enginePanes,
-        engineMessages,
-        engineAgentStates,
-        engineStatusFields,
         engineWorkingMessages,
         engineNotifications,
         engineDialogs,
         enginePinnedPrompt,
         engineUsage,
-        engineDraftInputs,
-        engineModelOverrides,
-        engineConversationIds,
-        enginePermissionDenied,
       })
 
-      // Close source tab if it's now empty
+      // Close source tab if it's now empty. If the source tab still
+      // has running orchestrators/children (race window or unrelated
+      // sibling instance not moved), the closeTab guard will refuse
+      // and log — the source tab stays open until it's truly idle.
       if (sourceRemaining.length === 0) {
         get().closeTab(sourceTabId)
       }
@@ -425,121 +460,20 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
       const pane = get().enginePanes.get(tabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
-      const key = `${tabId}:${instanceId}`
-      const overrides = new Map(get().engineModelOverrides)
-      overrides.set(key, modelId)
-      set({ engineModelOverrides: overrides })
-    },
-
-    submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase) => {
-      const pane = get().enginePanes.get(tabId)
-      const instanceId = pane?.activeInstanceId
-      if (!instanceId) return
-      const key = `${tabId}:${instanceId}`
-      // Sync plan mode to the engine session via compound key before
-      // submitting the prompt. The engine session is keyed by
-      // `tabId:instanceId`; the generic setPermissionMode path uses
-      // bare tabId which silently misses the engine session.
-      const currentTab = get().tabs.find(t => t.id === tabId)
-      const isPlanMode = currentTab?.permissionMode === 'plan'
-      window.ion.engineSetPlanMode(key, isPlanMode)
-      // Build a FileAttachment list from the encoded image attachments so
-      // the user-message bubble can render images inline. The path is the
-      // only field needed at render time; main-side READ_IMAGE_DATA_URL
-      // turns it into a data URL for <img>.
-      const userAttachments = rawAttachments && rawAttachments.length > 0
-        ? rawAttachments.map((a) => ({
-          id: a.id,
-          type: a.type,
-          name: a.name,
-          path: a.path,
-          mimeType: a.mimeType,
-        }))
-        : (imageAttachments || [])
-          .filter((a) => !!a.path)
-          .map((a) => ({
-            id: crypto.randomUUID(),
-            type: 'image' as const,
-            name: (a.path?.split('/').pop() || 'image'),
-            path: a.path!,
-            mimeType: a.mediaType,
-          }))
+      // Write modelOverride directly onto the instance.
       set((state) => {
-        const pinnedPrompt = new Map(state.enginePinnedPrompt)
-        pinnedPrompt.set(key, text)
-        const messages = new Map(state.engineMessages)
-        const msgs = [...(messages.get(key) || [])]
-        msgs.push({
-          id: nextMsgId(),
-          role: 'user' as const,
-          content: text,
-          timestamp: Date.now(),
-          ...(userAttachments.length > 0 ? { attachments: userAttachments } : {}),
-        })
-        messages.set(key, msgs)
-        const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const, attachments: [] } : t)
-        // Clear any pending engine-instance denial — submitting a new
-        // prompt is the user moving past the question/plan card. Mirrors
-        // the engine-side clearing in `prompt_dispatch.go`.
-        const enginePermissionDenied = new Map(state.enginePermissionDenied)
-        enginePermissionDenied.set(key, null)
-        return { enginePinnedPrompt: pinnedPrompt, engineMessages: messages, tabs, enginePermissionDenied }
-      })
-      const prefs = usePreferencesStore.getState()
-      const rawModel = get().engineModelOverrides.get(key) || prefs.engineDefaultModel || prefs.preferredModel || undefined
-      // Filter out invalid model values (e.g. "unknown" from stale state)
-      // so the engine's own defaultModel resolution handles the fallback.
-      const modelOverride = rawModel === 'unknown' ? undefined : rawModel
-      window.ion.enginePrompt(key, text, modelOverride, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase).then((result) => {
-        if (result && !result.ok) {
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
-            msgs.push({ id: nextMsgId(), role: 'system' as const, content: `Error: ${result.error}`, timestamp: Date.now() })
-            messages.set(key, msgs)
-            const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'idle' as const } : t)
-            return { engineMessages: messages, tabs }
-          })
-        }
-      }).catch((err: any) => {
-        set((state) => {
-          const messages = new Map(state.engineMessages)
-          const msgs = [...(messages.get(key) || [])]
-          msgs.push({ id: nextMsgId(), role: 'system' as const, content: `Error: ${err.message}`, timestamp: Date.now() })
-          messages.set(key, msgs)
-          const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'idle' as const } : t)
-          return { engineMessages: messages, tabs }
-        })
+        const enginePanes = new Map(state.enginePanes)
+        const paneInner = enginePanes.get(tabId)
+        if (!paneInner) return {}
+        const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
+        if (idx === -1) return {}
+        const instances = paneInner.instances.slice()
+        instances[idx] = { ...instances[idx], modelOverride: modelId }
+        enginePanes.set(tabId, { ...paneInner, instances })
+        return { enginePanes }
       })
     },
 
-    respondEngineDialog: (tabId, dialogId, value) => {
-      const pane = get().enginePanes.get(tabId)
-      const instanceId = pane?.activeInstanceId
-      if (!instanceId) return
-      const key = `${tabId}:${instanceId}`
-      set((state) => {
-        const dialogs = new Map(state.engineDialogs)
-        dialogs.set(key, null)
-        return { engineDialogs: dialogs }
-      })
-      window.ion.engineDialogResponse(key, dialogId, value)
-    },
-
-    addEngineSystemMessage: (key, content) => {
-      set((state) => {
-        const messages = new Map(state.engineMessages)
-        const msgs = [...(messages.get(key) || [])]
-        msgs.push({ id: nextMsgId(), role: 'system' as const, content, timestamp: Date.now() })
-        messages.set(key, msgs)
-        return { engineMessages: messages }
-      })
-    },
-
-    setEngineDraftInput: (key, text) => {
-      const engineDraftInputs = new Map(get().engineDraftInputs)
-      engineDraftInputs.set(key, text)
-      set({ engineDraftInputs })
-    },
+    ...createEngineSubmitActions(set, get),
   }
 }

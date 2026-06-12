@@ -1,12 +1,15 @@
-import { readFileSync } from 'fs'
 import { IPC } from '../shared/types'
 import type { NormalizedEvent, EnrichedError } from '../shared/types'
 import { log as _log } from './logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, extensionCommandRegistry, forwardedEnginePermissionDenials, lastForwardedEngineTabStatus } from './state'
+import { state, sessionPlane, engineBridge, extensionCommandRegistry, forwardedEnginePermissionDenials, lastForwardedEngineTabStatus } from './state'
 import { broadcast } from './broadcast'
 import { currentBackend } from './settings-store'
-import { normalizedToRemote } from './remote/protocol'
 import { formatClearDivider } from '../shared/clear-divider'
+import { subscribeToResourceKinds, subscribeToGlobalResourceKinds, clearResourceSubscriptions, markReadPersisted, resubscribeSessionResourceKinds } from './event-wiring-resources'
+import { handleInterceptEvent } from './event-wiring-intercept'
+import { injectDiskResourcesIfEmpty } from './event-wiring-disk-seed'
+export { wireTabFocusHandler, wireMarkResourceReadHandler, wireDeleteResourceHandler } from './event-wiring-resources'
+export { wireRemoteSessionPlaneForwarding } from './event-wiring-remote'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -24,10 +27,77 @@ export function wireSessionPlaneEvents(): void {
   sessionPlane.on('error', (tabId: string, error: EnrichedError) => {
     broadcast('ion:enriched-error', tabId, error)
   })
+
+  // engine_intercept from CLI-tab sessions. EngineControlPlane bubbles
+  // engine_intercept up via ctx.emit('engine_intercept', tabId, event)
+  // rather than emitting it as a NormalizedEvent (it's not one). The
+  // intercept handler does device-focus routing, optional abort/re-prompt,
+  // and renderer broadcast.
+  sessionPlane.on('engine_intercept', (tabId: string, event: any) => {
+    handleInterceptEvent(tabId, event).catch((err: unknown) => {
+      log(`wireSessionPlaneEvents: intercept handler error tabId=${tabId}: ${(err as Error).message}`)
+    })
+  })
 }
 
 export function wireEngineBridgeEvents(): void {
+  // ---------------------------------------------------------------------------
+  // Text-delta batching: accumulate engine_text_delta events per key and
+  // flush at ~60fps (16ms interval) to reduce Electron IPC crossings from
+  // 50-200/sec per key to ~60/sec. Each IPC call involves structured-clone
+  // serialization across the process boundary; coalescing small deltas into
+  // larger chunks significantly reduces serialization + deserialization CPU.
+  // ---------------------------------------------------------------------------
+  const pendingTextDeltas = new Map<string, string>()
+  let deltaFlushTimer: ReturnType<typeof setInterval> | null = null
+
+  function flushTextDeltas(): void {
+    if (pendingTextDeltas.size === 0) return
+    for (const [deltaKey, text] of pendingTextDeltas) {
+      broadcast(IPC.ENGINE_EVENT, deltaKey, { type: 'engine_text_delta', text })
+      if (state.remoteTransport) {
+        const dtabId = deltaKey.split(':')[0]
+        const dinstanceId = deltaKey.split(':')[1] || null
+        state.remoteTransport.send({ type: 'engine_text_delta', tabId: dtabId, instanceId: dinstanceId, text })
+      }
+    }
+    pendingTextDeltas.clear()
+  }
+
+  function ensureDeltaFlushTimer(): void {
+    if (!deltaFlushTimer) {
+      deltaFlushTimer = setInterval(flushTextDeltas, 16)
+    }
+  }
+
+  // Subscribe to global resources on every (re)connect. The engine_command_registry
+  // event only fires once during initial session creation; reconnects to a running
+  // engine see "already exists" and skip the registry emission. Without this,
+  // resource subscriptions are never re-established after a desktop restart.
+  const subscribeGlobalResources = () => {
+    clearResourceSubscriptions()
+    log('engineBridge: subscribing to global resources')
+    subscribeToGlobalResourceKinds().catch((err) => {
+      log(`resource_subscribe_global: error on connect err=${err}`)
+    })
+    // Re-establish per-session subscriptions for sessions that were active
+    // before the reconnect. engine_command_registry only fires on initial
+    // session creation; reconnects skip it.
+    resubscribeSessionResourceKinds().catch((err) => {
+      log(`resource_subscribe: resubscribe error on connect err=${err}`)
+    })
+  }
+  engineBridge.on('reconnected', subscribeGlobalResources)
+
+  // Track whether we've done the initial global resource subscription.
+  // The first engine event signals the bridge is live. Fire once.
+  let initialSubscribeDone = false
+
   engineBridge.on('event', (key: string, event: any) => {
+    if (!initialSubscribeDone) {
+      initialSubscribeDone = true
+      subscribeGlobalResources()
+    }
     if (event.type === 'engine_status' && event.fields) {
       event = { ...event, fields: { ...event.fields, backend: currentBackend } }
     }
@@ -52,9 +122,71 @@ export function wireEngineBridgeEvents(): void {
         extensionCommandRegistry.set(key, names)
         log(`engine_command_registry: cached key=${key} count=${names.size} names=[${[...names].join(',')}]`)
       }
+      // Extensions are loaded — subscribe to resource kinds now. The
+      // command_registry event fires after the extension process has
+      // declared its resource kinds, so the broker is ready to serve
+      // subscription requests. Idempotent: subscribeToResourceKinds
+      // skips kinds already subscribed for this session key.
+      subscribeToResourceKinds(key).catch((err) => {
+        log(`resource_subscribe: error key=${key} err=${err}`)
+      })
+      // Also subscribe to global resource kinds (workspace-scoped).
+      // Idempotent: subscribeToGlobalResourceKinds skips already-subscribed kinds.
+      subscribeToGlobalResourceKinds().catch((err) => {
+        log(`resource_subscribe_global: error err=${err}`)
+      })
+    }
+
+    // engine_intercept: route through the intercept handler which checks
+    // device focus, per-device and desktop preferences, and performs
+    // targeted iOS forwarding + optional abort/re-prompt. Skip the generic
+    // broadcast and generic iOS send below — the handler does both.
+    if (event.type === 'engine_intercept') {
+      const tabId = key.split(':')[0]
+      handleInterceptEvent(tabId, event).catch((err: unknown) => {
+        log(`engine_intercept: handler error key=${key}: ${(err as Error).message}`)
+      })
+      return
+    }
+
+    // engine_text_delta: accumulate into the batch buffer instead of
+    // broadcasting immediately. The 16ms flush timer coalesces multiple
+    // small deltas (50-200/sec) into ~60 larger chunks/sec, cutting IPC
+    // serialization overhead by 3-4x. iOS forwarding is also deferred.
+    if (event.type === 'engine_text_delta') {
+      pendingTextDeltas.set(key, (pendingTextDeltas.get(key) || '') + (event.text || ''))
+      ensureDeltaFlushTimer()
+      return
     }
 
     broadcast(IPC.ENGINE_EVENT, key, event)
+
+    // Resource event observability
+    if (event.type === 'engine_resource_snapshot') {
+      const items = event.resourceItems ?? []
+      log(`resource: snapshot key=${key} kind=${event.resourceKind} subId=${event.resourceSubId} items=${items.length} ids=[${items.slice(0, 3).map((i: any) => i.id?.slice(-8)).join(',')}${items.length > 3 ? '...' : ''}]`)
+      // Cold-start disk seed: inject persisted items when the engine delivers
+      // an empty snapshot (e.g. extension died during HandleQuery).
+      if (items.length === 0 && state.mainWindow) {
+        injectDiskResourcesIfEmpty(event.resourceKind, event.resourceSubId, key)
+      }
+    }
+    if (event.type === 'engine_resource_delta') {
+      const d = event.resourceDelta
+      log(`resource: delta key=${key} kind=${event.resourceKind} op=${d?.op} id=${d?.item?.id?.slice(-8)} convId=${d?.item?.conversationId ?? 'global'}`)
+    }
+
+    // Persist mark_read deltas to disk so the desktop's read state survives
+    // restarts and stays consistent with cross-device reads from iOS.
+    // The renderer updates its in-memory readResourceIds on the same delta;
+    // the main process writes through to ~/.ion/resource-read-state.json.
+    if (
+      event.type === 'engine_resource_delta' &&
+      event.resourceDelta?.op === 'mark_read' &&
+      event.resourceDelta?.item?.id
+    ) {
+      markReadPersisted(event.resourceDelta.item.id)
+    }
 
     // Trace agent_state so we can correlate engine→desktop→iOS flow when
     // diagnosing stuck-row, stale-snapshot, or missing-conversation reports.
@@ -114,13 +246,28 @@ export function wireEngineBridgeEvents(): void {
             continue
           }
           forwardedEnginePermissionDenials.add(questionId)
+          // Cap the dedup set to prevent unbounded growth. The set stores
+          // one entry per permission denial ever forwarded; power users
+          // can generate thousands over a long session. When the cap is
+          // hit, clear the entire set — false-positive re-forwards are
+          // harmless (just a duplicate push notification).
+          if (forwardedEnginePermissionDenials.size > 1000) {
+            forwardedEnginePermissionDenials.clear()
+            forwardedEnginePermissionDenials.add(questionId)
+          }
           const pushBody = denial.toolName === 'AskUserQuestion'
             ? 'Question waiting for your answer'
             : 'Plan ready for your review'
           log(`engine_status: forwarding ${denial.toolName} denial to remote key=${key} questionId=${questionId}`)
+          // Stamp the engine instance (sub-tab) onto the envelope so iOS
+          // can scope the plan/question card to the owning
+          // sub-conversation instead of rendering it on every sibling
+          // sub-tab under the same parent tab. `instanceId` is non-null
+          // here — the enclosing guard requires it.
           state.remoteTransport.send({
             type: 'permission_request',
             tabId,
+            instanceId,
             questionId,
             toolName: denial.toolName,
             toolInput: denial.toolInput,
@@ -217,312 +364,3 @@ export function wireEngineBridgeEvents(): void {
     }
   })
 }
-
-export function wireRemoteSessionPlaneForwarding(): void {
-  sessionPlane.on('event', async (tabId: string, event: NormalizedEvent) => {
-    if (!state.remoteTransport) return
-
-    if (
-      event.type === 'permission_request' &&
-      (event.toolName === 'AskUserQuestion' || event.toolName === 'ExitPlanMode')
-    ) {
-      return
-    }
-
-    const remoteEvent = normalizedToRemote(tabId, event)
-    if (remoteEvent) {
-      const needsPush = event.type === 'permission_request'
-      if (needsPush) {
-        const pushTitle = 'Ion needs your attention'
-        const pushBody = event.toolName === 'AskUserQuestion'
-          ? 'Question waiting for your answer'
-          : event.toolName === 'ExitPlanMode'
-            ? 'Plan ready for your review'
-            : `Permission needed: ${event.toolName}`
-        state.remoteTransport.send(remoteEvent, true, { title: pushTitle, body: pushBody })
-      } else {
-        state.remoteTransport.send(remoteEvent)
-      }
-    }
-
-    switch (event.type) {
-      case 'text_chunk': {
-        let msg = activeAssistantMessages.get(tabId)
-        if (!msg) {
-          msg = { id: `assistant-${Date.now()}-${tabId}`, content: event.text }
-          activeAssistantMessages.set(tabId, msg)
-          state.remoteTransport.send({
-            type: 'message_added',
-            tabId,
-            message: {
-              id: msg.id,
-              role: 'assistant',
-              content: event.text,
-              timestamp: Date.now(),
-            },
-          })
-        } else {
-          msg.content += event.text
-          state.remoteTransport.send({
-            type: 'message_updated',
-            tabId,
-            messageId: msg.id,
-            content: msg.content,
-          })
-        }
-        break
-      }
-      case 'tool_call': {
-        activeAssistantMessages.delete(tabId)
-        state.remoteTransport.send({
-          type: 'message_added',
-          tabId,
-          message: {
-            id: event.toolId,
-            role: 'tool',
-            content: '',
-            toolName: event.toolName,
-            toolId: event.toolId,
-            toolStatus: 'running',
-            timestamp: Date.now(),
-          },
-        })
-        break
-      }
-      case 'tool_call_update': {
-        if (!activeToolInputs.has(tabId)) activeToolInputs.set(tabId, new Map())
-        const tabTools = activeToolInputs.get(tabId)!
-        const current = (tabTools.get(event.toolId) || '') + event.partialInput
-        tabTools.set(event.toolId, current)
-        state.remoteTransport.send({
-          type: 'message_updated',
-          tabId,
-          messageId: event.toolId,
-          toolInput: current,
-        })
-        break
-      }
-      case 'tool_result': {
-        const content = event.content.length > 2048
-          ? event.content.substring(0, 2048) + '\n... [truncated]'
-          : event.content
-        state.remoteTransport.send({
-          type: 'message_updated',
-          tabId,
-          messageId: event.toolId,
-          content,
-          toolStatus: event.isError ? 'error' : 'completed',
-        })
-        break
-      }
-      case 'task_complete': {
-        const assistantMsg = activeAssistantMessages.get(tabId)
-        if (assistantMsg?.content) {
-          lastMessagePreview.set(tabId, assistantMsg.content.substring(0, 100))
-        }
-        activeAssistantMessages.delete(tabId)
-        activeToolInputs.delete(tabId)
-
-        const exitPlanDenial = event.permissionDenials?.find(
-          (d) => d.toolName === 'ExitPlanMode',
-        )
-        if (exitPlanDenial && state.remoteTransport) {
-          let planPath = exitPlanDenial.toolInput?.planFilePath as string | undefined
-
-          if (!planPath && state.mainWindow) {
-            try {
-              const escapedTabId = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-              planPath = await state.mainWindow.webContents.executeJavaScript(`
-                (function() {
-                  var store = window.__Ion_SESSION_STORE__;
-                  if (!store) return null;
-                  var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTabId}'; });
-                  if (!tab) return null;
-                  var msgs = tab.messages || [];
-                  for (var i = msgs.length - 1; i >= 0; i--) {
-                    var m = msgs[i];
-                    if (m.toolName === 'Write' && m.toolInput) {
-                      try {
-                        var input = JSON.parse(m.toolInput);
-                        var fp = input.file_path;
-                        if (fp && /\\/\\.ion\\/plans\\/[^/]+\\.md$/.test(fp)) return fp;
-                      } catch(e) {}
-                    }
-                  }
-                  // Fallback: check permissionDenied for planFilePath
-                  var denied = tab.permissionDenied && tab.permissionDenied.tools;
-                  if (denied) {
-                    for (var d = 0; d < denied.length; d++) {
-                      if (denied[d].toolName === 'ExitPlanMode' && denied[d].toolInput && denied[d].toolInput.planFilePath) {
-                        return denied[d].toolInput.planFilePath;
-                      }
-                    }
-                  }
-                  return null;
-                })()
-              `) || undefined
-            } catch {}
-          }
-
-          let toolInput: Record<string, unknown> = { ...(exitPlanDenial.toolInput || {}) }
-          if (planPath) {
-            try {
-              const content = readFileSync(planPath, 'utf-8')
-              toolInput = { ...toolInput, planFilePath: planPath, planContent: content }
-            } catch (err) {
-              log(`Failed to read plan file for remote (task_complete): ${(err as Error).message}`)
-            }
-          }
-
-          state.remoteTransport.send({
-            type: 'permission_request',
-            tabId,
-            questionId: `denied-${exitPlanDenial.toolUseId}`,
-            toolName: 'ExitPlanMode',
-            toolInput,
-            options: [],
-          }, true, { title: 'Ion needs your attention', body: 'Plan ready for your review' })
-        }
-
-        // Forward AskUserQuestion denials the same way. The engine records
-        // these as PermissionDenials in task_complete (same as ExitPlanMode)
-        // but the task_complete handler previously ignored them, so iOS never
-        // received a permission_request and the card never appeared.
-        const askDenial = event.permissionDenials?.find(
-          (d) => d.toolName === 'AskUserQuestion',
-        )
-        if (askDenial && state.remoteTransport) {
-          log(`task_complete: forwarding AskUserQuestion denial to remote questionId=denied-${askDenial.toolUseId}`)
-          state.remoteTransport.send({
-            type: 'permission_request',
-            tabId,
-            questionId: `denied-${askDenial.toolUseId}`,
-            toolName: 'AskUserQuestion',
-            toolInput: askDenial.toolInput,
-            options: [],
-          }, true, { title: 'Ion needs your attention', body: 'Question waiting for your answer' })
-        }
-        break
-      }
-      case 'compacting': {
-        // When compaction finishes, send a system message to iOS so it renders
-        // the compaction marker in the conversation (mirrors desktop event-slice).
-        if (!event.active && (event.messagesBefore || event.summary)) {
-          const parts = ['[Compaction]']
-          if (event.strategy) parts.push(event.strategy)
-          if (event.messagesBefore && event.messagesAfter != null) {
-            parts.push(`${event.messagesBefore} → ${event.messagesAfter} messages`)
-          }
-          if (event.clearedBlocks) parts.push(`${event.clearedBlocks} blocks cleared`)
-          let content = parts.join(' · ')
-          if (event.summary) content += '\n\n' + event.summary
-          state.remoteTransport.send({
-            type: 'message_added',
-            tabId,
-            message: {
-              id: `compaction-${Date.now()}-${tabId}`,
-              role: 'system',
-              content,
-              timestamp: Date.now(),
-            },
-          })
-        }
-        break
-      }
-    }
-  })
-
-  sessionPlane.on('remote-permission', async (tabId: string, data: {
-    questionId: string; toolName: string;
-    toolInput?: Record<string, unknown>;
-    options: Array<{ id: string; label: string; kind?: string }>
-  }) => {
-    log(`remote-permission received: tool=${data.toolName}, questionId=${data.questionId}, hasTransport=${!!state.remoteTransport}, hasToolInput=${!!data.toolInput}`)
-    if (!state.remoteTransport) return
-    let toolInput = data.toolInput
-    if (data.toolName === 'ExitPlanMode') {
-      let planPath = toolInput?.planFilePath as string | undefined
-
-      if (!planPath && state.mainWindow) {
-        try {
-          const escapedTabId = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-          planPath = await state.mainWindow.webContents.executeJavaScript(`
-            (function() {
-              var store = window.__Ion_SESSION_STORE__;
-              if (!store) return null;
-              var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTabId}'; });
-              if (!tab) return null;
-              var msgs = tab.messages || [];
-              for (var i = msgs.length - 1; i >= 0; i--) {
-                var m = msgs[i];
-                if (m.toolName === 'Write' && m.toolInput) {
-                  try {
-                    var input = JSON.parse(m.toolInput);
-                    var fp = input.file_path;
-                    if (fp && /\\/\\.ion\\/plans\\/[^/]+\\.md$/.test(fp)) return fp;
-                  } catch(e) {}
-                }
-              }
-              // Fallback: check permissionDenied for planFilePath
-              var denied = tab.permissionDenied && tab.permissionDenied.tools;
-              if (denied) {
-                for (var d = 0; d < denied.length; d++) {
-                  if (denied[d].toolName === 'ExitPlanMode' && denied[d].toolInput && denied[d].toolInput.planFilePath) {
-                    return denied[d].toolInput.planFilePath;
-                  }
-                }
-              }
-              return null;
-            })()
-          `) || undefined
-        } catch {}
-      }
-
-      if (planPath) {
-        try {
-          const content = readFileSync(planPath, 'utf-8')
-          toolInput = { ...(toolInput || {}), planFilePath: planPath, planContent: content }
-        } catch (err) {
-          log(`Failed to read plan file for remote: ${(err as Error).message}`)
-        }
-      }
-    }
-    const pushTitle = 'Ion needs your attention'
-    const pushBody = data.toolName === 'AskUserQuestion'
-      ? 'Question waiting for your answer'
-      : data.toolName === 'ExitPlanMode'
-        ? 'Plan ready for your review'
-        : `Permission needed: ${data.toolName}`
-    state.remoteTransport.send({
-      type: 'permission_request', tabId,
-      questionId: data.questionId, toolName: data.toolName,
-      toolInput, options: data.options,
-    }, true, { title: pushTitle, body: pushBody })
-    if (data.toolName !== 'AskUserQuestion' && data.toolName !== 'ExitPlanMode') {
-      const resolveOnIdle = (changedTabId: string, status: string) => {
-        if (changedTabId !== tabId) return
-        if (status === 'idle' || status === 'failed' || status === 'dead') {
-          sessionPlane.off('tab-status-change', resolveOnIdle)
-          state.remoteTransport?.send({
-            type: 'permission_resolved', tabId,
-            questionId: data.questionId,
-          })
-        }
-      }
-      sessionPlane.on('tab-status-change', resolveOnIdle)
-    }
-  })
-
-  sessionPlane.on('tab-status-change', (tabId: string, newStatus: string) => {
-    if (newStatus === 'idle' || newStatus === 'failed' || newStatus === 'dead') {
-      activeAssistantMessages.delete(tabId)
-    }
-    if (!state.remoteTransport) return
-    const pushOnIdle = newStatus === 'idle'
-    const pushMeta = pushOnIdle
-      ? { title: 'Task completed', body: lastMessagePreview.get(tabId) || 'Tab is now idle' }
-      : undefined
-    state.remoteTransport.send({ type: 'tab_status', tabId, status: newStatus as any }, pushOnIdle, pushMeta)
-  })
-}
-

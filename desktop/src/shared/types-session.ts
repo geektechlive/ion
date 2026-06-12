@@ -24,6 +24,11 @@ export interface PermissionRequest {
   toolDescription?: string
   toolInput?: Record<string, unknown>
   options: Array<{ optionId: string; kind?: string; label: string }>
+  /** Engine instance (sub-tab) this request belongs to. Set for engine-view
+   * denials promoted into the tab-level queue so clients can scope the
+   * card to the owning sub-conversation. Absent for CLI tabs and for
+   * requests that predate this field (additive, non-breaking). */
+  instanceId?: string
 }
 
 export interface FileAttachment {
@@ -67,7 +72,9 @@ export interface TabState {
   draftInput: string
   /** One-shot field: set by rewind, consumed by InputBar to pre-fill input, then cleared */
   pendingInput?: string
-  messages: Message[]
+  messages: Message[] | null
+  /** Persisted message count — used for blank-tab detection when messages are lazily loaded (null). */
+  messageCount: number
   title: string
   /** User-provided custom tab name (overrides auto-generated title when set) */
   customTitle: string | null
@@ -170,6 +177,15 @@ export interface Message {
    * Client-only field — NOT part of the Go contract or wire protocol.
    */
   planFilePath?: string
+  /**
+   * Intercept level carried from `engine_intercept.interceptLevel`.
+   * Populated only on `role: 'harness'` messages pushed by the
+   * `engine_intercept` handler in engine-event-slice.ts.
+   * Values: "banner" (informational) | "redirect" (urgent, run aborted).
+   * The InterceptBanner component reads this to choose its visual weight.
+   * Client-only field — NOT part of the Go contract or wire protocol.
+   */
+  interceptLevel?: string
   timestamp: number
   /**
    * Local UI state only -- NOT a wire protocol field, NOT persisted.

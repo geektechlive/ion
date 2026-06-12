@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react'
 import { useSessionStore } from '../stores/sessionStore'
 import { TerminalInstanceView, destroyTerminalInstance } from './TerminalInstance'
-import { TerminalStatusBar } from './TerminalStatusBar'
+import { TerminalTabStrip } from './TerminalTabStrip'
 
 // Re-export destroyTerminalInstance for backward compatibility
 export { destroyTerminalInstance } from './TerminalInstance'
@@ -26,7 +26,7 @@ export function TerminalPanel({ tabId, cwd }: Props) {
 
   return (
     <div data-ion-ui style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <TerminalStatusBar tabId={tabId} />
+      <TerminalTabStrip tabId={tabId} />
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {activeInstance && (
           <TerminalInstanceView

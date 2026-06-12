@@ -62,11 +62,13 @@ func normalizedEventVariants() map[string]NormalizedEventData {
 		EventPermissionRequest: &PermissionRequestEvent{},
 		EventPlanModeChanged:   &PlanModeChangedEvent{},
 		EventPlanProposal:      &PlanProposalEvent{},
+		EventPlanModeAutoExit:  &PlanModeAutoExitEvent{},
 		EventStreamReset:       &StreamResetEvent{},
 		EventCompacting:        &CompactingEvent{},
 		EventToolStalled:       &ToolStalledEvent{},
 		EventSteerInjected:     &SteerInjectedEvent{},
 		EventModelFallback:     &ModelFallbackEvent{},
+		EventRunStalled:        &RunStalledEvent{},
 	}
 }
 
@@ -87,6 +89,7 @@ func buildManifest() contractManifest {
 	// Shared types used across language boundaries
 	shared := map[string]reflect.Type{
 		"StatusFields":     reflect.TypeOf(StatusFields{}),
+		"SessionStatus":    reflect.TypeOf(SessionStatus{}),
 		"EngineConfig":     reflect.TypeOf(EngineConfig{}),
 		"MessageEndUsage":  reflect.TypeOf(MessageEndUsage{}),
 		"PermissionOpt":    reflect.TypeOf(PermissionOpt{}),

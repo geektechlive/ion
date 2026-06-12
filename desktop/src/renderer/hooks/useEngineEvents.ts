@@ -108,11 +108,30 @@ export function useEngineEvents() {
     // Remote permission mode change (from iOS toggle or slash-command expansion) —
     // update store without calling back to main, then re-evaluate auto group placement
     const remoteSetModeHandler = (_e: any, data: { tabId: string; mode: 'auto' | 'plan' }) => {
-      useSessionStore.setState((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === data.tabId ? { ...t, permissionMode: data.mode } : t
-        ),
-      }))
+      const targetTab = useSessionStore.getState().tabs.find((t) => t.id === data.tabId)
+      if (targetTab?.isEngine) {
+        // Engine tabs: write permissionMode onto the active instance in enginePanes.
+        useSessionStore.setState((s) => {
+          const enginePanes = new Map(s.enginePanes)
+          const pane = enginePanes.get(data.tabId)
+          if (!pane) return {}
+          const instanceId = pane.activeInstanceId
+          if (!instanceId) return {}
+          const idx = pane.instances.findIndex((i) => i.id === instanceId)
+          if (idx === -1) return {}
+          const instances = pane.instances.slice()
+          instances[idx] = { ...instances[idx], permissionMode: data.mode }
+          enginePanes.set(data.tabId, { ...pane, instances })
+          return { enginePanes }
+        })
+      } else {
+        // CLI tabs: update permissionMode on the parent tab.
+        useSessionStore.setState((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === data.tabId ? { ...t, permissionMode: data.mode } : t
+          ),
+        }))
+      }
 
       // Re-evaluate auto group movement after the mode change
       const { autoGroupMovement, tabGroupMode, planningGroupId, inProgressGroupId } = usePreferencesStore.getState()

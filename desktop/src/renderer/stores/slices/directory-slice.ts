@@ -36,7 +36,7 @@ export function createDirectorySlice(set: StoreSet, get: StoreGet): Partial<Stat
       const { activeTabId } = get()
       const tab = get().tabs.find((t) => t.id === activeTabId)
 
-      if (tab?.worktree && tab.messages.length === 0) {
+      if (tab?.worktree && (tab.messages?.length ?? 0) === 0) {
         window.ion.gitWorktreeRemove(
           tab.worktree.repoPath,
           tab.worktree.worktreePath,

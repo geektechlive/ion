@@ -7,6 +7,7 @@ struct TabListView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var showSettings = false
+    @State private var showNotifications = false
     @State private var showNewTab = false
     // When the new-tab sheet was opened from a group header's `+` button,
     // this holds the target group's id so we can stamp `pinToGroupId` on
@@ -44,6 +45,9 @@ struct TabListView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showNotifications) {
+            NotificationsView(resourceStore: viewModel.resourceStore, viewModel: viewModel)
         }
         .onAppear {
             // Always refresh git info for every tab dir on appear — covers
@@ -128,10 +132,15 @@ struct TabListView: View {
                 .navigationTitle("")
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
+                        HStack(spacing: IonTheme.sm) {
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Image(systemName: "gearshape")
+                            }
+                            NotificationsBellButton(resourceStore: viewModel.resourceStore) {
+                                showNotifications = true
+                            }
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -144,9 +153,16 @@ struct TabListView: View {
         .navigationSplitViewStyle(.balanced)
         .onChange(of: viewModel.pendingNavigationTabId) { _, tabId in
             if let tabId {
+                DiagnosticLog.log("NAV: iPad pendingNavigation -> selectedTabId=\(tabId.prefix(8))")
                 selectedTabId = tabId
                 viewModel.pendingNavigationTabId = nil
             }
+        }
+        .onChange(of: selectedTabId) { old, tabId in
+            DiagnosticLog.log("NAV: iPad selectedTabId changed old=\(old?.prefix(8) ?? "nil") new=\(tabId?.prefix(8) ?? "nil")")
+            // Notify the desktop which tab is focused so it can route
+            // intercept events to this device correctly.
+            viewModel.sendReportFocus(tabId: tabId)
         }
     }
 
@@ -193,6 +209,9 @@ struct TabListView: View {
                                 Image(systemName: "gearshape")
                             }
                             ConnectionQualityView(compact: true)
+                            NotificationsBellButton(resourceStore: viewModel.resourceStore) {
+                                showNotifications = true
+                            }
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -200,7 +219,21 @@ struct TabListView: View {
                     }
                 }
                 .navigationDestination(for: String.self) { tabId in
+                    let tab = viewModel.tab(for: tabId)
+                    let _ = DiagnosticLog.log("NAV: iPhone push tabId=\(tabId.prefix(8)) isEngine=\(tab?.isEngine ?? false) isTerminal=\(tab?.isTerminalOnly ?? false)")
                     destinationView(for: tabId)
+                        .onAppear {
+                            DiagnosticLog.log("NAV: iPhone onAppear tabId=\(tabId.prefix(8))")
+                            viewModel.sendReportFocus(tabId: tabId)
+                        }
+                        .onDisappear {
+                            // Only clear focus if we're popping back to the list,
+                            // not when a child sheet appears over the conversation.
+                            if navigationPath.isEmpty {
+                                DiagnosticLog.log("NAV: iPhone onDisappear tabId=\(tabId.prefix(8)) popped to list")
+                                viewModel.sendReportFocus(tabId: nil)
+                            }
+                        }
                 }
                 .refreshable {
                     Haptic.light()
@@ -208,6 +241,7 @@ struct TabListView: View {
                 }
                 .onChange(of: viewModel.pendingNavigationTabId) { _, tabId in
                     if let tabId {
+                        DiagnosticLog.log("NAV: iPhone pendingNavigation push tabId=\(tabId.prefix(8))")
                         navigationPath.append(tabId)
                         viewModel.pendingNavigationTabId = nil
                     }
@@ -526,12 +560,11 @@ struct TabListView: View {
 
         return viewModel.displayGroups.compactMap { group in
             let matchingTabs = group.tabs.filter { tab in
-                let compoundKey = viewModel.engineCompoundKey(tabId: tab.id)
                 return TabSearchHelper.matches(
                     tab: tab,
                     query: query,
                     messages: viewModel.messages[tab.id],
-                    engineMessages: viewModel.engineMessages[compoundKey],
+                    engineMessages: viewModel.engineInstance(tabId: tab.id, instanceId: viewModel.activeEngineInstance[tab.id])?.messages,
                     attachments: viewModel.tabAttachmentCache[tab.id]
                 )
             }

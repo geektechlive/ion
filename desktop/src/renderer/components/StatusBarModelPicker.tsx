@@ -9,19 +9,53 @@ import { ModelPickerPopover } from './ModelPickerPopover'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
+import { useActiveEngineStatusFields, useActiveEngineKey } from './StatusBarEngineHelpers'
 
 /* ─── Model Picker (inline — tightly coupled to StatusBar) ─── */
 
+/**
+ * Single model picker rendered in the unified `StatusBar` left
+ * cluster. Sources state differently depending on the active tab
+ * type:
+ *
+ * - **Conversation tabs**: reads `tab.modelOverride` / `tab.sessionModel`
+ *   from the active tab; writes via `setTabModel(activeTabId, modelId)`.
+ *
+ * - **Engine tabs**: reads `engineModelOverrides[${tabId}:${instanceId}]`
+ *   from the active engine instance, falling back to the preferences'
+ *   `engineDefaultModel`; writes via `setEngineModel(tabId, modelId)`.
+ *   Also shows the `(actualLabel)` parenthetical when the engine's
+ *   actual running model (`engineStatusFields[key].model`) differs
+ *   from the user's current selection — mirroring the rendering in
+ *   the former engine status bar.
+ *
+ * The popover, busy-state gating, and visual styling are identical for
+ * both tab types — only the underlying read/write source changes. This
+ * is one component, not a fork: per CLAUDE.md § "Solution quality" we
+ * prefer a single component that does the right thing over a "simpler"
+ * branch into two near-duplicate files.
+ */
 export function ModelPicker() {
   const preferredModel = usePreferencesStore((s) => s.preferredModel)
+  const engineDefaultModel = usePreferencesStore((s) => s.engineDefaultModel)
   const tab = useSessionStore(
     useShallow((s) => {
       const t = s.tabs.find((t) => t.id === s.activeTabId)
-      return t ? { status: t.status, sessionModel: t.sessionModel, modelOverride: t.modelOverride } : undefined
+      return t ? { status: t.status, sessionModel: t.sessionModel, modelOverride: t.modelOverride, isEngine: t.isEngine } : undefined
     }),
   )
   const activeTabId = useSessionStore((s) => s.activeTabId)
   const setTabModel = useSessionStore((s) => s.setTabModel)
+  const setEngineModel = useSessionStore((s) => s.setEngineModel)
+  // Engine-only state sources — null on conversation tabs.
+  const engineStatus = useActiveEngineStatusFields()
+  const engineKey = useActiveEngineKey()
+  const engineModelOverride = useSessionStore((s) => {
+    if (!engineKey) return undefined
+    const pane = s.enginePanes.get(engineKey.tabId)
+    const inst = pane?.instances.find((i) => i.id === engineKey.instanceId)
+    return inst?.modelOverride ?? undefined
+  })
   const popoverLayer = usePopoverLayer()
   const colors = useColors()
   const [open, setOpen] = useState(false)
@@ -33,7 +67,14 @@ export function ModelPicker() {
   const hasModels = useModelStore((s) => s.models.length > 0)
   const lastFetched = useModelStore((s) => s.lastFetched)
 
-  const isBusy = tab?.status === 'running' || tab?.status === 'connecting'
+  // Busy-gating: on conversation tabs we use the tab-level status; on
+  // engine tabs we use the active instance's engine status because
+  // each instance can be in a different run-state and only the active
+  // one gates the picker.
+  const isEngine = !!tab?.isEngine
+  const isBusy = isEngine
+    ? engineStatus?.state === 'running'
+    : (tab?.status === 'running' || tab?.status === 'connecting')
 
   useEffect(() => {
     if (!hasModels) fetchModels()
@@ -72,20 +113,46 @@ export function ModelPicker() {
     setOpen((o) => !o)
   }
 
-  const effectiveModel = tab?.modelOverride || preferredModel || AVAILABLE_MODELS[0].id
+  // Effective model + display label resolve from per-tab-type sources.
+  // Engine tabs fold in `engineDefaultModel` from preferences as a
+  // sensible default before falling back to the global `preferredModel`.
+  const effectiveModel = isEngine
+    ? (engineModelOverride || engineDefaultModel || preferredModel || AVAILABLE_MODELS[0].id)
+    : (tab?.modelOverride || preferredModel || AVAILABLE_MODELS[0].id)
 
   const activeLabel = (() => {
-    if (tab?.modelOverride) {
-      return getModelDisplayLabel(tab.modelOverride)
+    if (isEngine) {
+      // Engine tabs: prefer the active instance's override, then the
+      // engine default, then preferred, then sessionModel echo, then
+      // the static fallback. Mirrors the resolution order used by the
+      // former engine status bar.
+      if (engineModelOverride) return getModelDisplayLabel(engineModelOverride)
+      if (engineDefaultModel) return getModelDisplayLabel(engineDefaultModel)
+      if (preferredModel) return getModelDisplayLabel(preferredModel)
+      if (engineStatus?.model) return getModelDisplayLabel(engineStatus.model)
+      return AVAILABLE_MODELS[0].label
     }
-    if (preferredModel) {
-      return getModelDisplayLabel(preferredModel)
-    }
-    if (tab?.sessionModel) {
-      return getModelDisplayLabel(tab.sessionModel)
-    }
+    // Conversation tabs: original resolution order, unchanged.
+    if (tab?.modelOverride) return getModelDisplayLabel(tab.modelOverride)
+    if (preferredModel) return getModelDisplayLabel(preferredModel)
+    if (tab?.sessionModel) return getModelDisplayLabel(tab.sessionModel)
     return AVAILABLE_MODELS[0].label
   })()
+
+  // On engine tabs only: show the (actualLabel) parenthetical when
+  // the engine reports it is actually using a different model than
+  // the user's selection. Conversation tabs don't have this signal.
+  const actualModel = isEngine ? engineStatus?.model : undefined
+  const actualLabel = actualModel ? getModelDisplayLabel(actualModel) : null
+  const modelDiffers = isEngine && actualModel && actualLabel !== activeLabel
+
+  const handleSelect = (modelId: string) => {
+    if (isEngine) {
+      setEngineModel(activeTabId, modelId)
+    } else if (activeTabId) {
+      setTabModel(activeTabId, modelId)
+    }
+  }
 
   return (
     <>
@@ -100,6 +167,11 @@ export function ModelPicker() {
         title={isBusy ? 'Stop the task to change model' : 'Switch model'}
       >
         {activeLabel}
+        {modelDiffers && (
+          <span style={{ color: colors.textTertiary, fontSize: 10, opacity: 0.7, marginLeft: 2 }}>
+            ({actualLabel})
+          </span>
+        )}
         <CaretDown size={10} style={{ opacity: 0.6 }} />
       </button>
 
@@ -107,7 +179,7 @@ export function ModelPicker() {
         <ModelPickerPopover
           popoverRef={popoverRef}
           selectedModelId={effectiveModel}
-          onSelect={(modelId) => { if (activeTabId) setTabModel(activeTabId, modelId) }}
+          onSelect={handleSelect}
           onClose={() => setOpen(false)}
           position={pos}
         />,

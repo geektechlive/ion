@@ -9,6 +9,8 @@ import { createTray, createWindow, installContentSecurityPolicy, snapshotWindowS
 import { requestPermissions } from './permissions-preflight'
 import { cleanOrphanedWorktrees } from './git-runner'
 import { focusState } from './git/focus-state'
+import { startConversationCleanup } from './conversation-cleanup'
+import { tabsFileForBackend, sessionChainsFileForBackend, sessionLabelsFileForBackend } from './settings-store'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -117,6 +119,25 @@ export function setupAppLifecycle(): void {
     globalShortcut.register('CommandOrControl+Shift+K', () => toggleWindow('shortcut Cmd/Ctrl+Shift+K'))
 
     createTray()
+
+    // Background conversation cleanup (dry-run by default).
+    //
+    // We pass explicit per-backend file paths instead of deriving them
+    // inside a closure. The previous version did `require('./settings-store')`
+    // lazily inside the callback and silently returned `[]` on any error,
+    // which on June 7 caused the desktop to send `excludeIds=[]` to the
+    // engine. With DRY_RUN=true that was harmless; with DRY_RUN=false it
+    // would have deleted ~51 tab-referenced conversations. See
+    // docs/plans/grassy-chirping-crest.md Layer 2 for the full analysis.
+    //
+    // Both backends are passed in regardless of which is currently active —
+    // an inactive backend's tabs are still valid resumable conversations
+    // and must not be deleted just because the user toggled the backend.
+    startConversationCleanup({
+      tabsFiles: [tabsFileForBackend('api'), tabsFileForBackend('cli')],
+      chainsFiles: [sessionChainsFileForBackend('api'), sessionChainsFileForBackend('cli')],
+      labelsFiles: [sessionLabelsFileForBackend('api'), sessionLabelsFileForBackend('cli')],
+    })
 
     app.on('activate', () => showWindow('app activate'))
   })

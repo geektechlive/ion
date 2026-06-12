@@ -62,6 +62,21 @@ extension SessionViewModel {
     }
 
     @MainActor
+    func handleEnginePlanModeAutoExit() {
+        // Sibling to handleEnginePlanProposal. The engine
+        // deterministically synthesized an ExitPlanMode call at
+        // end-of-turn because the model misrouted plan exit
+        // (issue #187). iOS does not yet render the engine-driven
+        // distinction — the desktop is the authoritative consumer
+        // that gates approval — but we observe the event for
+        // diagnostic visibility (via DiagnosticLog.logEvent) and
+        // otherwise no-op. A future iOS surface (e.g. a "Plan
+        // surfaced automatically" hint above the approval card) can
+        // read the stopReason / reason / sessionId / runId payload
+        // fields without contract changes.
+    }
+
+    @MainActor
     func handleEngineEarlyStopDecisionRequest() {
         // Engine ↔ harness wire-protocol request emitted when the
         // engine wants an external opinion on whether to nudge a

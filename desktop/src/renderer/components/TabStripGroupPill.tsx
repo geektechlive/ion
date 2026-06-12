@@ -56,11 +56,10 @@ export function GroupPill({
 
   const displayTitle = selectedTab ? (selectedTab.customTitle || selectedTab.title) : ''
 
-  // Subscribe to the engine-instance denial map so the group pill border
-  // re-renders when any engine sub-tab gets/clears a pending denial.
-  // `getWaitingState()` reads this map for engine tabs; without the
-  // subscription the group pill would stall on stale data.
-  useSessionStore((s) => s.enginePermissionDenied)
+  // Subscribe to enginePanes so the group pill border re-renders when any
+  // engine instance's permissionDenied field changes. getWaitingState() reads
+  // inst.permissionDenied directly from enginePanes instances — no separate
+  // Map subscription needed.
   useSessionStore((s) => s.enginePanes)
 
   // Derive aggregate waiting state: if ANY tab in the group is waiting on the user.

@@ -13,7 +13,7 @@ interface ToolGroupProps {
   skipMotion?: boolean
 }
 
-export function ToolGroup({ tools, skipMotion }: ToolGroupProps) {
+export const ToolGroup = React.memo(function ToolGroup({ tools, skipMotion }: ToolGroupProps) {
   const hasRunning = tools.some((t) => t.toolStatus === 'running')
   const hasUserExecuted = tools.some((t) => t.userExecuted)
   const expandToolResults = usePreferencesStore((s) => s.expandToolResults)
@@ -160,4 +160,4 @@ export function ToolGroup({ tools, skipMotion }: ToolGroupProps) {
       {inner}
     </motion.div>
   )
-}
+})

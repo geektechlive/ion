@@ -542,6 +542,16 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		s.manager.ReconcileState(cmd.Key)
 		s.sendResult(conn, cmd, nil, nil)
 
+	case "query_session_status":
+		// Phase 2: on-demand engine_status snapshot. The status payload
+		// is emitted via the manager's normal event bus (not as the RPC
+		// result) so it reaches every attached consumer, not just the
+		// one that asked. The RPC result is empty — the caller subscribes
+		// via OnEvent / the WebSocket stream and observes the emission
+		// through that channel.
+		s.manager.QuerySessionStatus(cmd.Key)
+		s.sendResult(conn, cmd, nil, nil)
+
 	case "migrate_conversation":
 		// Implementation in dispatch_data.go.
 		s.dispatchMigrateConversation(conn, cmd)
@@ -608,6 +618,63 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		utils.Log("Server", fmt.Sprintf("clear_conversation_file: sessionId=%s", cmd.Key))
 		err := s.manager.ClearConversationFile(cmd.Key)
 		s.sendResult(conn, cmd, err, nil)
+
+	case "delete_stored_sessions":
+		maxAge := cmd.MaxAgeDays
+		if maxAge <= 0 {
+			maxAge = 14
+		}
+		// Server-side safety guard: collect conversation IDs from all active
+		// in-memory sessions so they are never deleted, independent of the
+		// client's excludeIDs list.
+		activeSessions := s.manager.ListSessions()
+		inMemoryActiveIDs := make([]string, 0, len(activeSessions))
+		for _, si := range activeSessions {
+			if si.ConversationID != "" {
+				inMemoryActiveIDs = append(inMemoryActiveIDs, si.ConversationID)
+			}
+		}
+
+		// Layer-1 expansion (docs/plans/grassy-chirping-crest.md):
+		// the desktop's in-process startSession is lazy — it only fires when
+		// the user sends the first prompt to a tab. After an engine restart
+		// (or in the first 60 seconds before any prompt is sent), the engine
+		// has zero in-memory sessions even though the desktop may have 60+
+		// persisted tabs whose conversationIds need protection.
+		//
+		// Read the desktop's session-chains-{api,cli}.json and
+		// session-labels-{api,cli}.json directly. Every ID that appears
+		// in any of those files is a conversation some tab has resumed
+		// or labeled — load-bearing IDs that must survive cleanup even
+		// when cmd.ExcludeIDs is empty.
+		//
+		// Pass "" so the helper resolves ~/.ion/. Reading these files is
+		// always safe: missing files contribute zero IDs, malformed JSON
+		// is logged and skipped.
+		desktopProtectedIDs := loadDesktopProtectedIDs("")
+
+		// Union the two sources into a single activeIDs slice. Dedup
+		// happens inside CleanupStored via the exclude map.
+		activeIDs := make([]string, 0, len(inMemoryActiveIDs)+len(desktopProtectedIDs))
+		activeIDs = append(activeIDs, inMemoryActiveIDs...)
+		activeIDs = append(activeIDs, desktopProtectedIDs...)
+
+		utils.Log("Server", fmt.Sprintf(
+			"delete_stored_sessions: clientExcludeCount=%d inMemoryActive=%d desktopProtected=%d totalEngineGuard=%d dryRun=%v",
+			len(cmd.ExcludeIDs), len(inMemoryActiveIDs), len(desktopProtectedIDs), len(activeIDs), cmd.DryRun,
+		))
+
+		deleted, err := conversation.CleanupStored("", maxAge, cmd.ExcludeIDs, activeIDs, cmd.DryRun)
+		s.sendResult(conn, cmd, err, map[string]int{"deleted": deleted})
+
+	case "resource_subscribe":
+		s.dispatchResourceSubscribe(conn, cmd)
+
+	case "resource_unsubscribe":
+		s.dispatchResourceUnsubscribe(conn, cmd)
+
+	case "resource_publish":
+		s.dispatchResourcePublish(conn, cmd)
 
 	case "shutdown":
 		_ = s.Stop()

@@ -2,8 +2,8 @@
  * engine-event-slice — engine_plan_mode_changed divider insertion
  *
  * Pins the contract that engine_plan_mode_changed { planModeEnabled: true }
- * appends a "── Plan created at <time> ──" system message into the
- * engineMessages buffer for the corresponding instance key. Mirrors the
+ * appends a "── Plan created at <time> ──" system message into the instance's
+ * messages in enginePanes for the corresponding instance key. Mirrors the
  * CLI-tab equivalent in event-slice-plan-mode.test.ts.
  *
  * Also pins the negative case: planModeEnabled=false (the model called
@@ -22,6 +22,10 @@ vi.mock('../session-store-helpers', () => ({
 import { createEngineEventSlice } from '../slices/engine-event-slice'
 import type { State } from '../session-store-types'
 
+function makeInstance(id: string) {
+  return { id, label: id, messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null }
+}
+
 function buildHarness() {
   const state: any = {
     tabs: [{
@@ -33,19 +37,13 @@ function buildHarness() {
       contextTokens: 0,
       contextPercent: 0,
     }],
-    engineAgentStates: new Map(),
-    engineStatusFields: new Map(),
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    engineMessages: new Map(),
-    engineDraftInputs: new Map(),
-    engineModelOverrides: new Map(),
-    engineConversationIds: new Map(),
-    enginePanes: new Map(),
-    enginePermissionDenied: new Map(),
+    engineModelFallbacks: new Map(),
+    enginePanes: new Map([['tab1', { instances: [makeInstance('inst1')], activeInstanceId: 'inst1' }]]),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
@@ -54,6 +52,11 @@ function buildHarness() {
   const get = () => state as State
   const slice = createEngineEventSlice(set, get) as State
   return { state, slice }
+}
+
+function getMessages(state: any, tabId: string, instanceId: string) {
+  const pane = state.enginePanes.get(tabId)
+  return pane?.instances.find((i: any) => i.id === instanceId)?.messages ?? []
 }
 
 describe('engine-event-slice — engine_plan_mode_changed', () => {
@@ -68,13 +71,11 @@ describe('engine-event-slice — engine_plan_mode_changed', () => {
       planSlug: 'my-plan',
     } as any)
 
-    const msgs = state.engineMessages.get(key) ?? []
+    const msgs = getMessages(state, 'tab1', 'inst1')
     expect(msgs.length).toBe(1)
     expect(msgs[0].role).toBe('system')
     expect(msgs[0].content).toMatch(/^── Plan created at /)
     expect(msgs[0].content).toContain('my-plan')
-    // planFilePath is propagated to the message so SystemMessage can
-    // wire the slug as a clickable link to the plan-viewer.
     expect(msgs[0].planFilePath).toBe('/tmp/plan.md')
   })
 
@@ -88,18 +89,12 @@ describe('engine-event-slice — engine_plan_mode_changed', () => {
       planFilePath: '/tmp/plan.md',
     } as any)
 
-    const msgs = state.engineMessages.get(key) ?? []
+    const msgs = getMessages(state, 'tab1', 'inst1')
     expect(msgs.length).toBe(1)
-    // No ` · slug` segment when there is no slug.
     expect(msgs[0].content).toMatch(/^── Plan created at [^·]+──$/)
   })
 
   it('does NOT insert a divider on planModeEnabled=false (proposal, not transition)', () => {
-    // ADR-003: planModeEnabled=false fires only on confirmed exit
-    // (today: user-approval chokepoint). The model's ExitPlanMode call
-    // surfaces as engine_plan_proposal, not engine_plan_mode_changed,
-    // so this branch should never legitimately fire — but if it ever
-    // does, the divider must not appear.
     const { state, slice } = buildHarness()
     const key = 'tab1:inst1'
 
@@ -109,14 +104,11 @@ describe('engine-event-slice — engine_plan_mode_changed', () => {
       planFilePath: '/tmp/plan.md',
     } as any)
 
-    const msgs = state.engineMessages.get(key) ?? []
+    const msgs = getMessages(state, 'tab1', 'inst1')
     expect(msgs.length).toBe(0)
   })
 
   it('appends repeated dividers on multiple plan-mode entries', () => {
-    // Repeating cycle: Session started → Plan created → Implementing
-    // → Plan created → Implementing → … Each plan-mode entry produces
-    // its own divider; the renderer never deduplicates.
     const { state, slice } = buildHarness()
     const key = 'tab1:inst1'
 
@@ -133,7 +125,7 @@ describe('engine-event-slice — engine_plan_mode_changed', () => {
       planSlug: 'second',
     } as any)
 
-    const msgs = state.engineMessages.get(key) ?? []
+    const msgs = getMessages(state, 'tab1', 'inst1')
     expect(msgs.length).toBe(2)
     expect(msgs[0].content).toContain('first')
     expect(msgs[0].planFilePath).toBe('/tmp/plan-1.md')

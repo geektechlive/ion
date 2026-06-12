@@ -597,6 +597,50 @@ struct EngineMessageRow: View {
     // MARK: - Harness (engine-only)
 
     private var harnessMessage: some View {
+        Group {
+            if let level = message.interceptLevel {
+                interceptBanner(level: level)
+            } else {
+                defaultHarnessMessage
+            }
+        }
+    }
+
+    /// Intercept banner — amber/warning style for engine_intercept events.
+    /// Visual weight scales with severity:
+    ///   "redirect" — filled amber background, bold border (run was aborted by desktop)
+    ///   "banner"   — border-only, lighter background (informational, no run change)
+    private func interceptBanner(level: String) -> some View {
+        let isRedirect = level == "redirect"
+        return HStack(alignment: .top, spacing: 6) {
+            Text("⚠️")
+                .font(.caption2)
+                .padding(.top, 1)
+            Text(LocalizedStringKey(message.content))
+                .font(.caption)
+                .foregroundStyle(isRedirect ? Color(red: 0.96, green: 0.62, blue: 0.04) : .secondary)
+                .multilineTextAlignment(.leading)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isRedirect
+                    ? Color(red: 0.96, green: 0.62, blue: 0.04).opacity(0.08)
+                    : Color(.secondarySystemFill))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(
+                    Color(red: 0.96, green: 0.62, blue: 0.04).opacity(isRedirect ? 0.55 : 0.3),
+                    lineWidth: 1
+                )
+        )
+        .padding(.vertical, 2)
+    }
+
+    private var defaultHarnessMessage: some View {
         HStack(spacing: 6) {
             if let collapsed = message.bootstrapCollapsedCount, collapsed > 0 {
                 Text("×\(collapsed + 1)")

@@ -44,29 +44,22 @@ const initialState = {
   fileEditorStates: new Map(),
   editorGeometry: { x: 60, y: 80, w: 680, h: 480 },
   planGeometry: { x: 60, y: 80, w: 720, h: 420 },
+  briefingGeometry: { x: 80, y: 100, w: 720, h: 420 },
   agentDetailGeometry: { x: 60, y: 80, w: 600, h: 500 },
   tabsReady: false,
   initProgress: null,
   backend: 'api' as const,
   worktreeUncommittedMap: new Map(),
-  engineAgentStates: new Map(),
-  engineStatusFields: new Map(),
   engineWorkingMessages: new Map(),
   engineNotifications: new Map(),
   engineDialogs: new Map(),
   enginePinnedPrompt: new Map(),
   engineUsage: new Map(),
-  engineConversationIds: new Map<string, string[]>(),
   enginePanes: new Map<string, EnginePaneState>(),
-  engineMessages: new Map<string, Message[]>(),
-  engineModelOverrides: new Map<string, string>(),
-  engineDraftInputs: new Map<string, string>(),
   engineModelFallbacks: new Map<string, { requestedModel: string; fallbackModel: string; reason: string; at: number }>(),
-  // Per-engine-instance AskUserQuestion / ExitPlanMode denials. Keyed by
-  // `${tabId}:${instanceId}`. See `enginePermissionDenied` JSDoc on
-  // `State` (session-store-types.ts) for the full rationale. Mirrors the
-  // other per-instance maps (engineMessages, engineDraftInputs, etc.).
-  enginePermissionDenied: new Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null>(),
+  resources: {} as Record<string, import('../../shared/types-engine').ResourceItem[]>,
+  resourceSubscriptions: {} as Record<string, string>,
+  readResourceIds: new Set<string>(),
   tallViewTabId: null,
   scrollToBottomCounter: 0,
   settingsOpen: false,
@@ -92,6 +85,21 @@ export const useSessionStore = create<State>((set, get) => {
     ...createEventSlice(_set, _get),
     ...createEngineSlice(_set, _get),
     ...createEngineEventSlice(_set, _get),
+    markResourceRead: (resourceId: string) => {
+      set((state) => {
+        const updated = new Set(state.readResourceIds)
+        updated.add(resourceId)
+        return { readResourceIds: updated }
+      })
+    },
+    deleteResource: (kind: string, resourceId: string) => {
+      set((state) => {
+        const current = state.resources[kind] ?? []
+        return {
+          resources: { ...state.resources, [kind]: current.filter(r => r.id !== resourceId) },
+        }
+      })
+    },
   } as State
 })
 
@@ -100,7 +108,10 @@ export const useSessionStore = create<State>((set, get) => {
 ;(window as any).__Ion_resolveEngineModel = (compoundKey: string): string => {
   const s = useSessionStore.getState()
   const prefs = usePreferencesStore.getState()
-  return s.engineModelOverrides.get(compoundKey) || prefs.engineDefaultModel || prefs.preferredModel || 'claude-sonnet-4-6'
+  const [tabId, instanceId] = compoundKey.split(':')
+  const pane = s.enginePanes.get(tabId)
+  const inst = pane?.instances.find((i) => i.id === instanceId)
+  return inst?.modelOverride || prefs.engineDefaultModel || prefs.preferredModel || 'claude-sonnet-4-6'
 }
 ;(window as any).__serializeTerminalBuffer = serializeTerminalBuffer
 

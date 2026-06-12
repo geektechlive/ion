@@ -77,13 +77,25 @@ extension SessionViewModel {
     /// Dismiss a special permission card (AskUserQuestion/ExitPlanMode) without
     /// sending respond_permission -- the tool was already auto-allowed on desktop.
     func dismissSpecialPermission(tabId: String, questionId: String) {
+        // Capture the entry's engine-instance scoping before removal so the
+        // dismissal suppression can be keyed per sub-tab. Dismissing one
+        // sub-tab's plan card must not block a sibling sub-tab's future
+        // cards from rendering.
+        var instanceId: String? = nil
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            instanceId = tabs[idx].permissionQueue.first(where: { $0.questionId == questionId })?.instanceId
             tabs[idx].permissionQueue.removeAll { $0.questionId == questionId }
         }
         if questionId.hasPrefix("restored-") {
             dismissedRestoredCards.insert(questionId)
+        } else if let instanceId {
+            // Live engine-instance card dismissed -- suppress snapshot
+            // re-injection for this sub-tab only ("tabId:instanceId" key).
+            DiagnosticLog.log("PERM: dismissSpecialPermission: tabId=\(tabId.prefix(8)) instance-scoped dismissal instanceId=\(instanceId.prefix(8))")
+            dismissedLiveSpecialTabs.insert("\(tabId):\(instanceId)")
         } else {
             // Live card dismissed -- block restoredSpecialCard from re-triggering
+            DiagnosticLog.log("PERM: dismissSpecialPermission: tabId=\(tabId.prefix(8)) tab-scoped dismissal (no instanceId)")
             dismissedLiveSpecialTabs.insert(tabId)
         }
     }
@@ -258,7 +270,8 @@ extension SessionViewModel {
 
     func loadEngineConversation(tabId: String) {
         let instanceId = activeEngineInstance[tabId]
-        ionLog.info("loadEngineConversation: tabId=\(tabId), instanceId=\(instanceId ?? "nil"), instances=\(self.engineInstances[tabId]?.map(\.id) ?? [])")
+        let instList = engineInstances[tabId]?.map(\.id) ?? []
+        DiagnosticLog.log("LOAD-CONV: loadEngineConversation tabId=\(tabId.prefix(8)) instanceId=\(instanceId?.prefix(8) ?? "nil") allInstances=\(instList.map { $0.prefix(8) })")
         send(.loadEngineConversation(tabId: tabId, instanceId: instanceId))
     }
 
@@ -423,6 +436,9 @@ extension SessionViewModel {
     }
 
     func requestLoadAttachments(tabId: String) {
+        let oldCount = tabAttachmentCache[tabId]?.count ?? -1
+        DiagnosticLog.log("ATTACH: requestLoadAttachments tabId=\(tabId.prefix(8)) oldCacheCount=\(oldCount) clearing")
+        tabAttachmentCache.removeValue(forKey: tabId)
         send(.loadAttachments(tabId: tabId))
     }
 
@@ -465,10 +481,27 @@ extension SessionViewModel {
         send(.setDesktopSetting(key: key, value: value))
     }
 
+    /// Send the current focus state to the desktop for intercept routing.
+    /// The desktop stores the (tabId, interceptEnabled) pair in `deviceFocusMap`
+    /// and uses it to decide whether this device's active tab is a valid
+    /// target for redirect-level intercepts.
+    ///
+    /// `tabId: nil` signals that the app is backgrounded (no active tab).
+    /// `interceptEnabled` reads the iOS-local UserDefaults preference,
+    /// defaulting to `true` so new installs participate in intercepts
+    /// without any configuration step.
+    func sendReportFocus(tabId: String?) {
+        let interceptEnabled = UserDefaults.standard.object(forKey: "interceptEnabled") as? Bool ?? true
+        DiagnosticLog.log("CMD: report_focus tabId=\(tabId?.prefix(8) ?? "nil") interceptEnabled=\(interceptEnabled)")
+        Task { @MainActor [weak self] in
+            self?.focusedTabId = tabId
+        }
+        send(.reportFocus(tabId: tabId, interceptEnabled: interceptEnabled))
+    }
+
     // MARK: - Send
 
-    func send(_ command: RemoteCommand) {
-        DiagnosticLog.logCommand(command)
+    func send(_ command: RemoteCommand) {        DiagnosticLog.logCommand(command)
         guard let transport else {
             DiagnosticLog.log("CMD: dropped (no transport)")
             Task { @MainActor [weak self] in

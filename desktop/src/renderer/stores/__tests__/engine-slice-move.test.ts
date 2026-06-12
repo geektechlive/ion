@@ -2,14 +2,14 @@
  * engine-slice move — unit tests
  *
  * Tests the moveEngineInstance action in isolation using a hand-built
- * set/get pair over a plain mutable State object. This avoids importing
- * sessionStore.ts (which touches window and persistence at module load).
+ * set/get pair over a plain mutable State object. ConversationInstance fields
+ * (messages, agentStates, etc.) travel with the instance object in enginePanes.
+ * Non-ConversationInstance compound-keyed Maps (workingMessages, notifications,
+ * dialogs, pinnedPrompt, usage) are rekeyed.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// session-store-helpers.ts calls `new Audio(...)` at module load (node env has no Audio).
-// Mock the whole helpers module before the slice is imported.
 vi.mock('../session-store-helpers', () => ({
   makeLocalTab: vi.fn(() => ({
     id: 'mock-tab',
@@ -30,7 +30,7 @@ vi.mock('../session-store-helpers', () => ({
 
 import { createEngineSlice } from '../slices/engine-slice'
 import type { State } from '../session-store-types'
-import type { EngineInstance, EnginePaneState } from '../../../shared/types-engine'
+import type { EngineInstance, EnginePaneState, ConversationInstance } from '../../../shared/types-engine'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,45 +50,59 @@ function makeTab(id: string, isEngine = true) {
   }
 }
 
-function makeInstance(id: string, label: string): EngineInstance {
-  return { id, label }
+function makeInstance(id: string, label: string, extra?: Partial<ConversationInstance>): EngineInstance & ConversationInstance {
+  return {
+    id,
+    label,
+    messages: [],
+    modelOverride: null,
+    permissionMode: 'auto',
+    permissionDenied: null,
+    conversationIds: [],
+    draftInput: '',
+    agentStates: [],
+    statusFields: null,
+    planFilePath: null,
+    ...extra,
+  }
 }
 
-function makePane(instances: EngineInstance[], activeInstanceId: string | null): EnginePaneState {
+function makePane(instances: Array<EngineInstance & ConversationInstance>, activeInstanceId: string | null): EnginePaneState {
   return { instances, activeInstanceId }
 }
 
 /**
- * Builds a minimal State object wired to a slice that can actually mutate it.
- * Returns the state reference and the bound moveEngineInstance action.
+ * Builds a minimal State object with an inst1 that carries populated
+ * ConversationInstance fields and non-ConversationInstance compound-keyed Maps.
  */
 function buildHarness() {
-  // Mutable state bag
+  const inst1 = makeInstance('inst1', 'Engine 1', {
+    messages: [{ id: '1', role: 'user' as const, content: 'hi', timestamp: 1 }],
+    agentStates: [{ name: 'chief', status: 'idle' }],
+    statusFields: { label: 'l', state: 'idle', model: 'm', contextPercent: 0, contextWindow: 1000 },
+    conversationIds: ['conv-abc'],
+    permissionDenied: { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }] },
+    modelOverride: 'claude-3',
+    draftInput: 'draft',
+    permissionMode: 'auto',
+  })
+
   const state: any = {
-    tabs: [
-      makeTab('srcTab'),
-      makeTab('dstTab'),
-    ],
+    tabs: [makeTab('srcTab'), makeTab('dstTab')],
     enginePanes: new Map([
-      ['srcTab', makePane([makeInstance('inst1', 'Engine 1')], 'inst1')],
+      ['srcTab', makePane([inst1], 'inst1')],
       ['dstTab', makePane([makeInstance('inst2', 'Engine 2')], 'inst2')],
     ]),
-    engineMessages: new Map([['srcTab:inst1', [{ id: '1', role: 'user', content: 'hi', timestamp: 1 }]]]),
-    engineAgentStates: new Map([['srcTab:inst1', [{ name: 'chief', status: 'idle' }]]]),
-    engineStatusFields: new Map([['srcTab:inst1', { label: 'l', state: 'idle', model: 'm', contextPercent: 0, contextWindow: 1000 }]]),
+    // Non-ConversationInstance compound-keyed Maps — these still get rekeyed.
     engineWorkingMessages: new Map([['srcTab:inst1', 'working...']]),
     engineNotifications: new Map([['srcTab:inst1', [{ id: 'n1', message: 'note', level: 'info', timestamp: 1 }]]]),
     engineDialogs: new Map([['srcTab:inst1', null]]),
     enginePinnedPrompt: new Map([['srcTab:inst1', 'pinned']]),
     engineUsage: new Map([['srcTab:inst1', { percent: 10, tokens: 100, cost: 0.01 }]]),
-    engineDraftInputs: new Map([['srcTab:inst1', 'draft']]),
-    engineModelOverrides: new Map([['srcTab:inst1', 'claude-3']]),
-    engineConversationIds: new Map([['srcTab:inst1', ['conv-abc']]]),
-    enginePermissionDenied: new Map([['srcTab:inst1', { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }] }]]),
+    engineModelFallbacks: new Map(),
     closeTab: vi.fn(),
   }
 
-  // set: merges partial into state
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
     Object.assign(state, patch)
@@ -101,8 +115,6 @@ function buildHarness() {
 
 // ── mock window.ion ───────────────────────────────────────────────────────────
 
-// In vitest node env, `window` is undefined by default.
-// Define it as a plain global before each test.
 beforeEach(() => {
   ;(globalThis as any).window = {
     ion: {
@@ -111,8 +123,6 @@ beforeEach(() => {
     },
   }
 })
-
-// ── mock usePreferencesStore ──────────────────────────────────────────────────
 
 vi.mock('../../preferences', () => ({
   usePreferencesStore: {
@@ -130,47 +140,47 @@ vi.mock('../../preferences', () => ({
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 describe('moveEngineInstance', () => {
-  it('migrates state across all 12 compound-keyed Maps', () => {
+  it('ConversationInstance fields travel with the instance to the new pane', () => {
+    const { state, slice } = buildHarness()
+    slice.moveEngineInstance('srcTab', 'inst1', 'dstTab')
+
+    const dstPane = state.enginePanes.get('dstTab')!
+    const movedInst = dstPane.instances.find((i: EngineInstance) => i.id === 'inst1')
+    expect(movedInst).toBeDefined()
+    // Messages travel with the instance
+    expect(movedInst?.messages).toHaveLength(1)
+    expect(movedInst?.messages[0].content).toBe('hi')
+    // Other ConversationInstance fields travel too
+    expect(movedInst?.modelOverride).toBe('claude-3')
+    expect(movedInst?.draftInput).toBe('draft')
+    expect(movedInst?.conversationIds).toEqual(['conv-abc'])
+    expect(movedInst?.permissionDenied?.tools[0].toolName).toBe('AskUserQuestion')
+    expect(movedInst?.statusFields?.state).toBe('idle')
+  })
+
+  it('non-ConversationInstance compound-keyed Maps are rekeyed', () => {
     const { state, slice } = buildHarness()
     slice.moveEngineInstance('srcTab', 'inst1', 'dstTab')
 
     const newKey = 'dstTab:inst1'
     const oldKey = 'srcTab:inst1'
 
-    // New key present in every map
-    expect(state.engineMessages.has(newKey)).toBe(true)
-    expect(state.engineAgentStates.has(newKey)).toBe(true)
-    expect(state.engineStatusFields.has(newKey)).toBe(true)
+    // New key present in the remaining Maps
     expect(state.engineWorkingMessages.has(newKey)).toBe(true)
     expect(state.engineNotifications.has(newKey)).toBe(true)
     expect(state.engineDialogs.has(newKey)).toBe(true)
     expect(state.enginePinnedPrompt.has(newKey)).toBe(true)
     expect(state.engineUsage.has(newKey)).toBe(true)
-    expect(state.engineDraftInputs.has(newKey)).toBe(true)
-    expect(state.engineModelOverrides.has(newKey)).toBe(true)
-    expect(state.engineConversationIds.has(newKey)).toBe(true)
-    expect(state.enginePermissionDenied.has(newKey)).toBe(true)
 
-    // Old key absent from every map
-    expect(state.engineMessages.has(oldKey)).toBe(false)
-    expect(state.engineAgentStates.has(oldKey)).toBe(false)
-    expect(state.engineStatusFields.has(oldKey)).toBe(false)
+    // Old key absent
     expect(state.engineWorkingMessages.has(oldKey)).toBe(false)
     expect(state.engineNotifications.has(oldKey)).toBe(false)
     expect(state.engineDialogs.has(oldKey)).toBe(false)
     expect(state.enginePinnedPrompt.has(oldKey)).toBe(false)
     expect(state.engineUsage.has(oldKey)).toBe(false)
-    expect(state.engineDraftInputs.has(oldKey)).toBe(false)
-    expect(state.engineModelOverrides.has(oldKey)).toBe(false)
-    expect(state.engineConversationIds.has(oldKey)).toBe(false)
-    expect(state.enginePermissionDenied.has(oldKey)).toBe(false)
 
-    // Values were actually transferred
-    expect(state.engineModelOverrides.get(newKey)).toBe('claude-3')
+    // Values were transferred
     expect(state.enginePinnedPrompt.get(newKey)).toBe('pinned')
-    const msgs = state.engineMessages.get(newKey)
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0].content).toBe('hi')
   })
 
   it('adds moved instance to target pane and sets activeInstanceId', () => {
@@ -184,7 +194,6 @@ describe('moveEngineInstance', () => {
 
   it('closes source tab and removes its pane when last instance is moved', () => {
     const { state, slice } = buildHarness()
-    // srcTab has only inst1
     slice.moveEngineInstance('srcTab', 'inst1', 'dstTab')
 
     expect(state.enginePanes.has('srcTab')).toBe(false)
@@ -193,7 +202,6 @@ describe('moveEngineInstance', () => {
 
   it('keeps source tab with updated activeInstanceId when other instances remain', () => {
     const { state, slice } = buildHarness()
-    // Give srcTab two instances
     state.enginePanes.set('srcTab', makePane(
       [makeInstance('inst1', 'Engine 1'), makeInstance('inst3', 'Engine 3')],
       'inst1',
@@ -211,7 +219,7 @@ describe('moveEngineInstance', () => {
     const { state, slice } = buildHarness()
     state.enginePanes.set('srcTab', makePane(
       [makeInstance('inst1', 'Engine 1'), makeInstance('inst4', 'Engine 4')],
-      'inst1', // inst1 is active
+      'inst1',
     ))
 
     slice.moveEngineInstance('srcTab', 'inst1', 'dstTab')
@@ -236,7 +244,6 @@ describe('moveEngineInstance', () => {
 
     slice.moveEngineInstance('nonExistentTab', 'inst1', 'dstTab')
 
-    // State unchanged
     expect(state.tabs).toEqual(snapshotTabs)
     expect((globalThis as any).window.ion.engineRemapSession).not.toHaveBeenCalled()
   })
@@ -266,7 +273,6 @@ describe('moveEngineInstance', () => {
 
   it('handles move to a target with no existing pane (creates pane)', () => {
     const { state, slice } = buildHarness()
-    // Remove the dstTab pane so it starts empty
     state.enginePanes.delete('dstTab')
 
     slice.moveEngineInstance('srcTab', 'inst1', 'dstTab')

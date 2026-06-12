@@ -325,8 +325,7 @@ export function getWaitingState(tab: TabState): WaitingState {
     if (!pane || pane.instances.length === 0) return null
     let hasPlanReady = false
     for (const inst of pane.instances) {
-      const entry = s.enginePermissionDenied.get(`${tab.id}:${inst.id}`)
-      const ws = waitingStateFromTools(entry?.tools)
+      const ws = waitingStateFromTools(inst.permissionDenied?.tools)
       if (ws === 'question') return 'question'
       if (ws === 'plan-ready') hasPlanReady = true
     }
@@ -339,9 +338,10 @@ export function getWaitingState(tab: TabState): WaitingState {
  *  instance identified by its compound `${tabId}:${instanceId}` key.
  *  Used by the engine sub-tab pill renderer to draw a per-instance
  *  status dot. */
-export function getEngineInstanceWaitingState(key: string): WaitingState {
-  const entry = useSessionStore.getState().enginePermissionDenied.get(key)
-  return waitingStateFromTools(entry?.tools)
+export function getEngineInstanceWaitingState(tabId: string, instanceId: string): WaitingState {
+  const pane = useSessionStore.getState().enginePanes.get(tabId)
+  const inst = pane?.instances.find((i) => i.id === instanceId)
+  return waitingStateFromTools(inst?.permissionDenied?.tools)
 }
 
 /**
@@ -360,8 +360,34 @@ export function isAnyEngineInstanceRunning(tabId: string): boolean {
   const pane = s.enginePanes.get(tabId)
   if (!pane || pane.instances.length === 0) return false
   for (const inst of pane.instances) {
-    const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
+    const state = inst.statusFields?.state
     if (state === 'running' || state === 'connecting' || state === 'starting') return true
+  }
+  return false
+}
+
+/**
+ * Check whether any engine instance under a tab has running dispatched
+ * background agents. Sibling to `isAnyEngineInstanceRunning` — folds
+ * across `enginePanes` instances and reads per-instance entries from
+ * `engineAgentStates`. This is the data source for the "awaiting
+ * children" yellow pulsing dot on the parent tab pill and for the
+ * action-layer guard in `closeTab` that hard-blocks tab close while
+ * background agents are still executing.
+ *
+ * NOTE: Reads from `useSessionStore.getState()` — not reactive on its
+ * own. Callers in React components must subscribe to
+ * `engineAgentStates` so the component re-renders when child agents
+ * start or finish (e.g. via `useSessionStore((s) => s.engineAgentStates)`).
+ */
+export function anyEngineInstanceHasRunningChildren(tabId: string): boolean {
+  const s = useSessionStore.getState()
+  const pane = s.enginePanes.get(tabId)
+  if (!pane || pane.instances.length === 0) return false
+  for (const inst of pane.instances) {
+    for (const a of inst.agentStates) {
+      if (a.status === 'running') return true
+    }
   }
   return false
 }
@@ -387,7 +413,18 @@ export function getTabStatusColor(
   } else if (waitingState === 'question') {
     bg = colors.infoText; glow = true; glowColor = colors.tabGlowQuestion
   } else if (tab.status === 'connecting' || tab.status === 'running' || (tab.isEngine && isAnyEngineInstanceRunning(tab.id))) {
+    // Orange "foreground running" wins over yellow "background only" —
+    // the orchestrator's own activity is the strongest signal. Yellow
+    // "awaiting children" fires below for the case where orchestrator
+    // is idle but dispatched agents are still executing.
     bg = colors.statusRunning; pulse = true
+  } else if (tab.isEngine && anyEngineInstanceHasRunningChildren(tab.id)) {
+    // Yellow "awaiting children" — orchestrator idle, dispatched
+    // background agents still running. Visually distinct from the
+    // orange running state so users can tell at a glance whether
+    // foreground or background work is in flight. Glow uses the
+    // matching amber tint so the rim around the pill stays in palette.
+    bg = colors.statusWaitingChildren; pulse = true; glow = true; glowColor = colors.statusWaitingChildrenGlow
   } else if (tab.bashExecuting) {
     bg = colors.statusBash; pulse = true; glow = true; glowColor = colors.statusBashGlow
   } else if (tab.hasUnread) {

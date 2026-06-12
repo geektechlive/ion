@@ -139,13 +139,13 @@ Optional (harness opt-in): TaskCreate, TaskList, TaskGet, TaskStop.
 
 ## Hooks
 
-67 total: 13 lifecycle + 6 session + 2 pre-action + 2 early-stop + 7 content + 14 per-tool + 3 context + 3 permission + 1 file + 1 workspace + 2 task + 2 elicitation + 4 plan-mode/system-inject + 1 context-inject + 3 capability + 4 extension-lifecycle.
+The engine exposes a large hook surface for extensions. The canonical reference with every hook name, payload shape, and dispatch pattern is [`docs/hooks/reference.md`](../docs/hooks/reference.md). Do not maintain a hook count or category list here; the reference doc is the single source of truth.
 
-The `before_plan_mode_enter`, `before_plan_mode_exit`, `system_inject`, `before_early_stop_decision`, `early_stop_continued`, `before_provider_request`, and `workspace_file_changed` hooks are recent additions; consult `docs/hooks/reference.md` for the canonical breakdown and per-hook payload shapes.
+Key behavioral patterns for agents working with hooks:
 
-Extension-lifecycle hooks (`extension_respawned`, `turn_aborted`, `peer_extension_died`, `peer_extension_respawned`) fire on auto-respawn. Auto-respawn is post-run only; mid-turn deaths defer to `handleRunExit`. Strike budget: 3 in 60s, reset after 2min healthy. Payloads: `docs/hooks/reference.md`.
-
-The TypeScript SDK runtime automatically unwraps `_payload` wrappers before invoking hook handlers. The engine cannot embed bare strings (or other non-object values) directly in the JSON-RPC params map, so it wraps them as `{_payload: value}`. The SDK detects the single-key `_payload` shape and passes the unwrapped value to the handler. Extension code that handles `before_prompt` or any other hook with a string payload receives the bare string, not the wrapper object. This unwrapping is transparent to extension authors but matters when debugging raw RPC frames or writing a custom SDK implementation.
+- Extension-lifecycle hooks (`extension_respawned`, `turn_aborted`, `peer_extension_died`, `peer_extension_respawned`) fire on auto-respawn. Auto-respawn is post-run only; mid-turn deaths defer to `handleRunExit`. Strike budget: 3 in 60s, reset after 2min healthy.
+- The `before_*` hooks use last-writer-wins merge semantics across multiple handlers. A handler that returns nil abstains.
+- The TypeScript SDK runtime automatically unwraps `_payload` wrappers before invoking hook handlers. The engine wraps bare strings (and other non-object values) as `{_payload: value}` for JSON-RPC transport. The SDK detects this shape and passes the unwrapped value to the handler. This is transparent to extension authors but matters when debugging raw RPC frames or writing a custom SDK.
 
 ## Conventions
 

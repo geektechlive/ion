@@ -7,6 +7,7 @@ export type GroupedItem =
   | { kind: 'assistant'; message: Message }
   | { kind: 'system'; message: Message }
   | { kind: 'harness'; message: Message; bootstrapCollapsedCount?: number }
+  | { kind: 'intercept'; message: Message }
   | { kind: 'tool-group'; messages: Message[] }
   | { kind: 'agent-turn'; tools: Message[]; assistantMessages: Message[]; isActive: boolean }
   | { kind: 'compaction'; message: Message }
@@ -30,8 +31,6 @@ interface GroupOptions {
 export function groupMessages(messages: Message[], opts?: GroupOptions): GroupedItem[] {
   const includeUser = opts?.includeUser ?? true
   const hidden = opts?.hiddenMessages ?? HIDDEN_MESSAGES
-
-  console.log(`[ENGINE-BOOTSTRAP] groupMessages entry total=${messages.length}`)
 
   if (opts?.unifiedTurnView) {
     return groupMessagesUnified(messages, includeUser, hidden)
@@ -59,9 +58,6 @@ export function groupMessages(messages: Message[], opts?: GroupOptions): Grouped
       message: representative,
       bootstrapCollapsedCount: suppressed > 0 ? suppressed : undefined,
     }
-    console.log(
-      `[ENGINE-BOOTSTRAP] flush run count=${bootstrapBuf.length} kept=${representative.id} suppressed=${suppressed}`
-    )
     result.push(item)
     totalRunsFlushed++
     totalSuppressed += suppressed
@@ -82,8 +78,10 @@ export function groupMessages(messages: Message[], opts?: GroupOptions): Grouped
         flushBootstrap()
         result.push({ kind: 'assistant', message: msg })
       } else if (msg.role === 'harness') {
-        if ((msg.content || '').startsWith(BOOTSTRAP_PREFIX)) {
-          console.log(`[ENGINE-BOOTSTRAP] enqueue id=${msg.id} buf=${bootstrapBuf.length + 1}`)
+        if (msg.interceptLevel) {
+          flushBootstrap()
+          result.push({ kind: 'intercept', message: msg })
+        } else if ((msg.content || '').startsWith(BOOTSTRAP_PREFIX)) {
           bootstrapBuf.push(msg)
         } else {
           flushBootstrap()
@@ -101,9 +99,6 @@ export function groupMessages(messages: Message[], opts?: GroupOptions): Grouped
   flushTools()
   flushBootstrap()
 
-  console.log(
-    `[ENGINE-BOOTSTRAP] groupMessages done runs=${totalRunsFlushed} suppressed=${totalSuppressed} output=${result.length}`
-  )
   return result
 }
 
@@ -125,9 +120,6 @@ function groupMessagesUnified(
     if (bootstrapBuf.length === 0) return
     const suppressed = bootstrapBuf.length - 1
     const representative = bootstrapBuf[bootstrapBuf.length - 1]
-    console.log(
-      `[ENGINE-BOOTSTRAP] flush run count=${bootstrapBuf.length} kept=${representative.id} suppressed=${suppressed}`
-    )
     result.push({
       kind: 'harness',
       message: representative,
@@ -171,8 +163,11 @@ function groupMessagesUnified(
       flushBootstrap()
       turnAssistant.push(msg)
     } else if (msg.role === 'harness') {
-      if ((msg.content || '').startsWith(BOOTSTRAP_PREFIX)) {
-        console.log(`[ENGINE-BOOTSTRAP] enqueue id=${msg.id} buf=${bootstrapBuf.length + 1}`)
+      if (msg.interceptLevel) {
+        flushTurn()
+        flushBootstrap()
+        result.push({ kind: 'intercept', message: msg })
+      } else if ((msg.content || '').startsWith(BOOTSTRAP_PREFIX)) {
         bootstrapBuf.push(msg)
       } else {
         flushTurn()
@@ -193,9 +188,6 @@ function groupMessagesUnified(
   flushTurn()
   flushBootstrap()
 
-  console.log(
-    `[ENGINE-BOOTSTRAP] groupMessages(unified) done runs=${totalRunsFlushed} suppressed=${totalSuppressed} output=${result.length}`
-  )
   return result
 }
 

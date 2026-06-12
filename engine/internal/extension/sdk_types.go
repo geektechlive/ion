@@ -19,6 +19,11 @@ type Context struct {
 	// of a module-level `Map` to keep per-session state across hook calls.
 	SessionKey string
 
+	// ConversationID is the durable conversation identity for this session.
+	// Unlike SessionKey, this ID is stable across engine restarts and
+	// reattaches. Empty when no conversation is active.
+	ConversationID string
+
 	Cwd    string
 	Model  *ModelRef
 	Config *ExtensionConfig
@@ -174,6 +179,105 @@ type Context struct {
 	//
 	// Nil when the session has no extension wiring (rare; defensive guard).
 	LLMCall func(opts LLMCallOpts) (*LLMCallResult, error)
+
+	// Resource subsystem — producer side. Extensions declare resource
+	// kinds they produce, publish items, and register query handlers
+	// that respond when clients subscribe.
+	//
+	// DeclareResource registers this extension as the producer for a
+	// resource kind on the session's broker. One producer per kind.
+	DeclareResource func(decl types.ResourceDeclaration) error
+
+	// PublishResource publishes a create/update/delete/mark_read delta
+	// to all subscribers of the given kind. The broker fans out the
+	// delta to every active subscription.
+	PublishResource func(kind string, delta types.ResourceDelta) error
+
+	// HandleResourceQuery registers a query handler for the given kind.
+	// When a client subscribes, the broker calls this handler to get the
+	// initial snapshot of items matching the subscription filter.
+	HandleResourceQuery func(kind string, handler func(types.ResourceFilter) ([]types.ResourceItem, error))
+
+	// Notify sends a push notification through the engine's notification
+	// pipeline. The engine formats the payload and routes it through
+	// the relay's push channel. Extensions never speak relay protocol
+	// directly. Notifications are signals, not payloads — they carry
+	// enough to identify the resource and surface it to the user, not
+	// the full content.
+	Notify func(opts types.NotifyOpts) error
+
+	// Intercept emits an engine_intercept event on the target session's stream.
+	// The engine performs no routing beyond delivering the event; clients decide
+	// how to render and whether to act on the Level hint. This is a
+	// fire-and-forget signal — the engine does not track intercept state.
+	// The extension's name is attached as InterceptSource by the engine;
+	// extensions cannot set it themselves.
+	Intercept func(opts InterceptOpts) error
+
+	// ListSessions returns info about all active sessions in the engine.
+	// Extensions use this to discover other sessions of the same extension
+	// type for cross-session notification targeting. The engine returns
+	// all sessions; the extension filters by ExtensionName on its side.
+	ListSessions func() ([]SessionListEntry, error)
+
+	// SendToSession sends a structured message to another session of the
+	// same extension type. The target session must have a session_message
+	// hook registered; if not, the engine returns an error. Same extension
+	// type only — the engine enforces this by comparing extension names.
+	SendToSession func(targetKey string, kind string, payload map[string]interface{}) error
+
+	// RunOnceCheck coordinates cross-instance dedup for ctx.runOnce.
+	// Returns (execute=true, "") when this instance wins the dedup check.
+	// Returns (execute=false, reason) when another instance is running or
+	// the operation was run recently enough to be debounced.
+	// reason values: "in_progress", "debounced", "already_ran"
+	RunOnceCheck func(operationID string, debounceMs int64) (execute bool, reason string)
+
+	// RunOnceComplete records the outcome of a runOnce operation.
+	// failed=true releases the lock without updating lastRun so the next
+	// instance can retry immediately instead of waiting for debounce expiry.
+	RunOnceComplete func(operationID string, failed bool)
+}
+
+// SessionListEntry describes a session as returned by ListSessions.
+// Mirrors session.SessionInfo but lives in the extension package to
+// avoid a circular dependency.
+type SessionListEntry struct {
+	Key            string `json:"key"`
+	HasActiveRun   bool   `json:"hasActiveRun"`
+	ExtensionName  string `json:"extensionName,omitempty"`
+	ConversationID string `json:"conversationId,omitempty"`
+}
+
+// InterceptOpts configures an engine_intercept signal event. The engine
+// routes the event to the target session (or the caller's session when
+// TargetSessionKey is empty) and attaches no further semantics. Clients
+// decide how to render and whether to act on the Level hint.
+type InterceptOpts struct {
+	// Level is a client hint about severity:
+	//   "banner"   — informational, non-disruptive
+	//   "redirect" — urgent, client may abort + re-prompt
+	// The engine does not validate or branch on this value.
+	Level string `json:"level"`
+
+	// Title is a short headline. Required.
+	Title string `json:"title"`
+
+	// Message is the body content. For "redirect" level, clients may use
+	// this as the injected user prompt if they choose to redirect.
+	Message string `json:"message"`
+
+	// TargetSessionKey identifies which session receives the event.
+	// When empty, the event emits on the caller's own session.
+	TargetSessionKey string `json:"targetSessionKey,omitempty"`
+
+	// Metadata is an opaque map forwarded to clients unchanged.
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+
+	// Source is set by the engine from the host's extension name before
+	// the event is emitted. Extensions cannot set this field directly;
+	// the json:"-" tag ensures it is never deserialized from extension RPC.
+	Source string `json:"-"`
 }
 
 // DispatchAgentOpts configures an engine-native agent dispatch.
@@ -445,10 +549,11 @@ type ExtensionConfig struct {
 
 // ToolDefinition describes a tool registered by an extension.
 type ToolDefinition struct {
-	Name        string
-	Description string
-	Parameters  map[string]interface{}
-	Execute     func(params interface{}, ctx *Context) (*types.ToolResult, error)
+	Name         string
+	Description  string
+	Parameters   map[string]interface{}
+	PlanModeSafe bool
+	Execute      func(params interface{}, ctx *Context) (*types.ToolResult, error)
 }
 
 // CommandDefinition describes a slash command registered by an extension.

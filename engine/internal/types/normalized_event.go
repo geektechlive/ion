@@ -22,11 +22,13 @@ const (
 	EventPermissionRequest = "permission_request"
 	EventPlanModeChanged   = "plan_mode_changed"
 	EventPlanProposal      = "plan_proposal"
+	EventPlanModeAutoExit  = "plan_mode_auto_exit"
 	EventStreamReset       = "stream_reset"
 	EventCompacting        = "compacting"
 	EventToolStalled       = "tool_stalled"
 	EventSteerInjected     = "steer_injected"
 	EventModelFallback     = "model_fallback"
+	EventRunStalled        = "run_stalled"
 )
 
 // NormalizedEventData is the interface satisfied by all canonical event variants.
@@ -101,6 +103,8 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &PlanModeChangedEvent{}
 	case EventPlanProposal:
 		target = &PlanProposalEvent{}
+	case EventPlanModeAutoExit:
+		target = &PlanModeAutoExitEvent{}
 	case EventStreamReset:
 		target = &StreamResetEvent{}
 	case EventCompacting:
@@ -111,6 +115,8 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &SteerInjectedEvent{}
 	case EventModelFallback:
 		target = &ModelFallbackEvent{}
+	case EventRunStalled:
+		target = &RunStalledEvent{}
 	default:
 		return fmt.Errorf("unknown normalized event type: %q", peek.Type)
 	}
@@ -320,6 +326,61 @@ type PlanProposalEvent struct {
 
 func (PlanProposalEvent) eventType() string { return EventPlanProposal }
 
+// PlanModeAutoExitEvent signals that the engine synthesized an
+// ExitPlanMode call at end-of-turn because the model failed to emit one
+// on its own. Sibling to PlanProposalEvent (which fires when the model
+// itself calls ExitPlanMode); both surface the plan-approval card to
+// consumers, but PlanModeAutoExitEvent additionally tells consumers
+// that this exit was engine-driven rather than model-driven.
+//
+// Consumers may use this to:
+//   - distinguish "model exited cleanly" from "engine recovered the
+//     stuck-in-plan-mode failure mode" for telemetry;
+//   - render a subtle UI hint that the synthesis fired (e.g. "Plan
+//     surfaced automatically — review carefully");
+//   - feed back into prompt-quality dashboards that track how often
+//     the model misroutes plan exit.
+//
+// Emission order during synthesis:
+//  1. PlanModeAutoExitEvent (this event, identifies the synthesized
+//     exit)
+//  2. PlanProposalEvent{Kind:"exit"} (same first-class workflow signal
+//     as model-driven exits)
+//  3. TaskCompleteEvent with the synthesized PermissionDenial in
+//     PermissionDenials so legacy consumers keying off the denial path
+//     still see the approval card without changes.
+//
+// The event ships off by default in the sense that it cannot fire
+// unless the engine is in plan mode AND the synthesis safety net is
+// enabled (LimitsConfig.PlanModeAutoExitOnEndTurn /
+// RunOptions.PlanModeAutoExit), so consumers that opt out of the
+// synthesis never see this event.
+type PlanModeAutoExitEvent struct {
+	// SessionID is the engine session ID for this run. Empty only in
+	// pathological cases where the run reaches synthesis without an
+	// assigned session.
+	SessionID string `json:"sessionId,omitempty"`
+	// RunID is the engine-issued request ID for this run.
+	RunID string `json:"runId,omitempty"`
+	// StopReason is the provider stop reason ("end_turn" or "stop")
+	// that triggered the synthesis. Other stop reasons never reach
+	// this path.
+	StopReason string `json:"stopReason"`
+	// PlanFilePath is the resolved plan file path the synthesized
+	// PermissionDenial references. Mirrors PlanProposalEvent.PlanFilePath.
+	PlanFilePath string `json:"planFilePath,omitempty"`
+	// PlanSlug is the human-readable identifier portion of the plan
+	// file path. See PlanSlugFromPath.
+	PlanSlug string `json:"planSlug,omitempty"`
+	// Reason is the human-readable reason recorded on the synthesized
+	// PermissionDenial. Defaults to "engine-synthesized: run ended in
+	// plan mode without ExitPlanMode call" but may be overridden by a
+	// before_plan_mode_auto_exit hook handler.
+	Reason string `json:"reason,omitempty"`
+}
+
+func (PlanModeAutoExitEvent) eventType() string { return EventPlanModeAutoExit }
+
 // PlanSlugFromPath extracts the human-readable slug portion of a plan
 // file path: the basename minus the ".md" extension. Empty path → "".
 //
@@ -395,6 +456,42 @@ type ToolStalledEvent struct {
 }
 
 func (ToolStalledEvent) eventType() string { return EventToolStalled }
+
+// RunStalledEvent fires when the engine watchdog detects that an active
+// run has made no progress (no provider stream events, no tool results,
+// no turn boundaries) for longer than the configured run-stall threshold
+// and cancels the run as a safety backstop. Emitted exactly once per
+// stalled run, immediately before the engine cancels the run's context.
+//
+// This event is *advisory*: the authoritative completion signal is the
+// follow-up TaskCompleteEvent (with a non-zero exit code) plus the
+// emitExit call that fires after context cancellation propagates. A
+// consumer that ignores RunStalledEvent entirely still sees the run
+// reach a terminal state through the normal exit pipeline; the event
+// exists so consumers that want to render "stalled" distinctly from
+// "errored" (e.g. a watchdog icon vs. a generic error toast) can do so.
+//
+// The watchdog is the engine's last line of defense against subsystems
+// that block indefinitely on a channel or syscall outside the reach of
+// HTTP/2 pings or per-tool timeouts. See
+// engine/internal/backend/runloop_watchdog.go for the implementation
+// and the threshold default. Headless harnesses receive the event in
+// the JSON stream and may abort, retry, notify, or ignore.
+type RunStalledEvent struct {
+	// StalledDuration is the elapsed time (seconds) since the last
+	// recorded progress event on this run. Equal to or greater than
+	// the configured run-stall threshold at emission time.
+	StalledDuration float64 `json:"stalledDuration"`
+	// LastActivity is a short human-readable description of the most
+	// recent progress event observed (e.g. "provider stream chunk",
+	// "tool result", "turn boundary"). Optional — included for
+	// diagnostics so an operator reading the event stream can tell
+	// where progress stopped without cross-referencing the engine
+	// log. Empty string is permitted when no description is available.
+	LastActivity string `json:"lastActivity,omitempty"`
+}
+
+func (RunStalledEvent) eventType() string { return EventRunStalled }
 
 // SteerInjectedEvent is emitted when a mid-turn steer message is injected into
 // the conversation before the next LLM call. Clients can use this to confirm

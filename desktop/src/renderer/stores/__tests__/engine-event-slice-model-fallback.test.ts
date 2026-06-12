@@ -6,7 +6,7 @@
  * fell back to the configured `defaultModel`. The desktop renderer's
  * policy (one possible consumer choice — see CLAUDE.md § "The
  * typed-event corollary") is to display a ⚠ glyph on the affected
- * EngineStatusBar instance pill until the next idle transition.
+ * EngineTabStrip pill until the next idle transition.
  *
  * This test pins:
  *
@@ -50,20 +50,19 @@ function buildHarness() {
       historicalSessionIds: [],
     }],
     activeTabId: 'tab1',
-    engineAgentStates: new Map(),
-    engineStatusFields: new Map(),
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    engineMessages: new Map(),
-    engineDraftInputs: new Map(),
-    engineModelOverrides: new Map(),
-    engineConversationIds: new Map(),
-    enginePanes: new Map(),
-    enginePermissionDenied: new Map(),
     engineModelFallbacks: new Map(),
+    enginePanes: new Map([
+      ['tab1', { instances: [
+        { id: 'inst1', label: 'inst1', messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null },
+        { id: 'inst-a', label: 'inst-a', messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null },
+        { id: 'inst-b', label: 'inst-b', messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null },
+      ], activeInstanceId: 'inst1' }],
+    ]),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial

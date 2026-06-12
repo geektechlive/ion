@@ -77,6 +77,18 @@ describe('TC-005: non-standard model IDs', () => {
   })
 })
 
+// ─── TC-005b: Single-version Claude models ───
+
+describe('TC-005b: single-version claude model IDs', () => {
+  it('returns "Fable 5" for claude-fable-5', () => {
+    expect(getModelDisplayLabel('claude-fable-5')).toBe('Fable 5')
+  })
+
+  it('returns "Fable 5 (1M)" for claude-fable-5[1m]', () => {
+    expect(getModelDisplayLabel('claude-fable-5[1m]')).toBe('Fable 5 (1M)')
+  })
+})
+
 // ─── TC-006: Non-1m bracket content stripped without annotation ───
 
 describe('TC-006: non-1m bracket content is stripped without annotation', () => {

@@ -7,34 +7,57 @@ import { useSessionStore } from '../stores/sessionStore'
 import type { EngineInstance } from '../../shared/types'
 import { getEngineInstanceWaitingState } from './TabStripShared'
 import { Tooltip } from './git/Tooltip'
+import { EngineInstanceCloseConfirmDialog } from './EngineInstanceCloseConfirmDialog'
 
 interface Props {
   tabId: string
 }
 
-export function EngineStatusBar({ tabId }: Props) {
+/**
+ * Engine sub-tab strip — top-of-view tab strip listing the active tab's
+ * engine instances (sub-conversations) as draggable pills.
+ *
+ * This is a TAB STRIP, not a status bar. It owns its own outer 28px-high
+ * container slab (border-bottom, container-bg) because it lives at the
+ * top of `EngineView` above the conversation area, mirroring the
+ * positioning of `TerminalTabStrip` at the top of `TerminalPanel` and
+ * the main app `TabStrip` at the top of the window.
+ *
+ * iOS counterpart: `EngineInstanceBar.swift` (same role, same data).
+ *
+ * Behavior:
+ * - Drag-to-reorder via framer-motion `Reorder.Group`
+ * - Double-click to rename
+ * - Per-instance status dot (waiting=`question`/`plan-ready` steady glow,
+ *   `running` pulse, otherwise nothing)
+ * - Model-fallback ⚠ with tooltip showing requested vs. fallback model
+ * - Right-click → "Move to" context menu listing sibling engine tabs
+ * - Close (✕) opens the centered confirmation dialog before destroying
+ *   the instance (and possibly the parent tab if it's the last instance)
+ * - Auto-scroll-into-view when the active instance changes
+ * - Trailing `+` button adds a new engine instance to this tab
+ */
+export function EngineTabStrip({ tabId }: Props) {
   const colors = useColors()
   const pane = useSessionStore((s) => s.enginePanes.get(tabId))
   const instances = pane?.instances || []
   const activeId = pane?.activeInstanceId || null
   const tabs = useSessionStore((s) => s.tabs)
-  // Subscribe to enginePermissionDenied so the per-instance status dot
-  // re-renders when this tab's instances acquire or clear a pending
-  // AskUserQuestion / ExitPlanMode denial. The map identity changes on
-  // every write in engine-event-slice.ts.
-  useSessionStore((s) => s.enginePermissionDenied)
-  // Subscribe to engineStatusFields and project it into a per-instance
-  // {instanceId → state} map so the renderTab closure below can read
-  // each pill's running-state without calling hooks inside .map().
-  // engine-event-slice.ts replaces the entry for `${tabId}:${instanceId}`
-  // on every engine_status event, so the map identity changes on every
-  // status tick and React re-runs this selector. We use useShallow so
-  // we don't re-render unless the {id, state} pairs actually change.
+  // Subscribe to enginePanes so the per-instance status dot re-renders when
+  // permissionDenied or statusFields on any instance changes. Both fields now
+  // live on the instance in enginePanes — identity changes on every dual-write.
+  // The `pane` selector above already does this; keeping a named comment here
+  // so it's clear we no longer need separate subscriptions to the removed Maps.
+
+  // Project per-instance running state from enginePanes instances so the
+  // renderTab closure can read each pill's state without calling hooks inside
+  // .map(). Instance statusFields is set by engine-event-status.ts on every
+  // engine_status event. useShallow prevents re-render when pairs don't change.
   const engineStateByInstance = useSessionStore(
     useShallow((s) => {
       const out = new Map<string, string>()
-      for (const inst of pane?.instances || []) {
-        const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
+      for (const inst of s.enginePanes.get(tabId)?.instances || []) {
+        const state = inst.statusFields?.state
         if (state) out.set(inst.id, state)
       }
       return out
@@ -77,6 +100,13 @@ export function EngineStatusBar({ tabId }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editLabel, setEditLabel] = useState('')
   const [contextMenu, setContextMenu] = useState<{ instId: string; x: number; y: number } | null>(null)
+  // Pending sub-tab close confirmation. The X button on a sub-tab pill
+  // sets this; the EngineInstanceCloseConfirmDialog (rendered at the
+  // bottom of this component) reads it and gates the actual
+  // removeEngineInstance call behind a modal pop-up. We keep the id only
+  // and resolve the label/last-instance flag at render time so we don't
+  // hold stale references if the underlying instance list changes.
+  const [confirmingCloseInstId, setConfirmingCloseInstId] = useState<string | null>(null)
 
   const startRename = (inst: EngineInstance) => {
     setEditingId(inst.id)
@@ -107,7 +137,7 @@ export function EngineStatusBar({ tabId }: Props) {
     // independent sub-conversations, so the dot is scoped to whichever
     // instance has the pending denial. The parent-tab pill in TabStrip
     // bubbles "any instance waiting" via getWaitingState().
-    const waitingState = getEngineInstanceWaitingState(`${tabId}:${inst.id}`)
+    const waitingState = getEngineInstanceWaitingState(tabId, inst.id)
     // Per-instance running indicator. When an engine instance has an
     // active run in flight, surface that on its inner pill so users
     // with multiple engine conversations in one tab can see at a glance
@@ -227,11 +257,18 @@ export function EngineStatusBar({ tabId }: Props) {
             </Tooltip>
           )
         })()}
-        {/* Close button */}
+        {/* Close button. Sets pending-close state so the
+            EngineInstanceCloseConfirmDialog (rendered below) can confirm
+            the destructive action via a centered modal. We deliberately
+            do NOT call removeEngineInstance directly here — closing a
+            sub-tab is just as destructive as closing the parent tab (and
+            removing the last instance closes the parent tab too via
+            engine-slice.ts), so a stray click on a tiny icon should not
+            be enough to lose work. */}
         <button
           data-ion-ui
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); useSessionStore.getState().removeEngineInstance(tabId, inst.id) }}
+          onClick={(e) => { e.stopPropagation(); setConfirmingCloseInstId(inst.id) }}
           style={{
             background: 'none',
             border: 'none',
@@ -250,6 +287,12 @@ export function EngineStatusBar({ tabId }: Props) {
 
   return (
     <>
+      {/* Top-of-view tab strip slab. Mirrors `TerminalTabStrip` and the
+          main app `TabStrip`: fixed 28px height, container-bg fill, a
+          subtle bottom border to separate the strip from the
+          conversation area below. The inner Reorder.Group is
+          horizontally scrollable with a fade mask on the right edge so
+          a tab with many engine instances stays usable. */}
       <div
         data-ion-ui
         style={{
@@ -264,48 +307,48 @@ export function EngineStatusBar({ tabId }: Props) {
         }}
       >
         <div style={{ position: 'relative', minWidth: 0, flex: 1 }}>
-          <Reorder.Group
-            as="div"
-            axis="x"
-            values={instances}
-            onReorder={(reordered) => useSessionStore.getState().reorderEngineInstances(tabId, reordered)}
-            ref={scrollRef}
-            onWheel={onWheel}
+        <Reorder.Group
+          as="div"
+          axis="x"
+          values={instances}
+          onReorder={(reordered) => useSessionStore.getState().reorderEngineInstances(tabId, reordered)}
+          ref={scrollRef}
+          onWheel={onWheel}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            overflowX: 'auto',
+            minWidth: 0,
+            scrollbarWidth: 'none',
+            maskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
+            listStyle: 'none',
+            padding: 0,
+            margin: 0,
+          }}
+        >
+          {instances.map(renderTab)}
+          {/* Add instance button */}
+          <button
+            data-ion-ui
+            onClick={() => useSessionStore.getState().addEngineInstance(tabId)}
+            title="New engine instance"
             style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 4px',
+              cursor: 'pointer',
+              color: colors.textTertiary,
               display: 'flex',
               alignItems: 'center',
-              gap: 2,
-              overflowX: 'auto',
-              minWidth: 0,
-              scrollbarWidth: 'none',
-              maskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
-              WebkitMaskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
-              listStyle: 'none',
-              padding: 0,
-              margin: 0,
+              borderRadius: 4,
+              flexShrink: 0,
             }}
           >
-            {instances.map(renderTab)}
-            {/* Add instance button */}
-            <button
-              data-ion-ui
-              onClick={() => useSessionStore.getState().addEngineInstance(tabId)}
-              title="New engine instance"
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: '2px 4px',
-                cursor: 'pointer',
-                color: colors.textTertiary,
-                display: 'flex',
-                alignItems: 'center',
-                borderRadius: 4,
-                flexShrink: 0,
-              }}
-            >
-              <Plus size={12} />
-            </button>
-          </Reorder.Group>
+            <Plus size={12} />
+          </button>
+        </Reorder.Group>
         </div>
       </div>
       {/* Context menu: Move to another engine tab */}
@@ -356,6 +399,38 @@ export function EngineStatusBar({ tabId }: Props) {
           ))}
         </div>
       )}
+      {/* Close-instance confirmation modal. Rendered here (not inside
+          the Reorder.Item) so the dialog markup is outside the small
+          draggable pill — keeps the modal lifecycle decoupled from
+          instance reorders and avoids portal-anchor surprises. The
+          dialog re-resolves the instance from `instances` on every
+          render so a concurrent removal or rename doesn't strand the
+          modal with stale data. */}
+      {(() => {
+        if (!confirmingCloseInstId) return null
+        const inst = (pane?.instances || []).find((i) => i.id === confirmingCloseInstId)
+        if (!inst) {
+          // Instance vanished (race with a remote removal, tab close,
+          // etc.). Drop the pending state so we don't render an empty
+          // dialog on the next paint.
+          return null
+        }
+        const parentTab = tabs.find((t) => t.id === tabId)
+        const parentTitle = parentTab?.customTitle || parentTab?.title || 'engine tab'
+        const isLast = (pane?.instances.length || 0) <= 1
+        return (
+          <EngineInstanceCloseConfirmDialog
+            instanceLabel={inst.label}
+            tabTitle={parentTitle}
+            isLastInstance={isLast}
+            onConfirm={() => {
+              useSessionStore.getState().removeEngineInstance(tabId, confirmingCloseInstId)
+              setConfirmingCloseInstId(null)
+            }}
+            onCancel={() => setConfirmingCloseInstId(null)}
+          />
+        )
+      })()}
     </>
   )
 }

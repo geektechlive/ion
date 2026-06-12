@@ -25,6 +25,15 @@ extension SessionViewModel {
             DiagnosticLog.log("SNAP: connected (was \(connectionState))")
             connectionState = .connected
             cancelReconnectSafetyTimer()
+            // The transport is now proven usable (we just got a real
+            // snapshot back from the desktop), so release any commands
+            // that were deferred via `runWhenConnected` during the
+            // reconnect window — e.g. the scene-resume git refresh and
+            // focus report. Order matters: we flip state first so that
+            // a drained block which re-checks `connectionState` (or
+            // calls `runWhenConnected` again) sees `.connected` and
+            // runs inline rather than re-queueing.
+            drainPendingOnConnected()
         }
         connectionQuality.transportState = transport?.state ?? .disconnected
         if !recentDirs.isEmpty {
@@ -63,10 +72,23 @@ extension SessionViewModel {
             // queue if the user already dismissed the card on this tab.
             // The 5-second snapshot polling can re-inject stale entries
             // from the desktop's permissionDenied before it's cleared.
-            if dismissedLiveSpecialTabs.contains(tabId) {
-                merged[i].permissionQueue.removeAll {
-                    $0.toolName == "ExitPlanMode" || $0.toolName == "AskUserQuestion"
+            //
+            // Dismissals come in two scopes (see dismissSpecialPermission):
+            //   - bare tabId — CLI tabs and legacy entries without
+            //     instance identity; strips every special entry on the tab.
+            //   - "tabId:instanceId" — engine sub-tab dismissals; strips
+            //     only entries owned by that instance so a sibling
+            //     sub-tab's pending card survives the sweep.
+            merged[i].permissionQueue.removeAll { entry in
+                guard entry.toolName == "ExitPlanMode" || entry.toolName == "AskUserQuestion" else {
+                    return false
                 }
+                if dismissedLiveSpecialTabs.contains(tabId) { return true }
+                if let instanceId = entry.instanceId,
+                   dismissedLiveSpecialTabs.contains("\(tabId):\(instanceId)") {
+                    return true
+                }
+                return false
             }
 
             if let existing = tabs.first(where: { $0.id == tabId }),
@@ -148,17 +170,67 @@ extension SessionViewModel {
             }
             // Populate engine instance state from snapshot tab data
             if tab.isEngine == true, let instances = tab.engineInstances {
-                // Carry waitingState through to the local model so
-                // EngineInstanceBar can render its per-instance status
-                // dot. Desktop sends nil for no-state, "question" for
-                // AskUserQuestion, "plan-ready" for ExitPlanMode.
-                engineInstances[tab.id] = instances.map {
-                    EngineInstanceInfo(id: $0.id, label: $0.label, waitingState: $0.waitingState)
+                // Merge snapshot-projected fields onto existing instances so
+                // we preserve runtime conversation state across snapshot
+                // ticks. EngineInstanceInfo carries two flavors of state:
+                //
+                //   - Snapshot-projected (Codable): id, label, waitingState,
+                //     isRunning, runningAgentCount, modelFallback. These are
+                //     authoritative from the desktop snapshot every tick.
+                //   - Runtime-only (excluded from Codable): messages,
+                //     agentStates, statusFields, modelOverride. These are
+                //     populated by live events / loadEngineConversation and
+                //     must survive the snapshot reassignment.
+                //
+                // Previously this code did `engineInstances[tab.id] =
+                // instances.map { EngineInstanceInfo(id:label:waitingState:) }`
+                // which constructed fresh instances with default-empty
+                // runtime state — wiping messages every snapshot. That was
+                // masked by an unconditional `loadEngineConversation` call
+                // below that immediately refetched the history (and caused
+                // the every-5s flicker). With the guard in place, the wipe
+                // is no longer masked and the conversation would disappear
+                // a few seconds after open. The merge below fixes the root
+                // cause: preserve runtime state, update snapshot fields.
+                let existing = engineInstances[tab.id] ?? []
+                engineInstances[tab.id] = instances.map { snap in
+                    if var prior = existing.first(where: { $0.id == snap.id }) {
+                        prior.label = snap.label
+                        prior.waitingState = snap.waitingState
+                        prior.isRunning = snap.isRunning
+                        prior.runningAgentCount = snap.runningAgentCount
+                        prior.modelFallback = snap.modelFallback
+                        return prior
+                    }
+                    // New instance not seen before — use the snapshot value
+                    // as-is; runtime fields default to their empty values
+                    // and will be populated by loadEngineConversation /
+                    // live events.
+                    return snap
                 }
                 activeEngineInstance[tab.id] = tab.activeEngineInstanceId ?? instances.first?.id
                 ionLog.info("snapshot: engine tab \(tab.id.prefix(8)), instances=\(instances.map(\.id)), active=\(tab.activeEngineInstanceId ?? "nil")")
-                // Pre-load engine conversation history for all engine tabs
-                loadEngineConversation(tabId: tab.id)
+                // Pre-load engine conversation history for engine tabs we
+                // haven't loaded yet. Guarded against `engineConversationLoaded`
+                // so the snapshot handler — which runs on every ~5s snapshot
+                // delivery — does not re-issue a `loadEngineConversation`
+                // command for tabs that already have history. Without this
+                // guard the desktop replies with `engineConversationHistory`
+                // every snapshot, and the event handler replaces the entire
+                // `messages` array (SessionViewModel+EventHandlers.swift:256),
+                // causing the conversation view to flicker every 5s — most
+                // visible in engine/extension tabs where this code path runs.
+                // The compound-key composition matches the event handler at
+                // SessionViewModel+EventHandlers.swift:253 so the same key
+                // marks "loaded" here and is checked there.
+                let activeInstanceId = activeEngineInstance[tab.id]
+                let loadedKey = activeInstanceId.map { "\(tab.id):\($0)" } ?? tab.id
+                if !engineConversationLoaded.contains(loadedKey) {
+                    DiagnosticLog.log("SNAP: engine conv not loaded for key=\(loadedKey.prefix(16)) — firing loadEngineConversation")
+                    loadEngineConversation(tabId: tab.id)
+                } else {
+                    DiagnosticLog.log("SNAP: engine conv already loaded key=\(loadedKey.prefix(16)) — skipping")
+                }
             }
         }
         // Re-send in-flight conversation loads that may have been dropped.

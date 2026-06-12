@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useColors } from '../theme'
 import { useSessionStore } from '../stores/sessionStore'
 import { TerminalInstanceView } from './TerminalInstance'
-import { TerminalStatusBar } from './TerminalStatusBar'
+import { TerminalTabStrip } from './TerminalTabStrip'
 import { usePopoverLayer } from './PopoverLayer'
 
 interface Props {
@@ -53,7 +53,7 @@ export function TerminalBigScreen({ tabId }: Props) {
           overflow: 'hidden',
         }}
       >
-        <TerminalStatusBar tabId={tabId} />
+        <TerminalTabStrip tabId={tabId} />
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {activeInstance && (
             <TerminalInstanceView

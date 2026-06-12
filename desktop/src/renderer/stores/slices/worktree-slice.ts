@@ -87,7 +87,7 @@ export function createWorktreeSlice(set: StoreSet, get: StoreGet): Partial<State
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.id === tabId
-                ? { ...t, messages: [...t.messages, { id: `msg-${bumpMsgCounter()}`, role: 'system' as const, content: msg, timestamp: Date.now() }] }
+                ? { ...t, messages: [...(t.messages ?? []), { id: `msg-${bumpMsgCounter()}`, role: 'system' as const, content: msg, timestamp: Date.now() }] }
                 : t
             ),
           }))
@@ -101,7 +101,7 @@ export function createWorktreeSlice(set: StoreSet, get: StoreGet): Partial<State
           set((s) => ({
             tabs: s.tabs.map((t) =>
               t.id === tabId
-                ? { ...t, messages: [...t.messages, { id: `msg-${bumpMsgCounter()}`, role: 'system' as const, content: `Push failed: ${pushResult.error}`, timestamp: Date.now() }] }
+                ? { ...t, messages: [...(t.messages ?? []), { id: `msg-${bumpMsgCounter()}`, role: 'system' as const, content: `Push failed: ${pushResult.error}`, timestamp: Date.now() }] }
                 : t
             ),
           }))

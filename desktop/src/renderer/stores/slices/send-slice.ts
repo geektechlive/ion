@@ -22,7 +22,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
             bashExecuting: true,
             bashExecId: execId,
             messages: [
-              ...t.messages,
+              ...(t.messages ?? []),
               { id: nextMsgId(), role: 'user' as const, content: `! ${command}`, userExecuted: true, timestamp: now },
               { id: toolMsgId, role: 'tool' as const, content: '', toolName: 'Bash', toolInput: JSON.stringify({ command }), toolStatus: 'running' as const, userExecuted: true, timestamp: now },
             ],
@@ -47,7 +47,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
             bashExecId: null,
             hasUnread: (t.id !== activeTabId || !isExpanded) ? true : t.hasUnread,
             bashResults: [...t.bashResults, { command, stdout, stderr }],
-            messages: t.messages.map((m) =>
+            messages: (t.messages ?? []).map((m) =>
               m.id === toolMsgId
                 ? { ...m, content: outputParts.join('\n'), toolStatus: 'completed' as const }
                 : m
@@ -64,7 +64,10 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
       const resolvedPath = projectPath || (tab?.hasChosenDirectory ? tab.workingDirectory : (staticInfo?.homePath || tab?.workingDirectory || '~'))
       if (!tab) return
 
-      if (tab.status === 'connecting') return
+      if (tab.status === 'connecting') {
+        console.log(`[sendMessage] blocked: tab=${tab.id.slice(0, 8)} status=connecting, dropping prompt len=${prompt.length}`)
+        return
+      }
 
       const effectiveMode = tab.permissionMode
 
@@ -140,7 +143,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
               attachments: [],
               bashResults: [],
               messages: [
-                ...withEffectiveBase.messages,
+                ...(withEffectiveBase.messages ?? []),
                 {
                   id: nextMsgId(),
                   role: 'user' as const,
@@ -162,7 +165,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
             bashResults: [],
             permissionDenied: null,
             messages: [
-              ...withEffectiveBase.messages,
+              ...(withEffectiveBase.messages ?? []),
               {
                 id: nextMsgId(),
                 role: 'user' as const,
@@ -184,7 +187,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
       let effectiveSystemPrompt = appendSystemPrompt || undefined
       if (tab.forkedFromSessionId && !tab.conversationId) {
-        const priorMessages = tab.messages
+        const priorMessages = (tab.messages ?? [])
           .filter((m) => m.role === 'user' || m.role === 'assistant')
           .filter((m) => m.content.trim().length > 0)
         if (priorMessages.length > 0) {
@@ -235,7 +238,10 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
       const preferredModel = usePreferencesStore.getState().preferredModel
       const tab = tabs.find((t) => t.id === tabId)
       if (!tab) return
-      if (tab.status === 'connecting') return
+      if (tab.status === 'connecting') {
+        console.log(`[submitRemotePrompt] blocked: tab=${tab.id.slice(0, 8)} status=connecting, dropping prompt len=${prompt.length}`)
+        return
+      }
 
       // Cancel any pending done-group move from a prior task_complete
       const cancelledRemote = cancelDoneGroupMove(tab.id)
@@ -277,7 +283,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
               ...t,
               title,
               messages: [
-                ...t.messages,
+                ...(t.messages ?? []),
                 { id: nextMsgId(), role: 'user' as const, content: prompt, timestamp: Date.now(), source: 'remote' as const },
               ],
             }
@@ -291,7 +297,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
             title,
             permissionDenied: null,
             messages: [
-              ...t.messages,
+              ...(t.messages ?? []),
               { id: nextMsgId(), role: 'user' as const, content: prompt, timestamp: Date.now(), source: 'remote' as const },
             ],
           }
@@ -361,7 +367,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
             bashExecuting: true,
             bashExecId: execId,
             messages: [
-              ...t.messages,
+              ...(t.messages ?? []),
               { id: userMsgId, role: 'user' as const, content: `! ${command}`, userExecuted: true, timestamp: now, source: 'remote' as const },
               { id: toolMsgId, role: 'tool' as const, content: '', toolName: 'Bash', toolInput: JSON.stringify({ command }), toolStatus: 'running' as const, userExecuted: true, timestamp: now },
             ],
@@ -383,7 +389,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
               bashExecuting: false,
               bashExecId: null,
               bashResults: [...t.bashResults, { command, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }],
-              messages: t.messages.map((m) =>
+              messages: (t.messages ?? []).map((m) =>
                 m.id === toolMsgId
                   ? { ...m, content: outputParts.join('\n') || '(no output)', toolStatus: 'completed' as const }
                   : m
@@ -411,7 +417,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
               ...t,
               bashExecuting: false,
               bashExecId: null,
-              messages: t.messages.map((m) =>
+              messages: (t.messages ?? []).map((m) =>
                 m.id === toolMsgId
                   ? { ...m, content: 'IPC error: bash execution failed', toolStatus: 'completed' as const }
                   : m

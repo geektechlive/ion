@@ -52,13 +52,14 @@ export function deriveChannelId(sharedSecret: Buffer): string {
 /**
  * Encrypt a plaintext payload with AES-256-GCM.
  *
+ * Accepts a UTF-8 string or a raw Buffer (for pre-compressed payloads).
  * Returns { nonce, ciphertext } both as base64 strings.
  * The ciphertext includes the 16-byte GCM auth tag appended.
  * This matches iOS CryptoKit AES.GCM.seal() output format.
  */
-export function encrypt(plaintext: string, key: Buffer): { nonce: string; ciphertext: string } {
+export function encrypt(plaintext: string | Buffer, key: Buffer): { nonce: string; ciphertext: string } {
   const nonce = generateNonce()
-  const plaintextBuf = Buffer.from(plaintext, 'utf-8')
+  const plaintextBuf = Buffer.isBuffer(plaintext) ? plaintext : Buffer.from(plaintext, 'utf-8')
 
   const cipher = createCipheriv(CIPHER_ALG, key, nonce, { authTagLength: TAG_LENGTH })
   const encrypted = Buffer.concat([cipher.update(plaintextBuf), cipher.final()])
@@ -79,10 +80,12 @@ export function encrypt(plaintext: string, key: Buffer): { nonce: string; cipher
  * Expects ciphertext with the 16-byte auth tag appended (same format
  * as iOS CryptoKit AES.GCM.SealedBox).
  *
- * Returns the plaintext string, or null if decryption fails
- * (tampered, wrong key, or wrong nonce).
+ * Returns the raw decrypted Buffer, or null if decryption fails
+ * (tampered, wrong key, or wrong nonce). Callers inspect the first
+ * byte to determine whether the payload is compressed (0x01 prefix)
+ * or raw UTF-8 text, then call `.toString('utf-8')` as appropriate.
  */
-export function decrypt(nonceB64: string, ciphertextB64: string, key: Buffer): string | null {
+export function decrypt(nonceB64: string, ciphertextB64: string, key: Buffer): Buffer | null {
   const nonce = Buffer.from(nonceB64, 'base64')
   const combined = Buffer.from(ciphertextB64, 'base64')
 
@@ -103,8 +106,7 @@ export function decrypt(nonceB64: string, ciphertextB64: string, key: Buffer): s
   try {
     const decipher = createDecipheriv(CIPHER_ALG, key, nonce, { authTagLength: TAG_LENGTH })
     decipher.setAuthTag(tag)
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
-    return decrypted.toString('utf-8')
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()])
   } catch {
     log('Decryption failed (wrong key, tampered, or wrong nonce)')
     return null

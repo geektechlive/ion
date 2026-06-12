@@ -221,6 +221,12 @@ extension SessionViewModel {
         DiagnosticLog.log("DISCONNECT: tearing down")
         reconnectSafetyTask?.cancel()
         reconnectSafetyTask = nil
+        // Clear any commands deferred via `runWhenConnected` — a hard
+        // reset means the user is intentionally walking away from the
+        // current pairing's state (switch desktop, unpair), so resume
+        // commands waiting for the previous transport must not fire
+        // against the next one.
+        clearPendingOnConnected()
         tearDownTransport()
         wipeTransientState()
     }
@@ -277,12 +283,9 @@ extension SessionViewModel {
         terminalInstances = [:]
         activeTerminalInstance = [:]
         terminalInstanceLabels = [:]
-        engineAgentStates = [:]
-        engineStatusFields = [:]
         engineWorkingMessages = [:]
         engineDialogs = [:]
         enginePinnedPrompt = [:]
-        engineMessages = [:]
         engineConversationLoaded = []
         engineInstances = [:]
         activeEngineInstance = [:]
@@ -299,13 +302,26 @@ extension SessionViewModel {
         tabGroups = []
         connectionQuality.reset()
         connectionQuality.transportState = .disconnected
+        // Wipe resource store so stale items from the old desktop don't
+        // bleed into the new pairing. Persistence files are deleted so the
+        // next launch also starts clean for this device.
+        resourceStore.wipe()
     }
 
     // MARK: - Layout Cache
 
     /// Restore cached layout for a device so the UI shows last-known state.
     func restoreCachedLayout(for deviceId: String?) {
-        guard let deviceId, let cached = LayoutCache.load(deviceId: deviceId) else { return }
+        guard let deviceId else {
+            DiagnosticLog.log("CACHE: restoreCachedLayout skipped — no deviceId")
+            return
+        }
+        guard let cached = LayoutCache.load(deviceId: deviceId) else {
+            DiagnosticLog.log("CACHE: restoreCachedLayout miss — no cache for deviceId=\(deviceId.prefix(8))")
+            return
+        }
+        let ageSeconds = Int(Date().timeIntervalSince(cached.cachedAt))
+        DiagnosticLog.log("CACHE: restoreCachedLayout hit deviceId=\(deviceId.prefix(8)) tabs=\(cached.tabs.count) groups=\(cached.tabGroups.count) groupMode=\(cached.tabGroupMode) age=\(ageSeconds)s")
         tabs = cached.tabs
         tabIds = Set(cached.tabs.map(\.id))
         tabGroupMode = cached.tabGroupMode

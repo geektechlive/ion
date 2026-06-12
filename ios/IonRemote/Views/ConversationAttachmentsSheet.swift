@@ -48,16 +48,23 @@ private struct ExtractedAttachment: Identifiable, Hashable {
     let path: String
 
     enum AttachmentKind: String {
-        case image, file, plan
+        case image, file, plan, briefing
     }
 
     /// SF Symbol name for this attachment.
     var iconName: String {
         switch type {
-        case .plan:  return "doc.text"
-        case .image: return "photo"
-        case .file:  return "doc"
+        case .plan:     return "doc.text"
+        case .image:    return "photo"
+        case .briefing: return "book.pages"
+        case .file:     return "doc"
         }
+    }
+
+    /// For briefing entries, extract the resource ID from the `resource:<id>` path.
+    var resourceId: String? {
+        guard type == .briefing, path.hasPrefix("resource:") else { return nil }
+        return String(path.dropFirst("resource:".count))
     }
 }
 
@@ -65,7 +72,12 @@ private struct ExtractedAttachment: Identifiable, Hashable {
 
 /// Sheet that lists all attachments and plans referenced in a conversation.
 /// Scans user messages for `[Attached (image|file|plan): path]` markers,
-/// deduplicates by path, and groups into Plans and Files sections.
+/// deduplicates by path, and groups into Plans, Files, and Briefings sections.
+///
+/// Briefings are conversation-scoped resources delivered via the resource
+/// broker. The desktop includes them in the `tab_attachments` response with
+/// type="briefing" and path="resource:<id>". Content is read directly from
+/// the local ResourceStore — no additional network request is needed.
 struct ConversationAttachmentsSheet: View {
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(\.dismiss) private var dismiss
@@ -74,6 +86,7 @@ struct ConversationAttachmentsSheet: View {
     @State private var selectedPlanPath: IdentifiablePath?
     @State private var selectedFilePath: IdentifiablePath?
     @State private var imagePreview: (image: UIImage, name: String)?
+    @State private var selectedBriefing: ResourceItem?
 
     // MARK: - Computed
 
@@ -89,15 +102,16 @@ struct ConversationAttachmentsSheet: View {
         var seen = Set<String>()
         var result: [ExtractedAttachment] = []
 
-        // Desktop cache first — has the complete history
+        // Desktop cache first — has the complete history (including briefings)
         for a in desktopItems {
             guard !seen.contains(a.path) else { continue }
             seen.insert(a.path)
             let kind: ExtractedAttachment.AttachmentKind
             switch a.type {
-            case "image": kind = .image
-            case "plan":  kind = .plan
-            default:      kind = .file
+            case "image":    kind = .image
+            case "plan":     kind = .plan
+            case "briefing": kind = .briefing
+            default:         kind = .file
             }
             result.append(ExtractedAttachment(id: a.path, type: kind, name: a.name, path: a.path))
         }
@@ -116,8 +130,12 @@ struct ConversationAttachmentsSheet: View {
         attachments.filter { $0.type == .plan }
     }
 
+    private var briefings: [ExtractedAttachment] {
+        attachments.filter { $0.type == .briefing }
+    }
+
     private var files: [ExtractedAttachment] {
-        attachments.filter { $0.type != .plan }
+        attachments.filter { $0.type == .image || $0.type == .file }
     }
 
     // MARK: - Body
@@ -155,7 +173,12 @@ struct ConversationAttachmentsSheet: View {
                     AttachmentImagePreview(image: preview.image, name: preview.name)
                 }
             }
+            .sheet(item: $selectedBriefing) { item in
+                BriefingDetailView(item: item, resourceStore: viewModel.resourceStore, viewModel: viewModel)
+            }
             .task {
+                let preCacheCount = viewModel.tabAttachmentCache[tabId]?.count ?? -1
+                DiagnosticLog.log("ATTACH: AttachmentsSheet.task tabId=\(tabId.prefix(8)) cacheBeforeRequest=\(preCacheCount)")
                 viewModel.requestLoadAttachments(tabId: tabId)
             }
         }
@@ -217,6 +240,23 @@ struct ConversationAttachmentsSheet: View {
                         .textCase(nil)
                 }
             }
+
+            if !briefings.isEmpty {
+                Section {
+                    ForEach(briefings) { attachment in
+                        attachmentRow(attachment)
+                            .onTapGesture {
+                                Haptic.light()
+                                openBriefing(attachment)
+                            }
+                    }
+                } header: {
+                    Label("Briefings", systemImage: "book.pages")
+                        .foregroundStyle(.purple)
+                        .font(.caption.weight(.semibold))
+                        .textCase(nil)
+                }
+            }
         }
         .listStyle(.insetGrouped)
     }
@@ -227,18 +267,20 @@ struct ConversationAttachmentsSheet: View {
         HStack(spacing: 12) {
             Image(systemName: attachment.iconName)
                 .font(.title3)
-                .foregroundStyle(attachment.type == .plan ? .green : .secondary)
+                .foregroundStyle(attachment.type == .plan ? .green : attachment.type == .briefing ? .purple : .secondary)
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(attachment.name)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
-                Text(attachment.path)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if attachment.type != .briefing {
+                    Text(attachment.path)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
 
             Spacer()
@@ -248,6 +290,26 @@ struct ConversationAttachmentsSheet: View {
                 .foregroundStyle(.quaternary)
         }
         .contentShape(Rectangle())
+    }
+
+    // MARK: - Briefing Tap
+
+    /// Opens a briefing by looking up its ResourceItem in the local ResourceStore.
+    /// The path is `resource:<id>` — extract the ID and find the item.
+    /// `BriefingDetailView` handles on-demand content fetch if the snapshot
+    /// arrived without inline content.
+    private func openBriefing(_ attachment: ExtractedAttachment) {
+        guard let resourceId = attachment.resourceId else { return }
+
+        // Search all kinds in the resource store for this ID.
+        for items in viewModel.resourceStore.items.values {
+            if let item = items.first(where: { $0.id == resourceId }) {
+                selectedBriefing = item
+                return
+            }
+        }
+
+        DiagnosticLog.log("ATTACHMENTS: briefing resource not found in store id=\(resourceId.prefix(12))")
     }
 
     // MARK: - Image Preview
@@ -350,215 +412,5 @@ struct ConversationAttachmentsSheet: View {
         }
 
         return result
-    }
-}
-
-// MARK: - IdentifiablePath
-
-/// Wrapper to make a file path usable with `.fullScreenCover(item:)`.
-private struct IdentifiablePath: Identifiable {
-    let path: String
-    var id: String { path }
-}
-
-// MARK: - Plan Content View
-
-/// Full-screen viewer for a plan attachment.
-/// Loads content via `requestFsReadFile` and delegates rendering to `PlanFullScreenView`.
-private struct PlanContentView: View {
-    @Environment(SessionViewModel.self) private var viewModel
-    @Environment(\.dismiss) private var dismiss
-    let path: String
-
-    private var isLoading: Bool {
-        viewModel.fileContentLoading.contains(path)
-    }
-
-    private var fileResponse: FsFileContentResponse? {
-        viewModel.fileContent[path]
-    }
-
-    var body: some View {
-        Group {
-            if let response = fileResponse {
-                if let error = response.error {
-                    errorView(error)
-                } else if let content = response.content {
-                    PlanFullScreenView(content: content)
-                } else {
-                    errorView("No content available")
-                }
-            } else if isLoading {
-                loadingView
-            } else {
-                loadingView
-                    .task {
-                        viewModel.requestFsReadFile(filePath: path)
-                    }
-            }
-        }
-    }
-
-    private var loadingView: some View {
-        NavigationStack {
-            ProgressView("Loading plan…")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .navigationTitle("Plan")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { dismiss() }
-                            .fontWeight(.semibold)
-                    }
-                }
-        }
-    }
-
-    private func errorView(_ message: String) -> some View {
-        NavigationStack {
-            VStack(spacing: 12) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.largeTitle)
-                    .foregroundStyle(.secondary)
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding()
-            .navigationTitle("Plan")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - File Content View
-
-/// Full-screen viewer for a file attachment.
-/// Displays the raw content with line numbers in a monospaced font.
-private struct FileContentView: View {
-    @Environment(SessionViewModel.self) private var viewModel
-    @Environment(\.dismiss) private var dismiss
-    let path: String
-
-    private var fileName: String {
-        (path as NSString).lastPathComponent
-    }
-
-    private var isLoading: Bool {
-        viewModel.fileContentLoading.contains(path)
-    }
-
-    private var fileResponse: FsFileContentResponse? {
-        viewModel.fileContent[path]
-    }
-
-    private var isMarkdown: Bool {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        return ext == "md" || ext == "markdown" || ext == "mdx"
-    }
-
-    private var isImage: Bool {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        return ["png", "jpg", "jpeg", "gif", "svg", "webp", "ico"].contains(ext)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if let response = fileResponse {
-                    if let error = response.error {
-                        errorView(error)
-                    } else if let content = response.content {
-                        contentView(content)
-                    } else {
-                        errorView("No content available")
-                    }
-                } else if isLoading {
-                    ProgressView("Loading file…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ProgressView("Loading file…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .task {
-                            viewModel.requestFsReadFile(filePath: path)
-                        }
-                }
-            }
-            .navigationTitle(fileName)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-    }
-
-    // MARK: - Content
-
-    @ViewBuilder
-    private func contentView(_ content: String) -> some View {
-        if isMarkdown {
-            ScrollView {
-                MarkdownContentView(blocks: MarkdownFormatter.parse(content))
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } else {
-            ScrollView(.horizontal) {
-                ScrollView(.vertical) {
-                    HStack(alignment: .top, spacing: 0) {
-                        // Line number gutter
-                        let lines = content.components(separatedBy: "\n")
-                        VStack(alignment: .trailing, spacing: 0) {
-                            ForEach(1...max(lines.count, 1), id: \.self) { lineNum in
-                                Text("\(lineNum)")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.tertiary)
-                                    .frame(height: 20)
-                            }
-                        }
-                        .padding(.top, 8)
-                        .padding(.horizontal, 4)
-                        .frame(width: 40)
-                        .background(Color(.secondarySystemBackground))
-
-                        Text(content)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Error
-
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
     }
 }

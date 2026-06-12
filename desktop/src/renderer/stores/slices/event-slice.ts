@@ -1,4 +1,4 @@
-import type { TabStatus } from '../../../shared/types'
+import type { TabStatus, Message } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId, playNotificationIfHidden, totalInputTokens, scheduleDoneGroupMove } from '../session-store-helpers'
@@ -18,6 +18,8 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
         const tabs = s.tabs.map((tab) => {
           if (tab.id !== tabId) return tab
           const updated = { ...tab, lastEventAt: Date.now() }
+          // Auto-hydrate skeleton tabs that start receiving events
+          if (!updated.messages) updated.messages = []
 
           switch (event.type) {
             case 'session_init':
@@ -206,7 +208,7 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
                 for (const block of event.message.content) {
                   if (block.type === 'tool_use' && block.name) {
-                    const exists = updated.messages.find(
+                    const exists: Message | undefined = updated.messages.find(
                       (m) => m.role === 'tool' && m.toolName === block.name && !m.content
                     )
                     if (!exists) {
@@ -502,7 +504,8 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
         tabs: s.tabs.map((t) => {
           if (t.id !== tabId) return t
 
-          const lastMsg = t.messages[t.messages.length - 1]
+          const msgs = t.messages ?? []
+          const lastMsg = msgs[msgs.length - 1]
           const alreadyHasError = lastMsg?.role === 'system' && lastMsg.content.startsWith('Error:')
 
           return {
@@ -512,9 +515,9 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
             currentActivity: '',
             permissionQueue: [],
             messages: alreadyHasError
-              ? t.messages
+              ? msgs
               : [
-                  ...t.messages,
+                  ...msgs,
                   {
                     id: nextMsgId(),
                     role: 'system' as const,

@@ -78,6 +78,13 @@ export const IPC = {
   LOAD_TABS: 'ion:load-tabs',
   SAVE_TABS: 'ion:save-tabs',
 
+  // Conversation backup (user-driven export/restore zip archives)
+  CONVERSATION_EXPORT_PREVIEW: 'ion:conversation-export-preview',
+  CONVERSATION_EXPORT: 'ion:conversation-export',
+  CONVERSATION_RESTORE_PREVIEW: 'ion:conversation-restore-preview',
+  CONVERSATION_RESTORE: 'ion:conversation-restore',
+  CONVERSATION_BACKUP_PROGRESS: 'ion:conversation-backup-progress',
+
   // Session labels
   SAVE_SESSION_LABEL: 'ion:save-session-label',
   LOAD_SESSION_LABELS: 'ion:load-session-labels',
@@ -89,6 +96,9 @@ export const IPC = {
 
   // Conversation retrieval (agent child sessions)
   GET_CONVERSATION: 'ion:get-conversation',
+
+  // Batch conversation loading (all sessions in a chain in one roundtrip)
+  LOAD_CHAIN_HISTORY: 'ion:load-chain-history',
 
   // Backend mode
   GET_BACKEND: 'ion:get-backend',
@@ -227,6 +237,13 @@ export const IPC = {
   ENGINE_STOP: 'ion:engine-stop',
   ENGINE_EVENT: 'ion:engine-event',
   ENGINE_REMAP_SESSION: 'ion:engine-remap-session',
+
+  // Resource focus tracking
+  NOTIFY_TAB_FOCUS: 'ion:notify-tab-focus',
+  MARK_RESOURCE_READ: 'ion:mark-resource-read',
+  GET_READ_RESOURCE_IDS: 'ion:get-read-resource-ids',
+  GET_PERSISTED_RESOURCES: 'ion:get-persisted-resources',
+  DELETE_RESOURCE: 'ion:delete-resource',
 
   // Model & provider management
   LIST_MODELS: 'ion:list-models',

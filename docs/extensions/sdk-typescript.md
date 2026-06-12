@@ -435,6 +435,7 @@ interface ToolDef {
   name: string
   description: string
   parameters: any                    // JSON Schema
+  planModeSafe?: boolean             // if true, available during plan mode
   execute: (params: any, ctx: IonContext) => Promise<{ content: string; isError?: boolean }>
 }
 ```
@@ -655,3 +656,141 @@ interface ProcessInfo {
   startedAt: string   // ISO 8601 timestamp
 }
 ```
+
+## Resource Subsystem
+
+Extensions can declare resource collections and publish changes via the resource API. Resources flow to subscribers over the socket as `engine_resource_snapshot` and `engine_resource_delta` events.
+
+**Global resources** (extension-scoped, not tied to a session):
+
+```typescript
+const handle = ion.resources.declare({ kind: 'tasks' })
+
+// Publish a change
+handle.publish('update', { id: 'task-1', title: 'New title', conversationId: '' })
+```
+
+**Session-scoped resources** (available inside hook and command handlers via `ctx`):
+
+```typescript
+const handle = ctx.resources.declare({ kind: 'notifications' })
+handle.publish('create', { id: 'n-1', conversationId: ctx.sessionKey })
+```
+
+**Query handler** — called when a client subscribes to provide the initial snapshot:
+
+```typescript
+// Global query handler
+ion.resources.onQuery('tasks', async () => {
+  return await db.getAllTasks()  // returns ResourceItem[]
+})
+
+// Session-scoped query handler
+ctx.resources.onQuery('notifications', async () => {
+  return await db.getNotificationsForSession(ctx.sessionKey)
+})
+```
+
+`declare()` returns a `ResourceHandle`:
+
+```typescript
+interface ResourceHandle {
+  publish(op: 'create' | 'update' | 'delete' | 'mark_read', item: ResourceItem): void
+}
+```
+
+## Notifications
+
+Send a push notification through the engine/relay pipeline. Delivery to APNs (iOS) is gated on `push: true` and requires the relay to be connected.
+
+```typescript
+ctx.notify({
+  kind: 'task_complete',
+  title: 'Task finished',
+  body: 'The analysis run completed successfully.',
+  sound: true,
+})
+```
+
+**`NotifyOpts`:**
+
+| Field              | Type    | Required | Description                                                        |
+|--------------------|---------|----------|--------------------------------------------------------------------|
+| `kind`             | string  | yes      | Application-defined notification kind                             |
+| `resourceId`       | string  | no       | Resource ID the notification relates to                           |
+| `title`            | string  | yes      | Notification title                                                |
+| `body`             | string  | yes      | Notification body                                                 |
+| `sound`            | boolean | no       | Whether to play a sound on delivery                               |
+| `scope`            | string  | no       | Scope hint: `"session"` or `"global"` (default: `"session"`)      |
+| `conversationId`   | string  | no       | Conversation ID; routes to session broker when set                |
+| `targetSessionKey` | string  | no       | Send to a specific session's subscribers instead of the caller's  |
+
+## Cross-Session Messaging
+
+Extensions can send structured messages to other sessions running the same extension type. The engine enforces same-type-only; cross-type sends return an error to the caller.
+
+**List sessions:**
+
+```typescript
+const sessions = await ctx.sessions.list()
+// [{ key: 'abc-123', hasActiveRun: true, extensionName: 'my-ext', conversationId: 'conv-1' }]
+```
+
+**Send a message:**
+
+```typescript
+await ctx.sessions.send('abc-123', 'task_update', { taskId: 't-1', status: 'done' })
+```
+
+**Receive messages** — register a handler on the `session_message` hook:
+
+```typescript
+ion.on('session_message', (ctx, info) => {
+  if (info.kind === 'task_update') {
+    // React: emit an event, update local state, or ignore
+    ctx.emit({ type: 'engine_notify', message: `Task ${info.payload.taskId} is ${info.payload.status}`, level: 'info' })
+  }
+})
+```
+
+**`SessionListEntry`:**
+
+| Field           | Type    | Description                          |
+|-----------------|---------|--------------------------------------|
+| `key`           | string  | Session key                          |
+| `hasActiveRun`  | boolean | Whether a prompt is being processed  |
+| `extensionName` | string  | Name of the extension loaded         |
+| `conversationId`| string  | Conversation ID for this session     |
+
+## Intercept
+
+The intercept API emits an `engine_intercept` event on a target session's stream. The TypeScript SDK does not yet expose a convenience method for `ctx.intercept`; use the raw JSON-RPC method `ext/intercept` directly. See the [raw protocol docs](sdk-raw.md#extintercept) for the request shape.
+
+## Cross-Instance Dedup (runOnce)
+
+When multiple tabs load the same extension, `ctx.runOnce` ensures an operation runs on exactly one instance. The first instance to call wins; subsequent calls within the debounce window return immediately without executing.
+
+```typescript
+const result = await ctx.runOnce('daily-sync', { debounceMs: 60000 }, async () => {
+  const data = await fetchExternalData()
+  return data.summary
+})
+
+if (result.executed) {
+  console.log('Sync completed:', result.result)
+} else {
+  console.log('Skipped:', result.reason) // 'in_progress' | 'debounced' | 'already_ran'
+}
+```
+
+**`ctx.runOnce<T>(id, opts, fn)`**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | string | Operation identifier. Shared across all instances of this extension. |
+| `opts` | `{ debounceMs?: number }` | Minimum interval between executions in milliseconds. Default `60000` (1 minute). |
+| `fn` | `() => Promise<T>` | The operation to execute. |
+
+**Returns** `{ executed: true, result: T }` when this instance won the dedup check and `fn` completed, or `{ executed: false, reason: string }` when skipped.
+
+**Failure handling:** If `fn` throws, the lock is released immediately so the next instance can retry without waiting for the debounce window to expire.

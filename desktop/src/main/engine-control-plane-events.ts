@@ -282,6 +282,15 @@ export function handleEngineEvent(
       )
       ctx.emit('engine_early_stop_decision_request', tabId, event)
       break
+
+    case 'engine_intercept':
+      // Fire-and-forget signal: bubble up via ctx.emit so event-wiring.ts's
+      // wireSessionPlaneEvents can call handleInterceptEvent without creating
+      // a circular import through state.ts. The event carries the raw payload
+      // and tabId; the wiring layer in event-wiring.ts does the routing.
+      log(`intercept: tabId=${tabId} level=${event.interceptLevel} title=${event.interceptTitle}`)
+      ctx.emit('engine_intercept', tabId, event)
+      break
   }
 }
 
@@ -299,7 +308,15 @@ function handleStatusEvent(
       ctx.bridge.updateSessionConversationId(tabId, event.fields.sessionId)
     }
 
-    if (tab.status === 'completed' || tab.status === 'idle') {
+    if (tab.status === 'completed' || tab.status === 'idle' || tab.status === 'connecting') {
+      // 'completed' / 'idle': already synthesized task_complete for this
+      // idle transition — skip duplicates from cost-only heartbeat ticks.
+      // 'connecting': submitPrompt has been called (new prompt in flight)
+      // but the engine hasn't responded with state='running' yet. Any
+      // engine_status(idle + denials) in this window is stale — the engine
+      // is about to clear its lastPermissionDenials in prompt_dispatch.
+      // Synthesizing a task_complete here would resurrect a dismissed
+      // ExitPlanMode / AskUserQuestion card.
       log(`engine_status: skipping idle for ${tab.status} tab ${tabId}`)
       return
     }

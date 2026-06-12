@@ -8,6 +8,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
+	"github.com/dsswift/ion/engine/internal/resource"
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -20,6 +21,7 @@ type agentDiscoveryTestAccessor struct {
 }
 
 func (a *agentDiscoveryTestAccessor) SessionKey() string       { return "test-session" }
+func (a *agentDiscoveryTestAccessor) ConversationID() string   { return "" }
 func (a *agentDiscoveryTestAccessor) WorkingDirectory() string { return "/tmp" }
 func (a *agentDiscoveryTestAccessor) Emit(ev types.EngineEvent) {}
 func (a *agentDiscoveryTestAccessor) SendAbort()               {}
@@ -56,6 +58,16 @@ func (a *agentDiscoveryTestAccessor) GetPlanModeState() (bool, string) { return 
 func (a *agentDiscoveryTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string { return "" }
 func (a *agentDiscoveryTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate))  {}
 func (a *agentDiscoveryTestAccessor) EmitAgentSnapshot(_ string) {}
+func (a *agentDiscoveryTestAccessor) ResourceBroker() *resource.Broker       { return nil }
+func (a *agentDiscoveryTestAccessor) GlobalResourceBroker() *resource.Broker { return nil }
+func (a *agentDiscoveryTestAccessor) BroadcastNotification(_ types.NotifyOpts)        {}
+func (a *agentDiscoveryTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)    {}
+func (a *agentDiscoveryTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
+func (a *agentDiscoveryTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
+	return nil
+}
+func (a *agentDiscoveryTestAccessor) RunOnceCheck(_ string, _ int64) (bool, string) { return true, "" }
+func (a *agentDiscoveryTestAccessor) RunOnceComplete(_ string, _ bool)              {}
 
 // writeAgentFile creates a minimal .md agent file in dir/agents/<name>.md
 // with valid frontmatter.

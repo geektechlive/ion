@@ -3,6 +3,7 @@ import { usePreferencesStore } from '../../preferences'
 import { destroyTerminalInstance } from '../../components/TerminalPanel'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { makeLocalTab, isBlankConversationTab } from '../session-store-helpers'
+import { cleanupTabDeltas } from './engine-event-slice'
 
 export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -25,24 +26,33 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
     setPermissionMode: (mode, source) => {
       const { activeTabId } = get()
-      set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === activeTabId ? { ...t, permissionMode: mode } : t
-        ),
-      }))
-      // Engine tabs are keyed by `tabId:instanceId` in the engine.
-      // The generic setPermissionMode path uses bare tabId which
-      // silently misses the engine session. Route through the
-      // compound-key bridge path for engine tabs.
       const activeTab = get().tabs.find((t) => t.id === activeTabId)
       if (activeTab?.isEngine) {
+        // Engine tabs: write permissionMode directly onto the active instance.
         const pane = get().enginePanes.get(activeTabId)
         const instanceId = pane?.activeInstanceId
         if (instanceId) {
           const compoundKey = `${activeTabId}:${instanceId}`
+          set((s) => {
+            const enginePanes = new Map(s.enginePanes)
+            const paneInner = enginePanes.get(activeTabId)
+            if (!paneInner) return {}
+            const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
+            if (idx === -1) return {}
+            const instances = paneInner.instances.slice()
+            instances[idx] = { ...instances[idx], permissionMode: mode }
+            enginePanes.set(activeTabId, { ...paneInner, instances })
+            return { enginePanes }
+          })
           window.ion.engineSetPlanMode(compoundKey, mode === 'plan')
         }
       } else {
+        // CLI tabs: set on the parent tab as before.
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === activeTabId ? { ...t, permissionMode: mode } : t
+          ),
+        }))
         window.ion.setPermissionMode(activeTabId, mode, source)
       }
       // Auto-switch to the plan model when entering plan mode
@@ -224,10 +234,75 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
           ),
         }
       })
+      // Publish focused session key as a workspace resource so extensions
+      // can route notifications to the active tab. Fire-and-forget.
+      window.ion.notifyTabFocus(tabId)
+
+      // If skeleton tab (messages not yet loaded), load them asynchronously
+      const targetTabAfter = get().tabs.find(t => t.id === tabId)
+      if (targetTabAfter?.messages === null && targetTabAfter.conversationId) {
+        get().loadSkeletonMessages(tabId)
+      }
     },
 
     closeTab: (tabId) => {
       const closingTab = get().tabs.find((t) => t.id === tabId)
+      // ─── Action-layer guard: hard-block engine tab close while
+      // orchestrator is running OR dispatched background agents are
+      // still executing. Mirrors the X-button suppression in
+      // TabStripTabPill.tsx and exists for defense-in-depth — catches
+      // keyboard shortcuts (Cmd+W → CloseTabConfirmDialog), group-pill
+      // close paths, and any future entry point we haven't enumerated.
+      //
+      // No escape hatch: there is no `force` flag. Either the tab is
+      // completely idle (no orchestrator activity, no dispatched
+      // background children) and close is allowed, or the tab is
+      // active and the user must stop it first (via the in-pane
+      // Interrupt button, or by waiting for natural completion). The
+      // user's path to close an active engine tab is: interrupt →
+      // wait for idle → close. This protects dispatched background
+      // agents from accidental SIGTERM via tab close.
+      //
+      // Internal cleanup paths (`removeEngineInstance` last-instance
+      // close, `moveEngineInstance` source-cleanup) abort the
+      // orchestrator above the call site, which propagates to
+      // children — by the time those paths reach this guard, the
+      // tab's state should already be quiescent. If a race window
+      // means agents haven't yet flipped to terminal status, the
+      // guard fires, the warn is logged, and the next snapshot tick
+      // (after agents finish aborting) allows the close.
+      //
+      // CLI tabs are intentionally NOT gated — CLI tabs have no
+      // dispatched-agent concept and their existing Cmd+W → confirm
+      // flow is correct as-is. The guard is engine-tab-only because
+      // engine tabs are where the dispatched-agent kill footgun lives.
+      if (closingTab?.isEngine) {
+        const s = get() as any
+        const pane = s.enginePanes?.get?.(tabId)
+        if (pane && pane.instances) {
+          let orchestratorRunning = false
+          const childCounts: Array<{ id: string; count: number }> = []
+          for (const inst of pane.instances) {
+            const state = inst.statusFields?.state
+            if (state === 'running' || state === 'connecting' || state === 'starting') {
+              orchestratorRunning = true
+            }
+            const agents = inst.agentStates || []
+            const running = agents.filter((a: any) => a?.status === 'running').length
+            childCounts.push({ id: inst.id, count: running })
+          }
+          const childRunning = childCounts.some((c) => c.count > 0)
+          if (orchestratorRunning || childRunning) {
+            console.warn(
+              `[closeTab] refused engine tab close: tabId=${tabId.slice(0, 8)} ` +
+              `orchestratorRunning=${orchestratorRunning} ` +
+              `childCounts=${JSON.stringify(childCounts.map((c) => `${c.id.slice(0, 6)}:${c.count}`))}` +
+              ' — user must stop the tab (interrupt + wait for children) before closing'
+            )
+            return
+          }
+        }
+      }
       if (closingTab?.worktree) {
         window.ion.gitWorktreeRemove(
           closingTab.worktree.repoPath,
@@ -256,31 +331,20 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         set({ terminalPanes: panes })
       }
       if (closingTab?.isEngine) {
-        const engineAgentStates = new Map(get().engineAgentStates)
-        const engineStatusFields = new Map(get().engineStatusFields)
         const engineWorkingMessages = new Map(get().engineWorkingMessages)
         const engineNotifications = new Map(get().engineNotifications)
         const engineDialogs = new Map(get().engineDialogs)
         const enginePinnedPrompt = new Map(get().enginePinnedPrompt)
         const engineUsage = new Map(get().engineUsage)
-        const engineConversationIds = new Map(get().engineConversationIds)
-        const engineMessages = new Map(get().engineMessages)
-        const engineDraftInputs = new Map(get().engineDraftInputs)
-        const enginePermissionDenied = new Map(get().enginePermissionDenied)
         const enginePanes = new Map(get().enginePanes)
-        for (const k of engineAgentStates.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineAgentStates.delete(k)
-        for (const k of engineStatusFields.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineStatusFields.delete(k)
         for (const k of engineWorkingMessages.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineWorkingMessages.delete(k)
         for (const k of engineNotifications.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineNotifications.delete(k)
         for (const k of engineDialogs.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineDialogs.delete(k)
         for (const k of enginePinnedPrompt.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePinnedPrompt.delete(k)
         for (const k of engineUsage.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineUsage.delete(k)
-        for (const k of engineConversationIds.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineConversationIds.delete(k)
-        for (const k of engineMessages.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineMessages.delete(k)
-        for (const k of engineDraftInputs.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineDraftInputs.delete(k)
-        for (const k of enginePermissionDenied.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePermissionDenied.delete(k)
         enginePanes.delete(tabId)
-        set({ engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineConversationIds, engineMessages, engineDraftInputs, enginePermissionDenied, enginePanes })
+        set({ engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, enginePanes })
+        cleanupTabDeltas(tabId)
       }
       if (closingTab) {
         const dir = closingTab.workingDirectory
@@ -484,7 +548,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
             ? {
                 ...t,
                 messages: [
-                  ...t.messages,
+                  ...(t.messages ?? []),
                   { id: `msg-${Date.now()}-${Math.random()}`, role: 'system' as const, content, timestamp: Date.now() },
                 ],
               }

@@ -1,21 +1,39 @@
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, readdirSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 import { state, sessionPlane, lastMessagePreview } from '../state'
 import { TABS_FILE } from '../settings-store'
+import { isResourceRead } from '../event-wiring-resources'
 import { log } from '../logger'
 import type { RemoteTabState } from './protocol'
 import type { TabStatus } from '../../shared/types'
 
-export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
-  let rendererTabs: any[] = []
+export type ResourceManifest = Record<string, Array<{ id: string; kind: string; title?: string; createdAt: string; read?: boolean; conversationId?: string }>>
+
+export interface RemoteTabSnapshot {
+  tabs: RemoteTabState[]
+  resourceManifest: ResourceManifest
+}
+
+export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
+  let rendererResult: { tabs: any[]; resourceManifest: ResourceManifest } = { tabs: [], resourceManifest: {} }
   try {
-    rendererTabs = await state.mainWindow?.webContents.executeJavaScript(`
+    rendererResult = await state.mainWindow?.webContents.executeJavaScript(`
       (function() {
         try {
           var store = window.__Ion_SESSION_STORE__;
-          if (!store) return [];
+          if (!store) return { tabs: [], resourceManifest: {} };
           var s = store.getState();
           var panes = s.terminalPanes;
-          return s.tabs.map(function(t) {
+          var resources = s.resources || {};
+          var readIds = s.readResourceIds instanceof Set ? Array.from(s.readResourceIds) : [];
+          var resourceManifest = {};
+          Object.keys(resources).forEach(function(kind) {
+            resourceManifest[kind] = (resources[kind] || []).map(function(r) {
+              return { id: r.id, kind: r.kind, title: r.title || '', createdAt: r.createdAt, read: readIds.indexOf(r.id) >= 0, conversationId: r.conversationId || undefined };
+            });
+          });
+          var tabs = s.tabs.map(function(t) {
             var msgs = t.messages || [];
             var lastMsg = null;
             var lastTs = 0;
@@ -26,18 +44,16 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                 break;
               }
             }
-            // For engine tabs, scan engineMessages for last user/assistant activity
-            if (t.isEngine && !lastTs && s.engineMessages && s.engineMessages.get) {
+            // For engine tabs, scan the active instance's messages field for last activity
+            if (t.isEngine && !lastTs) {
               var ep = s.enginePanes && s.enginePanes.get ? s.enginePanes.get(t.id) : null;
-              var instId = ep ? (ep.activeInstanceId || (ep.instances && ep.instances[0] && ep.instances[0].id)) : null;
-              var eKey = instId ? (t.id + ':' + instId) : null;
-              var eMsgs = eKey ? s.engineMessages.get(eKey) : null;
-              if (eMsgs) {
-                for (var j = eMsgs.length - 1; j >= 0; j--) {
-                  if (eMsgs[j].role === 'assistant' || eMsgs[j].role === 'user') {
-                    lastTs = eMsgs[j].timestamp || 0;
-                    break;
-                  }
+              var activeInstId = ep ? (ep.activeInstanceId || (ep.instances && ep.instances[0] && ep.instances[0].id)) : null;
+              var activeInst = activeInstId && ep ? ep.instances.find(function(i) { return i.id === activeInstId; }) : null;
+              var eMsgs = activeInst ? (activeInst.messages || []) : [];
+              for (var j = eMsgs.length - 1; j >= 0; j--) {
+                if (eMsgs[j].role === 'assistant' || eMsgs[j].role === 'user') {
+                  lastTs = eMsgs[j].timestamp || 0;
+                  break;
                 }
               }
             }
@@ -59,20 +75,25 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
             // state into the parent tab fields directly (separate from
             // queue promotion), do it here — not by piping waitingState
             // through to RemoteTabState top-level.
-            if (t.isEngine === true && s.enginePermissionDenied && s.enginePermissionDenied.get) {
+            if (t.isEngine === true) {
               var ePane = s.enginePanes && s.enginePanes.get ? s.enginePanes.get(t.id) : null;
-              var activeInst = ePane ? (ePane.activeInstanceId || (ePane.instances && ePane.instances[0] && ePane.instances[0].id)) : null;
-              if (activeInst) {
-                var pdEntry = s.enginePermissionDenied.get(t.id + ':' + activeInst);
+              var activeInstId2 = ePane ? (ePane.activeInstanceId || (ePane.instances && ePane.instances[0] && ePane.instances[0].id)) : null;
+              var activeInstObj = activeInstId2 && ePane ? ePane.instances.find(function(i) { return i.id === activeInstId2; }) : null;
+              if (activeInstObj) {
+                var pdEntry = activeInstObj.permissionDenied;
                 var pdTools = pdEntry && pdEntry.tools;
                 if (pdTools && pdTools.length > 0) {
                   for (var pdi = 0; pdi < pdTools.length; pdi++) {
+                    // instanceId scopes the promoted entry to the engine
+                    // sub-tab that produced it so iOS can hide the card
+                    // when the user views a sibling sub-conversation.
                     queue.push({
                       questionId: 'denied-' + pdTools[pdi].toolUseId,
                       toolName: pdTools[pdi].toolName,
                       toolTitle: pdTools[pdi].toolName,
                       toolInput: pdTools[pdi].toolInput,
                       options: [],
+                      instanceId: activeInstId2,
                     });
                   }
                 }
@@ -116,27 +137,40 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               // 'plan-ready' (matches desktop's getWaitingState helper).
               engineInstances = ePaneForList.instances.map(function(inst) {
                 var ws = null;
-                if (s.enginePermissionDenied && s.enginePermissionDenied.get) {
-                  var pdEntry = s.enginePermissionDenied.get(t.id + ':' + inst.id);
-                  var pdTools = pdEntry && pdEntry.tools;
-                  if (pdTools && pdTools.length > 0) {
+                var pdEntry = inst.permissionDenied;
+                var pdTools = pdEntry && pdEntry.tools;
+                if (pdTools && pdTools.length > 0) {
                     var hasPlanReady = false;
                     for (var k = 0; k < pdTools.length; k++) {
                       if (pdTools[k].toolName === 'AskUserQuestion') { ws = 'question'; break; }
                       if (pdTools[k].toolName === 'ExitPlanMode') hasPlanReady = true;
                     }
                     if (ws === null && hasPlanReady) ws = 'plan-ready';
-                  }
                 }
                 // Per-instance running state so iOS EngineInstanceBar can
                 // show a pulsing dot on each running sub-tab. Parallels the
                 // waitingState derivation above.
                 var instRunning = false;
-                if (s.engineStatusFields && s.engineStatusFields.get) {
-                  var sf = s.engineStatusFields.get(t.id + ':' + inst.id);
-                  if (sf) {
-                    var st = sf.state;
-                    instRunning = st === 'running' || st === 'connecting' || st === 'starting';
+                var sf = inst.statusFields;
+                if (sf) {
+                  var st = sf.state;
+                  instRunning = st === 'running' || st === 'connecting' || st === 'starting';
+                }
+                // Per-instance running-agent-count. Folds across the
+                // instance's agentStates field to expose "how many
+                // dispatched background agents are still running" to iOS.
+                // Drives the yellow "awaiting children" pulse on the iOS
+                // sub-tab pill and footer, mirroring the desktop's
+                // agentCountByInstance derivation in EngineTabStrip.
+                // Per CLAUDE.md § "Common parity surfaces" — when the
+                // desktop renders a per-instance signal, iOS must see the
+                // same data through the snapshot so the parity table row
+                // can be honored.
+                var instRunningAgents = 0;
+                var ags = inst.agentStates;
+                if (ags && Array.isArray(ags)) {
+                  for (var ai = 0; ai < ags.length; ai++) {
+                    if (ags[ai] && ags[ai].status === 'running') instRunningAgents++;
                   }
                 }
                 // Per-instance model-fallback indicator. Projects the
@@ -153,12 +187,12 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                 // fallback indicator.
                 var mfOut = undefined;
                 if (s.engineModelFallbacks && s.engineModelFallbacks.get) {
-                  var mf = s.engineModelFallbacks.get(t.id + ':' + inst.id);
+                  const mf = s.engineModelFallbacks.get(t.id + ':' + inst.id);
                   if (mf) {
                     mfOut = { requestedModel: mf.requestedModel, fallbackModel: mf.fallbackModel };
                   }
                 }
-                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, modelFallback: mfOut };
+                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, runningAgentCount: instRunningAgents > 0 ? instRunningAgents : undefined, modelFallback: mfOut, conversationIds: inst.conversationIds && inst.conversationIds.length > 0 ? inst.conversationIds : undefined };
               });
               activeEngineInstanceId = ePaneForList.activeInstanceId || ePaneForList.instances[0].id;
             }
@@ -167,18 +201,92 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
             // if the active instance is idle. Parallels the desktop's
             // isAnyEngineInstanceRunning helper in TabStripShared.ts.
             var anyInstanceRunning = false;
+            // Parallel aggregate for "any instance has running background
+            // children" — drives the iOS parent tab pill's yellow
+            // "awaiting children" dot. Folds across the per-instance
+            // runningAgentCount we just derived. See CLAUDE.md §
+            // "Common parity surfaces" parity table row.
+            var anyInstanceHasRunningChildren = false;
             if (engineInstances) {
               for (var ei = 0; ei < engineInstances.length; ei++) {
-                if (engineInstances[ei].isRunning) { anyInstanceRunning = true; break; }
+                if (engineInstances[ei].isRunning) anyInstanceRunning = true;
+                if ((engineInstances[ei].runningAgentCount || 0) > 0) anyInstanceHasRunningChildren = true;
+                if (anyInstanceRunning && anyInstanceHasRunningChildren) break;
+              }
+            }
+            // Derive the parent engine tab's status authoritatively from
+            // per-instance state. The renderer's t.status can be stale
+            // for engine tabs: the engine_status / engine_text_delta
+            // handlers gate writes on the *active* sub-instance, so an
+            // inactive sub-instance that started running and then finished
+            // (or a user switching active sub-instances mid-run) can strand
+            // t.status === 'running' even when no sub-instance is
+            // actually running anymore. Without this derivation, iOS
+            // receives the stranded value via the snapshot and shows the
+            // parent tab pulsing orange + "Running…" indefinitely.
+            //
+            // Rules (engine tabs only):
+            //   - anyInstanceRunning → 'running'
+            //   - terminal status ('dead' / 'failed') → preserve
+            //   - 'completed' AND queue carries ExitPlanMode/AskUserQuestion
+            //     → preserve 'completed' so the green (plan-ready) /
+            //     blue (question) parent pill still shows after auto-allow
+            //   - otherwise → 'idle'
+            //
+            // Non-engine tabs pass through t.status unchanged.
+            //
+            // Desktop's own tab pill is unaffected: it reads
+            // isAnyEngineInstanceRunning(tab.id) directly in
+            // TabStripShared.ts line ~415, never trusting tab.status for
+            // engine running-state. This derivation is purely for the
+            // snapshot projection consumed by iOS.
+            //
+            // SYNC NOTE. The inline implementation below MUST match
+            // the pure deriveEngineParentStatus helper in
+            // snapshot-derive.ts. The helper is the canonical contract
+            // (pinned by __tests__/snapshot-derive.test.ts); the inline
+            // copy here exists because this IIFE runs in renderer
+            // process via executeJavaScript and cannot import from
+            // main-process modules. Reviewers verify by visual diff.
+            var derivedStatus = t.status;
+            if (t.isEngine === true) {
+              if (anyInstanceRunning) {
+                derivedStatus = 'running';
+              } else if (t.status === 'dead' || t.status === 'failed') {
+                derivedStatus = t.status;
+              } else if (t.status === 'completed') {
+                var hasWaitingDenial = false;
+                for (var qi = 0; qi < queue.length; qi++) {
+                  var qTool = queue[qi] && (queue[qi].toolTitle || queue[qi].toolName);
+                  if (qTool === 'ExitPlanMode' || qTool === 'AskUserQuestion') { hasWaitingDenial = true; break; }
+                }
+                derivedStatus = hasWaitingDenial ? 'completed' : 'idle';
+              } else {
+                derivedStatus = 'idle';
+              }
+              // Log every downgrade from running/connecting → idle so a
+              // future investigation can confirm the derivation fired and
+              // identify the tab. Logged in the renderer (console.log)
+              // because this IIFE runs in the renderer process. The
+              // main-process log() helper is not in scope here.
+              if ((t.status === 'running' || t.status === 'connecting') && derivedStatus !== 'running' && derivedStatus !== 'connecting') {
+                console.log('[snapshot] engine parent tab status downgrade tabId=' + (t.id || '').slice(0, 8) + ' raw=' + t.status + ' derived=' + derivedStatus + ' anyInstanceRunning=' + anyInstanceRunning + ' queueLen=' + queue.length);
               }
             }
             return {
               id: t.id,
               title: t.title,
               customTitle: t.customTitle,
-              status: (t.isEngine && anyInstanceRunning && t.status !== 'running' && t.status !== 'connecting') ? 'running' : t.status,
+              status: derivedStatus,
               workingDirectory: t.workingDirectory,
-              permissionMode: t.permissionMode,
+              permissionMode: (function() {
+                if (t.isEngine && ePaneForList) {
+                  var aId = activeEngineInstanceId;
+                  var aInst = aId ? ePaneForList.instances.find(function(i) { return i.id === aId; }) : null;
+                  return (aInst && aInst.permissionMode) || 'auto';
+                }
+                return t.permissionMode;
+              })(),
               permissionQueue: queue,
               contextTokens: t.contextTokens,
               messageCount: msgs.length,
@@ -192,6 +300,12 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               groupId: t.groupId || null,
               modelOverride: t.modelOverride || null,
               groupPinned: t.groupPinned || false,
+              // Top-level aggregate of "any sub-instance has running
+              // background children". iOS reads this on the parent tab
+              // pill so the yellow "awaiting children" dot fires without
+              // folding across engineInstances client-side. Mirrors the
+              // desktop's anyEngineInstanceHasRunningChildren helper.
+              hasRunningChildren: anyInstanceHasRunningChildren || undefined,
               conversationId: t.conversationId || null,
               lastMessageContent: lastMsg,
               lastActivityTs: lastTs || 0,
@@ -199,11 +313,58 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               pillIcon: t.pillIcon || null,
             };
           });
-        } catch(e) { return []; }
+          return { tabs: tabs, resourceManifest: resourceManifest };
+        } catch(e) { return { tabs: [], resourceManifest: {} }; }
       })()
-    `) || []
+    `) || { tabs: [], resourceManifest: {} }
   } catch {
-    rendererTabs = []
+    rendererResult = { tabs: [], resourceManifest: {} }
+  }
+
+  const rendererTabs = rendererResult.tabs
+  let resourceManifest: ResourceManifest = rendererResult.resourceManifest || {}
+
+  // Fallback: if the renderer store is empty (desktop just restarted,
+  // subscription hasn't resolved yet), read resource metadata from disk.
+  // The extension persists resources to ~/.ion/resources/global/*.json.
+  if (Object.keys(resourceManifest).length === 0) {
+    try {
+      const globalDir = join(homedir(), '.ion', 'resources', 'global')
+      if (existsSync(globalDir)) {
+        const files = readdirSync(globalDir).filter(f => f.endsWith('.json'))
+        if (files.length > 0) {
+          const items: Array<{ id: string; kind: string; title?: string; createdAt: string; read?: boolean }> = []
+          for (const f of files) {
+            try {
+              const data = JSON.parse(readFileSync(join(globalDir, f), 'utf-8'))
+              if (data.id && data.kind) {
+                items.push({ id: data.id, kind: data.kind, title: data.title, createdAt: data.createdAt || '', read: isResourceRead(data.id) })
+              }
+            } catch { /* skip corrupt files */ }
+          }
+          if (items.length > 0) {
+            const byKind: ResourceManifest = {}
+            for (const item of items) {
+              if (!byKind[item.kind]) byKind[item.kind] = []
+              byKind[item.kind].push(item)
+            }
+            resourceManifest = byKind
+            log('snapshot', `resource manifest cold-loaded from disk: ${items.length} items`)
+          }
+        }
+      }
+    } catch { /* disk read failure is non-fatal */ }
+  }
+
+  // Apply persisted read state from the main process. The renderer's
+  // readResourceIds may be stale or empty after restart. The main-process
+  // persistence file (~/.ion/resource-read-state.json) is the source of truth.
+  for (const kind of Object.keys(resourceManifest)) {
+    for (const item of resourceManifest[kind]) {
+      if (isResourceRead(item.id)) {
+        item.read = true
+      }
+    }
   }
 
   if (rendererTabs.length > 0) {
@@ -233,6 +394,10 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               kind: o.kind,
               label: o.label,
             })),
+            // Carry the engine-instance scoping through the main-process
+            // mapping so it survives onto the wire. Undefined for CLI
+            // tabs and for renderer queue entries that predate the field.
+            instanceId: p.instanceId || undefined,
           }
           // Enrich ExitPlanMode entries with planContent by reading the plan file
           if (entry.toolName === 'ExitPlanMode' && entry.toolInput?.planFilePath && !entry.toolInput?.planContent) {
@@ -255,6 +420,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
         groupId: t.groupId || null,
         modelOverride: t.modelOverride || null,
         groupPinned: t.groupPinned || false,
+        hasRunningChildren: t.hasRunningChildren || undefined,
         conversationId: t.conversationId || undefined,
         lastActivityAt: t.lastActivityTs || undefined,
         pillColor: t.pillColor || null,
@@ -268,7 +434,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
       return (b.lastActivityAt || 0) - (a.lastActivityAt || 0)
     })
 
-    return mapped
+    return { tabs: mapped, resourceManifest }
   }
 
   const health = sessionPlane.getHealth()
@@ -336,5 +502,5 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
     return (b.lastActivityAt || 0) - (a.lastActivityAt || 0)
   })
 
-  return results
+  return { tabs: results, resourceManifest: {} }
 }

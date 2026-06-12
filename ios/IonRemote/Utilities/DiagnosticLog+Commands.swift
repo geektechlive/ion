@@ -212,6 +212,18 @@ extension DiagnosticLog {
 
         case .setPillIcon(let tabId, let icon):
             log("CMD: setPillIcon tabId=\(tabId.prefix(8)) icon=\(icon ?? "nil")")
+
+        case .reportFocus(let tabId, let interceptEnabled):
+            log("CMD: reportFocus tabId=\(tabId?.prefix(8) ?? "nil") interceptEnabled=\(interceptEnabled)")
+
+        case .requestResourceContent(let kind, let resourceId):
+            log("CMD: requestResourceContent kind=\(kind) resourceId=\(resourceId.prefix(12))")
+
+        case .markResourceRead(let kind, let resourceId):
+            log("CMD: markResourceRead kind=\(kind) resourceId=\(resourceId.prefix(12))")
+
+        case .deleteResource(let kind, let resourceId):
+            log("CMD: deleteResource kind=\(kind) resourceId=\(resourceId.prefix(12))")
         }
     }
 }

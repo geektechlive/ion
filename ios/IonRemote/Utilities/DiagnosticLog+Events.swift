@@ -12,7 +12,7 @@ extension DiagnosticLog {
         case .heartbeat:
             return // skip — fires every few seconds
 
-        case .snapshot(let tabs, let dirs, let groupMode, _, _, _, _, _, _, _):
+        case .snapshot(let tabs, let dirs, let groupMode, _, _, _, _, _, _, _, _):
             log("EVENT: snapshot tabs=\(tabs.count) dirs=\(dirs.count) groupMode=\(groupMode ?? "nil")")
 
         case .tabCreated(let tab):
@@ -36,8 +36,8 @@ extension DiagnosticLog {
         case .taskComplete(let tabId, _, let costUsd):
             log("EVENT: taskComplete tabId=\(tabId.prefix(8)) cost=\(costUsd)")
 
-        case .permissionRequest(let tabId, let qId, let toolName, _, let options):
-            log("EVENT: permissionRequest tabId=\(tabId.prefix(8)) qId=\(qId.prefix(8)) tool=\(toolName) opts=\(options.count)")
+        case .permissionRequest(let tabId, let instanceId, let qId, let toolName, _, let options):
+            log("EVENT: permissionRequest tabId=\(tabId.prefix(8)) instanceId=\(instanceId?.prefix(8) ?? "nil") qId=\(qId.prefix(8)) tool=\(toolName) opts=\(options.count)")
 
         case .permissionResolved(let tabId, let qId):
             log("EVENT: permissionResolved tabId=\(tabId.prefix(8)) qId=\(qId.prefix(8))")
@@ -97,6 +97,9 @@ extension DiagnosticLog {
         case .engineStatus(let tabId, let instId, _, _):
             log("EVENT: engineStatus tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
 
+        case .engineSessionStatus(let tabId, let instId, let ss, _):
+            log("EVENT: engineSessionStatus tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") state=\(ss.state) inflight=\(ss.hasInflightRun ?? false)")
+
         case .engineWorkingMessage(let tabId, let instId, _, _):
             log("EVENT: engineWorkingMessage tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
 
@@ -108,8 +111,21 @@ extension DiagnosticLog {
 
         case .engineToolStalled(let tabId, let instId, let toolId, let toolName, _):
             log("EVENT: engineToolStalled tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") tool=\(toolName) toolId=\(toolId.prefix(8))")
+        case .engineRunStalled(let tabId, let instId, let stalledDuration, let lastActivity):
+            log("EVENT: engineRunStalled tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") stalledFor=\(Int(stalledDuration))s lastActivity=\(lastActivity ?? "nil")")
         case .engineSteerInjected(let tabId, let instId, let messageLength):
             log("EVENT: engineSteerInjected tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") messageLength=\(messageLength)")
+
+        case .engineToolUpdate(let tabId, let instId):
+            log("EVENT: engineToolUpdate tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        case .engineToolComplete(let tabId, let instId):
+            log("EVENT: engineToolComplete tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        case .engineScheduleFired(let tabId, let instId):
+            log("EVENT: engineScheduleFired tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        case .engineLlmCall(let tabId, let instId):
+            log("EVENT: engineLlmCall tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        case .engineDispatchStart(let tabId, let instId):
+            log("EVENT: engineDispatchStart tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
 
         case .engineError(let tabId, let instId, let msg):
             log("ERR: engine tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") msg=\(msg.prefix(80))")
@@ -166,6 +182,14 @@ extension DiagnosticLog {
             // observable in the diagnostic stream alongside other engine
             // events.
             log("EVENT: enginePlanProposal tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") kind=\(kind) path=\(path?.suffix(40) ?? "nil")")
+
+        case .enginePlanModeAutoExit(let tabId, let instId, let stopReason, let path, _, _, _, let runId):
+            // Engine-synthesized ExitPlanMode safety net (issue #187).
+            // iOS does not act on this; the desktop is the authoritative
+            // consumer that renders the approval card. Log the runId
+            // and stopReason so the diagnostic stream can correlate the
+            // synthesis with the engine.log entry that produced it.
+            log("EVENT: enginePlanModeAutoExit tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") runId=\(runId?.prefix(12) ?? "nil") stopReason=\(stopReason) path=\(path?.suffix(40) ?? "nil")")
 
         case .engineEarlyStopDecisionRequest(let tabId, let instId, let reqId, _, _, let turn, _, let cumOut, let budget, let pct, _, _, _, let would, _):
             // Engine ↔ harness wire-protocol request. The desktop is the
@@ -260,6 +284,21 @@ extension DiagnosticLog {
 
         case .requestDiagnosticLogs:
             log("EVENT: requestDiagnosticLogs")
+
+        case .engineResourceSnapshot(let tabId, _, let kind, let subId, let items):
+            log("EVENT: engineResourceSnapshot tab=\(tabId.prefix(8)) kind=\(kind) sub=\(subId.prefix(8)) items=\(items.count)")
+
+        case .engineResourceDelta(let tabId, _, let kind, let subId, _):
+            log("EVENT: engineResourceDelta tab=\(tabId.prefix(8)) kind=\(kind) sub=\(subId.prefix(8))")
+
+        case .engineNotification(let tabId, _, let kind, let title, _, _, _):
+            log("EVENT: engineNotification tab=\(tabId.prefix(8)) kind=\(kind) title=\(title)")
+
+        case .engineIntercept(let tabId, let instId, let level, let title, _, _, _):
+            log("EVENT: engineIntercept tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") level=\(level) title=\(title.prefix(60))")
+
+        case .resourceContent(let resourceId, let kind, let content):
+            log("EVENT: resourceContent resourceId=\(resourceId.prefix(12)) kind=\(kind) contentLen=\(content.count)")
         }
     }
 }

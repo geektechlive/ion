@@ -3,17 +3,16 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { useColors } from '../theme'
-import { formatImplementDivider } from '../../shared/clear-divider'
+import { runHandleImplement } from './EngineView-implement'
 import { EngineDialog } from './EngineDialog'
-import { EngineStatusBar } from './EngineStatusBar'
+import { EngineTabStrip } from './EngineTabStrip'
 import { AgentPanel } from './AgentPanel'
-import { EngineFooter } from './EngineFooter'
 import { PermissionDeniedCard } from './PermissionDeniedCard'
 import { ArrowDown } from '@phosphor-icons/react'
 import {
   groupMessages,
   ToolGroup, AssistantMessage, SystemMessage, HarnessMessage, MessageBubble,
-  CopyButton, InterruptButton, CompactionRow, AgentTurnGroup,
+  CopyButton, InterruptButton, CompactionRow, AgentTurnGroup, InterceptBanner,
 } from './conversation'
 
 // Stable empty refs to avoid creating new array/object references on every render.
@@ -23,6 +22,9 @@ const EMPTY_ARRAY: any[] = []
 const EMPTY_NOTIFICATIONS: any[] = []
 const EMPTY_MESSAGES: any[] = []
 const EMPTY_AGENTS: any[] = []
+
+const INITIAL_RENDER_CAP = 100
+const PAGE_SIZE = 100
 
 // ─── Main Component ───
 
@@ -48,18 +50,13 @@ export function EngineView({ tabId }: EngineViewProps) {
   })
   const messages = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? (s.engineMessages.get(k) || EMPTY_MESSAGES) : EMPTY_MESSAGES
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.messages ?? EMPTY_MESSAGES
   })
   const agentStates = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? (s.engineAgentStates.get(k) || EMPTY_AGENTS) : EMPTY_AGENTS
-  })
-  const statusFields = useSessionStore(s => {
-    const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? (s.engineStatusFields.get(k) || null) : null
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.agentStates ?? EMPTY_AGENTS
   })
   const workingMessage = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
@@ -67,18 +64,20 @@ export function EngineView({ tabId }: EngineViewProps) {
     return k ? (s.engineWorkingMessages.get(k) || '') : ''
   })
   const tabStatus = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.status)
-  // PermissionDenied is stored PER ENGINE INSTANCE in
-  // `enginePermissionDenied`, keyed by `${tabId}:${instanceId}`. Engine
-  // sub-tabs (instances) are independent sub-conversations, so storing
+  // PermissionDenied is stored PER ENGINE INSTANCE on `instance.permissionDenied`.
+  // Engine sub-tabs (instances) are independent sub-conversations, so storing
   // the denial on the parent tab would show the same card on every
   // sibling sub-tab. The card is scoped to whichever instance produced
   // it; switching to a sibling without a pending denial shows no card.
   //
   // Parent-tab pill bubbling: getWaitingState() in TabStripShared.ts
-  // folds across this map for engine tabs, so the strip pill still
-  // glows when any sub-tab is blocked. iOS receives the active
+  // folds across instances for engine tabs. iOS receives the active
   // instance's denial via the snapshot path (see main/remote/snapshot.ts).
-  const permissionDenied = useSessionStore(s => key ? (s.enginePermissionDenied.get(key) || null) : null)
+  const permissionDenied = useSessionStore(s => {
+    const p = s.enginePanes.get(tabId)
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.permissionDenied ?? null
+  })
   const tabPlanFilePath = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.planFilePath)
   const tabGroupPinned = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.groupPinned)
   const tabConversationId = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.conversationId)
@@ -89,11 +88,19 @@ export function EngineView({ tabId }: EngineViewProps) {
   const unifiedTurnView = usePreferencesStore(s => s.unifiedTurnView)
   const engineModelOverride = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? s.engineModelOverrides.get(k) : undefined
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.modelOverride ?? undefined
   })
   const isRunning = tabStatus === 'running' || tabStatus === 'connecting'
-  const hasRunningChildren = agentStates.some(a => a.status === 'running')
+  // Promote `.some(...)` to a count so we can render
+  // "waiting for N background agent(s)" in the footer and Thinking
+  // indicator. Computing both `runningChildCount` (number) and
+  // `hasRunningChildren` (boolean) keeps existing call sites working
+  // without scattering `.length > 0` checks. The boolean is still
+  // used by the Interrupt-button visibility predicate further down,
+  // which only cares about presence.
+  const runningChildCount = agentStates.filter(a => a.status === 'running').length
+  const hasRunningChildren = runningChildCount > 0
   const [agentPanelFullscreen, setAgentPanelFullscreen] = useState(false)
   // Per-instance agent panel heights — persisted only for the tab's lifetime.
   // Key is the engine instance compound key (tabId:instanceId).
@@ -101,6 +108,12 @@ export function EngineView({ tabId }: EngineViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const [renderOffset, setRenderOffset] = useState(0)
+
+  // Reset pagination when switching engine instances
+  useEffect(() => {
+    setRenderOffset(0)
+  }, [activeInstanceId])
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return
@@ -112,11 +125,34 @@ export function EngineView({ tabId }: EngineViewProps) {
   }, [])
 
   // Include all messages (user messages shown inline, plus pinned prompt header)
-  const visibleMessages = messages
+  const totalCount = messages.length
+  let startIndex = Math.max(0, totalCount - INITIAL_RENDER_CAP - renderOffset * PAGE_SIZE)
+  const visibleMessages = startIndex > 0 ? messages.slice(startIndex) : messages
+  const hasOlder = startIndex > 0
+  const hiddenCount = totalCount - visibleMessages.length
   const grouped = useMemo(() => groupMessages(visibleMessages, { includeUser: true, unifiedTurnView }), [visibleMessages, unifiedTurnView])
 
   const hasContent = visibleMessages.some(m => m.role === 'assistant' && (m.content || '').length > 0)
-  const showThinking = isRunning && !hasContent && agentStates.filter(a => a.status === 'running').length === 0
+  // Thinking indicator visibility — three modes:
+  //   - foreground "Thinking…" (orange): orchestrator is running AND
+  //     no assistant content has streamed yet AND no children are
+  //     running. This is the original behaviour: show "Thinking…"
+  //     between submit and first token while children haven't been
+  //     dispatched.
+  //   - background "Waiting for background agents…" (yellow):
+  //     orchestrator is idle but at least one dispatched agent is
+  //     still running. The label and dot color change so users
+  //     understand the conversation is parked awaiting children, not
+  //     stopped.
+  //   - hidden otherwise.
+  // The yellow branch wins when both could fire (orchestrator running
+  // AND content) — but since we check `!isRunning` for the yellow
+  // branch, that combination produces neither, which is correct: the
+  // streaming-content pulse-dot in the message area is the right
+  // signal then.
+  const showThinkingForeground = isRunning && !hasContent && runningChildCount === 0
+  const showWaitingChildren = !isRunning && hasRunningChildren
+  const showThinking = showThinkingForeground || showWaitingChildren
 
   // Auto-scroll (only when user is near bottom)
   useEffect(() => {
@@ -192,13 +228,19 @@ export function EngineView({ tabId }: EngineViewProps) {
   // need `resetTabSession` — the engine manages its own session
   // lifecycle; we just disable plan mode and submit a new prompt.
   const clearPermissionDenied = useCallback(() => {
-    if (!key) return
+    if (!key || !activeInstanceId) return
     useSessionStore.setState((s) => {
-      const next = new Map(s.enginePermissionDenied)
-      next.set(key, null)
-      return { enginePermissionDenied: next }
+      const pane = s.enginePanes.get(tabId)
+      if (!pane) return {}
+      const idx = pane.instances.findIndex((i) => i.id === activeInstanceId)
+      if (idx === -1) return {}
+      const updatedPanes = new Map(s.enginePanes)
+      const instances = pane.instances.slice()
+      instances[idx] = { ...instances[idx], permissionDenied: null }
+      updatedPanes.set(tabId, { ...pane, instances })
+      return { enginePanes: updatedPanes }
     })
-  }, [key])
+  }, [key, tabId, activeInstanceId])
 
   const handleAnswerDenial = useCallback((answer: string) => {
     console.log(`[EngineView] handleAnswerDenial: tab=${tabId.slice(0, 8)} key=${key} answerLen=${answer.length}`)
@@ -211,88 +253,10 @@ export function EngineView({ tabId }: EngineViewProps) {
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt])
 
   const handleImplement = useCallback(async (clearContext: boolean = false) => {
-    console.log(`[EngineView] handleImplement: tab=${tabId.slice(0, 8)} key=${key} clearContext=${clearContext}`)
-    clearPermissionDenied()
-
-    // Insert an "Implementing plan" divider so the user can see the
-    // boundary between planning and implementation phases — mirrors the
-    // CLI tab path in usePermissionDeniedHandlers.ts.
-    if (key) {
-      useSessionStore.getState().addEngineSystemMessage(key, formatImplementDivider(new Date()))
-    }
-
-    // Switch to auto mode — for engine tabs this calls
-    // engineSetPlanMode(compoundKey, false) internally (tab-slice.ts:38-43).
-    // This drops the plan-mode system prompt and restricted tool list on
-    // the engine side without destroying the conversation, regardless of
-    // whether we follow the clear-context path below.
-    useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
-
-    // Honor the per-click `clearContext` argument. Engine tabs do not yet
-    // have a per-instance reset IPC (no `engineResetSession` exists), so
-    // when clearContext=true the renderer logs a warning and falls
-    // through to the default no-reset behavior. The CLI-tab and iOS
-    // paths fully honor the flag. The "Implement, clear context" button
-    // is revealed in PermissionDeniedCard by the
-    // `showImplementClearContext` preference.
-    if (clearContext) {
-      console.warn(`[EngineView] handleImplement: clearContext=true is not yet supported for engine tabs — staying in the same engine-instance conversation. CLI tabs and iOS CLI tabs honor this action. Tracking engine API gap as a follow-up (no engineResetSession IPC).`)
-    } else {
-      console.log(`[EngineView] handleImplement: clearContext=false — preserving engine-instance conversation`)
-    }
-
-    // Auto-switch to the implementation model if the split feature is enabled
-    const { planModelSplitEnabled, implementModeModel } = usePreferencesStore.getState()
-    if (planModelSplitEnabled && implementModeModel) {
-      useSessionStore.getState().setTabModel(tabId, implementModeModel)
-    }
-
-    // Auto-move tab to in-progress group if designated
-    const { inProgressGroupId, tabGroupMode, autoGroupMovement } = usePreferencesStore.getState()
-    const tab = useSessionStore.getState().tabs.find(t => t.id === tabId)
-    if (autoGroupMovement && inProgressGroupId && tabGroupMode === 'manual' && tab && tab.groupId !== inProgressGroupId) {
-      if (tab.groupPinned) {
-        console.log(`[EngineView] auto-move suppressed: tab=${tabId.slice(0, 8)} pinned=true`)
-      } else {
-        useSessionStore.getState().moveTabToGroup(tabId, inProgressGroupId)
-      }
-    }
-
-    // Extract plan file path: tab state (engine event) > denial toolInput
-    let planFilePath: string | null = tabPlanFilePath || null
-    if (!planFilePath && permissionDenied?.tools) {
-      const exitDenial = permissionDenied.tools.find(
-        (t: { toolName: string; toolInput?: Record<string, unknown> }) =>
-          t.toolName === 'ExitPlanMode' && t.toolInput
-      )
-      if (exitDenial?.toolInput?.planFilePath) {
-        planFilePath = exitDenial.toolInput.planFilePath as string
-      }
-    }
-
-    // Read plan content
-    let planContent: string | null = null
-    if (planFilePath) {
-      try {
-        const result = await window.ion.readPlan(planFilePath)
-        planContent = result.content
-      } catch (err) {
-        console.warn('[EngineView] Failed to read plan file:', err)
-      }
-    }
-
-    // Clear the tab-level planFilePath now that we've read it
-    useSessionStore.setState((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.id === tabId ? { ...t, planFilePath: null } : t
-      ),
-    }))
-
-    const implementPrompt = planContent
-      ? `Implement the following plan:\n\n${planContent}`
-      : 'Implement the plan.'
-    console.log(`[EngineView] submitting implement prompt: tab=${tabId.slice(0, 8)} promptLen=${implementPrompt.length}`)
-    submitEnginePrompt(tabId, implementPrompt, undefined, undefined, undefined, true)
+    await runHandleImplement(
+      { tabId, key, clearPermissionDenied, submitEnginePrompt, tabPlanFilePath, permissionDenied },
+      clearContext,
+    )
   }, [tabId, key, clearPermissionDenied, submitEnginePrompt, tabPlanFilePath, permissionDenied])
 
   const handleImplementAndUnpin = useCallback(async (clearContext: boolean = false) => {
@@ -302,6 +266,10 @@ export function EngineView({ tabId }: EngineViewProps) {
     console.log(`[EngineView] implement-and-unpin: tab=${tabId.slice(0, 8)} clearContext=${clearContext} — pin cleared`)
     await handleImplement(clearContext)
   }, [tabId, handleImplement])
+
+  const handleLoadOlder = useCallback(() => {
+    setRenderOffset((o) => o + 1)
+  }, [])
 
   // No instances placeholder — all hooks MUST be declared above this point
   // to satisfy React's rules of hooks (constant hook count across renders).
@@ -319,7 +287,11 @@ export function EngineView({ tabId }: EngineViewProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-      <EngineStatusBar tabId={tabId} />
+      {/* Top-of-view engine sub-tab strip. Lists this engine tab's
+          instances (sub-conversations) as draggable pills. Mirrors the
+          terminal panel's `TerminalTabStrip` at the same position.
+          iOS counterpart: `EngineInstanceBar.swift`. */}
+      <EngineTabStrip tabId={tabId} />
 
       {/* Pinned prompt header */}
       {pinnedPrompt && (
@@ -342,7 +314,20 @@ export function EngineView({ tabId }: EngineViewProps) {
       {/* Scrollable conversation area */}
       <div style={{ flex: agentPanelFullscreen ? 0 : 1, maxHeight: agentPanelFullscreen ? 100 : undefined, position: 'relative', overflow: 'hidden' }}>
         <div ref={scrollRef} onScroll={handleScroll} style={{ height: '100%', overflowY: 'auto', padding: '8px 12px' }}>
-          {/* Thinking indicator */}
+          {/* Thinking indicator.
+              *
+              * Two visual modes, chosen by `showWaitingChildren`:
+              *   - foreground (showThinkingForeground): orange
+              *     `colors.accent` dot, label "Thinking…"
+              *   - background (showWaitingChildren): yellow
+              *     `colors.statusWaitingChildren` dot, label
+              *     "Waiting for background agents…"
+              * The yellow branch matches the footer state-label color
+              * and the parent-tab/sub-tab pill dot so the visual
+              * vocabulary is consistent across every surface. The dot
+              * uses the same `.animate-pulse-dot` animation; only the
+              * background color differs.
+              */}
           <AnimatePresence>
             {showThinking && (
               <motion.div
@@ -363,13 +348,30 @@ export function EngineView({ tabId }: EngineViewProps) {
                   className="animate-pulse-dot"
                   style={{
                     width: 6, height: 6, borderRadius: '50%',
-                    background: colors.accent, display: 'inline-block',
+                    background: showWaitingChildren ? colors.statusWaitingChildren : colors.accent, display: 'inline-block',
                   }}
                 />
-                <span>Thinking...</span>
+                <span>
+                  {showWaitingChildren
+                    ? `Waiting for background agent${runningChildCount === 1 ? '' : 's'}…`
+                    : 'Thinking...'}
+                </span>
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Load older messages (pagination) */}
+          {hasOlder && (
+            <div className="flex justify-center py-2">
+              <button
+                onClick={handleLoadOlder}
+                className="text-[11px] px-3 py-1 rounded-full transition-colors"
+                style={{ color: colors.textTertiary, border: `1px solid ${colors.toolBorder}` }}
+              >
+                Load {Math.min(PAGE_SIZE, hiddenCount)} older messages ({hiddenCount} hidden)
+              </button>
+            </div>
+          )}
 
           {/* Grouped conversation messages */}
           {grouped.length > 0 && (
@@ -386,6 +388,8 @@ export function EngineView({ tabId }: EngineViewProps) {
                     return <AgentTurnGroup key={`at-${idx}`} tools={item.tools} assistantMessages={item.assistantMessages} isActive={item.isActive} skipMotion />
                   case 'harness':
                     return <HarnessMessage key={item.message.id} message={item.message} skipMotion bootstrapCollapsedCount={item.bootstrapCollapsedCount} />
+                  case 'intercept':
+                    return <InterceptBanner key={item.message.id} message={item.message} skipMotion />
                   case 'system':
                     return <SystemMessage key={item.message.id} message={item.message} skipMotion />
                   case 'compaction':
@@ -475,9 +479,17 @@ export function EngineView({ tabId }: EngineViewProps) {
           Rendered between the scrollable conversation area and the agent
           panel so the question sits directly above the input where users
           expect it. Wired to the engine's submitEnginePrompt so the answer
-          becomes a new prompt on the active engine instance. */}
+          becomes a new prompt on the active engine instance.
+
+          Hidden while the tab is running — after the user sends feedback,
+          answers a question, or clicks Implement, the tab transitions to
+          running/connecting and the card must stay hidden until the agent
+          finishes the new turn. Without this, stale heartbeat ticks from
+          the engine can re-populate instance.permissionDenied via
+          handleEngineStatusEvent before prompt_dispatch clears the
+          engine's lastPermissionDenials. */}
       <AnimatePresence>
-        {permissionDenied && (
+        {permissionDenied && !isRunning && (
           <PermissionDeniedCard
             tools={permissionDenied.tools}
             tabId={tabId}
@@ -486,6 +498,7 @@ export function EngineView({ tabId }: EngineViewProps) {
             messages={messages}
             tabPlanFilePath={tabPlanFilePath}
             tabGroupPinned={tabGroupPinned}
+            supportsContextClear={false}
             onDismiss={clearPermissionDenied}
             onAnswer={handleAnswerDenial}
             onImplement={handleImplement}
@@ -508,14 +521,9 @@ export function EngineView({ tabId }: EngineViewProps) {
         />
       </div>
 
-      {/* Status footer */}
-      <EngineFooter
-        status={statusFields ?? null}
-        isTall={isTall}
-        onToggleTall={() => toggleTallView(tabId)}
-        activeTabId={tabId}
-        engineModelOverride={engineModelOverride}
-      />
+      {/* Engine status bar removed — its controls have been absorbed
+          into the single unified `StatusBar` mounted at the app root.
+          See `App.tsx`. */}
 
       {/* Notification toasts */}
       <AnimatePresence>

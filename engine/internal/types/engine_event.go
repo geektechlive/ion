@@ -20,6 +20,16 @@ type EngineEvent struct {
 	// engine_status
 	Fields *StatusFields `json:"fields,omitempty"`
 
+	// engine_session_status — Phase 3 of the state-management overhaul.
+	// Typed counterpart to engine_status that carries a SessionStatus
+	// payload. Emitted in parallel with engine_status during the
+	// transition window. Once Phase 4 lands and the legacy
+	// engine_status emission is removed (a deliberate contract break
+	// gated on the published deprecation policy), this is the sole
+	// authoritative status surface. See types.SessionStatus for the
+	// payload's per-field contract.
+	SessionStatus *SessionStatus `json:"sessionStatus,omitempty"`
+
 	// engine_working_message, engine_notify, engine_error, engine_harness_message
 	EventMessage  string `json:"message,omitempty"`
 	Level         string `json:"level,omitempty"`
@@ -75,6 +85,23 @@ type EngineEvent struct {
 	// engine_tool_stalled
 	ToolElapsed float64 `json:"toolElapsed,omitempty"`
 
+	// engine_run_stalled — workflow signal emitted exactly once per run
+	// when the engine's progress watchdog detects that the run has made
+	// no forward progress for longer than the configured threshold and
+	// is about to cancel the run as a safety backstop. Mirrors the
+	// underlying RunStalledEvent NormalizedEvent variant. The
+	// authoritative completion signal remains the follow-up
+	// TaskCompleteEvent + emitExit; this event is advisory so consumers
+	// that want to distinguish "stalled" from generic "errored" can do
+	// so (e.g. desktop renders a watchdog icon, iOS surfaces a distinct
+	// notification, headless harnesses may opt to retry). See
+	// engine/internal/backend/runloop_watchdog.go for the watchdog
+	// implementation and CLAUDE.md § "The typed-event corollary" for
+	// the rule that this typed event is the engine's complete
+	// signaling surface for stall detection.
+	RunStalledDuration     float64 `json:"runStalledDuration,omitempty"`
+	RunStalledLastActivity string  `json:"runStalledLastActivity,omitempty"`
+
 	// engine_steer_injected — character count of a mid-turn steer
 	// message the engine drained into the conversation before the next
 	// LLM call. Clients use this to confirm a steer was captured without
@@ -125,6 +152,24 @@ type EngineEvent struct {
 	// shape is identical; only the discriminator differs. See
 	// docs/architecture/adr/003-state-events-vs-workflow-events.md.
 	PlanProposalKind string `json:"planProposalKind,omitempty"`
+
+	// engine_plan_mode_auto_exit — sibling to engine_plan_proposal.
+	// Fires when the engine deterministically synthesizes an ExitPlanMode
+	// call at end-of-turn because the model ended a plan-mode run without
+	// invoking ExitPlanMode or AskUserQuestion (issue #187). Both events
+	// surface the plan-approval card, but this one additionally tells
+	// consumers the exit was engine-driven rather than model-driven.
+	//
+	// Fields use the planModeAutoExit* prefix to avoid colliding with
+	// other event variants that share field name primitives (StopReason
+	// in particular collides with early-stop, which already uses
+	// earlyStopStopReason). PlanFilePath and PlanModeSlug are reused
+	// from engine_plan_mode_changed / engine_plan_proposal since the
+	// shape is identical.
+	PlanModeAutoExitStopReason string `json:"planModeAutoExitStopReason,omitempty"`
+	PlanModeAutoExitReason     string `json:"planModeAutoExitReason,omitempty"`
+	PlanModeAutoExitSessionID  string `json:"planModeAutoExitSessionId,omitempty"`
+	PlanModeAutoExitRunID      string `json:"planModeAutoExitRunId,omitempty"`
 
 	// engine_compacting
 	CompactingActive         bool   `json:"active,omitempty"`
@@ -317,4 +362,54 @@ type EngineEvent struct {
 	DispatchInputTokens  int     `json:"dispatchInputTokens,omitempty"`
 	DispatchOutputTokens int     `json:"dispatchOutputTokens,omitempty"`
 	DispatchToolCount    int     `json:"dispatchToolCount,omitempty"`
+
+	// --- Resource subsystem events (D-007) ---
+	//
+	// engine_resource_snapshot: emitted when a client subscribes to a
+	// resource kind. Carries the full set of items the producer returned
+	// for the subscription's filter. Consumers REPLACE their local
+	// collection with this payload.
+	//
+	// engine_resource_delta: emitted when a producer publishes a change
+	// (create, update, delete, mark_read). Consumers apply the delta
+	// incrementally to their local collection.
+	//
+	// Both events carry ResourceKind and ResourceSubID so consumers can
+	// correlate events with their active subscriptions.
+	ResourceKind  string         `json:"resourceKind,omitempty"`
+	ResourceSubID string         `json:"resourceSubId,omitempty"`
+	ResourceItems []ResourceItem `json:"resourceItems,omitempty"`
+	ResourceDelta *ResourceDelta `json:"resourceDelta,omitempty"`
+
+	// --- Notification events (D-009) ---
+	//
+	// engine_notification: emitted when an extension calls ctx.Notify.
+	// The Push/PushTitle/PushBody fields trigger APNs delivery through
+	// the relay when the mobile peer is not connected — the relay checks
+	// these fields on any forwarded message, so no relay changes are needed.
+	// NotifyKind/ResourceID/Title/Body/Sound/Scope carry structured metadata
+	// for clients that want richer handling beyond the basic push title/body.
+	Push             bool   `json:"push,omitempty"`
+	PushTitle        string `json:"pushTitle,omitempty"`
+	PushBody         string `json:"pushBody,omitempty"`
+	NotifyKind       string `json:"notifyKind,omitempty"`
+	NotifyResourceID string `json:"notifyResourceId,omitempty"`
+	NotifyTitle      string `json:"notifyTitle,omitempty"`
+	NotifyBody       string `json:"notifyBody,omitempty"`
+	NotifySound      string `json:"notifySound,omitempty"`
+	NotifyScope      string `json:"notifyScope,omitempty"`
+
+	// --- engine_intercept ---
+	//
+	// Fire-and-forget signal event emitted when an extension calls ctx.Intercept.
+	// The engine attaches no semantics beyond routing the event to the target
+	// session's stream. Clients decide how to render and whether to act on the
+	// Level hint ("banner" = informational, "redirect" = urgent). There is no
+	// "current intercept state" to query — the engine emits it exactly once per
+	// ctx.Intercept() call and moves on.
+	InterceptLevel    string                 `json:"interceptLevel,omitempty"`
+	InterceptTitle    string                 `json:"interceptTitle,omitempty"`
+	InterceptMessage  string                 `json:"interceptMessage,omitempty"`
+	InterceptSource   string                 `json:"interceptSource,omitempty"` // extension name, set by engine
+	InterceptMetadata map[string]interface{} `json:"interceptMetadata,omitempty"`
 }

@@ -112,9 +112,14 @@ export function handlePairRequest(request: PairRequest): void {
   }
 
   setTimeout(async () => {
-    const tabs = await getRemoteTabStates()
+    const { tabs, resourceManifest } = await getRemoteTabStates()
     const pairSettings = readSettings()
     const pairRecentDirs: string[] = Array.isArray(pairSettings.recentBaseDirectories) ? pairSettings.recentBaseDirectories : []
-    state.remoteTransport?.send({ type: 'snapshot', tabs, recentDirectories: pairRecentDirs })
+    state.remoteTransport?.send({
+      type: 'snapshot',
+      tabs,
+      recentDirectories: pairRecentDirs,
+      resources: Object.keys(resourceManifest).length > 0 ? resourceManifest : undefined,
+    })
   }, 500)
 }

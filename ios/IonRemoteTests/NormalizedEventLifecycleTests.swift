@@ -22,7 +22,7 @@ final class NormalizedEventLifecycleTests: XCTestCase {
         {"type":"snapshot","tabs":[\(sampleTabJSON)]}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .snapshot(let tabs, _, _, _, _, _, _, _, _, _) = event {
+        if case .snapshot(let tabs, _, _, _, _, _, _, _, _, _, _) = event {
             XCTAssertEqual(tabs.count, 1)
             XCTAssertEqual(tabs[0].id, "t1")
             XCTAssertEqual(tabs[0].title, "Tab 1")
@@ -106,7 +106,7 @@ final class NormalizedEventLifecycleTests: XCTestCase {
         {"type":"snapshot","tabs":[\(sampleTabJSON),\(tab2)]}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .snapshot(let tabs, _, _, _, _, _, _, _, _, _) = event {
+        if case .snapshot(let tabs, _, _, _, _, _, _, _, _, _, _) = event {
             XCTAssertEqual(tabs.count, 2)
             XCTAssertEqual(tabs[1].id, "t2")
             XCTAssertEqual(tabs[1].customTitle, "My Tab")
@@ -125,7 +125,7 @@ final class NormalizedEventLifecycleTests: XCTestCase {
         {"type":"snapshot","tabs":[]}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .snapshot(let tabs, _, _, _, _, _, _, _, _, _) = event {
+        if case .snapshot(let tabs, _, _, _, _, _, _, _, _, _, _) = event {
             XCTAssertTrue(tabs.isEmpty)
         } else {
             XCTFail("Expected snapshot with empty tabs")
@@ -203,16 +203,17 @@ final class NormalizedEventLifecycleTests: XCTestCase {
             customName: nil,
             customIcon: nil,
             remoteDisplayUpdatedAt: nil,
+            resources: nil
         )
         let data = try encoder.encode(original)
         let decoded = try decoder.decode(RemoteEvent.self, from: data)
-        if case .snapshot(let tabs, let recentDirs, _, _, _, _, _, _, _, _) = decoded {
+        if case .snapshot(let tabs, let recentDirs, _, _, _, _, _, _, _, _, _) = decoded {
             XCTAssertEqual(recentDirs, ["/Users/test/project"])
             XCTAssertEqual(tabs.count, 1)
             XCTAssertEqual(tabs[0].id, "rt1")
             XCTAssertEqual(tabs[0].customTitle, "Custom")
-            XCTAssertEqual(tabs[0].status, .running)
-            XCTAssertEqual(tabs[0].permissionMode, .auto)
+            XCTAssertEqual(tabs[0].status, TabStatus.running)
+            XCTAssertEqual(tabs[0].permissionMode, PermissionMode.auto)
             XCTAssertEqual(tabs[0].lastMessage, "hi")
             XCTAssertEqual(tabs[0].contextTokens, 512)
         } else {

@@ -126,8 +126,28 @@ type WebhookRoute struct {
 	// the engine config default (typically 127.0.0.1). The engine logs
 	// a loud Warn when a non-loopback interface is configured.
 	Interface string `json:"interface,omitempty"`
+	// Concurrency controls how many extension instances handle this
+	// webhook when multiple sessions load the same extension.
+	// "single" (default when empty): first matching host handles it.
+	// "all": every matching host handles it (future enhancement).
+	Concurrency string `json:"concurrency,omitempty"`
 }
 
 // ID satisfies the asyncreg.Declaration interface. Webhook routes use
 // the path as their stable identifier within the registry.
 func (r WebhookRoute) ID() string { return r.Path }
+
+// Validate returns a non-nil error when the webhook route declaration
+// is internally inconsistent.
+func (r WebhookRoute) Validate() error {
+	if r.Path == "" {
+		return fmt.Errorf("webhook route path is required")
+	}
+	switch r.Concurrency {
+	case "", "single", "all":
+		// valid
+	default:
+		return fmt.Errorf("unknown webhook concurrency %q (use \"single\" or \"all\")", r.Concurrency)
+	}
+	return nil
+}

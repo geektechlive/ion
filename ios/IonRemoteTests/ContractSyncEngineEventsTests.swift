@@ -1,3 +1,4 @@
+// @file-size-exception: contract sync test suite — each engine event variant needs its own decode + field-set test
 import XCTest
 @testable import IonRemote
 
@@ -16,6 +17,7 @@ import XCTest
 ///   - engine_early_stop_decision_request (ADR-002)
 ///   - engine_command_registry (snapshot semantics — agent-state.md)
 ///   - engine_command_result
+///   - engine_model_fallback (field-set only — iOS uses snapshot path)
 ///
 /// Plus the shared `EngineCommandListing` type that rides inside
 /// engine_command_registry snapshots.
@@ -152,6 +154,72 @@ final class ContractSyncEngineEventsTests: XCTestCase {
         )
     }
 
+    // MARK: - PlanModeAutoExitEvent decode
+
+    /// The engine emits engine_plan_mode_auto_exit when it
+    /// deterministically synthesizes an ExitPlanMode call at end-of-turn
+    /// because the model misrouted plan exit (issue #187). Sibling to
+    /// engine_plan_proposal — both surface the plan-approval card, but
+    /// this event additionally tells consumers the exit was
+    /// engine-driven rather than model-driven. iOS does not act on this
+    /// event today (the desktop is the authoritative consumer), but
+    /// decoding cleanly here keeps the wire protocol uniform across
+    /// consumers and lets a future iOS surface (e.g. a "Plan surfaced
+    /// automatically" hint) read the full payload without contract
+    /// changes.
+    func testPlanModeAutoExitDecode() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.normalizedEvents["plan_mode_auto_exit"] else {
+            XCTFail("plan_mode_auto_exit not found in Go manifest")
+            return
+        }
+
+        let json = """
+        {
+            "type": "engine_plan_mode_auto_exit",
+            "tabId": "t1",
+            "instanceId": "i1",
+            "planModeAutoExitStopReason": "end_turn",
+            "planFilePath": "/home/user/.ion/plans/happy-jumping-rabbit.md",
+            "planSlug": "happy-jumping-rabbit",
+            "planModeAutoExitReason": "engine-synthesized: run ended in plan mode without ExitPlanMode call",
+            "planModeAutoExitSessionId": "sess-42",
+            "planModeAutoExitRunId": "run-99"
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .enginePlanModeAutoExit(let tabId, let instanceId, let stopReason, let path, let slug, let reason, let sessionId, let runId) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(stopReason, "end_turn")
+            XCTAssertEqual(path, "/home/user/.ion/plans/happy-jumping-rabbit.md")
+            XCTAssertEqual(slug, "happy-jumping-rabbit")
+            XCTAssertEqual(reason, "engine-synthesized: run ended in plan mode without ExitPlanMode call")
+            XCTAssertEqual(sessionId, "sess-42")
+            XCTAssertEqual(runId, "run-99")
+        } else {
+            XCTFail("Expected enginePlanModeAutoExit, got \(event)")
+        }
+
+        // Swift tracks the NormalizedEvent variant field names verbatim
+        // (the manifest's `plan_mode_auto_exit` entry uses the un-prefixed
+        // tags from the PlanModeAutoExitEvent struct). The iOS wire-side
+        // CodingKeys use planModeAutoExit* prefixes for collision-free
+        // decoding, but the contract manifest tracks the variant struct
+        // — which is what consumers reason about logically.
+        let swiftHandled: Set<String> = [
+            "stopReason", "planFilePath", "planSlug",
+            "reason", "sessionId", "runId",
+        ]
+        let goSet = Set(goFields ?? [])
+        let unhandled = goSet.subtracting(swiftHandled)
+        XCTAssert(
+            unhandled.isEmpty,
+            "Go plan_mode_auto_exit has fields not tracked in Swift test: \(unhandled.sorted())"
+        )
+    }
+
     // MARK: - EarlyStopDecisionRequest decode
 
     /// The engine emits engine_early_stop_decision_request as the wire-
@@ -167,6 +235,84 @@ final class ContractSyncEngineEventsTests: XCTestCase {
     /// through the iOS Swift decoder without loss so a future iOS
     /// surface for the event (e.g. a "model nudged" status indicator)
     /// can read the complete record without contract changes.
+
+    // MARK: - RunStalledEvent decode
+
+    /// The engine emits engine_run_stalled when the progress watchdog
+    /// detects no forward progress for longer than the configured
+    /// threshold. Advisory only; the authoritative completion signal is
+    /// the follow-up engine_task_complete. iOS decodes the event via
+    /// NormalizedEvent.swift CodingKeys; this test pins the wire format.
+    func testRunStalledDecode() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.normalizedEvents["run_stalled"] else {
+            XCTFail("run_stalled not found in Go manifest")
+            return
+        }
+
+        let json = """
+        {
+            "type": "engine_run_stalled",
+            "tabId": "t1",
+            "instanceId": "i1",
+            "runStalledDuration": 45.2,
+            "runStalledLastActivity": "provider stream chunk"
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineRunStalled(let tabId, let instanceId, let stalledDuration, let lastActivity) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(stalledDuration, 45.2, accuracy: 0.001)
+            XCTAssertEqual(lastActivity, "provider stream chunk")
+        } else {
+            XCTFail("Expected engineRunStalled, got \(event)")
+        }
+
+        let swiftHandled: Set<String> = [
+            "stalledDuration", "lastActivity",
+        ]
+        let goSet = Set(goFields ?? [])
+        let unhandled = goSet.subtracting(swiftHandled)
+        XCTAssert(
+            unhandled.isEmpty,
+            "Go run_stalled has fields not tracked in Swift test: \(unhandled.sorted())"
+        )
+    }
+
+    // MARK: - ModelFallbackEvent field-set
+
+    /// The engine emits engine_model_fallback when the provider falls back
+    /// to a different model than the one originally requested. iOS does NOT
+    /// decode this as a live RemoteEvent — it consumes the information via
+    /// the snapshot path instead (EngineInstanceModelFallback in
+    /// RemoteTabState). This test validates only that the Swift-tracked
+    /// field set stays in sync with the Go manifest so that any future
+    /// decoder or snapshot consumer picks up new fields without a silent
+    /// contract drift.
+    func testModelFallbackFieldSetMatchesManifest() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.normalizedEvents["model_fallback"] else {
+            XCTFail("model_fallback not found in Go manifest")
+            return
+        }
+
+        // iOS uses the snapshot path (EngineInstanceModelFallback in
+        // RemoteTabState), not live event decoding. This set tracks the
+        // Go-side NormalizedEvent variant fields so a manifest addition
+        // triggers a test failure and prompts an iOS-side review.
+        let swiftTracked: Set<String> = [
+            "fallbackModel", "reason", "requestedModel",
+        ]
+        let goSet = Set(goFields ?? [])
+        let untracked = goSet.subtracting(swiftTracked)
+        XCTAssert(
+            untracked.isEmpty,
+            "Go model_fallback has fields not tracked in Swift test: \(untracked.sorted())"
+        )
+    }
+
     func testEngineEarlyStopDecisionRequestDecode() throws {
         let json = """
         {
@@ -400,6 +546,73 @@ final class ContractSyncEngineEventsTests: XCTestCase {
             XCTAssertNil(commandError)
         } else {
             XCTFail("Expected engineCommandResult (minimal), got \(minimalEvent)")
+        }
+    }
+
+    // MARK: - engine_tool_update / engine_tool_complete / engine_schedule_fired / engine_llm_call / engine_dispatch_start
+
+    func testEngineToolUpdateDecode() throws {
+        let json = """
+        {"type":"engine_tool_update","tabId":"t1","instanceId":"i1"}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineToolUpdate(let tabId, let instanceId) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+        } else {
+            XCTFail("Expected engineToolUpdate")
+        }
+    }
+
+    func testEngineToolCompleteDecode() throws {
+        let json = """
+        {"type":"engine_tool_complete","tabId":"t1","instanceId":"i1"}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineToolComplete(let tabId, let instanceId) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+        } else {
+            XCTFail("Expected engineToolComplete")
+        }
+    }
+
+    func testEngineScheduleFiredDecode() throws {
+        let json = """
+        {"type":"engine_schedule_fired","tabId":"t1","instanceId":"i1"}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineScheduleFired(let tabId, let instanceId) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+        } else {
+            XCTFail("Expected engineScheduleFired")
+        }
+    }
+
+    func testEngineLlmCallDecode() throws {
+        let json = """
+        {"type":"engine_llm_call","tabId":"t1","instanceId":"i1"}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineLlmCall(let tabId, let instanceId) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+        } else {
+            XCTFail("Expected engineLlmCall")
+        }
+    }
+
+    func testEngineDispatchStartDecode() throws {
+        let json = """
+        {"type":"engine_dispatch_start","tabId":"t1","instanceId":"i1"}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineDispatchStart(let tabId, let instanceId) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+        } else {
+            XCTFail("Expected engineDispatchStart")
         }
     }
 

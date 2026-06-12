@@ -34,6 +34,15 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     var pillColor: String?
     /// Custom pill icon key (e.g. "diamond", "star"). Nil means use the default status dot.
     var pillIcon: String?
+    /// Aggregated "any sub-instance has running dispatched background
+    /// agents" flag, projected by the desktop's
+    /// `getRemoteTabStates` snapshot. Drives the yellow "awaiting
+    /// children" pulse on the parent tab pill in `TabRowView`. Nil/
+    /// absent means false — older desktops that don't emit this field
+    /// continue to work, with the parent pill simply not pulsing
+    /// yellow until they're upgraded. See CLAUDE.md § "Common parity
+    /// surfaces" parity table for the desktop/iOS parity rule.
+    var hasRunningChildren: Bool?
 
     var displayTitle: String {
         customTitle ?? title
@@ -95,6 +104,15 @@ struct EngineInstanceInfo: Codable, Identifiable, Sendable {
     /// status is aggregated by the snapshot — if any instance is running,
     /// `RemoteTabState.status` is promoted to `.running`.
     var isRunning: Bool? = nil
+    /// Per-engine-instance dispatched-agent count, decoded from the
+    /// desktop snapshot. > 0 when the instance has background agents
+    /// in the `running` status — even if the orchestrator itself is
+    /// idle. Drives the yellow "awaiting children" pulse on the iOS
+    /// sub-tab pill in `EngineInstanceBar` (priority cascade matches
+    /// the desktop: waitingState → isRunning → runningAgentCount).
+    /// Nil/zero means no background agents are running. See
+    /// CLAUDE.md § "Common parity surfaces" parity table.
+    var runningAgentCount: Int? = nil
     /// Per-engine-instance model-fallback indicator. Non-nil when the
     /// desktop's engineModelFallbacks map holds an entry for this
     /// `tabId:instanceId` — i.e. the engine emitted ModelFallbackEvent
@@ -102,6 +120,31 @@ struct EngineInstanceInfo: Codable, Identifiable, Sendable {
     /// idle. `EngineInstanceBar` renders a ⚠ glyph when non-nil; tap
     /// to reveal the requested + fallback model names.
     var modelFallback: EngineInstanceModelFallback? = nil
+    /// Historical conversation IDs accumulated across engine restarts,
+    /// projected from the desktop snapshot. Used as a fallback for "Copy
+    /// Session ID" when `statusFields?.sessionId` is nil (e.g. restored
+    /// tabs before the engine reconnects, or tabs where an extension
+    /// failed at startup before any prompt was sent).
+    var conversationIds: [String]? = nil
+
+    // Non-Codable conversation state — populated by ConversationInstance,
+    // not decoded from the snapshot JSON.
+    var messages: [Message] = []
+    var agentStates: [AgentStateUpdate] = []
+    var statusFields: StatusFields? = nil
+    var modelOverride: String? = nil
+
+    // Explicit CodingKeys so the four fields above are excluded from
+    // JSON encoding/decoding and don't break snapshot deserialization.
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case waitingState
+        case isRunning
+        case runningAgentCount
+        case modelFallback
+        case conversationIds
+    }
 }
 
 // MARK: - PermissionMode
@@ -117,6 +160,13 @@ struct PermissionRequest: Codable, Identifiable, Sendable {
     let toolName: String
     let toolInput: [String: AnyCodable]?
     let options: [PermissionOption]
+    /// Engine instance (sub-tab) this request belongs to. Populated by the
+    /// desktop for engine-view denials (both the live `permission_request`
+    /// event and the snapshot queue promotion) so `EngineView` can scope
+    /// the plan/question card to the owning sub-conversation. Nil for CLI
+    /// tabs and for payloads from older desktops — nil passes the
+    /// active-instance filter for backward compatibility.
+    var instanceId: String? = nil
 
     var id: String { questionId }
 }

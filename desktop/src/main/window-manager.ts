@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, Menu, nativeImage, screen, 
 import { join } from 'path'
 import { IPC } from '../shared/types'
 import { log as _log, flushLogs } from './logger'
-import { state, SPACES_DEBUG, sessionPlane } from './state'
+import { state, SPACES_DEBUG, sessionPlane, engineBridge } from './state'
 import { broadcast } from './broadcast'
 import { terminalManager } from './terminal-manager-instance'
 
@@ -145,18 +145,24 @@ export function createWindow(): void {
     if (state.forceQuit) return
     e.preventDefault()
     const hasRunning = sessionPlane.hasRunningTabs()
+    // 0 = Quit Desktop (engine keeps running)
+    // 1 = Quit All (engine shuts down too)
+    // 2 = Cancel
     const choice = dialog.showMessageBoxSync(state.mainWindow!, {
-      type: 'warning',
-      buttons: ['Quit', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
+      type: 'question',
+      buttons: ['Quit Desktop', 'Quit All', 'Cancel'],
+      defaultId: 2,
+      cancelId: 2,
       title: 'Quit Ion?',
       message: hasRunning
-        ? 'Sessions are still running. Quitting will stop them.'
-        : 'Are you sure you want to quit?',
-      detail: 'Tip: Press ⌥Space to hide/show the app without quitting.',
+        ? 'Sessions are running in the engine.'
+        : 'How would you like to quit?',
+      detail: hasRunning
+        ? 'Quit Desktop closes the window but keeps engine sessions running.\nQuit All stops the engine and all running sessions.\n\nTip: ⌥Space hides/shows the window without quitting.'
+        : 'Quit Desktop closes the window but keeps the engine running.\nQuit All stops the engine too.\n\nTip: ⌥Space hides/shows the window without quitting.',
     })
-    if (choice === 0) {
+    if (choice === 0 || choice === 1) {
+      const shutdownEngine = choice === 1
       // Flush renderer tab state before exiting — the Zustand store debounces
       // persistTabs() at 100ms and app.exit(0) kills the renderer immediately,
       // so any pending state (conversationId, titles, etc.) would be lost.
@@ -169,6 +175,12 @@ export function createWindow(): void {
           } catch {
             // Window may already be destroyed or renderer unresponsive.
           }
+        }
+        if (shutdownEngine) {
+          log('Quit All: shutting down engine process')
+          await engineBridge.shutdownAndWait().catch((err: Error) => {
+            log(`Engine shutdown error (proceeding with quit): ${err.message}`)
+          })
         }
         state.forceQuit = true
         terminalManager.destroyAll()
