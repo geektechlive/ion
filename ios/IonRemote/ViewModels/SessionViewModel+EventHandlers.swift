@@ -440,6 +440,9 @@ extension SessionViewModel {
             resourceStore.applyDelta(kind: kind, rawDelta: rawDelta)
         case .engineNotification:
             break
+
+        case .engineIntercept(let tabId, let instanceId, let level, let title, let message, _, _):
+            handleEngineIntercept(tabId: tabId, instanceId: instanceId, level: level, title: title, message: message)
         }
     }
 

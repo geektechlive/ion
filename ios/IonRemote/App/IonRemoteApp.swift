@@ -34,11 +34,21 @@ struct IonRemoteApp: App {
                         if viewModel.showGitInfoInTabList {
                             viewModel.requestAllGitChanges()
                         }
+                        // Re-send the current focus state so the desktop's
+                        // deviceFocusMap is fresh after any suspension gap.
+                        // Uses the locally-tracked focusedTabId (may be nil
+                        // if the user hasn't opened a tab yet this session).
+                        viewModel.sendReportFocus(tabId: viewModel.focusedTabId)
                     case .background:
                         // Stop transport but preserve all state (tabs, messages,
                         // navigation, typed input) so the user returns to the
                         // same view when the app foregrounds.
                         viewModel.suspendTransport()
+                        // Tell the desktop this device is no longer focused on
+                        // any tab so redirect-level intercepts are not sent to
+                        // a backgrounded device. Send before suspending the
+                        // transport so the message can be flushed.
+                        viewModel.sendReportFocus(tabId: nil)
                     default:
                         break
                     }

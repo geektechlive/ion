@@ -277,6 +277,9 @@ extension DiagnosticLog {
 
         case .engineNotification(let tabId, _, let kind, let title, _, _, _):
             log("EVENT: engineNotification tab=\(tabId.prefix(8)) kind=\(kind) title=\(title)")
+
+        case .engineIntercept(let tabId, let instId, let level, let title, _, _, _):
+            log("EVENT: engineIntercept tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") level=\(level) title=\(title.prefix(60))")
         }
     }
 }

@@ -465,10 +465,27 @@ extension SessionViewModel {
         send(.setDesktopSetting(key: key, value: value))
     }
 
+    /// Send the current focus state to the desktop for intercept routing.
+    /// The desktop stores the (tabId, interceptEnabled) pair in `deviceFocusMap`
+    /// and uses it to decide whether this device's active tab is a valid
+    /// target for redirect-level intercepts.
+    ///
+    /// `tabId: nil` signals that the app is backgrounded (no active tab).
+    /// `interceptEnabled` reads the iOS-local UserDefaults preference,
+    /// defaulting to `true` so new installs participate in intercepts
+    /// without any configuration step.
+    func sendReportFocus(tabId: String?) {
+        let interceptEnabled = UserDefaults.standard.object(forKey: "interceptEnabled") as? Bool ?? true
+        DiagnosticLog.log("CMD: report_focus tabId=\(tabId?.prefix(8) ?? "nil") interceptEnabled=\(interceptEnabled)")
+        Task { @MainActor [weak self] in
+            self?.focusedTabId = tabId
+        }
+        send(.reportFocus(tabId: tabId, interceptEnabled: interceptEnabled))
+    }
+
     // MARK: - Send
 
-    func send(_ command: RemoteCommand) {
-        DiagnosticLog.logCommand(command)
+    func send(_ command: RemoteCommand) {        DiagnosticLog.logCommand(command)
         guard let transport else {
             DiagnosticLog.log("CMD: dropped (no transport)")
             Task { @MainActor [weak self] in

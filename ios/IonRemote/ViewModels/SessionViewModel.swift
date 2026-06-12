@@ -278,6 +278,11 @@ final class SessionViewModel {
     /// Tab ID to auto-open the Git pane for (set by tapping the branch badge in tab list).
     /// Observed by ConversationView and EngineView; cleared after the pane is presented.
     var pendingGitPaneTabId: String? = nil
+    /// The currently focused tab ID — the tab the user is viewing right now.
+    /// Updated by TabListView whenever the selected/navigated tab changes and
+    /// cleared when the app backgrounds. The desktop reads this via `report_focus`
+    /// commands to route engine_intercept events to the correct device+tab.
+    var focusedTabId: String? = nil
     /// Set `true` before sending a create-tab command so the `tabCreated`
     /// handler knows the creation was locally initiated and should navigate.
     var awaitingLocalTabCreation = false

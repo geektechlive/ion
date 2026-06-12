@@ -6,8 +6,35 @@ import UIKit
 extension SessionViewModel {
 
     @MainActor
-    func handleEngineHarnessMessage(tabId: String, instanceId: String?, message: String) {
+    func handleEngineIntercept(tabId: String, instanceId: String?, level: String, title: String, message: String) {
+        // Render the intercept inline in the engine conversation scrollback
+        // so the user can see that an extension fired an intercept, what it
+        // said, and whether the run was redirected. Uses role: .harness so
+        // EngineMessageRow routes it through the intercept banner style.
+        // `interceptLevel` on the Message lets the view choose visual weight:
+        //   "redirect" — amber/urgent (run was aborted + re-prompted by desktop)
+        //   "banner"   — lighter informational style
+        //
+        // Content format mirrors the desktop: bold title line prefixed with
+        // "Conversation redirected: " for redirect level, then the body.
+        DiagnosticLog.log("ENGINE: intercept tabId=\(tabId.prefix(8)) level=\(level) title=\(title.prefix(60))")
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
+        var msgs = engineMessages[key] ?? []
+        let levelPrefix = level == "redirect" ? "Conversation redirected: " : ""
+        let content = "**\(levelPrefix)\(title)**\n\n\(message)"
+        var msg = Message(
+            id: UUID().uuidString,
+            role: .harness,
+            content: content,
+            timestamp: Date().timeIntervalSince1970 * 1000
+        )
+        msg.interceptLevel = level
+        msgs.append(msg)
+        engineMessages[key] = msgs
+    }
+
+    @MainActor
+    func handleEngineHarnessMessage(tabId: String, instanceId: String?, message: String) {        let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
         var msgs = engineMessages[key] ?? []
         // Divider messages (session-start, implement, etc.) may be relayed
         // from the desktop as engine_harness_message. Detect the `──` sentinel

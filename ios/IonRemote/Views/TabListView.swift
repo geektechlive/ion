@@ -157,6 +157,11 @@ struct TabListView: View {
                 viewModel.pendingNavigationTabId = nil
             }
         }
+        .onChange(of: selectedTabId) { _, tabId in
+            // Notify the desktop which tab is focused so it can route
+            // intercept events to this device correctly.
+            viewModel.sendReportFocus(tabId: tabId)
+        }
     }
 
     // MARK: - iPhone Layout (NavigationStack)
@@ -213,6 +218,14 @@ struct TabListView: View {
                 }
                 .navigationDestination(for: String.self) { tabId in
                     destinationView(for: tabId)
+                        .onAppear { viewModel.sendReportFocus(tabId: tabId) }
+                        .onDisappear {
+                            // Only clear focus if we're popping back to the list,
+                            // not when a child sheet appears over the conversation.
+                            if navigationPath.isEmpty {
+                                viewModel.sendReportFocus(tabId: nil)
+                            }
+                        }
                 }
                 .refreshable {
                     Haptic.light()

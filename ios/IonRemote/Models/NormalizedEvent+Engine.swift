@@ -295,6 +295,31 @@ extension RemoteEvent {
             let groups = try container.decode([DesktopSettingGroupDescriptor].self, forKey: .groups)
             return .desktopSettingsSnapshot(settings: settings, schema: schema, groups: groups)
 
+        case .engineIntercept:
+            // Intercept event routed from the desktop after it has applied
+            // its own focus-checking and redirect-orchestration logic.
+            // iOS renders an inline banner in the engine conversation.
+            // Fields match the desktop RemoteEvent wire shape exactly:
+            // tabId (required), level, title, message, source?, metadata?.
+            // `level` and `title` default to empty strings on missing values
+            // (older desktops should never omit them, but be safe).
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let level = try container.decodeIfPresent(String.self, forKey: .level) ?? "banner"
+            let title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+            let message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
+            let source = try container.decodeIfPresent(String.self, forKey: .source)
+            let metadata = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata)
+            return .engineIntercept(
+                tabId: tabId,
+                instanceId: instanceId,
+                level: level,
+                title: title,
+                message: message,
+                source: source,
+                metadata: metadata
+            )
+
         default:
             return nil
         }
@@ -574,6 +599,20 @@ extension RemoteEvent {
             try container.encode(settings, forKey: .settings)
             try container.encode(schema, forKey: .schema)
             try container.encode(groups, forKey: .groups)
+            return true
+
+        case .engineIntercept(let tabId, let instanceId, let level, let title, let message, let source, let metadata):
+            // Encoder mirror of the decoder above. iOS never originates
+            // this event (the engine+desktop emit it), but the encoder
+            // must round-trip cleanly for tests and diagnostic dumps.
+            try container.encode(TypeKey.engineIntercept, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(level, forKey: .level)
+            try container.encode(title, forKey: .title)
+            try container.encode(message, forKey: .message)
+            try container.encodeIfPresent(source, forKey: .source)
+            try container.encodeIfPresent(metadata, forKey: .metadata)
             return true
 
         default:

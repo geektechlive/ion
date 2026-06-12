@@ -22,6 +22,13 @@ struct Message: Codable, Identifiable, Sendable {
     /// Set to true by engine_message_end so the next engine_text_delta
     /// opens a fresh assistant message instead of appending to this one.
     var sealed: Bool = false
+    /// Intercept level carried from `engine_intercept.interceptLevel`.
+    /// Populated only on `role: .harness` messages pushed by the
+    /// `engineIntercept` handler in SessionViewModel+EngineEvents.swift.
+    /// Values: "banner" (informational) | "redirect" (urgent, run aborted).
+    /// EngineMessageRow reads this to choose the intercept banner style.
+    /// Client-only field — NOT part of the wire protocol, NOT persisted.
+    var interceptLevel: String? = nil
 
     var isUser: Bool { role == .user }
     var isAssistant: Bool { role == .assistant }

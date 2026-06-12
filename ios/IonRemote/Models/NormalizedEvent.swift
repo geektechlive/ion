@@ -220,6 +220,28 @@ enum RemoteEvent: Codable, Sendable {
         notifySound: String?,
         notifyScope: String?
     )
+    /// Intercept event from an extension via ctx.intercept(). Emitted by the
+    /// engine and routed to the target session's stream by the desktop.
+    /// The desktop forwards this as a `RemoteEvent` of type `engine_intercept`
+    /// after performing its own routing/redirect logic.
+    ///
+    /// Level hint semantics (same as desktop):
+    ///   "banner"   — informational, non-disruptive inline display.
+    ///   "redirect" — urgent; the desktop has already aborted + re-prompted;
+    ///                iOS renders a visual "Conversation redirected" marker.
+    ///
+    /// iOS does not perform the abort or re-prompt — the desktop owns that
+    /// orchestration. iOS renders the inline banner and (for redirect) relies
+    /// on the natural abort + new user message arriving on the engine stream.
+    case engineIntercept(
+        tabId: String,
+        instanceId: String?,
+        level: String,
+        title: String,
+        message: String,
+        source: String?,
+        metadata: [String: AnyCodable]?
+    )
     /// Desktop user-preferences projection. Emitted on initial pairing
     /// and on every subsequent change to a projectable setting (either
     /// from iOS via `setDesktopSetting` or from the desktop UI). Snapshot
@@ -327,6 +349,7 @@ enum RemoteEvent: Codable, Sendable {
         case engineResourceSnapshot = "engine_resource_snapshot"
         case engineResourceDelta = "engine_resource_delta"
         case engineNotification = "engine_notification"
+        case engineIntercept = "engine_intercept"
         case desktopSettingsSnapshot = "desktop_settings_snapshot"
         case gitChangesResponse = "git_changes_response"
         case gitGraphResponse = "git_graph_response"

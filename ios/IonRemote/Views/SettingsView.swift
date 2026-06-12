@@ -82,6 +82,8 @@ struct SettingsView: View {
                     SettingsVoiceView()
                 }
 
+                interceptToggleSection
+
                 categoryLink(
                     "Diagnostics & About",
                     icon: "stethoscope",
@@ -184,10 +186,44 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Intercept toggle
+
+    /// Inline toggle section for the "Allow conversation intercepts" preference.
+    /// Backed by `UserDefaults` key "interceptEnabled" (default true).
+    /// Toggling immediately sends a `report_focus` command so the desktop's
+    /// `deviceFocusMap` reflects the new preference without waiting for the
+    /// next tab-switch or app-foreground event.
+    private var interceptToggleSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: {
+                    UserDefaults.standard.object(forKey: "interceptEnabled") as? Bool ?? true
+                },
+                set: { newValue in
+                    UserDefaults.standard.set(newValue, forKey: "interceptEnabled")
+                    // Re-send focus so desktop immediately reflects the change.
+                    viewModel.sendReportFocus(tabId: viewModel.focusedTabId)
+                }
+            )) {
+                HStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.bubble")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Color.orange, in: RoundedRectangle(cornerRadius: 6))
+                    Text("Allow conversation intercepts")
+                }
+            }
+        } footer: {
+            Text("When on, background automations can redirect your active conversation with an urgent alert. Turn off to receive only passive banners.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: - Helpers
 
-    private var currentThemeName: String {
-        ThemeRegistry.themes.first { $0.id == theme.selectedThemeId }?.displayName ?? "Default"
+    private var currentThemeName: String {        ThemeRegistry.themes.first { $0.id == theme.selectedThemeId }?.displayName ?? "Default"
     }
 
     private var currentModelLabel: String {
