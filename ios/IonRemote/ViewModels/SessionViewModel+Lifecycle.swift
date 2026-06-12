@@ -312,7 +312,16 @@ extension SessionViewModel {
 
     /// Restore cached layout for a device so the UI shows last-known state.
     func restoreCachedLayout(for deviceId: String?) {
-        guard let deviceId, let cached = LayoutCache.load(deviceId: deviceId) else { return }
+        guard let deviceId else {
+            DiagnosticLog.log("CACHE: restoreCachedLayout skipped — no deviceId")
+            return
+        }
+        guard let cached = LayoutCache.load(deviceId: deviceId) else {
+            DiagnosticLog.log("CACHE: restoreCachedLayout miss — no cache for deviceId=\(deviceId.prefix(8))")
+            return
+        }
+        let ageSeconds = Int(Date().timeIntervalSince(cached.cachedAt))
+        DiagnosticLog.log("CACHE: restoreCachedLayout hit deviceId=\(deviceId.prefix(8)) tabs=\(cached.tabs.count) groups=\(cached.tabGroups.count) groupMode=\(cached.tabGroupMode) age=\(ageSeconds)s")
         tabs = cached.tabs
         tabIds = Set(cached.tabs.map(\.id))
         tabGroupMode = cached.tabGroupMode

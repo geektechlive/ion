@@ -226,7 +226,10 @@ extension SessionViewModel {
                 let activeInstanceId = activeEngineInstance[tab.id]
                 let loadedKey = activeInstanceId.map { "\(tab.id):\($0)" } ?? tab.id
                 if !engineConversationLoaded.contains(loadedKey) {
+                    DiagnosticLog.log("SNAP: engine conv not loaded for key=\(loadedKey.prefix(16)) — firing loadEngineConversation")
                     loadEngineConversation(tabId: tab.id)
+                } else {
+                    DiagnosticLog.log("SNAP: engine conv already loaded key=\(loadedKey.prefix(16)) — skipping")
                 }
             }
         }

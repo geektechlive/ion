@@ -274,7 +274,7 @@ extension SessionViewModel {
         case .engineConversationHistory(let tabId, let instanceId, let messages):
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
             let filtered = messages.filter { $0.isInternal != true }
-            ionLog.info("engineConversationHistory: key=\(key), messageCount=\(messages.count), filtered=\(filtered.count)")
+            DiagnosticLog.log("LOAD-CONV: engineConversationHistory key=\(key.prefix(16)) total=\(messages.count) filtered=\(filtered.count) alreadyLoaded=\(engineConversationLoaded.contains(key))")
             mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.messages = filtered }
             engineConversationLoaded.insert(key)
 
@@ -445,6 +445,8 @@ extension SessionViewModel {
             handleUploadAttachmentResult(id: id, name: name, path: path, correlationId: correlationId, error: error)
 
         case .tabAttachments(let tabId, let attachments):
+            let names = attachments.map { "\($0.type):\($0.name)" }.joined(separator: ", ")
+            DiagnosticLog.log("ATTACH: tabAttachments received tabId=\(tabId.prefix(8)) count=\(attachments.count) items=[\(names)]")
             tabAttachmentCache[tabId] = attachments
 
         // Command discovery events

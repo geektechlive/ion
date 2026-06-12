@@ -31,7 +31,8 @@ struct ConversationView: View {
     }
 
     private var attachmentCount: Int {
-        countConversationAttachments(conversationMessages, desktopCache: viewModel.tabAttachmentCache[tabId])
+        guard let cache = viewModel.tabAttachmentCache[tabId] else { return 0 }
+        return cache.count
     }
 
     private var unifiedTurnView: Bool {
@@ -388,6 +389,7 @@ struct ConversationView: View {
             }
         }
         .task {
+            DiagnosticLog.log("ATTACH: ConversationView.task tabId=\(tabId.prefix(8)) cacheBeforeRequest=\(viewModel.tabAttachmentCache[tabId]?.count ?? -1)")
             viewModel.loadConversation(tabId: tabId)
             viewModel.requestLoadAttachments(tabId: tabId)
             cachedRestoredCard = computeRestoredSpecialCard()

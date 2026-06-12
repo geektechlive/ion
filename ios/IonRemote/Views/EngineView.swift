@@ -91,7 +91,7 @@ struct EngineView: View {
     }
 
     private var engineAttachmentCount: Int {
-        countConversationAttachments(engineMsgs, desktopCache: viewModel.tabAttachmentCache[tabId])
+        viewModel.tabAttachmentCache[tabId]?.count ?? 0
     }
 
     private enum GroupedItem: Identifiable {
@@ -283,6 +283,11 @@ struct EngineView: View {
         let dir = workingDirectory
         guard !dir.isEmpty, viewModel.discoveredCommands[dir] == nil else { return }
         viewModel.discoverCommands(directory: dir)
+    }
+
+    private func logAttachmentTaskEntry(tabId: String) {
+        let count = viewModel.tabAttachmentCache[tabId]?.count ?? -1
+        DiagnosticLog.log("ATTACH: EngineView.task tabId=\(tabId.prefix(8)) cacheBeforeRequest=\(count)")
     }
 
     /// First pending permission request for this engine tab that belongs to
@@ -661,7 +666,14 @@ struct EngineView: View {
             ToolbarItem(placement: .topBarTrailing) { toolbarButtons }
         }
         .task {
+            logAttachmentTaskEntry(tabId: tabId)
             viewModel.loadEngineConversation(tabId: tabId)
+            viewModel.requestLoadAttachments(tabId: tabId)
+            fetchCommandsIfNeeded()
+            if viewModel.pendingGitPaneTabId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
         }
         .task(id: compoundKey) {
             // Load immediately when switching to an instance that has no cached
@@ -671,6 +683,7 @@ struct EngineView: View {
             if engineMsgs.isEmpty {
                 viewModel.loadEngineConversation(tabId: tabId)
             }
+            viewModel.requestLoadAttachments(tabId: tabId)
         }
         .sheet(item: Binding(
             get: { viewModel.engineDialogs[compoundKey] ?? nil },
@@ -685,13 +698,6 @@ struct EngineView: View {
         .fullScreenCover(isPresented: $showTerminal) {
             ConversationTerminalView(tabId: tabId)
                 .environment(viewModel)
-        }
-        .task {
-            // Present git pane if navigated here via the branch badge tap
-            if viewModel.pendingGitPaneTabId == tabId {
-                viewModel.pendingGitPaneTabId = nil
-                showGitPane = true
-            }
         }
         .onChange(of: viewModel.pendingGitPaneTabId) { _, newId in
             if newId == tabId {
@@ -836,9 +842,6 @@ struct EngineView: View {
         .onChange(of: promptText) { _, newText in
             updateSlashFilter(newText)
         }
-        .onAppear {
-            fetchCommandsIfNeeded()
-        }
         .onChange(of: workingDirectory) {
             fetchCommandsIfNeeded()
         }
@@ -933,6 +936,7 @@ struct EngineView: View {
         DiagnosticLog.log("RESUME-SYNC: EngineView reloading tabId=\(tabId.prefix(8))")
         pendingScrollAfterReload = true
         viewModel.loadEngineConversation(tabId: tabId)
+        viewModel.requestLoadAttachments(tabId: tabId)
     }
 
     /// When a reconnect-triggered reload delivers new history, force-scroll

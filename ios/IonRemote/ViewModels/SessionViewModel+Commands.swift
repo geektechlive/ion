@@ -270,7 +270,8 @@ extension SessionViewModel {
 
     func loadEngineConversation(tabId: String) {
         let instanceId = activeEngineInstance[tabId]
-        ionLog.info("loadEngineConversation: tabId=\(tabId), instanceId=\(instanceId ?? "nil"), instances=\(self.engineInstances[tabId]?.map(\.id) ?? [])")
+        let instList = engineInstances[tabId]?.map(\.id) ?? []
+        DiagnosticLog.log("LOAD-CONV: loadEngineConversation tabId=\(tabId.prefix(8)) instanceId=\(instanceId?.prefix(8) ?? "nil") allInstances=\(instList.map { $0.prefix(8) })")
         send(.loadEngineConversation(tabId: tabId, instanceId: instanceId))
     }
 
@@ -435,6 +436,9 @@ extension SessionViewModel {
     }
 
     func requestLoadAttachments(tabId: String) {
+        let oldCount = tabAttachmentCache[tabId]?.count ?? -1
+        DiagnosticLog.log("ATTACH: requestLoadAttachments tabId=\(tabId.prefix(8)) oldCacheCount=\(oldCount) clearing")
+        tabAttachmentCache.removeValue(forKey: tabId)
         send(.loadAttachments(tabId: tabId))
     }
 
