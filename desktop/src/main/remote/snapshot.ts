@@ -192,11 +192,62 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                 if (anyInstanceRunning && anyInstanceHasRunningChildren) break;
               }
             }
+            // Derive the parent engine tab's status authoritatively from
+            // per-instance state. The renderer's t.status can be stale
+            // for engine tabs: the engine_status / engine_text_delta
+            // handlers gate writes on the *active* sub-instance, so an
+            // inactive sub-instance that started running and then finished
+            // (or a user switching active sub-instances mid-run) can strand
+            // t.status === 'running' even when no sub-instance is
+            // actually running anymore. Without this derivation, iOS
+            // receives the stranded value via the snapshot and shows the
+            // parent tab pulsing orange + "Running…" indefinitely.
+            //
+            // Rules (engine tabs only):
+            //   - anyInstanceRunning → 'running'
+            //   - terminal status ('dead' / 'failed') → preserve
+            //   - 'completed' AND queue carries ExitPlanMode/AskUserQuestion
+            //     → preserve 'completed' so the green (plan-ready) /
+            //     blue (question) parent pill still shows after auto-allow
+            //   - otherwise → 'idle'
+            //
+            // Non-engine tabs pass through t.status unchanged.
+            //
+            // Desktop's own tab pill is unaffected: it reads
+            // isAnyEngineInstanceRunning(tab.id) directly in
+            // TabStripShared.ts line ~415, never trusting tab.status for
+            // engine running-state. This derivation is purely for the
+            // snapshot projection consumed by iOS.
+            var derivedStatus = t.status;
+            if (t.isEngine === true) {
+              if (anyInstanceRunning) {
+                derivedStatus = 'running';
+              } else if (t.status === 'dead' || t.status === 'failed') {
+                derivedStatus = t.status;
+              } else if (t.status === 'completed') {
+                var hasWaitingDenial = false;
+                for (var qi = 0; qi < queue.length; qi++) {
+                  var qTool = queue[qi] && (queue[qi].toolTitle || queue[qi].toolName);
+                  if (qTool === 'ExitPlanMode' || qTool === 'AskUserQuestion') { hasWaitingDenial = true; break; }
+                }
+                derivedStatus = hasWaitingDenial ? 'completed' : 'idle';
+              } else {
+                derivedStatus = 'idle';
+              }
+              // Log every downgrade from running/connecting → idle so a
+              // future investigation can confirm the derivation fired and
+              // identify the tab. Logged in the renderer (console.log)
+              // because this IIFE runs in the renderer process. The
+              // main-process log() helper is not in scope here.
+              if ((t.status === 'running' || t.status === 'connecting') && derivedStatus !== 'running' && derivedStatus !== 'connecting') {
+                console.log('[snapshot] engine parent tab status downgrade tabId=' + (t.id || '').slice(0, 8) + ' raw=' + t.status + ' derived=' + derivedStatus + ' anyInstanceRunning=' + anyInstanceRunning + ' queueLen=' + queue.length);
+              }
+            }
             return {
               id: t.id,
               title: t.title,
               customTitle: t.customTitle,
-              status: (t.isEngine && anyInstanceRunning && t.status !== 'running' && t.status !== 'connecting') ? 'running' : t.status,
+              status: derivedStatus,
               workingDirectory: t.workingDirectory,
               permissionMode: (function() {
                 if (t.isEngine && ePaneForList) {
