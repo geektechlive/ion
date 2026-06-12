@@ -1,3 +1,4 @@
+// @file-size-exception: contract sync test suite — each engine event variant needs its own decode + field-set test
 import XCTest
 @testable import IonRemote
 
@@ -16,6 +17,7 @@ import XCTest
 ///   - engine_early_stop_decision_request (ADR-002)
 ///   - engine_command_registry (snapshot semantics — agent-state.md)
 ///   - engine_command_result
+///   - engine_model_fallback (field-set only — iOS uses snapshot path)
 ///
 /// Plus the shared `EngineCommandListing` type that rides inside
 /// engine_command_registry snapshots.
@@ -233,6 +235,40 @@ final class ContractSyncEngineEventsTests: XCTestCase {
     /// through the iOS Swift decoder without loss so a future iOS
     /// surface for the event (e.g. a "model nudged" status indicator)
     /// can read the complete record without contract changes.
+
+    // MARK: - ModelFallbackEvent field-set
+
+    /// The engine emits engine_model_fallback when the provider falls back
+    /// to a different model than the one originally requested. iOS does NOT
+    /// decode this as a live RemoteEvent — it consumes the information via
+    /// the snapshot path instead (EngineInstanceModelFallback in
+    /// RemoteTabState). This test validates only that the Swift-tracked
+    /// field set stays in sync with the Go manifest so that any future
+    /// decoder or snapshot consumer picks up new fields without a silent
+    /// contract drift.
+    func testModelFallbackFieldSetMatchesManifest() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.normalizedEvents["model_fallback"] else {
+            XCTFail("model_fallback not found in Go manifest")
+            return
+        }
+
+        // iOS uses the snapshot path (EngineInstanceModelFallback in
+        // RemoteTabState), not live event decoding. This set tracks the
+        // Go-side NormalizedEvent variant fields so a manifest addition
+        // triggers a test failure and prompts an iOS-side review.
+        let swiftTracked: Set<String> = [
+            "fallbackModel", "reason", "requestedModel",
+        ]
+        let goSet = Set(goFields ?? [])
+        let untracked = goSet.subtracting(swiftTracked)
+        XCTAssert(
+            untracked.isEmpty,
+            "Go model_fallback has fields not tracked in Swift test: \(untracked.sorted())"
+        )
+    }
+
+
     func testEngineEarlyStopDecisionRequestDecode() throws {
         let json = """
         {
