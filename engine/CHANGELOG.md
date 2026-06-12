@@ -13,6 +13,29 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.38.0](https://github.com/dsswift/ion/compare/engine-v1.37.0...engine-v1.38.0) (2026-06-12)
+
+### Features
+
+* **engine:** add resource subsystem with broker, SDK, and client wiring (#180) ([6d9241e](https://github.com/dsswift/ion/commit/6d9241ee17d27008fa83f14731048c146b0c9012))
+* **engine:** add notification SDK with ctx.notify (#181) ([7fdb6ed](https://github.com/dsswift/ion/commit/7fdb6edaa0765818f5fbe565d90ea8a527e5356c))
+* **engine:** add plan-mode auto-exit safety net (#187) ([7ce9eb0](https://github.com/dsswift/ion/commit/7ce9eb0847433f0430f281ebff04f1e252d90007))
+* **engine:** add scheduler concurrency dedup (#186) ([1ba9472](https://github.com/dsswift/ion/commit/1ba9472f3533cccddb52bcdbe6938ec07f5f9181))
+* **engine:** add model fallback on unresolved tier alias (#174) ([5ed274a](https://github.com/dsswift/ion/commit/5ed274a1916fbeedd1feb0868b71f3c59f23c077))
+* **engine:** add ctx.intercept subsystem with event routing ([4391031](https://github.com/dsswift/ion/commit/4391031006b1564068b9b7047b53230bbeaab8db))
+* **engine:** add agent colors and expand skill-author docs ([6face66](https://github.com/dsswift/ion/commit/6face6699e67b6004c02291ec1279bd31a06bc3e))
+* **engine:** add conversation cleanup with mtime-based expiry (#208) ([eeb2179](https://github.com/dsswift/ion/commit/eeb21795cb68e1a75b1e08e655d7e0c05d0ccdfe))
+* **engine:** add run-progress watchdog and dispatch panic recovery ([e5a1b26](https://github.com/dsswift/ion/commit/e5a1b26129564d8749fc3aebf7481332dd512d08))
+* **engine:** add typed session status events and lock down status writers ([ccc5d51](https://github.com/dsswift/ion/commit/ccc5d517884f4a25d787a4a95252728663aa1459))
+* **engine:** add ctx.runOnce cross-instance dedup primitive ([d58ef9d](https://github.com/dsswift/ion/commit/d58ef9d2f969ecb4d020e0221bb66f402f3e98c5))
+* **engine:** expose conversationId on extension context (#213) ([490acf9](https://github.com/dsswift/ion/commit/490acf9babc18c9956faa46493c7dac48105b81c))
+
+### Bug Fixes
+
+* **engine:** add watcher diagnostic logging and process-start marker (#210) ([0de2471](https://github.com/dsswift/ion/commit/0de2471544ab73be5402b8edd96e59ffc1aabbec))
+* **engine:** raise scanner buffer to 4MB and improve heartbeat handling ([4b8c064](https://github.com/dsswift/ion/commit/4b8c0649866582f5390d9819ec5ef42396706885))
+* **engine:** update session resume test for pre-minted conversation ID ([b6b59c9](https://github.com/dsswift/ion/commit/b6b59c9117b44f29bced4687752568bae823f535))
+
 ## [1.37.0](https://github.com/dsswift/ion/compare/engine-v1.36.0...engine-v1.37.0) (2026-06-05)
 
 ### Features

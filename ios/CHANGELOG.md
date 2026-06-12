@@ -10,6 +10,30 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.39.0](https://github.com/dsswift/ion/compare/ios-v1.38.0...ios-v1.39.0) (2026-06-12)
+
+### Features
+
+* **ios:** add resource event decoding with NormalizedEvent+Resource (#180) ([b26a1f4](https://github.com/dsswift/ion/commit/b26a1f41a8e39610e6937082a9767092e7bf717c))
+* **ios:** decode plan-mode auto-exit event with contract sync tests (#187) ([4e93efa](https://github.com/dsswift/ion/commit/4e93efa5ed797b7055def44c0bf4d280d52250fe))
+* **ios:** render model fallback indicator on engine instance (#174) ([464cf69](https://github.com/dsswift/ion/commit/464cf697c135f83fe58228ad92700d40c315bb52))
+* **ios:** add NotificationsView, ResourceStore, and delete support (#188) ([e5bb058](https://github.com/dsswift/ion/commit/e5bb05866a9831d81d8bae71f447eb8a3fbc053e))
+* **ios:** add slash command autocomplete and frontmatter rendering ([09c9714](https://github.com/dsswift/ion/commit/09c97142513e10f56aed159475796bc033f2974c))
+* **ios:** add intercept rendering and focus reporting ([324c188](https://github.com/dsswift/ion/commit/324c188b9a2562b134e156dd36b46a15f469e1b7))
+* **ios:** add sub-tab close confirmation and awaiting-children state ([8427f0f](https://github.com/dsswift/ion/commit/8427f0f9e882767704e1bbaeaa661307f0988322))
+* **ios:** mirror ConversationInstance with per-instance EngineInstanceInfo (#203) ([d8ae2d9](https://github.com/dsswift/ion/commit/d8ae2d9887bf08f4ee1df5f849daff58de2fc603))
+* **ios:** decode RunStalledEvent and add engine run stalled handler ([2a5fd53](https://github.com/dsswift/ion/commit/2a5fd531bcb261ad3955a59e6412aadd830a6291))
+* **ios:** add session status event dispatcher and synthesis tests ([79576a3](https://github.com/dsswift/ion/commit/79576a3cef69346c4fa1049e56235bb248f81ca6))
+* **ios:** display conversationId on engine instance bar and context menu (#213) ([a8c6795](https://github.com/dsswift/ion/commit/a8c67957fc4146b292ac2b6e8f1508ba121352c4))
+* **ios:** add resource manifest sync, persistence, and attachments UI (#212) ([039ef6e](https://github.com/dsswift/ion/commit/039ef6ec32fd9b270fb5fc4f097451738f02407c))
+
+### Bug Fixes
+
+* **ios:** stabilize snapshot-driven engine state and event decoding ([7cd4a25](https://github.com/dsswift/ion/commit/7cd4a259d37a05457a403272bdf28aed7a631f95))
+* **ios:** add payload compression and align transport receive decoding ([ad20877](https://github.com/dsswift/ion/commit/ad208772b3eb663fc6bc9f95affcc394069169f4))
+* **ios:** fix streaming auto-tail and scope plan card per instance ([7c834dd](https://github.com/dsswift/ion/commit/7c834dd3fb2819d1f95211fdfdc377c8404682de))
+* **ios:** fix attachment loading, caching, and engine instance switching ([653c356](https://github.com/dsswift/ion/commit/653c35690966e9e0bcf0b07417df3381389200c5))
+
 ## [1.38.0](https://github.com/dsswift/ion/compare/ios-v1.37.0...ios-v1.38.0) (2026-06-05)
 
 ### Features
