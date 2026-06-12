@@ -118,10 +118,11 @@ const (
 	HookElicitationResult  = "elicitation_result"
 
 	// Plan mode hooks
-	HookPlanModePrompt      = "plan_mode_prompt"
-	HookBeforePlanModeEnter = "before_plan_mode_enter"
-	HookBeforePlanModeExit  = "before_plan_mode_exit"
-	HookSystemInject        = "system_inject"
+	HookPlanModePrompt         = "plan_mode_prompt"
+	HookBeforePlanModeEnter    = "before_plan_mode_enter"
+	HookBeforePlanModeExit     = "before_plan_mode_exit"
+	HookBeforePlanModeAutoExit = "before_plan_mode_auto_exit"
+	HookSystemInject           = "system_inject"
 
 	// Context injection hooks
 	HookContextInject = "context_inject"
@@ -152,6 +153,12 @@ const (
 	HookWebhookDeregistered  = "webhook_deregistered"
 	HookScheduleRegistered   = "schedule_registered"
 	HookScheduleDeregistered = "schedule_deregistered"
+
+	// Cross-session messaging hook. Fires when another session of the
+	// same extension type sends a message via ctx.sessions.send().
+	// The receiving extension can react: abort, inject context, emit
+	// a harness message, or ignore.
+	HookSessionMessage = "session_message"
 )
 
 // SDK is the extension hook registry. It manages hook handlers, tools,
@@ -304,6 +311,19 @@ func (s *SDK) Handlers(event string) []HookHandler {
 	out := make([]HookHandler, len(handlers))
 	copy(out, handlers)
 	return out
+}
+
+// FireIntercept emits an engine_intercept event through the active session
+// context. This is the in-process SDK path for Go-based extensions —
+// subprocess extensions use the ext/intercept RPC. The source field is
+// set by the engine (via BroadcastIntercept) and is not exposed to callers.
+// Returns an error when ctx.Intercept is nil or when the opts are invalid
+// (e.g. empty title).
+func (s *SDK) FireIntercept(ctx *Context, opts InterceptOpts) error {
+	if ctx == nil || ctx.Intercept == nil {
+		return fmt.Errorf("intercept not available: no active session context")
+	}
+	return ctx.Intercept(opts)
 }
 
 // fire iterates all handlers for an event, logging errors without propagating.

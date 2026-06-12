@@ -5,7 +5,7 @@
  * /skills, /help). The other five were audited and removed because each one
  * was strictly worse than the dedicated UI already present:
  *   - /cost     — duplicated by the always-visible status-bar cost/token
- *                 indicator (see ConversationStatusBar / EngineFooter).
+ *                 indicator (see StatusBar's engine cost slot).
  *   - /model    — duplicated (and worse than) StatusBarModelPicker /
  *                 ModelPickerPopover and the AIModelsCategory settings page.
  *   - /mcp      — was the only MCP surface but mostly emitted "No MCP data

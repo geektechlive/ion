@@ -325,3 +325,117 @@ gcc -o main extension.c
 ```
 
 Place the binary in the extension directory. The engine executes it directly without any runtime dependency.
+
+## Resources, Notifications, and Cross-Session Messaging
+
+Raw-protocol extensions access the resource subsystem, notifications, and cross-session messaging via these JSON-RPC methods. Send them as requests (with an `id`) and read the response from stdin.
+
+### ext/declare_resource
+
+Declare a resource collection for this extension. Call once at startup (inside or shortly after `init`).
+
+```json
+{"jsonrpc":"2.0","id":100010,"method":"ext/declare_resource","params":{"kind":"tasks"}}
+```
+
+Response: `{"jsonrpc":"2.0","id":100010,"result":{"ok":true}}`
+
+### ext/publish_resource
+
+Publish a resource operation. Routes to the global broker when `item.conversationId` is empty, session broker otherwise.
+
+```json
+{"jsonrpc":"2.0","id":100011,"method":"ext/publish_resource","params":{"op":"update","item":{"id":"task-1","conversationId":"conv-1","title":"Updated"}}}
+```
+
+`op` is one of `"create"`, `"update"`, `"delete"`, `"mark_read"`.
+
+Response: `{"jsonrpc":"2.0","id":100011,"result":{"ok":true}}`
+
+### resource/query
+
+The engine calls this method on your extension when a client subscribes to a resource kind you declared. Respond with the current full collection.
+
+```json
+{"jsonrpc":"2.0","id":5,"method":"resource/query","params":{"kind":"tasks"}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":5,"result":{"items":[{"id":"task-1","title":"Do the thing"},{"id":"task-2","title":"Do another thing"}]}}
+```
+
+### ext/notify
+
+Send a push notification through the engine/relay pipeline.
+
+```json
+{"jsonrpc":"2.0","id":100012,"method":"ext/notify","params":{"kind":"task_complete","title":"Task finished","body":"Analysis complete.","sound":true}}
+```
+
+Response: `{"jsonrpc":"2.0","id":100012,"result":{"ok":true}}`
+
+### ext/list_sessions
+
+List sessions running the same extension type.
+
+```json
+{"jsonrpc":"2.0","id":100013,"method":"ext/list_sessions","params":{}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":100013,"result":{"sessions":[{"key":"abc-123","hasActiveRun":true,"extensionName":"my-ext","conversationId":"conv-1"}]}}
+```
+
+### ext/send_to_session
+
+Send a structured message to another session. The engine enforces same extension type. The target session's `session_message` hook fires with `{senderSessionKey, kind, payload}`.
+
+```json
+{"jsonrpc":"2.0","id":100014,"method":"ext/send_to_session","params":{"targetKey":"abc-123","kind":"task_update","payload":{"taskId":"t-1","status":"done"}}}
+```
+
+Response: `{"jsonrpc":"2.0","id":100014,"result":{"ok":true}}`
+
+### ext/intercept
+
+Emit an `engine_intercept` event on a target session's stream. The engine stamps `interceptSource` from the calling extension's name.
+
+```json
+{"jsonrpc":"2.0","id":100015,"method":"ext/intercept","params":{"level":"banner","title":"Task complete","message":"The analysis finished.","targetSessionKey":"abc-123"}}
+```
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `level` | string | yes | `"banner"` (informational) or `"redirect"` (urgent) |
+| `title` | string | yes | Short headline |
+| `message` | string | no | Body content |
+| `targetSessionKey` | string | no | Target session; defaults to caller's session |
+| `metadata` | object | no | Opaque map forwarded to clients unchanged |
+
+Response: `{"jsonrpc":"2.0","id":100015,"result":{"ok":true}}`
+
+### ext/run_once_check
+
+Check whether this instance should execute a cross-instance dedup operation.
+
+```json
+{"jsonrpc":"2.0","id":100016,"method":"ext/run_once_check","params":{"id":"daily-sync","debounceMs":60000}}
+```
+
+Response: `{"jsonrpc":"2.0","id":100016,"result":{"execute":true,"reason":""}}` or `{"jsonrpc":"2.0","id":100016,"result":{"execute":false,"reason":"debounced"}}`
+
+### ext/run_once_complete
+
+Record the outcome of a dedup operation. Call after `ext/run_once_check` returned `execute: true`.
+
+```json
+{"jsonrpc":"2.0","id":100017,"method":"ext/run_once_complete","params":{"id":"daily-sync","failed":false}}
+```
+
+When `failed` is `true`, the lock is released without updating the last-run timestamp so the next instance retries immediately.
+
+Response: `{"jsonrpc":"2.0","id":100017,"result":{"ok":true}}`

@@ -47,6 +47,7 @@ func (m *Manager) handleHostDeath(key string, h *extension.Host) {
 		ExtensionName: h.Name(),
 		ExitCode:      exitCode,
 		Signal:        &signal,
+		StderrTail:    h.StderrTail(),
 	})
 
 	// Emit a corrective agent_state snapshot. The dead extension's cached
@@ -71,6 +72,17 @@ func (m *Manager) handleHostDeath(key string, h *extension.Host) {
 	// only — peers can't prevent the death, but they can degrade
 	// gracefully (mark dependent state as stale, etc.).
 	m.firePeerExtensionDied(key, h, exitCode, signal)
+
+	// Release any runOnce leases this host was holding. If the host crashed
+	// mid-operation without sending run_once_complete, the running flag
+	// would otherwise block all other instances until debounce expiry.
+	// Releasing here lets the next instance retry immediately.
+	extDir := h.ExtensionDir()
+	if extDir != "" {
+		for _, opID := range m.runOnce.runningIDs(extDir) {
+			m.runOnce.releaseRunning(extDir, opID)
+		}
+	}
 
 	// If no run is active, respawn immediately. Otherwise the manager's
 	// handleRunExit will call respawnDeadExtensions after the run ends.
@@ -126,6 +138,7 @@ func (m *Manager) respawnDeadExtensions(key string) {
 					Type:          "engine_extension_dead_permanent",
 					ExtensionName: h.Name(),
 					AttemptNumber: attempt,
+					StderrTail:    h.StderrTail(),
 				})
 				continue
 			}
@@ -147,6 +160,18 @@ func (m *Manager) respawnDeadExtensions(key string) {
 		// re-registration doesn't collide with stale entries.
 		h.ResetAsyncRegistrations()
 		m.commitHostInitAsyncDecls(key, h)
+
+		// Rewire resource query handlers onto the existing broker producers
+		// and re-deliver snapshots to subscribers. This corrects the empty-
+		// snapshot that was delivered when the initial query failed because
+		// the first subprocess died before it could answer the resource/query
+		// RPC. The broker's producer entries already exist (registered during
+		// CommitPendingResourceDecls on first spawn); RewireResourceDecls
+		// updates their query handlers to point to the live subprocess and
+		// pushes a fresh snapshot to every active subscriber.
+		if broker := m.ResourceBroker(key); broker != nil {
+			h.RewireResourceDecls(broker)
+		}
 
 		// Fire extension_respawned on the new instance so the harness
 		// can rebuild caches.

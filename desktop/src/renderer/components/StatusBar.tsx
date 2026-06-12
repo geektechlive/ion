@@ -13,6 +13,9 @@ import { OpenWithPicker } from './StatusBarOpenWithPicker'
 import { TallViewToggle } from './StatusBarTallViewToggle'
 import { DirectoryPicker } from './StatusBarDirectoryPicker'
 import { GitButton } from './StatusBarGitButton'
+import { StatusBarEngineIdentity } from './StatusBarEngineIdentity'
+import { StatusBarEngineState } from './StatusBarEngineState'
+import { StatusBarEngineCost } from './StatusBarEngineCost'
 
 // Re-export sibling components for any consumer importing from StatusBar.tsx
 export { BackendIndicator } from './StatusBarBackendIndicator'
@@ -24,9 +27,32 @@ export { OpenWithPicker } from './StatusBarOpenWithPicker'
 export { TallViewToggle } from './StatusBarTallViewToggle'
 export { DirectoryPicker } from './StatusBarDirectoryPicker'
 export { GitButton } from './StatusBarGitButton'
+export { StatusBarEngineIdentity } from './StatusBarEngineIdentity'
+export { StatusBarEngineState } from './StatusBarEngineState'
+export { StatusBarEngineCost } from './StatusBarEngineCost'
 export { compactPath } from './StatusBarShared'
 
-/* ─── StatusBar ─── */
+/* ─── StatusBar ───
+ *
+ * The single status bar for the desktop application. Always rendered
+ * at the bottom of the active tab body via `App.tsx`. One instance
+ * per visible tab — every state read inside this tree is derived from
+ * `s.activeTabId`, so the same JSX serves conversation, engine,
+ * terminal-only, and terminal-tall tabs.
+ *
+ * On engine tabs, additional engine-only slots appear in the left
+ * cluster (extension name + team, run-state dot + label) and right
+ * cluster (cost). The slot components themselves return `null` on
+ * non-engine tabs, so the layout doesn't require `isEngine` gating at
+ * this level.
+ *
+ * The context indicator (`<ContextIndicator />`) works on both tab
+ * types: it reads `tab.contextPercent` / `tab.contextTokens`, both
+ * of which are populated for the active engine instance by the
+ * engine event slice (see engine-event-slice.ts case 'message_end').
+ * One indicator, one rendering — the simple `65%` percent with a
+ * hover tooltip showing the token count.
+ */
 
 export function StatusBar() {
   const tab = useSessionStore(
@@ -40,12 +66,6 @@ export function StatusBar() {
     }),
   )
   const activeTabId = useSessionStore((s) => s.activeTabId)
-  const isEngine = useSessionStore((s) => {
-    const t = s.tabs.find((t) => t.id === s.activeTabId)
-    return t?.isEngine || false
-  })
-  const engineStatusFields = useSessionStore((s) => s.engineStatusFields)
-  const enginePanes = useSessionStore((s) => s.enginePanes)
   const explorerOpen = useSessionStore((s) => s.fileExplorerOpenDirs.has(s.tabs.find((t) => t.id === s.activeTabId)?.workingDirectory || ''))
   const toggleFileExplorer = useSessionStore((s) => s.toggleFileExplorer)
   const editorOpen = useSessionStore((s) => s.fileEditorOpenDirs.has(s.tabs.find((t) => t.id === s.activeTabId)?.workingDirectory || ''))
@@ -81,7 +101,8 @@ export function StatusBar() {
       className="flex items-center justify-between px-4 py-1.5"
       style={{ minHeight: 28, flexShrink: 0 }}
     >
-      {/* Left — explorer/editor toggles + directory + model picker */}
+      {/* Left cluster — workspace toggles + directory + identity +
+          state + model + context + permission + attachments. */}
       <div className="flex items-center gap-2 text-[11px] min-w-0" style={{ color: colors.textTertiary }}>
         {/* File explorer toggle */}
         <button
@@ -108,7 +129,17 @@ export function StatusBar() {
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
 
         <BackendIndicator />
-        {!isEngine && <ModelPicker />}
+        {/* Engine identity (extension name + team) — engine-only;
+            self-gates internally to render null on conversation tabs. */}
+        <StatusBarEngineIdentity />
+        {/* Engine run-state dot + label — engine-only;
+            self-gates internally. */}
+        <StatusBarEngineState />
+        <ModelPicker />
+        {/* Context indicator — same component on both tab types.
+            Reads `tab.contextPercent` / `tab.contextTokens`, which the
+            engine event slice populates for the active engine instance
+            (see engine-event-slice.ts case 'message_end'). */}
         <ContextIndicator />
 
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
@@ -117,25 +148,15 @@ export function StatusBar() {
 
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
         <AttachmentsButton />
-
-        {isEngine && (() => {
-          const pane = enginePanes.get(activeTabId)
-          const hk = pane?.activeInstanceId ? `${activeTabId}:${pane.activeInstanceId}` : activeTabId
-          const fields = engineStatusFields.get(hk)
-          if (!fields) return null
-          return (
-            <>
-              <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
-              <span style={{ color: colors.accent, fontSize: 10 }}>
-                {fields.label} [{fields.state}]
-              </span>
-            </>
-          )
-        })()}
       </div>
 
-      {/* Right — Tall view + Open in CLI + Git */}
+      {/* Right cluster — cost (engine) + tall view + open in CLI + git */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
+        {/* Engine cost — engine-only; self-gates to null on
+            conversation tabs. Pinned to the left of the right cluster
+            so the tall/open-with/git icons stay anchored to the right
+            edge. */}
+        <StatusBarEngineCost />
         <TallViewToggle />
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
         <OpenWithPicker />

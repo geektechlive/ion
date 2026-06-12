@@ -1,10 +1,13 @@
 package scheduling
 
 import (
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dsswift/ion/engine/internal/asyncreg"
 	"github.com/dsswift/ion/engine/internal/extension"
+	"github.com/dsswift/ion/engine/internal/types"
 )
 
 func TestParseHHMM(t *testing.T) {
@@ -141,5 +144,209 @@ func TestSafeName(t *testing.T) {
 	}
 	if safeName("abc-123_def.foo") != "abc-123_def.foo" {
 		t.Fatal("alnum + - _ . should pass")
+	}
+}
+
+// ─── Concurrency coordination tests ───
+
+// testHostWithSchedule creates a Host with a name and schedule jobs
+// registered in its asyncreg registry. No subprocess is loaded.
+func testHostWithSchedule(t *testing.T, name string, jobs ...extension.ScheduleJob) *extension.Host {
+	t.Helper()
+	h := extension.NewHost()
+	h.SetNameForTest(name)
+	for _, job := range jobs {
+		err := h.AsyncRegistry().Register(asyncreg.KindSchedule, job, asyncreg.OriginInit, nil)
+		if err != nil {
+			t.Fatalf("register job %q: %v", job.JobID, err)
+		}
+	}
+	return h
+}
+
+// fireTracker records which host names enter the fire path via the
+// session resolver.
+type fireTracker struct {
+	mu    sync.Mutex
+	fired []string
+}
+
+func (ft *fireTracker) resolver() SessionResolver {
+	return func(host *extension.Host) (*extension.Context, error) {
+		ft.mu.Lock()
+		ft.fired = append(ft.fired, host.Name())
+		ft.mu.Unlock()
+		return &extension.Context{SessionKey: "test-" + host.Name()}, nil
+	}
+}
+
+func (ft *fireTracker) count() int {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	return len(ft.fired)
+}
+
+func (ft *fireTracker) countByName(name string) int {
+	ft.mu.Lock()
+	defer ft.mu.Unlock()
+	n := 0
+	for _, f := range ft.fired {
+		if f == name {
+			n++
+		}
+	}
+	return n
+}
+
+// setupConcurrencyTest creates a scheduler with a controllable clock,
+// adds the given hosts, bootstraps nextRun on the first tick, advances
+// time past the interval, and returns the scheduler + tracker ready
+// for the second tick.
+func setupConcurrencyTest(t *testing.T, hosts ...*extension.Host) (*Scheduler, *fireTracker) {
+	t.Helper()
+	tracker := &fireTracker{}
+	s := New(Config{})
+	s.SetSessionResolver(tracker.resolver())
+	s.SetEmit(func(ev types.EngineEvent) {})
+
+	baseTime := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	s.nowFn = func() time.Time { return baseTime }
+
+	for _, h := range hosts {
+		s.AddHost(h)
+	}
+
+	// First tick: bootstraps nextRun for all jobs
+	s.tickOnce()
+
+	// Advance time past the interval so jobs are due
+	s.nowFn = func() time.Time { return baseTime.Add(2 * time.Second) }
+
+	return s, tracker
+}
+
+func TestScheduler_Concurrency_SingleDefault(t *testing.T) {
+	job := extension.ScheduleJob{
+		JobID:      "morning-brief",
+		Kind:       extension.ScheduleInterval,
+		IntervalMs: 1000,
+		// Concurrency defaults to "" which means single
+	}
+
+	h1 := testHostWithSchedule(t, "ion-dev", job)
+	h2 := testHostWithSchedule(t, "ion-dev", job)
+	h3 := testHostWithSchedule(t, "ion-dev", job)
+
+	s, tracker := setupConcurrencyTest(t, h1, h2, h3)
+
+	// Second tick: fires with concurrency coordination
+	s.tickOnce()
+
+	// Wait for fire goroutines (they fail quickly — no subprocess)
+	time.Sleep(200 * time.Millisecond)
+
+	if got := tracker.count(); got != 1 {
+		t.Fatalf("single mode: expected 1 fire, got %d: %v", got, tracker.fired)
+	}
+}
+
+func TestScheduler_Concurrency_All(t *testing.T) {
+	job := extension.ScheduleJob{
+		JobID:       "morning-brief",
+		Kind:        extension.ScheduleInterval,
+		IntervalMs:  1000,
+		Concurrency: "all",
+	}
+
+	h1 := testHostWithSchedule(t, "ion-dev", job)
+	h2 := testHostWithSchedule(t, "ion-dev", job)
+	h3 := testHostWithSchedule(t, "ion-dev", job)
+
+	s, tracker := setupConcurrencyTest(t, h1, h2, h3)
+
+	s.tickOnce()
+	time.Sleep(200 * time.Millisecond)
+
+	if got := tracker.count(); got != 3 {
+		t.Fatalf("all mode: expected 3 fires, got %d: %v", got, tracker.fired)
+	}
+}
+
+func TestScheduler_Concurrency_CrossExtension(t *testing.T) {
+	job := extension.ScheduleJob{
+		JobID:      "morning-brief",
+		Kind:       extension.ScheduleInterval,
+		IntervalMs: 1000,
+		// single mode (default)
+	}
+
+	// Two ion-dev hosts + two chief-of-staff hosts
+	id1 := testHostWithSchedule(t, "ion-dev", job)
+	id2 := testHostWithSchedule(t, "ion-dev", job)
+	cs1 := testHostWithSchedule(t, "chief-of-staff", job)
+	cs2 := testHostWithSchedule(t, "chief-of-staff", job)
+
+	s, tracker := setupConcurrencyTest(t, id1, id2, cs1, cs2)
+
+	s.tickOnce()
+	time.Sleep(200 * time.Millisecond)
+
+	idCount := tracker.countByName("ion-dev")
+	csCount := tracker.countByName("chief-of-staff")
+
+	if idCount != 1 {
+		t.Errorf("ion-dev: expected 1 fire, got %d", idCount)
+	}
+	if csCount != 1 {
+		t.Errorf("chief-of-staff: expected 1 fire, got %d", csCount)
+	}
+	if got := tracker.count(); got != 2 {
+		t.Errorf("total: expected 2 fires, got %d: %v", got, tracker.fired)
+	}
+}
+
+func TestScheduler_Concurrency_DeadHostSkipped(t *testing.T) {
+	job := extension.ScheduleJob{
+		JobID:      "morning-brief",
+		Kind:       extension.ScheduleInterval,
+		IntervalMs: 1000,
+	}
+
+	h1 := testHostWithSchedule(t, "ion-dev", job)
+	h2 := testHostWithSchedule(t, "ion-dev", job)
+	h3 := testHostWithSchedule(t, "ion-dev", job)
+
+	// Kill the first host
+	h1.MarkDeadForTest()
+
+	s, tracker := setupConcurrencyTest(t, h1, h2, h3)
+
+	s.tickOnce()
+	time.Sleep(200 * time.Millisecond)
+
+	if got := tracker.count(); got != 1 {
+		t.Fatalf("dead-host skip: expected 1 fire, got %d: %v", got, tracker.fired)
+	}
+}
+
+func TestScheduleJob_Validate_Concurrency(t *testing.T) {
+	base := extension.ScheduleJob{
+		JobID:      "test",
+		Kind:       extension.ScheduleInterval,
+		IntervalMs: 1000,
+	}
+
+	for _, c := range []string{"", "single", "all"} {
+		j := base
+		j.Concurrency = c
+		if err := j.Validate(); err != nil {
+			t.Errorf("concurrency=%q should be valid, got: %v", c, err)
+		}
+	}
+
+	j := base
+	j.Concurrency = "invalid"
+	if err := j.Validate(); err == nil {
+		t.Error("concurrency='invalid' should fail validation")
 	}
 }

@@ -84,6 +84,7 @@ export function makeLocalTab(): TabState {
     attachments: [],
     draftInput: '',
     messages: [],
+    messageCount: 0,
     title: 'New Tab',
     customTitle: null,
     lastResult: null,
@@ -121,7 +122,7 @@ export function makeLocalTab(): TabState {
 }
 
 export function isBlankConversationTab(t: TabState, dir: string): boolean {
-  return !t.isTerminalOnly && !t.isEngine && t.messages.length === 0 && !t.customTitle && t.workingDirectory === dir
+  return !t.isTerminalOnly && !t.isEngine && (t.messages?.length ?? t.messageCount ?? 0) === 0 && !t.customTitle && t.workingDirectory === dir
 }
 
 export function isBlankTerminalTab(t: TabState, dir: string): boolean {

@@ -87,6 +87,15 @@ func (h *Host) spawnAndInit(extensionPath string, config *ExtensionConfig, isRes
 		return fmt.Errorf("manifest: %w", err)
 	}
 
+	// Default name from manifest or directory — overridden by init response
+	// if non-empty. This ensures every log line and event has a useful name
+	// even when the subprocess dies before completing the init handshake.
+	if manifest != nil && manifest.Name != "" {
+		h.name = manifest.Name
+	} else {
+		h.name = filepath.Base(extensionDir)
+	}
+
 	// Run `npm install` if the extension declares dependencies. Idempotent:
 	// skips when node_modules is up to date with package.json.
 	if err := ensureNodeModules(extensionDir); err != nil {
@@ -131,7 +140,6 @@ func (h *Host) spawnAndInit(extensionPath string, config *ExtensionConfig, isRes
 		cmd = exec.Command(binPath)
 	}
 	cmd.Dir = extensionDir
-	cmd.Stderr = os.Stderr
 
 	// Resolve external runtime requires (e.g. native modules) from the
 	// extension's own node_modules. Other env vars are inherited.
@@ -155,12 +163,37 @@ func (h *Host) spawnAndInit(extensionPath string, config *ExtensionConfig, isRes
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		return fmt.Errorf("start extension: %w", err)
 	}
 
+	// Capture subprocess stderr into a ring buffer and log each line.
+	// This runs until the pipe closes (subprocess exit or dispose).
+	h.stderrMu.Lock()
+	h.stderrBuf = nil // reset for respawns
+	h.stderrMu.Unlock()
+	go func() {
+		sc := bufio.NewScanner(stderr)
+		tag := "ext:" + h.name
+		for sc.Scan() {
+			line := sc.Text()
+			h.appendStderr(line)
+			utils.Debug(tag, line)
+		}
+	}()
+
 	scanner := bufio.NewScanner(stdout)
+	// Raise the scanner's max token size from the 64 KB default to 4 MB.
+	// The resource/query RPC path can return unbounded arrays of content-rich
+	// items as a single NDJSON line that easily exceed 64 KB.
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	h.cmd = cmd
 	h.process = cmd.Process
 	h.stdin = stdin
@@ -172,6 +205,9 @@ func (h *Host) spawnAndInit(extensionPath string, config *ExtensionConfig, isRes
 	// Fresh deadCh per spawn — old channel (if any) is already closed.
 	h.deadCh = make(chan struct{})
 	h.deadOnce = &sync.Once{}
+	// Fresh exitDone per spawn so the readLoop defer can wait for
+	// captureExitStatus before firing the onDeath callback.
+	h.exitDone = make(chan struct{})
 
 	// Start the background response reader before sending init so we can
 	// receive the init response through the normal call path. Pass the
@@ -335,8 +371,15 @@ func (h *Host) LastExit() (*int, string) {
 
 // captureExitStatus calls cmd.Wait to reap the dead subprocess and stores
 // the exit code/signal so downstream events (engine_extension_died,
-// extension_respawned) can include them.
+// extension_respawned) can include them. Closes h.exitDone when finished
+// so the readLoop defer can gate the onDeath callback on exit-info
+// availability.
 func (h *Host) captureExitStatus() {
+	defer func() {
+		if ch := h.exitDone; ch != nil {
+			close(ch)
+		}
+	}()
 	h.mu.Lock()
 	cmd := h.cmd
 	h.mu.Unlock()

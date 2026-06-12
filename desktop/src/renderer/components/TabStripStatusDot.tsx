@@ -10,10 +10,16 @@ interface StatusDotProps {
   bashExecuting: boolean
   waitingState: WaitingState
   pillIcon?: string | null
+  /** When true, the tab has dispatched background agents still running
+   *  even though the orchestrator's own state is idle. Used by the
+   *  parent-tab pill to render the yellow "awaiting children" pulse.
+   *  Sits below the running/connecting branch in the priority cascade
+   *  so foreground work always wins. */
+  hasRunningChildren?: boolean
 }
 
 /** Single status dot/icon for one tab pill. Color, pulse and glow reflect the live tab state. */
-export function StatusDot({ status, hasUnread, hasPermission, bashExecuting, waitingState, pillIcon }: StatusDotProps) {
+export function StatusDot({ status, hasUnread, hasPermission, bashExecuting, waitingState, pillIcon, hasRunningChildren }: StatusDotProps) {
   const colors = useColors()
   let bg: string = colors.statusIdle
   let pulse = false
@@ -34,8 +40,21 @@ export function StatusDot({ status, hasUnread, hasPermission, bashExecuting, wai
     glow = true
     glowColor = colors.tabGlowQuestion
   } else if (status === 'connecting' || status === 'running') {
+    // Orange "foreground running" wins over yellow "background only" —
+    // see TabStripShared.getTabStatusColor for the rationale.
     bg = colors.statusRunning
     pulse = true
+  } else if (hasRunningChildren) {
+    // Yellow "awaiting children" — orchestrator idle, dispatched
+    // background agents still running. Mirrors the
+    // anyEngineInstanceHasRunningChildren branch in
+    // getTabStatusColor so direct-prop callers (single tab pill in
+    // TabStripTabPill) and fold callers (StackedStatusDots via
+    // getTabStatusColor) produce the same dot for the same condition.
+    bg = colors.statusWaitingChildren
+    pulse = true
+    glow = true
+    glowColor = colors.statusWaitingChildrenGlow
   } else if (bashExecuting) {
     bg = colors.statusBash
     pulse = true

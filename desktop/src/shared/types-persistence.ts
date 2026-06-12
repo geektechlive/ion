@@ -66,6 +66,13 @@ export interface PersistedTab {
    *  relaunch so the engine session resumes with the same model the user had
    *  selected (instead of falling back to the hardcoded default). */
   engineModelOverrides?: Record<string, string>
+  /**
+   * Per-engine-instance permission mode, keyed by `instanceId`.
+   * Restored on relaunch so each subtab resumes with the correct
+   * plan/auto mode independently. Follows the same shape as
+   * `engineDenials` and `engineModelOverrides`.
+   */
+  enginePermissionModes?: Record<string, 'auto' | 'plan'>
   terminalInstances?: TerminalInstance[]
   terminalBuffers?: Record<string, string>
   /** Wall-clock ms of the most recent engine event for this tab. Persisted so
@@ -73,6 +80,8 @@ export interface PersistedTab {
   lastEventAt?: number | null
   /** Short single-line preview of the last visible message (~80 chars). */
   lastMessagePreview?: string | null
+  /** Persisted message count for blank-tab detection when messages are lazily loaded. */
+  messageCount?: number
 }
 
 export interface PersistedEditorFile {

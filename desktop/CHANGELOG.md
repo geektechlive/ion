@@ -10,6 +10,34 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.52.0](https://github.com/dsswift/ion/compare/desktop-v1.51.0...desktop-v1.52.0) (2026-06-12)
+
+### Features
+
+* **desktop:** add resource subscription lifecycle and store wiring (#180) ([94e7a80](https://github.com/dsswift/ion/commit/94e7a8033106df4a4e280dbbd33a1559536568fd))
+* **desktop:** handle engine_plan_mode_auto_exit event (#187) ([4f4ea27](https://github.com/dsswift/ion/commit/4f4ea27de6871a1528b3708b499c511353e2577a))
+* **desktop:** render model fallback indicator on engine instance (#174) ([3795dec](https://github.com/dsswift/ion/commit/3795dec81098d1c65d3e83baf9c8494621346b81))
+* **desktop:** add notifications panel with cross-device sync (#188) ([edf6c6f](https://github.com/dsswift/ion/commit/edf6c6f39771f2c4e1f3b3a284298f5cc8e15874))
+* **desktop:** add slash command and frontmatter support ([a337f7d](https://github.com/dsswift/ion/commit/a337f7d137043b9745ff57f99a50c8de354601c9))
+* **desktop:** add intercept banner and cross-device routing UI ([7ff5779](https://github.com/dsswift/ion/commit/7ff57791db08146abb524c6988bb9a523087dd1b))
+* **desktop:** add sub-tab close confirmation and awaiting-children state ([f6a080f](https://github.com/dsswift/ion/commit/f6a080f2dbcad49d61b6ea9c3dd5c8a7c0fc7d4c))
+* **desktop:** unify engine state into ConversationInstance (#203) ([ad82f6a](https://github.com/dsswift/ion/commit/ad82f6a4cce36c772101fe4edf0972bf040d8128))
+* **desktop:** add conversation cleanup job, export, and restore (#208) ([8a30322](https://github.com/dsswift/ion/commit/8a3032236133fefeb7188abb5e98272a4138dea1))
+* **desktop:** add RunStalledEvent to contract sync surface ([b719177](https://github.com/dsswift/ion/commit/b719177d97f62669cec4ee6fb233f0ca7f1f84fe))
+* **desktop:** add session status event handling and tab count display ([a4961df](https://github.com/dsswift/ion/commit/a4961df16c5f1ff7caa7b18ab8c53fb73bf0f192))
+* **desktop:** surface conversationId in snapshot and settings (#213) ([bea6e6f](https://github.com/dsswift/ion/commit/bea6e6f5f029594a4e5a3fdacbe8126a09195b38))
+* **desktop:** add resource manifest sync, persistence, and attachments UI (#212) ([da9ab1a](https://github.com/dsswift/ion/commit/da9ab1ae9146053bf996276e615f86ba92211f12))
+
+### Bug Fixes
+
+* **desktop:** isolate plan mode per engine instance ([76698b1](https://github.com/dsswift/ion/commit/76698b1709c95e6f2808d30dc793eeca8d21a1b6))
+* **desktop:** memoize groupMessages and remove debug logging (#205) ([037e691](https://github.com/dsswift/ion/commit/037e691a7b3d7ce6402caa4516c71baf4952ca7c))
+* **desktop:** align snapshot polling with iOS engine state changes ([fcc5be0](https://github.com/dsswift/ion/commit/fcc5be06a5389bd0ac80adfffb0643df613b7450))
+* **desktop:** improve performance, stability, and error handling ([74a230e](https://github.com/dsswift/ion/commit/74a230e0c34fc09f207a786fa80e7b98f0d4af09))
+* **desktop:** align snapshot types with iOS streaming auto-tail fixes ([4e214f1](https://github.com/dsswift/ion/commit/4e214f185e10e5c4d2c36cfac1de1c87f1a50e8d))
+* **desktop:** align attachment handler with iOS loading fixes ([de0e431](https://github.com/dsswift/ion/commit/de0e431a4760f2cac4bd965e718e1471e9a94882))
+* **desktop:** add missing electron mocks to three test files ([1141b75](https://github.com/dsswift/ion/commit/1141b75ece4a6fb598724b5ca9fad050f6414d0b))
+
 ## [1.51.0](https://github.com/dsswift/ion/compare/desktop-v1.50.0...desktop-v1.51.0) (2026-06-05)
 
 ### Features

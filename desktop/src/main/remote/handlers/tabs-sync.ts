@@ -34,7 +34,7 @@ export async function broadcastSync(): Promise<void> {
  * extraction of the previously-private `_sendSync` from tabs.ts.
  */
 export async function sendSync(send: (event: any) => void): Promise<void> {
-  const tabs = await getRemoteTabStates()
+  const { tabs, resourceManifest } = await getRemoteTabStates()
   const syncSettings = readSettings()
   const recentDirectories: string[] = Array.isArray(syncSettings.recentBaseDirectories) ? syncSettings.recentBaseDirectories : []
   const tabGroupMode = syncSettings.tabGroupMode || 'off'
@@ -53,6 +53,7 @@ export async function sendSync(send: (event: any) => void): Promise<void> {
     customName: remoteDisplay?.customName ?? undefined,
     customIcon: remoteDisplay?.customIcon ?? undefined,
     remoteDisplayUpdatedAt: remoteDisplay?.updatedAt ?? undefined,
+    resources: Object.keys(resourceManifest).length > 0 ? resourceManifest : undefined,
   })
   const engineProfiles = Array.isArray(syncSettings.engineProfiles) ? syncSettings.engineProfiles : []
   send({ type: 'engine_profiles', profiles: engineProfiles })

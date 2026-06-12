@@ -119,6 +119,10 @@ final class SessionViewModel {
 
     // MARK: - State
 
+    /// Workspace-level resource accumulator (D-007). Populated by
+    /// engineResourceSnapshot and engineResourceDelta events.
+    let resourceStore = ResourceStore()
+
     var tabs: [RemoteTabState] = []
     var tabIds: Set<String> = []
     var liveText: [String: String] = [:]
@@ -142,14 +146,9 @@ final class SessionViewModel {
     /// Local display name overrides for terminal instances (keyed by "tabId:instanceId").
     var terminalInstanceLabels: [String: String] = [:]
     // Engine state (per engine tab)
-    var engineAgentStates: [String: [AgentStateUpdate]] = [:]  // compoundKey -> agents
-    var engineStatusFields: [String: StatusFields] = [:]        // compoundKey -> status fields
     var engineWorkingMessages: [String: String] = [:]           // compoundKey -> working message
     var engineDialogs: [String: EngineDialogInfo?] = [:]
     var enginePinnedPrompt: [String: String] = [:]
-    var engineModelOverrides: [String: String] = [:]             // compoundKey -> model override
-    // Engine conversation messages (per compound key)
-    var engineMessages: [String: [Message]] = [:]         // compoundKey -> messages
     var engineConversationLoaded: Set<String> = []               // compoundKeys that have loaded history
     var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
     var lastSpokenEngineMessageCount: [String: Int] = [:]        // compoundKey -> message count at last TTS call
@@ -247,6 +246,20 @@ final class SessionViewModel {
     var pairingState: PairingState = .idle
     var scenePhase: ScenePhase = .active
 
+    /// Blocks deferred until the transport reaches `.connected` (i.e. the
+    /// first snapshot has arrived and confirmed the round-trip works).
+    /// Populated by `runWhenConnected(_:)` and drained inside
+    /// `handleSnapshot` when `connectionState` flips to `.connected`. Also
+    /// cleared by `disconnect()` so a hard reset wipes pending work.
+    ///
+    /// Exists to fix the iOS resume race: scene `.active` fires
+    /// auto-resume commands (`requestAllGitChanges`, `sendReportFocus`)
+    /// before the LAN/relay handshake completes, which otherwise produces
+    /// spurious "Not connected" / "Send failed" toasts. See
+    /// `SessionViewModel+OnConnected.swift` for the helper and
+    /// `IonRemoteApp.swift`'s `.active` handler for the call sites.
+    var pendingOnConnected: [() -> Void] = []
+
     /// Which desktop is currently selected (persisted in UserDefaults).
     var activeDeviceId: String? {
         get { UserDefaults.standard.string(forKey: "activeDeviceId") }
@@ -277,6 +290,11 @@ final class SessionViewModel {
     /// Tab ID to auto-open the Git pane for (set by tapping the branch badge in tab list).
     /// Observed by ConversationView and EngineView; cleared after the pane is presented.
     var pendingGitPaneTabId: String? = nil
+    /// The currently focused tab ID — the tab the user is viewing right now.
+    /// Updated by TabListView whenever the selected/navigated tab changes and
+    /// cleared when the app backgrounds. The desktop reads this via `report_focus`
+    /// commands to route engine_intercept events to the correct device+tab.
+    var focusedTabId: String? = nil
     /// Set `true` before sending a create-tab command so the `tabCreated`
     /// handler knows the creation was locally initiated and should navigate.
     var awaitingLocalTabCreation = false

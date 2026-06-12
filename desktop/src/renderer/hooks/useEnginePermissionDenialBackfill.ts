@@ -22,23 +22,14 @@ import { useSessionStore } from '../stores/sessionStore'
  *   card can render question text and plan content).
  *
  * Trigger:
- *   This effect watches `engineConversationIds`. Each entry appears
- *   when the engine emits `engine_status` carrying a `sessionId` for
- *   that instance — i.e. after `start_session` + `reconcile_state`
- *   complete. At that point we know:
+ *   This effect watches `enginePanes`. Each time instance.conversationIds
+ *   is updated (by engine_status carrying a sessionId after start_session
+ *   + reconcile_state), the pane Map identity changes and this subscription
+ *   fires. At that point we know:
  *     - the compound key (`${tabId}:${instanceId}`)
- *     - the latest sessionId for this instance
- *     - whether `enginePermissionDenied.get(key)` already has live
- *       data (engine emitted denials directly, no backfill needed)
- *     - whether the existing entry is missing `toolInput` (synthesized
- *       from history during restoration, needs enrichment)
- *
- *   For each key with a sessionId where backfill is needed, we issue
- *   a single async `loadSession` call. To avoid repeated work, we
- *   track keys we've already processed in a module-local Set; the
- *   Set is cleared only on unmount (full desktop teardown), which is
- *   the right scope — the engine doesn't change its conversation
- *   file mid-session.
+ *     - the latest sessionId for this instance (instance.conversationIds.last)
+ *     - whether instance.permissionDenied already has live data (no backfill
+ *       needed) or a synthesized entry that needs toolInput enrichment.
  *
  * What we read:
  *   `window.ion.loadSession(sessionId)` returns engine messages from
@@ -50,8 +41,8 @@ import { useSessionStore } from '../stores/sessionStore'
  *   would indicate a `tool_result` was already recorded — meaning the
  *   user already answered).
  *
- *   We only WRITE to `enginePermissionDenied` when:
- *     - no entry exists for the key, OR
+ *   We only WRITE to instance.permissionDenied when:
+ *     - no entry exists for the instance, OR
  *     - the existing entry's first tool has `toolInput == null/undefined`
  *       (synthesis from restoration that needs enrichment).
  *
@@ -62,49 +53,47 @@ export function useEnginePermissionDenialBackfill(): void {
   useEffect(() => {
     const processedKeys = new Set<string>()
 
-    // Subscribe to engineConversationIds. The selector returns the map
-    // identity itself — Zustand re-runs the callback when the map is
-    // replaced (which happens on every new sessionId assignment in
-    // engine-event-slice.ts:case 'engine_status').
+    // Subscribe to enginePanes. The pane Map identity changes whenever
+    // instance.conversationIds is updated (engine_status sets a new sessionId).
+    // We iterate all instances across all panes to find newly-resolvable keys.
     const unsubscribe = useSessionStore.subscribe((state, prev) => {
-      const ids = state.engineConversationIds
-      if (ids === prev.engineConversationIds) return
+      if (state.enginePanes === prev.enginePanes) return
 
-      // For each key with a sessionId, decide whether we need to
-      // backfill. We process newly-known keys; entries that haven't
-      // changed don't need re-processing.
-      for (const [key, sessionIds] of ids) {
-        if (processedKeys.has(key)) continue
-        const sessionId = sessionIds[sessionIds.length - 1]
-        if (!sessionId) continue
+      for (const [tabId, pane] of state.enginePanes) {
+        for (const inst of pane.instances) {
+          const key = `${tabId}:${inst.id}`
+          if (processedKeys.has(key)) continue
+          const sessionIds = inst.conversationIds
+          const sessionId = sessionIds[sessionIds.length - 1]
+          if (!sessionId) continue
 
-        const existing = state.enginePermissionDenied.get(key)
-        // We only enrich EXISTING synthesized entries. If no entry
-        // exists, we don't create one from the conversation file —
-        // that risks cross-instance contamination when multiple
-        // instances share a single legacy parent-tab conversationId
-        // (a pre-existing structural bug; see
-        // useTabRestoration.ts:engineSessionIds comment).
-        //
-        // A synthesized entry has `toolInput === undefined` because
-        // the engineMessages persistence didn't capture toolInput
-        // before this change. A live denial that arrived via
-        // engine_status has full toolInput. We only act on the
-        // former.
-        if (!existing || !existing.tools || existing.tools.length === 0) {
+          const existing = inst.permissionDenied
+          // We only enrich EXISTING synthesized entries. If no entry
+          // exists, we don't create one from the conversation file —
+          // that risks cross-instance contamination when multiple
+          // instances share a single legacy parent-tab conversationId
+          // (a pre-existing structural bug; see
+          // useTabRestoration.ts:engineSessionIds comment).
+          //
+          // A synthesized entry has `toolInput === undefined` because
+          // the messages persistence didn't capture toolInput before
+          // this change. A live denial that arrived via engine_status
+          // has full toolInput. We only act on the former.
+          if (!existing || !existing.tools || existing.tools.length === 0) {
+            processedKeys.add(key)
+            continue
+          }
+          if (existing.tools[0]?.toolInput) {
+            processedKeys.add(key)
+            continue
+          }
+
+          // Mark processed BEFORE the async call to prevent re-entry
+          // during the await. If the load fails or returns empty, we
+          // accept the loss; we won't infinitely retry.
           processedKeys.add(key)
-          continue
+          void backfillForKey(tabId, inst.id, key, sessionId, existing.tools[0].toolName, existing.tools[0].toolUseId)
         }
-        if (existing.tools[0]?.toolInput) {
-          processedKeys.add(key)
-          continue
-        }
-
-        // Mark processed BEFORE the async call to prevent re-entry
-        // during the await. If the load fails or returns empty, we
-        // accept the loss; we won't infinitely retry.
-        processedKeys.add(key)
-        void backfillForKey(key, sessionId, existing.tools[0].toolName, existing.tools[0].toolUseId)
       }
     })
 
@@ -118,18 +107,19 @@ export function useEnginePermissionDenialBackfill(): void {
 /**
  * Load `sessionId`'s conversation file and, if its tail shows an
  * unresolved tool_use matching the synthesized entry's toolName and
- * toolUseId, enrich the denial entry for `key` with the file's
- * toolInput. Logs both branches so an operator can confirm which keys
- * got backfilled and which didn't via a single grep over
+ * toolUseId, enrich instance.permissionDenied for `key` with the
+ * file's toolInput. Logs both branches so an operator can confirm
+ * which keys got backfilled and which didn't via a single grep over
  * `~/.ion/desktop.log`.
  *
  * The `expectedToolName` / `expectedToolUseId` parameters anchor the
  * lookup: when multiple instances share a single conversation file
  * (legacy parent-tab.conversationId leak), we only enrich the key
- * whose synthesized tool_use ID matches the file's tail. Other
- * instances pointing at the same file won't get a stray denial.
+ * whose synthesized tool_use ID matches the file's tail.
  */
 async function backfillForKey(
+  tabId: string,
+  instanceId: string,
   key: string,
   sessionId: string,
   expectedToolName: string,
@@ -198,22 +188,33 @@ async function backfillForKey(
       return
     }
 
+    const finalCandidate = candidate
+    const finalParsedInput = parsedInput
     useSessionStore.setState((state) => {
-      const existing = state.enginePermissionDenied.get(key)
+      const pane = state.enginePanes.get(tabId)
+      if (!pane) return {}
+      const idx = pane.instances.findIndex((i) => i.id === instanceId)
+      if (idx === -1) return {}
+      const existing = pane.instances[idx].permissionDenied
       // Final guard: don't overwrite a live denial that arrived between
       // when we decided to backfill and when the load returned.
       if (!existing || !existing.tools || existing.tools.length === 0) return {}
       if (existing.tools[0]?.toolInput) return {}
-      const next = new Map(state.enginePermissionDenied)
-      next.set(key, {
-        tools: [{
-          toolName: candidate.toolName,
-          toolUseId: candidate.toolId,
-          toolInput: parsedInput,
-        }],
-      })
-      console.log(`[denial-backfill] key=${key} sessionId=${sessionId.slice(0, 20)} branch=enriched tool=${candidate.toolName} toolId=${candidate.toolId.slice(0, 16)} inputKeys=${Object.keys(parsedInput).join(',')}`)
-      return { enginePermissionDenied: next }
+      const updatedPanes = new Map(state.enginePanes)
+      const instances = pane.instances.slice()
+      instances[idx] = {
+        ...instances[idx],
+        permissionDenied: {
+          tools: [{
+            toolName: finalCandidate.toolName,
+            toolUseId: finalCandidate.toolId,
+            toolInput: finalParsedInput,
+          }],
+        },
+      }
+      updatedPanes.set(tabId, { ...pane, instances })
+      console.log(`[denial-backfill] key=${key} sessionId=${sessionId.slice(0, 20)} branch=enriched tool=${finalCandidate.toolName} toolId=${finalCandidate.toolId.slice(0, 16)} inputKeys=${Object.keys(finalParsedInput).join(',')}`)
+      return { enginePanes: updatedPanes }
     })
   } catch (err) {
     console.warn(`[denial-backfill] key=${key} sessionId=${sessionId.slice(0, 20)} branch=error ${err instanceof Error ? err.message : String(err)}`)

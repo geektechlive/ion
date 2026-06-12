@@ -10,6 +10,12 @@ clients to Ion Engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.4.0](https://github.com/dsswift/ion/compare/relay-v1.3.4...relay-v1.4.0) (2026-06-12)
+
+### Features
+
+* **relay:** forward ionKind and ionResourceId in APNs payloads (#188) ([89aded0](https://github.com/dsswift/ion/commit/89aded066604e23c2c4b79f46e04e027dae834f6))
+
 ## [1.3.4](https://github.com/dsswift/ion/compare/relay-v1.3.3...relay-v1.3.4) (2026-06-03)
 
 ## [1.3.3](https://github.com/dsswift/ion/compare/relay-v1.3.2...relay-v1.3.3) (2026-05-22)

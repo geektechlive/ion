@@ -11,7 +11,7 @@ struct RemoteTabGroup: Codable, Identifiable, Sendable {
 }
 
 enum RemoteEvent: Codable, Sendable {
-    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?, availableModels: [RemoteModelEntry]?, customName: String?, customIcon: String?, remoteDisplayUpdatedAt: Date?)
+    case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?, availableModels: [RemoteModelEntry]?, customName: String?, customIcon: String?, remoteDisplayUpdatedAt: Date?, resources: [String: [[String: AnyCodable]]]?)
     case tabCreated(tab: RemoteTabState)
     case tabClosed(tabId: String)
     case tabStatus(tabId: String, status: TabStatus)
@@ -19,7 +19,7 @@ enum RemoteEvent: Codable, Sendable {
     case toolCall(tabId: String, toolName: String, toolId: String)
     case toolResult(tabId: String, toolId: String, content: String, isError: Bool)
     case taskComplete(tabId: String, result: String, costUsd: Double)
-    case permissionRequest(tabId: String, questionId: String, toolName: String, toolInput: [String: AnyCodable]?, options: [PermissionOption])
+    case permissionRequest(tabId: String, instanceId: String?, questionId: String, toolName: String, toolInput: [String: AnyCodable]?, options: [PermissionOption])
     case permissionResolved(tabId: String, questionId: String)
     case conversationHistory(tabId: String, messages: [Message], hasMore: Bool, cursor: String?)
     case messageAdded(tabId: String, message: Message)
@@ -53,10 +53,28 @@ enum RemoteEvent: Codable, Sendable {
     // Engine events (structured)
     case engineAgentState(tabId: String, instanceId: String?, agents: [AgentStateUpdate])
     case engineStatus(tabId: String, instanceId: String?, fields: StatusFields, metadata: [String: AnyCodable]?)
+    /// Phase 3 of the state-management overhaul: engine_session_status
+    /// is the typed-payload counterpart to engine_status. The engine
+    /// emits both events for every status transition during the
+    /// transition window; consumers may read either. SessionStatus
+    /// carries `lastEmittedAt` (freshness contract) and
+    /// `hasInflightRun` (the engine's cross-checked answer to "is
+    /// there a live run") that the legacy event does not.
+    case engineSessionStatus(tabId: String, instanceId: String?, sessionStatus: SessionStatus, metadata: [String: AnyCodable]?)
     case engineWorkingMessage(tabId: String, instanceId: String?, message: String, metadata: [String: AnyCodable]?)
     case engineToolStart(tabId: String, instanceId: String?, toolName: String, toolId: String)
     case engineToolEnd(tabId: String, instanceId: String?, toolId: String, result: String?, isError: Bool)
+    case engineToolUpdate(tabId: String, instanceId: String?)
+    case engineToolComplete(tabId: String, instanceId: String?)
     case engineToolStalled(tabId: String, instanceId: String?, toolId: String, toolName: String, elapsed: Double)
+    /// Engine progress watchdog tripped: this run made no forward
+    /// progress (no provider stream events, no tool results, no turn
+    /// boundaries) for longer than the configured threshold and the
+    /// engine has cancelled it as a safety backstop. Advisory only —
+    /// the authoritative completion signal still arrives via the
+    /// follow-up engine_task_complete + engine_dead/idle events. See
+    /// the Go-side RunStalledEvent doc for the watchdog contract.
+    case engineRunStalled(tabId: String, instanceId: String?, stalledDuration: Double, lastActivity: String?)
     /// Engine drained a mid-turn steer message into the conversation as
     /// a user turn before the next LLM call. The desktop renders a
     /// "Steer applied" divider into the engineMessages scrollback; iOS
@@ -65,6 +83,9 @@ enum RemoteEvent: Codable, Sendable {
     /// message is already part of the conversation. See the Go-side
     /// SteerInjectedEvent and the TS engine_steer_injected variant.
     case engineSteerInjected(tabId: String, instanceId: String?, messageLength: Int)
+    case engineScheduleFired(tabId: String, instanceId: String?)
+    case engineLlmCall(tabId: String, instanceId: String?)
+    case engineDispatchStart(tabId: String, instanceId: String?)
     case engineError(tabId: String, instanceId: String?, message: String)
     case engineNotify(tabId: String, instanceId: String?, message: String, level: String, metadata: [String: AnyCodable]?)
     case engineDialog(tabId: String, instanceId: String?, dialogId: String, method: String, title: String, options: [String]?, defaultValue: String?)
@@ -98,6 +119,17 @@ enum RemoteEvent: Codable, Sendable {
     /// that gates approval. See
     /// docs/architecture/adr/003-state-events-vs-workflow-events.md.
     case enginePlanProposal(tabId: String, instanceId: String?, kind: String, planFilePath: String?, planSlug: String?)
+    /// engine_plan_mode_auto_exit fires when the engine deterministically
+    /// synthesizes an ExitPlanMode call at end-of-turn because the model
+    /// ended a plan-mode run without invoking ExitPlanMode or
+    /// AskUserQuestion (issue #187). Sibling to enginePlanProposal —
+    /// both surface the plan-approval card, but this event additionally
+    /// tells consumers the exit was engine-driven rather than
+    /// model-driven, enabling telemetry on prompt quality and optional
+    /// subtle UI hints. iOS does not act on this event today; the
+    /// desktop is the authoritative consumer that gates approval. Wire
+    /// protocol stays uniform by decoding cleanly here.
+    case enginePlanModeAutoExit(tabId: String, instanceId: String?, stopReason: String, planFilePath: String?, planSlug: String?, reason: String?, sessionId: String?, runId: String?)
     /// Engine ↔ harness wire-protocol request emitted when the engine wants
     /// an external opinion on whether to nudge a model that has stopped
     /// below the configured output-token budget. The desktop is the
@@ -178,6 +210,59 @@ enum RemoteEvent: Codable, Sendable {
         command: String?,
         commandError: String?
     )
+    /// Resource snapshot: emitted when a client subscribes to a resource kind.
+    /// Consumers replace their local collection with the items payload.
+    /// iOS observes this event but does not act on it in Phase 1 — decoding
+    /// keeps the wire uniform across consumers.
+    case engineResourceSnapshot(
+        tabId: String,
+        instanceId: String?,
+        resourceKind: String,
+        resourceSubId: String,
+        resourceItems: [[String: AnyCodable]]
+    )
+    /// Resource delta: emitted when a producer publishes a change.
+    /// iOS observes this event but does not act on it in Phase 1.
+    case engineResourceDelta(
+        tabId: String,
+        instanceId: String?,
+        resourceKind: String,
+        resourceSubId: String,
+        resourceDelta: [String: AnyCodable]
+    )
+    /// Notification from extension ctx.notify(). The relay handles APNs
+    /// push delivery; iOS observes for diagnostic visibility.
+    case engineNotification(
+        tabId: String,
+        instanceId: String?,
+        notifyKind: String,
+        notifyTitle: String,
+        notifyBody: String,
+        notifySound: String?,
+        notifyScope: String?
+    )
+    /// Intercept event from an extension via ctx.intercept(). Emitted by the
+    /// engine and routed to the target session's stream by the desktop.
+    /// The desktop forwards this as a `RemoteEvent` of type `engine_intercept`
+    /// after performing its own routing/redirect logic.
+    ///
+    /// Level hint semantics (same as desktop):
+    ///   "banner"   — informational, non-disruptive inline display.
+    ///   "redirect" — urgent; the desktop has already aborted + re-prompted;
+    ///                iOS renders a visual "Conversation redirected" marker.
+    ///
+    /// iOS does not perform the abort or re-prompt — the desktop owns that
+    /// orchestration. iOS renders the inline banner and (for redirect) relies
+    /// on the natural abort + new user message arriving on the engine stream.
+    case engineIntercept(
+        tabId: String,
+        instanceId: String?,
+        level: String,
+        title: String,
+        message: String,
+        source: String?,
+        metadata: [String: AnyCodable]?
+    )
     /// Desktop user-preferences projection. Emitted on initial pairing
     /// and on every subsequent change to a projectable setting (either
     /// from iOS via `setDesktopSetting` or from the desktop UI). Snapshot
@@ -224,6 +309,12 @@ enum RemoteEvent: Codable, Sendable {
     // Diagnostic log request from desktop
     case requestDiagnosticLogs
 
+    /// Full content for a single resource item, fetched on demand.
+    /// Sent by the desktop in response to a `request_resource_content`
+    /// command when the user taps a briefing card to expand it. iOS
+    /// calls `ResourceStore.updateContent` to populate the item's body.
+    case resourceContent(resourceId: String, kind: String, content: String)
+
     // MARK: - Codable keys
 
     enum TypeKey: String, Codable {
@@ -256,11 +347,18 @@ enum RemoteEvent: Codable, Sendable {
         case terminalSnapshot = "terminal_snapshot"
         case engineAgentState = "engine_agent_state"
         case engineStatus = "engine_status"
+        case engineSessionStatus = "engine_session_status"
         case engineWorkingMessage = "engine_working_message"
         case engineToolStart = "engine_tool_start"
         case engineToolEnd = "engine_tool_end"
+        case engineToolUpdate = "engine_tool_update"
+        case engineToolComplete = "engine_tool_complete"
         case engineToolStalled = "engine_tool_stalled"
+        case engineRunStalled = "engine_run_stalled"
         case engineSteerInjected = "engine_steer_injected"
+        case engineScheduleFired = "engine_schedule_fired"
+        case engineLlmCall = "engine_llm_call"
+        case engineDispatchStart = "engine_dispatch_start"
         case engineError = "engine_error"
         case engineNotify = "engine_notify"
         case engineDialog = "engine_dialog"
@@ -278,9 +376,14 @@ enum RemoteEvent: Codable, Sendable {
         case engineProfiles = "engine_profiles"
         case enginePlanModeChanged = "engine_plan_mode_changed"
         case enginePlanProposal = "engine_plan_proposal"
+        case enginePlanModeAutoExit = "engine_plan_mode_auto_exit"
         case engineEarlyStopDecisionRequest = "engine_early_stop_decision_request"
         case engineCommandRegistry = "engine_command_registry"
         case engineCommandResult = "engine_command_result"
+        case engineResourceSnapshot = "engine_resource_snapshot"
+        case engineResourceDelta = "engine_resource_delta"
+        case engineNotification = "engine_notification"
+        case engineIntercept = "engine_intercept"
         case desktopSettingsSnapshot = "desktop_settings_snapshot"
         case gitChangesResponse = "git_changes_response"
         case gitGraphResponse = "git_graph_response"
@@ -299,6 +402,7 @@ enum RemoteEvent: Codable, Sendable {
         case uploadAttachmentResult = "upload_attachment_result"
         case tabAttachments = "tab_attachments"
         case requestDiagnosticLogs = "request_diagnostic_logs"
+        case resourceContent = "resource_content"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -312,6 +416,10 @@ enum RemoteEvent: Codable, Sendable {
         case instanceId, data, exitCode, instance, instances, activeInstanceId, buffers
         case level, dialogId, method, title, defaultValue
         case agents, fields, inputTokens, outputTokens, contextPercent
+        // Phase 3 of the state-management overhaul: engine_session_status
+        // carries a typed SessionStatus payload under the `sessionStatus`
+        // wire key (mirrors EngineEvent.SessionStatus in Go).
+        case sessionStatus
         case signal, stderrTail, label, profiles, elapsed, usage, model
         case tabGroupMode, tabGroups, preferredModel, engineDefaultModel, availableModels
         case directory, files, branch, isGitRepo, ahead, behind, stagedCount, unstagedCount
@@ -335,11 +443,28 @@ enum RemoteEvent: Codable, Sendable {
         // engine_steer_injected — mid-turn steer drain confirmation.
         // Mirrors EngineEvent.SteerMessageLength's JSON tag.
         case steerMessageLength
+        // engine_run_stalled — engine progress watchdog tripped. Mirrors
+        // EngineEvent.RunStalledDuration / RunStalledLastActivity JSON tags.
+        // See the Go-side RunStalledEvent doc for the watchdog contract;
+        // iOS observes only and may render the advisory event as a
+        // diagnostic indicator separate from a generic engine_error.
+        case runStalledDuration, runStalledLastActivity
         // engine_plan_proposal — workflow event for plan-mode proposals.
         // The engine emits these field names (no instanceId; the proposal
         // is always at the tab level, not per-instance).
         // planFilePath and planSlug are shared with engine_plan_mode_changed.
         case planProposalKind, planFilePath, planSlug
+        // engine_plan_mode_auto_exit — sibling to engine_plan_proposal,
+        // fires when the engine deterministically synthesizes an
+        // ExitPlanMode call at end-of-turn (issue #187). Field names
+        // mirror the Go-side EngineEvent json tags verbatim
+        // (planModeAutoExit* prefix to avoid colliding with other
+        // event variants that share field name primitives — StopReason
+        // in particular collides with early-stop, which already uses
+        // earlyStopStopReason). planFilePath and planSlug are reused
+        // from above since the shape is identical.
+        case planModeAutoExitStopReason, planModeAutoExitReason
+        case planModeAutoExitSessionId, planModeAutoExitRunId
         // engine_early_stop_decision_request — wire-protocol request the
         // engine emits when it wants an external opinion on continuation.
         // The desktop responds; iOS only decodes for diagnostic visibility.
@@ -360,6 +485,13 @@ enum RemoteEvent: Codable, Sendable {
         // is the failure reason or "unknown_command" when the engine
         // disclaims the name.
         case command, commandError
+        // engine_resource_snapshot / engine_resource_delta — resource
+        // subsystem events (D-007). iOS observes but does not act on
+        // these in Phase 1. Field names mirror the Go-side json tags.
+        case resourceKind, resourceSubId, resourceItems, resourceDelta
+        // engine_notification — notification pipeline event (D-009).
+        // The relay handles APNs push; iOS decodes for diagnostic visibility.
+        case notifyKind, notifyTitle, notifyBody, notifySound, notifyScope
         // desktop_settings_snapshot — Part 7 wire event.
         // `settings` is the value map; `schema` carries per-key
         // metadata (type, group, label, description, defaultValue);
@@ -374,6 +506,17 @@ enum RemoteEvent: Codable, Sendable {
         case metadata
         case agentName
         case conversationId
+        // resource_content — lazy-loaded full body for a single resource item.
+        // Sent by desktop in response to request_resource_content.
+        // `resourceId` and `kind` are the desktop wire keys; `resourceKind` is
+        // the engine-side key used by engine_resource_snapshot / engine_resource_delta.
+        // Do NOT conflate them — resource_content uses "kind", not "resourceKind".
+        case resourceId
+        case kind
+        // resources — workspace-scoped resource manifest in snapshot.
+        // Carries metadata-only items (id, kind, title, createdAt, read).
+        // Full content is fetched on demand via request_resource_content.
+        case resources
     }
 
     // MARK: - Decoder
@@ -399,6 +542,10 @@ enum RemoteEvent: Codable, Sendable {
             return
         }
         if let event = try Self.decodeEngine(type: type, container: container) {
+            self = event
+            return
+        }
+        if let event = try Self.decodeResource(type: type, container: container) {
             self = event
             return
         }
@@ -428,6 +575,7 @@ enum RemoteEvent: Codable, Sendable {
         if try encodePermission(into: &container) { return }
         if try encodeTerminal(into: &container) { return }
         if try encodeEngine(into: &container) { return }
+        if try encodeResource(into: &container) { return }
         if try encodeGit(into: &container) { return }
         if try encodeFiles(into: &container) { return }
         // Unreachable: every case must be encoded by exactly one family.

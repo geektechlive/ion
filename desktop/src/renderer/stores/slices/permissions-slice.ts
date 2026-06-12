@@ -28,7 +28,8 @@ export function createPermissionsSlice(set: StoreSet, _get: StoreGet): Partial<S
       set((s) => ({
         tabs: s.tabs.map((t) => {
           if (t.id !== tabId) return t
-          const lastMsg = t.messages[t.messages.length - 1]
+          const msgs = t.messages ?? []
+          const lastMsg = msgs[msgs.length - 1]
           const alreadyRecovered = lastMsg?.role === 'system' && lastMsg.content.startsWith('Recovered:')
           return {
             ...t,
@@ -39,9 +40,9 @@ export function createPermissionsSlice(set: StoreSet, _get: StoreGet): Partial<S
             permissionDenied: null,
             lastEventAt: Date.now(),
             messages: alreadyRecovered
-              ? t.messages
+              ? msgs
               : [
-                  ...t.messages,
+                  ...msgs,
                   {
                     id: nextMsgId(),
                     role: 'system' as const,

@@ -164,9 +164,24 @@ extension TransportManager {
             return
         }
 
+        // Decompress if the payload has the 0x01 version prefix (raw DEFLATE).
+        // The desktop compresses with zlib.deflateRawSync() and prepends 0x01.
+        // Uncompressed (legacy) payloads start with '{' (0x7B) and pass through.
+        let jsonData: Data
+        if payloadData.first == 0x01 {
+            do {
+                jsonData = try PayloadCompression.inflateRaw(payloadData.dropFirst())
+            } catch {
+                ionLog.error("decompression failed for seq=\(wire.seq): \(error)")
+                return
+            }
+        } else {
+            jsonData = payloadData
+        }
+
         // Check for heartbeat: extract ts/buffered and surface to the app
         // for connection quality tracking.
-        if let json = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+        if let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
            let type = json["type"] as? String, type == "heartbeat" {
             let senderTs = json["ts"] as? Double ?? 0
             let buffered = json["buffered"] as? Int ?? 0
@@ -176,17 +191,17 @@ extension TransportManager {
 
         let event: RemoteEvent
         do {
-            event = try JSONDecoder().decode(RemoteEvent.self, from: payloadData)
+            event = try JSONDecoder().decode(RemoteEvent.self, from: jsonData)
         } catch {
             // Log decode failures so we can diagnose dropped events.
             // ionLog writes to os_log (Console.app only). DiagnosticLog writes
             // to the on-disk log file that gets sent to desktop via
             // requestDiagnosticLogs — without this, decode errors are invisible
             // in remote diagnostics.
-            let typeHint = (try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any])?["type"] as? String ?? "unknown"
+            let typeHint = (try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any])?["type"] as? String ?? "unknown"
             let errDesc = String(describing: error).prefix(500)
             ionLog.error("Failed to decode event type=\(typeHint): \(error)")
-            DiagnosticLog.log("DECODE-ERR: type=\(typeHint) size=\(payloadData.count) err=\(errDesc)")
+            DiagnosticLog.log("DECODE-ERR: type=\(typeHint) size=\(jsonData.count) err=\(errDesc)")
             return
         }
 

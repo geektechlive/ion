@@ -156,6 +156,22 @@ type ClientCommand struct {
 	CompactEnabled        *bool   `json:"compactEnabled,omitempty"`
 	CompactSummaryEnabled *bool   `json:"compactSummaryEnabled,omitempty"`
 	CompactMemoryEnabled  *bool   `json:"compactMemoryEnabled,omitempty"`
+
+	// resource_subscribe / resource_unsubscribe
+	ResourceKind   string                `json:"resourceKind,omitempty"`
+	ResourceFilter *types.ResourceFilter `json:"resourceFilter,omitempty"`
+	ResourceSubID  string                `json:"resourceSubId,omitempty"`
+	// resource_subscribe: when true, subscribe to the global (workspace-level)
+	// broker instead of the per-session broker.
+	ResourceGlobal bool `json:"resourceGlobal,omitempty"`
+	// resource_publish: operation and item for client-side resource publishing.
+	ResourceOp   string              `json:"resourceOp,omitempty"`
+	ResourceItem *types.ResourceItem `json:"resourceItem,omitempty"`
+
+	// delete_stored_sessions: cleanup stale conversation files.
+	MaxAgeDays int      `json:"maxAgeDays,omitempty"`
+	ExcludeIDs []string `json:"excludeIds,omitempty"`
+	DryRun     bool     `json:"dryRun,omitempty"`
 }
 
 var validCommands = map[string]bool{
@@ -185,6 +201,12 @@ var validCommands = map[string]bool{
 	"early_stop_decision_response": true,
 	"health":                true,
 	"reconcile_state":       true,
+	// query_session_status: on-demand counterpart to reconcile_state that
+	// emits ONLY the engine_status snapshot (no agent state). Used by
+	// freshly-reconnected clients to learn current status for a key
+	// without waiting for the next heartbeat tick or paying the cost of
+	// a full reconcile. Phase 2 of the state-management overhaul.
+	"query_session_status":   true,
 	"migrate_conversation":  true,
 	"list_models":           true,
 	"store_credential":      true,
@@ -198,6 +220,17 @@ var validCommands = map[string]bool{
 	// session is running against it (so dispatchClear cannot be used).
 	// Non-breaking additive command. Requires key (sessionId).
 	"clear_conversation_file": true,
+	// delete_stored_sessions: removes stale conversation files from disk.
+	// All fields optional with sane defaults (maxAgeDays=14, dryRun=false).
+	"delete_stored_sessions": true,
+	// resource_subscribe / resource_unsubscribe: client-side resource
+	// collection management. resource_subscribe attaches a live subscription
+	// to a resource kind; the engine streams snapshot + delta events back
+	// over the connection. resource_unsubscribe tears down an active
+	// subscription by its ID.
+	"resource_subscribe":   true,
+	"resource_unsubscribe": true,
+	"resource_publish":     true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -362,6 +395,8 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "earlyStopRequestId")
 	case "reconcile_state":
 		return hasNonEmptyString(raw, "key")
+	case "query_session_status":
+		return hasNonEmptyString(raw, "key")
 	case "migrate_conversation":
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "text") && hasNonEmptyString(raw, "message")
 	case "list_models":
@@ -378,6 +413,20 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 	case "clear_conversation_file":
 		// key carries the sessionId (conversationId) to wipe. Required and non-empty.
 		return hasNonEmptyString(raw, "key")
+	case "delete_stored_sessions":
+		return true // all fields are optional with sane defaults
+	case "resource_subscribe":
+		// Global subscriptions (resourceGlobal: true) use key="" intentionally —
+		// they target the Manager-level broker, not a per-session broker. Require
+		// a non-empty key only for per-session subscriptions.
+		if hasBool(raw, "resourceGlobal") {
+			return hasNonEmptyString(raw, "resourceKind")
+		}
+		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "resourceKind")
+	case "resource_unsubscribe":
+		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "resourceSubId")
+	case "resource_publish":
+		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "resourceOp")
 	}
 	return false
 }

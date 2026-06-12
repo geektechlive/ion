@@ -14,6 +14,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
     forkTab: async (sourceTabId) => {
       const source = get().tabs.find((t) => t.id === sourceTabId)
       if (!source || !source.conversationId) return null
+      if (!source.messages) throw new Error('Cannot fork a skeleton tab without loaded messages')
       try {
         const { tabId } = await window.ion.createTab()
 
@@ -66,6 +67,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
     rewindToMessage: (tabId, messageId) => {
       const tab = get().tabs.find((t) => t.id === tabId)
       if (!tab) return
+      if (!tab.messages) throw new Error('Cannot rewind a skeleton tab without loaded messages')
       const idx = tab.messages.findIndex((m) => m.id === messageId)
       if (idx < 0) return
 
@@ -107,6 +109,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
     forkFromMessage: async (tabId, messageId) => {
       const source = get().tabs.find((t) => t.id === tabId)
       if (!source) return null
+      if (!source.messages) throw new Error('Cannot fork from a skeleton tab without loaded messages')
       const idx = source.messages.findIndex((m) => m.id === messageId)
       if (idx < 0) return null
 
@@ -240,6 +243,71 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           isExpanded: true,
         }))
         return tab.id
+      }
+    },
+
+    loadSkeletonMessages: async (tabId) => {
+      const tab = get().tabs.find((t) => t.id === tabId)
+      if (!tab || tab.messages !== null || !tab.conversationId) return
+
+      try {
+        // Load all historical + current session messages in a single
+        // batch IPC roundtrip. The engine's loadChainHistory command
+        // loads all session IDs in order and returns a flat array.
+        // No retries — the engine is already running and the files
+        // are on disk. The old code used 3 retries with exponential
+        // backoff (2s, 4s) causing 6+ second waits on tab switch.
+        const allSessionIds = [...tab.historicalSessionIds, tab.conversationId]
+        const history = await window.ion.loadChainHistory(allSessionIds)
+
+        const allMessages: Message[] = history
+          .filter((m: any) => !m.internal)
+          .map((m: any) => ({
+            id: nextMsgId(),
+            role: m.role as Message['role'],
+            content: m.content || '',
+            toolName: m.toolName,
+            toolId: m.toolId,
+            toolInput: m.toolInput,
+            toolStatus: m.toolName ? 'completed' as const : undefined,
+            userExecuted: m.userExecuted,
+            attachments: m.attachments,
+            timestamp: m.timestamp,
+          }))
+
+        // Restore permissionDenied from the last tool message (only if tab
+        // doesn't already have one from the persisted state)
+        const currentTab = get().tabs.find((t) => t.id === tabId)
+        let restoredDenied = currentTab?.permissionDenied ?? null
+        if (!restoredDenied) {
+          const lastToolMsg = [...allMessages].reverse().find((m) => m.toolName)
+          if (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion') {
+            restoredDenied = { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastToolMsg.toolInput) }] }
+          }
+        }
+
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === tabId
+              ? {
+                  ...t,
+                  messages: allMessages,
+                  messageCount: allMessages.length,
+                  ...(restoredDenied ? { permissionDenied: restoredDenied } : {}),
+                }
+              : t
+          ),
+        }))
+      } catch (err) {
+        console.warn(`[loadSkeletonMessages] failed for tab ${tabId.slice(0, 8)}:`, err)
+        // Hydrate with empty messages so the tab is usable
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === tabId && t.messages === null
+              ? { ...t, messages: [], messageCount: 0 }
+              : t
+          ),
+        }))
       }
     },
 

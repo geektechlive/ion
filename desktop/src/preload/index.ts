@@ -60,11 +60,18 @@ export interface IonAPI {
   loadSessionChains(): Promise<{ chains: Record<string, string[]>; reverse: Record<string, string> }>
   saveSessionChains(data: { chains: Record<string, string[]>; reverse: Record<string, string> }): Promise<void>
   getConversation(conversationId: string, offset?: number, limit?: number): Promise<{ messages: any[]; total: number; hasMore: boolean }>
+  loadChainHistory(sessionIds: string[]): Promise<SessionLoadMessage[]>
   getBackend(): Promise<'api' | 'cli'>
   switchBackend(backend: 'api' | 'cli'): Promise<void>
   loadOtherBackendTabs(): Promise<Array<{ conversationId: string; title: string; customTitle: string | null; workingDirectory: string; permissionMode: string }>>
   migrateTabs(conversationIds: string[], targetBackend: 'api' | 'cli'): Promise<{ backupPaths: string[]; migrated: Array<{ conversationId: string; newConversationId: string; title: string }>; failed: Array<{ conversationId: string; title: string; error: string }> }>
 
+  // ─── Conversation backup (export/restore zip archives) ───
+  conversationExportPreview(scope: 'currently-open' | 'all'): Promise<{ ok: boolean; error?: string; conversationCount?: number; totalUncompressedBytes?: number; estimatedCompressedBytes?: number; tabCount?: number }>
+  conversationExport(args: { scope: 'currently-open' | 'all'; destinationPath?: string }): Promise<{ ok: boolean; error?: string; destinationPath?: string; conversationCount?: number; bytesWritten?: number }>
+  conversationRestorePreview(args?: { sourcePath?: string }): Promise<{ ok: boolean; error?: string; sourcePath?: string; manifest?: { version: number; createdAt: string; createdBy: string; ionVersion: string; scope: 'currently-open' | 'all'; conversationCount: number; backendSnapshot: 'api' | 'cli'; hostname: string } }>
+  conversationRestore(args: { sourcePath: string; conflictPolicy?: 'skip' | 'overwrite' | 'rename'; restoreTabs?: boolean }): Promise<{ ok: boolean; error?: string; restored: number; skipped: number; overwritten: number; renamed: number; errors: string[] }>
+  onConversationBackupProgress(callback: (data: { current: number; total: number; label: string }) => void): () => void
   // ─── Git operations ───
   gitIsRepo(directory: string): Promise<{ isRepo: boolean }>
   gitGraph(directory: string, skip?: number, limit?: number, search?: string, author?: string, extra?: { path?: string; refKind?: string; dateAfter?: string; dateBefore?: string }): Promise<GitGraphData>
@@ -145,6 +152,20 @@ export interface IonAPI {
   engineCommand(key: string, command: string, args: string): Promise<void>
   engineStop(key: string): Promise<void>
   engineRemapSession(oldKey: string, newKey: string): Promise<void>
+  /** Notify the main process that the user focused a tab. The main
+   *  process publishes the session key as a desktop.focus resource so
+   *  extensions can route to the active session. */
+  notifyTabFocus(tabId: string): void
+  /** Publish a mark_read delta for a resource. Propagates the read state to
+   *  all subscribers (including iOS) via the engine's resource broker. */
+  markResourceRead(kind: string, resourceId: string): void
+  /** Get persisted read resource IDs from the main process. */
+  getReadResourceIds(): Promise<string[]>
+  /** Get persisted resources from disk (cold-load fallback). */
+  getPersistedResources(): Promise<Array<{ id: string; kind: string; title?: string; content: string; createdAt: string; conversationId?: string; metadata?: Record<string, unknown>; read?: boolean }>>
+  /** Publish a delete op for a resource. Removes the item from all
+   *  subscribers (including iOS) via the engine's resource broker. */
+  publishResourceDelete(kind: string, resourceId: string): void
   onEngineEvent(callback: (key: string, event: EngineEvent) => void): () => void
 
   // ─── Model & provider management ───
@@ -272,10 +293,23 @@ const api: IonAPI = {
   saveSessionChains: (data) => ipcRenderer.invoke(IPC.SAVE_SESSION_CHAINS, data),
   getConversation: (conversationId: string, offset = 0, limit = 50) =>
     ipcRenderer.invoke(IPC.GET_CONVERSATION, { conversationId, offset, limit }),
+  loadChainHistory: (sessionIds: string[]) =>
+    ipcRenderer.invoke(IPC.LOAD_CHAIN_HISTORY, sessionIds),
   getBackend: () => ipcRenderer.invoke(IPC.GET_BACKEND),
   switchBackend: (backend) => ipcRenderer.invoke(IPC.SWITCH_BACKEND, backend),
   loadOtherBackendTabs: () => ipcRenderer.invoke(IPC.LOAD_OTHER_BACKEND_TABS),
   migrateTabs: (conversationIds, targetBackend) => ipcRenderer.invoke(IPC.MIGRATE_TABS, { conversationIds, targetBackend }),
+
+  // ─── Conversation backup ───
+  conversationExportPreview: (scope) => ipcRenderer.invoke(IPC.CONVERSATION_EXPORT_PREVIEW, { scope }),
+  conversationExport: (args) => ipcRenderer.invoke(IPC.CONVERSATION_EXPORT, args),
+  conversationRestorePreview: (args) => ipcRenderer.invoke(IPC.CONVERSATION_RESTORE_PREVIEW, args ?? {}),
+  conversationRestore: (args) => ipcRenderer.invoke(IPC.CONVERSATION_RESTORE, args),
+  onConversationBackupProgress: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, data: { current: number; total: number; label: string }) => callback(data)
+    ipcRenderer.on(IPC.CONVERSATION_BACKUP_PROGRESS, handler)
+    return () => ipcRenderer.removeListener(IPC.CONVERSATION_BACKUP_PROGRESS, handler)
+  },
 
   // ─── Git operations ───
   gitIsRepo: (directory) => ipcRenderer.invoke(IPC.GIT_IS_REPO, directory),
@@ -371,6 +405,11 @@ const api: IonAPI = {
   engineCommand: (key, command, args) => ipcRenderer.invoke(IPC.ENGINE_COMMAND, { key, command, args }),
   engineStop: (key) => ipcRenderer.invoke(IPC.ENGINE_STOP, { key }),
   engineRemapSession: (oldKey, newKey) => ipcRenderer.invoke(IPC.ENGINE_REMAP_SESSION, { oldKey, newKey }),
+  notifyTabFocus: (tabId) => ipcRenderer.send(IPC.NOTIFY_TAB_FOCUS, { tabId }),
+  markResourceRead: (kind, resourceId) => ipcRenderer.send(IPC.MARK_RESOURCE_READ, { kind, resourceId }),
+  getReadResourceIds: () => ipcRenderer.invoke(IPC.GET_READ_RESOURCE_IDS),
+  getPersistedResources: () => ipcRenderer.invoke(IPC.GET_PERSISTED_RESOURCES),
+  publishResourceDelete: (kind, resourceId) => ipcRenderer.send(IPC.DELETE_RESOURCE, { kind, resourceId }),
   onEngineEvent: (callback) => {
     const handler = (_e: Electron.IpcRendererEvent, key: string, event: any) => callback(key, event)
     ipcRenderer.on(IPC.ENGINE_EVENT, handler)

@@ -1,9 +1,10 @@
 import { useEffect } from 'react'
-import type { Message } from '../../shared/types'
+import type { Message, TabState } from '../../shared/types'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { setSavedBuffer } from '../components/TerminalInstance'
 import { restoreEngineTab } from './useTabRestoration-engine'
+import { makeLocalTab } from '../stores/session-store-helpers'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
@@ -37,20 +38,15 @@ export function useTabRestoration() {
           useSessionStore.setState({ initProgress: `Restoring tab ${i + 1} of ${saved.tabs.length}…` })
           const st = saved.tabs[i]
           if (st.conversationId && !st.isEngine) {
-            // Conversation tab with a session -- resume it
-            const tabId = await useSessionStore.getState().resumeSession(
-              st.conversationId,
-              st.title,
-              st.workingDirectory,
-            )
-            restoredTabIds.push({ tabId, sessionId: st.conversationId, index: i })
+            // Determine if this is the active tab (loads messages eagerly)
+            const isActiveTab = (saved.activeTabIndex !== undefined && saved.activeTabIndex !== null && i === saved.activeTabIndex) ||
+                                (!!(saved.activeSessionId && st.conversationId === saved.activeSessionId))
 
-            // Patch extra per-tab settings that resumeSession doesn't handle
             // Restore worktree info if present (verify path still exists)
             let restoredWorktree = st.worktree || null
             if (restoredWorktree) {
               try {
-                const { entries } = await window.ion.fsReadDir(restoredWorktree.worktreePath)
+                await window.ion.fsReadDir(restoredWorktree.worktreePath)
                 // Directory exists, keep the worktree info
               } catch {
                 // Worktree was cleaned up externally
@@ -58,43 +54,106 @@ export function useTabRestoration() {
               }
             }
 
-            useSessionStore.setState((s) => ({
-              tabs: s.tabs.map((t) =>
-                t.id === tabId
-                  ? {
-                      ...t,
-                      customTitle: st.customTitle || null,
-                      hasChosenDirectory: st.hasChosenDirectory,
-                      additionalDirs: st.additionalDirs,
-                      permissionMode: st.permissionMode,
-                      bashResults: st.bashResults || [],
-                      pillColor: st.pillColor || null,
-                      pillIcon: st.pillIcon || null,
-                      modelOverride: st.modelOverride || null,
-                      worktree: restoredWorktree,
-                      historicalSessionIds: st.historicalSessionIds || [],
-                      lastKnownSessionId: st.lastKnownSessionId || null,
-                      groupId: st.groupId || null,
-                      groupPinned: st.groupPinned ?? false,
-                      contextTokens: st.contextTokens || null,
-                      queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
-                      draftInput: st.draftInput ?? '',
-                      lastMessagePreview: st.lastMessagePreview || null,
-                      lastEventAt: st.lastEventAt ?? null,
-                      // Persisted permissionDenied is authoritative over resumeSession reconstruction
-                      ...(st.permissionDenied ? { permissionDenied: st.permissionDenied } : {}),
-                      ...(st.planFilePath ? { planFilePath: st.planFilePath } : {}),
-                      // If worktree is valid, restore workingDirectory to worktree path
-                      // If worktree was cleaned up, fall back to original repo path
-                      ...(restoredWorktree
-                        ? { workingDirectory: restoredWorktree.worktreePath }
-                        : st.worktree ? { workingDirectory: st.worktree.repoPath } : {}),
-                    }
-                  : t
-              ),
-            }))
-            window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
-            if (st.draftInput) console.log(`[restore] draft for tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
+            if (isActiveTab) {
+              // Active tab: load messages eagerly via resumeSession
+              const tabId = await useSessionStore.getState().resumeSession(
+                st.conversationId,
+                st.title,
+                st.workingDirectory,
+              )
+              restoredTabIds.push({ tabId, sessionId: st.conversationId, index: i })
+
+              // Patch extra per-tab settings that resumeSession doesn't handle
+              useSessionStore.setState((s) => ({
+                tabs: s.tabs.map((t) =>
+                  t.id === tabId
+                    ? {
+                        ...t,
+                        customTitle: st.customTitle || null,
+                        hasChosenDirectory: st.hasChosenDirectory,
+                        additionalDirs: st.additionalDirs,
+                        permissionMode: st.permissionMode,
+                        bashResults: st.bashResults || [],
+                        pillColor: st.pillColor || null,
+                        pillIcon: st.pillIcon || null,
+                        modelOverride: st.modelOverride || null,
+                        worktree: restoredWorktree,
+                        historicalSessionIds: st.historicalSessionIds || [],
+                        lastKnownSessionId: st.lastKnownSessionId || null,
+                        groupId: st.groupId || null,
+                        groupPinned: st.groupPinned ?? false,
+                        contextTokens: st.contextTokens || null,
+                        queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
+                        draftInput: st.draftInput ?? '',
+                        lastMessagePreview: st.lastMessagePreview || null,
+                        lastEventAt: st.lastEventAt ?? null,
+                        // Persisted permissionDenied is authoritative over resumeSession reconstruction
+                        ...(st.permissionDenied ? { permissionDenied: st.permissionDenied } : {}),
+                        ...(st.planFilePath ? { planFilePath: st.planFilePath } : {}),
+                        // If worktree is valid, restore workingDirectory to worktree path
+                        // If worktree was cleaned up, fall back to original repo path
+                        ...(restoredWorktree
+                          ? { workingDirectory: restoredWorktree.worktreePath }
+                          : st.worktree ? { workingDirectory: st.worktree.repoPath } : {}),
+                      }
+                    : t
+                ),
+              }))
+              window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
+              if (st.draftInput) console.log(`[restore] draft for tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
+            } else {
+              // Non-active tab: create skeleton tab with messages: null (lazy load)
+              let tabId: string
+              try {
+                const res = await window.ion.createTab()
+                tabId = res.tabId
+              } catch {
+                tabId = crypto.randomUUID()
+              }
+              restoredTabIds.push({ tabId, sessionId: st.conversationId, index: i })
+
+              const tab: TabState = {
+                ...makeLocalTab(),
+                id: tabId,
+                conversationId: st.conversationId,
+                lastKnownSessionId: st.lastKnownSessionId || st.conversationId,
+                historicalSessionIds: st.historicalSessionIds || [],
+                title: st.title || 'Resumed Session',
+                customTitle: st.customTitle || null,
+                workingDirectory: st.workingDirectory,
+                hasChosenDirectory: st.hasChosenDirectory,
+                additionalDirs: st.additionalDirs,
+                permissionMode: st.permissionMode,
+                messages: null,
+                messageCount: st.messageCount ?? 0,
+                bashResults: st.bashResults || [],
+                pillColor: st.pillColor || null,
+                pillIcon: st.pillIcon || null,
+                modelOverride: st.modelOverride || null,
+                forkedFromSessionId: st.forkedFromSessionId || null,
+                worktree: restoredWorktree,
+                groupId: st.groupId || null,
+                groupPinned: st.groupPinned ?? false,
+                contextTokens: st.contextTokens || null,
+                queuedPrompts: st.queuedPrompts?.length ? [st.queuedPrompts.join('\n\n')] : [],
+                draftInput: st.draftInput ?? '',
+                lastMessagePreview: st.lastMessagePreview || null,
+                lastEventAt: st.lastEventAt ?? null,
+                ...(st.permissionDenied ? { permissionDenied: st.permissionDenied } : {}),
+                ...(st.planFilePath ? { planFilePath: st.planFilePath } : {}),
+                // If worktree is valid, restore workingDirectory to worktree path
+                // If worktree was cleaned up, fall back to original repo path
+                ...(restoredWorktree
+                  ? { workingDirectory: restoredWorktree.worktreePath }
+                  : st.worktree ? { workingDirectory: st.worktree.repoPath } : {}),
+              }
+
+              useSessionStore.setState((s) => ({
+                tabs: [...s.tabs, tab],
+              }))
+              window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
+              if (st.draftInput) console.log(`[restore] skeleton tab ${tabId.slice(0, 8)} draft len=${st.draftInput.length}`)
+            }
           } else if (st.isEngine) {
             restoreEngineTab(st, restoredTabIds, i)
           } else if (st.isTerminalOnly) {
@@ -178,7 +237,11 @@ export function useTabRestoration() {
 
         useSessionStore.setState({ initProgress: 'Loading history…' })
         // Load historical session messages for tabs that have them
+        // Skip skeleton tabs (messages: null) — their history will load on-demand via loadSkeletonMessages
         for (const { tabId, index } of restoredTabIds) {
+          const tab = useSessionStore.getState().tabs.find((t) => t.id === tabId)
+          if (tab?.messages === null) continue
+
           const st = saved.tabs[index]
           const historicalIds = st.historicalSessionIds || []
           if (historicalIds.length > 0) {
@@ -219,7 +282,7 @@ export function useTabRestoration() {
                   t.id === tabId
                     ? {
                         ...t,
-                        messages: [...allHistoricalMessages, ...t.messages],
+                        messages: [...allHistoricalMessages, ...(t.messages ?? [])],
                         ...(restoredDenied ? { permissionDenied: restoredDenied } : {}),
                       }
                     : t
@@ -231,7 +294,11 @@ export function useTabRestoration() {
 
         // Fallback: recover messages from lastKnownSessionId when both
         // conversationId and historicalSessionIds are empty
+        // Skip skeleton tabs — they defer all message loading to on-demand
         for (const { tabId, index } of restoredTabIds) {
+          const tab = useSessionStore.getState().tabs.find((t) => t.id === tabId)
+          if (tab?.messages === null) continue
+
           const st = saved.tabs[index]
           const historicalIds = st.historicalSessionIds || []
           if (!st.conversationId && historicalIds.length === 0 && st.lastKnownSessionId) {
@@ -252,7 +319,7 @@ export function useTabRestoration() {
               useSessionStore.setState((s) => ({
                 tabs: s.tabs.map((t) =>
                   t.id === tabId
-                    ? { ...t, messages: [...msgs, ...t.messages] }
+                    ? { ...t, messages: [...msgs, ...(t.messages ?? [])] }
                     : t
                 ),
               }))

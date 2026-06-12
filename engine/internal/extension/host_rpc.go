@@ -128,6 +128,10 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 	if h.handleAsyncRPC(method, id, raw) {
 		return
 	}
+	// runOnce dedup RPCs live in host_rpc_run_once.go.
+	if h.handleRunOnceRPC(method, id, raw) {
+		return
+	}
 	switch method {
 	case "ext/register_process":
 		var req struct {
@@ -700,6 +704,24 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			))
 			h.sendResponse(id, json.RawMessage(data), nil)
 		}()
+
+	case "ext/declare_resource":
+		h.handleDeclareResource(id, raw)
+
+	case "ext/publish_resource":
+		h.handlePublishResource(id, raw)
+
+	case "ext/notify":
+		h.handleNotify(id, raw)
+
+	case "ext/intercept":
+		h.handleIntercept(id, raw)
+
+	case "ext/list_sessions":
+		h.handleListSessions(id, raw)
+
+	case "ext/send_to_session":
+		h.handleSendToSession(id, raw)
 
 	default:
 		h.sendResponse(id, nil, &jsonrpcError{Code: -32601, Message: "method not found: " + method})

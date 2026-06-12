@@ -1,5 +1,32 @@
 import type { StoreSet } from '../session-store-types'
-import type { EngineEvent } from '../../../shared/types'
+import type { EngineEvent, EnginePaneState, StatusFields } from '../../../shared/types'
+
+/**
+ * Return a new enginePanes Map with the given instance fields patched for
+ * the instance identified by `key` (`${tabId}:${instanceId}`). No-ops
+ * silently when the pane or instance is not found.
+ */
+function withInstancePatch(
+  enginePanes: Map<string, EnginePaneState>,
+  key: string,
+  patch: Partial<{
+    statusFields: StatusFields | null
+    conversationIds: string[]
+    permissionDenied: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null
+    modelOverride: string | null
+  }>,
+): Map<string, EnginePaneState> {
+  const [tabId, instanceId] = key.split(':')
+  const pane = enginePanes.get(tabId)
+  if (!pane) return enginePanes
+  const idx = pane.instances.findIndex((i) => i.id === instanceId)
+  if (idx === -1) return enginePanes
+  const updated = new Map(enginePanes)
+  const instances = pane.instances.slice()
+  instances[idx] = { ...instances[idx], ...patch }
+  updated.set(tabId, { ...pane, instances })
+  return updated
+}
 
 /**
  * Handler for `engine_status` events on engine-view tabs (compound
@@ -7,15 +34,12 @@ import type { EngineEvent } from '../../../shared/types'
  * to keep that file under the 600-line TypeScript cap.
  *
  * Behavior:
- *   - Merges the engine_status payload into `engineStatusFields`,
- *     carrying forward last-known context/cost values so footers
- *     don't blink to zero on cost-only ticks.
- *   - Captures new sessionIds into `engineConversationIds` and signals
+ *   - Captures new sessionIds into instance.conversationIds and signals
  *     the caller (via the returned `didCaptureNewSessionId` flag) so it
  *     can trigger an immediate persistence flush — this is what makes
  *     the conversation chain survive a hard kill.
  *   - Promotes AskUserQuestion / ExitPlanMode permissionDenials into
- *     `enginePermissionDenied`, preserving prior entries on cost-only
+ *     instance.permissionDenied, preserving prior entries on cost-only
  *     follow-up ticks so the card doesn't flicker out.
  *   - Updates the parent tab's `conversationId` and `status` when the
  *     instance is the active one (mid-pane). Status transitions: idle
@@ -34,7 +58,7 @@ export function handleEngineStatusEvent(
   event: Extract<EngineEvent, { type: 'engine_status' }>,
 ): { didCaptureNewSessionId: boolean } {
   // Track whether the inside-`set` reducer captured a new sessionId into
-  // engineConversationIds — if so, the caller triggers an immediate
+  // instance.conversationIds — if so, the caller triggers an immediate
   // persistence flush after the reducer returns so the sessionId
   // survives a hard kill (closed laptop lid, OS force-quit, power loss)
   // that arrives before the next debounced save. Without this, the
@@ -43,8 +67,6 @@ export function handleEngineStatusEvent(
   // next launch.
   let didCaptureNewSessionId = false
   set((state) => {
-    const statusFields = new Map(state.engineStatusFields)
-
     // Trace permission denials for diagnostics
     if (event.fields?.permissionDenials?.length) {
       console.log(`[engine_status] key=${key} tabId=${tabId} denials=${JSON.stringify(event.fields.permissionDenials.map((d: { toolName: string }) => d.toolName))} state=${event.fields?.state}`)
@@ -53,8 +75,11 @@ export function handleEngineStatusEvent(
     // Merge last-known context/cost into incoming status fields so the
     // footer doesn't reset to 0% when the engine emits a status event
     // without usage data.
-    const prev = state.engineStatusFields.get(key)
-    const merged = { ...event.fields }
+    const [, instanceId] = key.split(':')
+    const pane = state.enginePanes.get(tabId)
+    const existingInst = pane?.instances.find((i) => i.id === instanceId)
+    const prev = existingInst?.statusFields ?? null
+    const merged: StatusFields = { ...event.fields }
     if (!merged.contextPercent) {
       const usage = state.engineUsage.get(key)
       if (usage && usage.percent > 0) {
@@ -67,63 +92,50 @@ export function handleEngineStatusEvent(
     if (!merged.sessionId && prev?.sessionId) {
       merged.sessionId = prev.sessionId
     }
-    statusFields.set(key, merged)
 
-    // Capture model from engine status into the persistent model
-    // override map so it survives desktop restarts. The engine is
-    // authoritative about which model the conversation is actually
-    // using; this back-populates engineModelOverrides from the
-    // engine's live state. Without this, a desktop restart between
-    // sessions would lose the model and fall back to the hardcoded
-    // sonnet default.
+    // Capture model from engine status into the instance modelOverride
+    // so it survives desktop restarts. The engine is authoritative about
+    // which model the conversation is actually using. Without this, a
+    // desktop restart between sessions would lose the model and fall back
+    // to the hardcoded sonnet default.
     //
     // Guard: reject known-invalid values like "unknown" (which can
     // enter the system from stale state or an engine that hasn't
     // resolved its model yet) to prevent a feedback loop where the
     // desktop captures "unknown" and re-sends it on every prompt.
-    let engineModelOverridesUpdate = state.engineModelOverrides
     const incomingModel = event.fields?.model
     const isValidModel = incomingModel && incomingModel.length > 0 && incomingModel !== 'unknown'
-    if (isValidModel) {
-      const currentOverride = state.engineModelOverrides.get(key)
+    if (isValidModel && existingInst) {
+      const currentOverride = existingInst.modelOverride
       if (currentOverride !== incomingModel) {
-        engineModelOverridesUpdate = new Map(state.engineModelOverrides)
-        engineModelOverridesUpdate.set(key, incomingModel)
-        console.log(`[engine_status] engineModelOverrides.set key=${key} model=${incomingModel} (was ${currentOverride || 'unset'})`)
+        console.log(`[engine_status] modelOverride.set key=${key} model=${incomingModel} (was ${currentOverride || 'unset'})`)
       }
     }
 
     const sessionId = event.fields?.sessionId
-    const pane = state.enginePanes.get(tabId)
-    const isActive = !pane || pane.activeInstanceId === key.split(':')[1]
+    const isActive = !pane || pane.activeInstanceId === instanceId
     const isIdle = event.fields?.state === 'idle'
     const isRunning = event.fields?.state === 'running'
-    let engineConversationIds = state.engineConversationIds
+    let newConversationIds: string[] | null = null
     if (sessionId) {
-      const existing = state.engineConversationIds.get(key) ?? []
+      const existing = existingInst?.conversationIds ?? []
       if (existing[existing.length - 1] !== sessionId) {
-        engineConversationIds = new Map(state.engineConversationIds)
-        engineConversationIds.set(key, [...existing, sessionId])
+        newConversationIds = [...existing, sessionId]
         didCaptureNewSessionId = true
-        // Permanent diagnostic log per the repo logging policy
-        // (~/.claude/docs/standards/logging.md, repo CLAUDE.md
-        // "Logging policy"). This is the only place the runtime
-        // `engineConversationIds` map is mutated for engine-view tabs
-        // (compound `${tabId}:${instanceId}` keys); without this line,
-        // we have no way to confirm from logs alone that the source
-        // map is being populated before the persistence layer reads
-        // from it. Logs the exact key shape so a future "session not
-        // resumed on restart" investigation can confirm the key
-        // matches what session-store-persistence.ts expects.
-        console.log(`[engine_status] engineConversationIds.set key=${key} sessionId=${sessionId} chainLen=${existing.length + 1}`)
+        // Permanent diagnostic log per the repo logging policy.
+        // This is the only place the runtime conversationIds list is
+        // mutated for engine-view instances; without this line, we have
+        // no way to confirm from logs alone that it's being populated
+        // before the persistence layer reads it. Logs the exact key
+        // shape so a future "session not resumed on restart" investigation
+        // can confirm the key matches what session-store-persistence.ts expects.
+        console.log(`[engine_status] conversationIds.set key=${key} sessionId=${sessionId} chainLen=${newConversationIds.length}`)
       }
     }
 
     // Promote AskUserQuestion / ExitPlanMode permissionDenials carried
-    // on engine_status into the per-engine-instance
-    // `enginePermissionDenied` map (keyed by the compound
-    // `${tabId}:${instanceId}` key). This is the engine-view
-    // counterpart to the sessionPlane synthesis at
+    // on engine_status into instance.permissionDenied. This is the
+    // engine-view counterpart to the sessionPlane synthesis at
     // engine-control-plane-events.ts:handleStatusEvent — which is
     // bypassed for engine-view tabs because EngineControlPlane is
     // keyed by bare tabId and engine-view events arrive with the
@@ -134,53 +146,34 @@ export function handleEngineStatusEvent(
     // the same engine tab from showing each other's cards when the
     // user switches between sub-tabs. The parent tab's pill still
     // glows via getWaitingState() in TabStripShared.ts, which folds
-    // across this map for engine tabs.
+    // across instances for engine tabs.
     //
     // Snapshot/idempotence rules:
-    //   - We write `state.enginePermissionDenied.set(key, ...)` using
-    //     the FULL compound key — not the parent tabId.
     //   - When the array is empty/absent (a follow-up cost-only
     //     `engine_status` tick), we PRESERVE any existing entry for
-    //     this key so the card stays visible. The renderer-side card
-    //     render in EngineView relies on this — the engine emits one
-    //     engine_status with denials and then a stream of cost-only
+    //     this instance so the card stays visible. The renderer-side
+    //     card render in EngineView relies on this — the engine emits
+    //     one engine_status with denials and then a stream of cost-only
     //     ticks; clobbering would make the card flicker out.
-    //   - We log both branches with verbosity matching event-slice.ts's
-    //     `[task_complete] tab=... branch=...` lines so a single grep
-    //     covers CLI + engine paths. `enginePermDenied` is the
-    //     engine-tab marker; CLI tabs use the older `permDenied` token
-    //     in their own logs.
     const askOrExitDenials: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> = (event.fields?.permissionDenials || []).filter(
       (d: { toolName: string }) => d.toolName === 'AskUserQuestion' || d.toolName === 'ExitPlanMode',
     )
     const hasInterestingDenials = askOrExitDenials.length > 0
-    let enginePermissionDeniedUpdate: Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null> | null = null
+    let newPermissionDenied: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null = null
     if (hasInterestingDenials) {
       const toolNamesStr = JSON.stringify(askOrExitDenials.map((d) => d.toolName))
-      const instanceId = key.split(':')[1] || ''
-      console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=denials enginePermDenied set to ${toolNamesStr}`)
-      enginePermissionDeniedUpdate = new Map(state.enginePermissionDenied)
-      enginePermissionDeniedUpdate.set(key, { tools: askOrExitDenials })
+      console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=denials permissionDenied set to ${toolNamesStr}`)
+      newPermissionDenied = { tools: askOrExitDenials }
     } else if ((event.fields?.permissionDenials?.length ?? 0) === 0) {
       // Cost-only or running tick — PRESERVE existing entry for this
-      // key. Logged at debug verbosity (no state change). Keep the
-      // noise low; only log if we currently hold a card to preserve
-      // for this instance.
-      const existing = state.enginePermissionDenied.get(key)
+      // instance. Logged at debug verbosity (no state change).
+      const existing = existingInst?.permissionDenied
       if (existing?.tools?.length) {
-        const instanceId = key.split(':')[1] || ''
-        console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=noDenials preserving existing enginePermDenied (${existing.tools.length} tools)`)
+        console.log(`[engine_status] tab=${tabId.slice(0, 8)} instance=${instanceId} branch=noDenials preserving existing permissionDenied (${existing.tools.length} tools)`)
       }
     }
 
-    const needsTabUpdate = isActive && (sessionId || isIdle || isRunning)
-    // Fold conversationId / status updates into the same tabs.map pass
-    // when applicable. The `enginePermissionDenied` map is returned
-    // separately — it lives outside the per-tab struct.
-    const returnPatch: Partial<typeof state> = { engineStatusFields: statusFields, engineConversationIds, engineModelOverrides: engineModelOverridesUpdate }
-    if (enginePermissionDeniedUpdate) {
-      returnPatch.enginePermissionDenied = enginePermissionDeniedUpdate
-    }
+    const returnPatch: Partial<typeof state> = {}
 
     // Auto-clear the model-fallback indicator on the idle transition.
     // The fallback indicator is a workflow signal — once the affected
@@ -198,6 +191,8 @@ export function handleEngineStatusEvent(
       fallbacks.delete(key)
       returnPatch.engineModelFallbacks = fallbacks
     }
+
+    const needsTabUpdate = isActive && (sessionId || isIdle || isRunning)
     if (needsTabUpdate) {
       const tabs = state.tabs.map((t) => {
         if (t.id !== tabId) return t
@@ -213,9 +208,9 @@ export function handleEngineStatusEvent(
           // When the engine reports AskUserQuestion / ExitPlanMode
           // denials, set status='completed' so the tab strip shows the
           // "waiting" pill. The actual denial data lives in
-          // enginePermissionDenied (per-instance, set above) — we do
+          // instance.permissionDenied (per-instance, set above) — we do
           // NOT mutate tab.permissionDenied here because that field is
-          // CLI-only. Engine tabs use the per-instance map.
+          // CLI-only. Engine tabs use the per-instance field.
           if (hasInterestingDenials) {
             updates.status = 'completed' as const
           } else if ((event.fields?.backgroundAgents ?? 0) > 0) {
@@ -231,6 +226,25 @@ export function handleEngineStatusEvent(
       })
       returnPatch.tabs = tabs
     }
+
+    // Update ConversationInstance fields on the instance in enginePanes.
+    const instancePatch: Parameters<typeof withInstancePatch>[2] = {
+      statusFields: merged,
+    }
+    if (newConversationIds !== null) {
+      instancePatch.conversationIds = newConversationIds
+    }
+    if (newPermissionDenied !== null) {
+      instancePatch.permissionDenied = newPermissionDenied
+    }
+    if (isValidModel && incomingModel) {
+      instancePatch.modelOverride = incomingModel
+    }
+    const updatedPanes = withInstancePatch(state.enginePanes, key, instancePatch)
+    if (updatedPanes !== state.enginePanes) {
+      returnPatch.enginePanes = updatedPanes
+    }
+
     return returnPatch
   })
   return { didCaptureNewSessionId }

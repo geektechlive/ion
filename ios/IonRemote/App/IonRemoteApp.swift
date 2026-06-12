@@ -37,11 +37,32 @@ struct IonRemoteApp: App {
                         guard !viewModel.pairedDevices.isEmpty else { break }
                         // Resume transport without wiping state.
                         viewModel.resumeTransport()
-                        // Refresh git info for every visible tab dir — the
-                        // desktop watcher may have dropped events while we
-                        // were backgrounded, so we can't trust cached state.
-                        if viewModel.showGitInfoInTabList {
-                            viewModel.requestAllGitChanges()
+                        // Auto-fired resume commands must wait until the
+                        // transport is actually usable — `resumeTransport`
+                        // returns synchronously after kicking off the
+                        // handshake task, so firing sends here would race
+                        // the LAN/relay connect and surface spurious
+                        // "Not connected" / "Send failed" toasts. The
+                        // `runWhenConnected` helper defers each block
+                        // until `handleSnapshot` confirms the first
+                        // snapshot has arrived (state → .connected).
+                        // Manual user actions are deliberately NOT routed
+                        // through this helper — their toasts are
+                        // legitimate feedback when a real disconnect is
+                        // in progress.
+                        viewModel.runWhenConnected { [weak viewModel] in
+                            guard let viewModel else { return }
+                            // Refresh git info for every visible tab dir — the
+                            // desktop watcher may have dropped events while we
+                            // were backgrounded, so we can't trust cached state.
+                            if viewModel.showGitInfoInTabList {
+                                viewModel.requestAllGitChanges()
+                            }
+                            // Re-send the current focus state so the desktop's
+                            // deviceFocusMap is fresh after any suspension gap.
+                            // Uses the locally-tracked focusedTabId (may be nil
+                            // if the user hasn't opened a tab yet this session).
+                            viewModel.sendReportFocus(tabId: viewModel.focusedTabId)
                         }
                         // Scan delivered notifications and write directly to the
                         // store. TabListView.onReceive is only active when
@@ -65,6 +86,11 @@ struct IonRemoteApp: App {
                         // navigation, typed input) so the user returns to the
                         // same view when the app foregrounds.
                         viewModel.suspendTransport()
+                        // Tell the desktop this device is no longer focused on
+                        // any tab so redirect-level intercepts are not sent to
+                        // a backgrounded device. Send before suspending the
+                        // transport so the message can be flushed.
+                        viewModel.sendReportFocus(tabId: nil)
                     default:
                         break
                     }

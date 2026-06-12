@@ -18,6 +18,7 @@ struct EngineView: View {
     @State private var showTerminal = false
     @State var pendingAttachments: [PendingAttachment] = []
     @State private var showAttachMenu = false
+    @State private var showAttachments = false
     @State private var showFilePicker = false
     @State private var showPhotoPicker = false
     @State private var showDocumentPicker = false
@@ -29,6 +30,8 @@ struct EngineView: View {
     @State private var showPermissionDeniedAlert = false
     /// Draft text snapshot taken when recording starts, used to restore on cancel.
     @State private var draftBeforeRecording = ""
+    /// Slash command autocomplete: nil = menu hidden; non-nil = the current "/" prefix text.
+    @State private var slashFilter: String?
 
     private var instances: [EngineInstanceInfo] {
         viewModel.engineInstances[tabId] ?? []
@@ -64,7 +67,7 @@ struct EngineView: View {
     }
 
     private var visibleAgents: [AgentStateUpdate] {
-        (viewModel.engineAgentStates[compoundKey] ?? [])
+        (viewModel.engineInstance(tabId: tabId, instanceId: activeInstanceId)?.agentStates ?? [])
             .filter(\.isVisible)
             .sorted { a, b in
                 let statusOrder: [String: Int] = ["running": 0, "done": 1, "error": 1, "cancelled": 1, "idle": 2]
@@ -84,7 +87,11 @@ struct EngineView: View {
     }
 
     private var engineMsgs: [Message] {
-        viewModel.engineMessages[compoundKey] ?? []
+        viewModel.engineInstance(tabId: tabId, instanceId: activeInstanceId)?.messages ?? []
+    }
+
+    private var engineAttachmentCount: Int {
+        viewModel.tabAttachmentCache[tabId]?.count ?? 0
     }
 
     private enum GroupedItem: Identifiable {
@@ -235,21 +242,83 @@ struct EngineView: View {
         return tab?.status == .running || tab?.status == .connecting
     }
 
-    /// First pending permission request for this engine tab.
+    /// Merged slash commands for autocomplete: filesystem-discovered + /clear builtin + extension-registered.
+    private var slashCommands: [DiscoveredSlashCommand] {
+        var cmds = viewModel.discoveredCommands[workingDirectory] ?? []
+
+        // Inject the /clear builtin (matches desktop's SLASH_COMMANDS constant).
+        let clearCmd = DiscoveredSlashCommand(
+            name: "clear", description: "Clear conversation history",
+            scope: "builtin", source: "builtin", origin: nil
+        )
+        if !cmds.contains(where: { $0.name == "clear" }) {
+            cmds.insert(clearCmd, at: 0)
+        }
+
+        // Merge extension-registered commands from engine_command_registry.
+        if let extCmds = viewModel.extensionCommands[compoundKey] {
+            for ec in extCmds where !cmds.contains(where: { $0.name == ec.name }) {
+                cmds.append(DiscoveredSlashCommand(
+                    name: ec.name,
+                    description: ec.description ?? ec.name,
+                    scope: "extension",
+                    source: "extension",
+                    origin: nil
+                ))
+            }
+        }
+        return cmds
+    }
+
+    private func updateSlashFilter(_ text: String) {
+        let pattern = #"^\/[a-zA-Z0-9_:\-]*$"#
+        if text.range(of: pattern, options: .regularExpression) != nil {
+            slashFilter = text
+        } else {
+            slashFilter = nil
+        }
+    }
+
+    private func fetchCommandsIfNeeded() {
+        let dir = workingDirectory
+        guard !dir.isEmpty, viewModel.discoveredCommands[dir] == nil else { return }
+        viewModel.discoverCommands(directory: dir)
+    }
+
+    private func logAttachmentTaskEntry(tabId: String) {
+        let count = viewModel.tabAttachmentCache[tabId]?.count ?? -1
+        DiagnosticLog.log("ATTACH: EngineView.task tabId=\(tabId.prefix(8)) cacheBeforeRequest=\(count)")
+    }
+
+    /// First pending permission request for this engine tab that belongs to
+    /// the *active* engine instance (sub-tab).
     /// Engine tabs don't need the restored-card logic from ConversationView —
     /// the desktop forwards engine denials via the per-instance Map into
     /// `permissionQueue` on the tab snapshot, so the queue is the single
     /// source of truth.
+    ///
+    /// Instance scoping: each queue entry may carry the `instanceId` of the
+    /// engine sub-conversation that produced it (stamped by the desktop's
+    /// event-wiring live path and snapshot promotion). Entries from a
+    /// sibling instance are skipped so a plan/question card never lingers
+    /// when the user switches sub-tabs. Entries with a nil `instanceId`
+    /// (older desktops that predate the field) pass the filter — legacy
+    /// behavior is "show on the whole tab", which is strictly better than
+    /// hiding a card the user must act on.
     private var pendingPermission: PermissionRequest? {
         let tab = viewModel.tab(for: tabId)
         let queue = tab?.permissionQueue ?? []
         let status = tab?.status
-        if let request = queue.first {
+        for request in queue {
+            if let owner = request.instanceId, owner != activeInstanceId {
+                DiagnosticLog.log("ENGINE-PERM: pendingPermission: skipping \(request.toolName) questionId=\(request.questionId.prefix(16)) — owned by instance \(owner.prefix(8)), active is \(activeInstanceId.prefix(8))")
+                continue
+            }
             let inputKeys = request.toolInput?.keys.sorted() ?? []
-            DiagnosticLog.log("ENGINE-PERM: pendingPermission: from queue — toolName=\(request.toolName) questionId=\(request.questionId) inputKeys=\(inputKeys) status=\(status?.rawValue ?? "nil")")
+            DiagnosticLog.log("ENGINE-PERM: pendingPermission: from queue — toolName=\(request.toolName) questionId=\(request.questionId) instanceId=\(request.instanceId?.prefix(8) ?? "nil") inputKeys=\(inputKeys) status=\(status?.rawValue ?? "nil")")
             return request
         }
-        DiagnosticLog.log("ENGINE-PERM: pendingPermission: nil (queueSize=\(queue.count) status=\(status?.rawValue ?? "nil") tabId=\(tabId.prefix(8)))")
+        DiagnosticLog.log("ENGINE-PERM: pendingPermission: nil (queueSize=\(queue.count) status=\(status?.rawValue ?? "nil") tabId=\(tabId.prefix(8)) activeInstance=\(activeInstanceId.prefix(8)))")
         return nil
     }
 
@@ -410,7 +479,7 @@ struct EngineView: View {
 
     private var headerSection: some View {
         VStack(spacing: 0) {
-            if let fields = viewModel.engineStatusFields[compoundKey] {
+            if let fields = viewModel.engineInstance(tabId: tabId, instanceId: activeInstanceId)?.statusFields {
                 GeometryReader { geo in
                     Rectangle()
                         .fill(contextBarColor(fields.contextPercent))
@@ -472,16 +541,16 @@ struct EngineView: View {
         // two action bindings (dismiss + draft text) the bar needs.
         VStack(spacing: 0) {
             Divider()
-            if let fields = viewModel.engineStatusFields[compoundKey] {
+            if let fields = viewModel.engineInstance(tabId: tabId, instanceId: activeInstanceId)?.statusFields {
                 ConversationStatusBar(
-                    modelOverride: viewModel.engineModelOverrides[compoundKey],
+                    modelOverride: viewModel.engineInstance(tabId: tabId, instanceId: activeInstanceId)?.modelOverride,
                     preferredModel: fields.model,
                     contextPercent: fields.contextPercent,
                     contextTokens: nil,
                     isRunning: isRunning,
                     permissionMode: viewModel.tab(for: tabId)?.permissionMode,
                     availableModels: viewModel.availableModels,
-                    attachmentCount: 0,
+                    attachmentCount: engineAttachmentCount,
                     onSelectModel: { model in
                         viewModel.setEngineModel(tabId: tabId, model: model)
                     },
@@ -490,10 +559,13 @@ struct EngineView: View {
                         let newMode: PermissionMode = current == .plan ? .auto : .plan
                         viewModel.setPermissionMode(tabId: tabId, mode: newMode)
                     },
-                    onTapAttachments: {},
+                    onTapAttachments: {
+                        showAttachments = true
+                    },
                     isEngine: true,
                     extensionName: fields.extensionName,
-                    statusState: fields.state
+                    statusState: fields.state,
+                    runningAgentCount: runningAgentCount
                 )
             }
             Divider()
@@ -594,7 +666,14 @@ struct EngineView: View {
             ToolbarItem(placement: .topBarTrailing) { toolbarButtons }
         }
         .task {
+            logAttachmentTaskEntry(tabId: tabId)
             viewModel.loadEngineConversation(tabId: tabId)
+            viewModel.requestLoadAttachments(tabId: tabId)
+            fetchCommandsIfNeeded()
+            if viewModel.pendingGitPaneTabId == tabId {
+                viewModel.pendingGitPaneTabId = nil
+                showGitPane = true
+            }
         }
         .task(id: compoundKey) {
             // Load immediately when switching to an instance that has no cached
@@ -604,6 +683,7 @@ struct EngineView: View {
             if engineMsgs.isEmpty {
                 viewModel.loadEngineConversation(tabId: tabId)
             }
+            viewModel.requestLoadAttachments(tabId: tabId)
         }
         .sheet(item: Binding(
             get: { viewModel.engineDialogs[compoundKey] ?? nil },
@@ -618,13 +698,6 @@ struct EngineView: View {
         .fullScreenCover(isPresented: $showTerminal) {
             ConversationTerminalView(tabId: tabId)
                 .environment(viewModel)
-        }
-        .task {
-            // Present git pane if navigated here via the branch badge tap
-            if viewModel.pendingGitPaneTabId == tabId {
-                viewModel.pendingGitPaneTabId = nil
-                showGitPane = true
-            }
         }
         .onChange(of: viewModel.pendingGitPaneTabId) { _, newId in
             if newId == tabId {
@@ -653,6 +726,10 @@ struct EngineView: View {
                 addFileAttachment(path: path, name: name)
             }
             .environment(viewModel)
+        }
+        .sheet(isPresented: $showAttachments) {
+            ConversationAttachmentsSheet(tabId: tabId)
+                .environment(viewModel)
         }
         .onChange(of: viewModel.pendingUploadResults) { _, results in
             consumeUploadResults(results)
@@ -692,43 +769,58 @@ struct EngineView: View {
     // MARK: - Engine input bar
 
     private var engineInputBar: some View {
-        HStack(spacing: 8) {
-            attachButton
-            TextField("Send a prompt...", text: promptTextBinding, axis: .vertical)
-                .lineLimit(1...5)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(.tertiarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.medium))
-                .overlay(RoundedRectangle(cornerRadius: IonTheme.Radius.medium).stroke(
-                    isRecordingVoice ? theme.accent.opacity(0.5) : Color(.separator),
-                    lineWidth: isRecordingVoice ? 1.5 : 1
-                ))
-                .focused($isInputFocused)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            // Mic area: inline recording strip while active, mic button when idle
-            if isRecordingVoice {
-                VoiceRecordingStrip(
-                    audioLevel: viewModel.speechService.audioLevel,
-                    onStop: { stopVoiceRecording() },
-                    onCancel: { cancelVoiceRecording() }
+        VStack(spacing: 0) {
+            if let filter = slashFilter, !slashCommands.isEmpty {
+                SlashCommandMenu(
+                    filter: filter,
+                    commands: slashCommands,
+                    onSelect: { cmd in
+                        viewModel.setEngineDraft(tabId: tabId, instanceId: activeInstanceId, "/\(cmd.name) ")
+                        slashFilter = nil
+                    }
                 )
-                .transition(.opacity.combined(with: .scale(scale: 0.9)))
-            } else {
-                engineMicButton
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            Button { submitPrompt() } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title)
-                    .foregroundStyle(!cannotSend ? theme.accent : Color.gray)
+            HStack(spacing: 8) {
+                attachButton
+                TextField("Send a prompt...", text: promptTextBinding, axis: .vertical)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.tertiarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.medium))
+                    .overlay(RoundedRectangle(cornerRadius: IonTheme.Radius.medium).stroke(
+                        isRecordingVoice ? theme.accent.opacity(0.5) : Color(.separator),
+                        lineWidth: isRecordingVoice ? 1.5 : 1
+                    ))
+                    .focused($isInputFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                // Mic area: inline recording strip while active, mic button when idle
+                if isRecordingVoice {
+                    VoiceRecordingStrip(
+                        audioLevel: viewModel.speechService.audioLevel,
+                        onStop: { stopVoiceRecording() },
+                        onCancel: { cancelVoiceRecording() }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                } else {
+                    engineMicButton
+                }
+
+                Button { submitPrompt() } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title)
+                        .foregroundStyle(!cannotSend ? theme.accent : Color.gray)
+                }
+                .disabled(cannotSend)
             }
-            .disabled(cannotSend)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .animation(IonTheme.snappySpring, value: slashFilter)
         .animation(IonTheme.snappySpring, value: isRecordingVoice)
         .alert("Microphone Access Required", isPresented: $showPermissionDeniedAlert) {
             Button("Open Settings") {
@@ -746,6 +838,12 @@ struct EngineView: View {
             if newTranscript.isEmpty { return }
             let separator = base.isEmpty ? "" : " "
             viewModel.setEngineDraft(tabId: tabId, instanceId: activeInstanceId, base + separator + newTranscript)
+        }
+        .onChange(of: promptText) { _, newText in
+            updateSlashFilter(newText)
+        }
+        .onChange(of: workingDirectory) {
+            fetchCommandsIfNeeded()
         }
     }
 
@@ -838,6 +936,7 @@ struct EngineView: View {
         DiagnosticLog.log("RESUME-SYNC: EngineView reloading tabId=\(tabId.prefix(8))")
         pendingScrollAfterReload = true
         viewModel.loadEngineConversation(tabId: tabId)
+        viewModel.requestLoadAttachments(tabId: tabId)
     }
 
     /// When a reconnect-triggered reload delivers new history, force-scroll

@@ -56,6 +56,14 @@ export const darkColors = {
   statusBashGlow: 'rgba(204, 107, 154, 0.4)',
   statusPermission: '#d97757',
   statusPermissionGlow: 'rgba(217, 119, 87, 0.4)',
+  // "Awaiting children" state — orchestrator is idle but dispatched
+  // background agents are still executing. Reuses the amber palette
+  // already used for permission cards (rgba(245,158,11,...)) so the
+  // visual language stays consistent: yellow ⇒ "in flight, not yet
+  // done". Distinct from the orange statusRunning so a quick glance
+  // tells the user whether foreground or background work is active.
+  statusWaitingChildren: '#f59e0b',
+  statusWaitingChildrenGlow: 'rgba(245, 158, 11, 0.4)',
 
   // Tab
   tabActive: '#353530',
@@ -209,6 +217,9 @@ export const lightColors = {
   statusBashGlow: 'rgba(204, 107, 154, 0.3)',
   statusPermission: '#d97757',
   statusPermissionGlow: 'rgba(217, 119, 87, 0.3)',
+  // "Awaiting children" state — see darkColors for full rationale.
+  statusWaitingChildren: '#f59e0b',
+  statusWaitingChildrenGlow: 'rgba(245, 158, 11, 0.3)',
 
   // Tab
   tabActive: '#edeae0',
@@ -381,6 +392,11 @@ export const hudColors: ColorPalette = {
 
   statusRunning: '#33C3F7',
   statusRunningBg: 'rgba(51, 195, 247, 0.10)',
+  // HUD inherits the amber "awaiting children" from darkColors via the
+  // spread above. The amber stays distinct from the cyan running color
+  // so the foreground-vs-background visual vocabulary is preserved in
+  // the HUD theme too; deliberately not cyan-tinted because a second
+  // cyan dot would collide with statusRunning at a glance.
 
   tabActive: 'rgba(8, 22, 40, 0.95)',
   tabActiveBorder: 'rgba(51, 195, 247, 0.30)',

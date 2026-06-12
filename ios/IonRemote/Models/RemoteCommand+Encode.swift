@@ -366,6 +366,40 @@ extension RemoteCommand {
             } else {
                 try container.encodeNil(forKey: .pillIcon)
             }
+
+        case .reportFocus(let tabId, let interceptEnabled):
+            // Desktop reads `tabId` (nullable) and `interceptEnabled`.
+            // Send `tabId: null` when the app is backgrounded so the
+            // desktop knows this device is not focused on any tab.
+            try container.encode(TypeKey.reportFocus, forKey: .type)
+            if let tabId {
+                try container.encode(tabId, forKey: .tabId)
+            } else {
+                try container.encodeNil(forKey: .tabId)
+            }
+            try container.encode(interceptEnabled, forKey: .interceptEnabled)
+
+        case .requestResourceContent(let kind, let resourceId):
+            // iOS → desktop: fetch the full content for a single resource item.
+            // Desktop reads both fields, queries the renderer store, and replies
+            // with a `resource_content` event carrying the body.
+            try container.encode(TypeKey.requestResourceContent, forKey: .type)
+            try container.encode(kind, forKey: .kind)
+            try container.encode(resourceId, forKey: .resourceId)
+
+        case .markResourceRead(let kind, let resourceId):
+            // iOS → desktop: propagate read state to the source of truth.
+            try container.encode(TypeKey.markResourceRead, forKey: .type)
+            try container.encode(kind, forKey: .kind)
+            try container.encode(resourceId, forKey: .resourceId)
+
+        case .deleteResource(let kind, let resourceId):
+            // iOS → desktop: permanently remove a notification from the
+            // global resource broker. Desktop publishes a delete delta
+            // through the engine so all subscribers remove the item.
+            try container.encode(TypeKey.deleteResource, forKey: .type)
+            try container.encode(kind, forKey: .kind)
+            try container.encode(resourceId, forKey: .resourceId)
         }
     }
 }

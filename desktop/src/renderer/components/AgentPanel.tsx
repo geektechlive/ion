@@ -287,6 +287,18 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
           }}
         />
         <span>Agents ({visible.length})</span>
+        {/*
+          "N active" count, rendered immediately after the total count
+          so the user reads both numbers from the same place. Mirrors
+          the iOS layout in EngineView.swift (lines 316-323) where the
+          active count sits right next to the total. Was previously
+          rendered after the fullscreen toggle on the right, forcing
+          the user to scan two different spots. Color uses the same
+          orange accent the iOS counterpart uses for "active".
+        */}
+        {running > 0 && (
+          <span style={{ color: colors.accent, fontWeight: 600 }}>· {running} active</span>
+        )}
         {onToggleFullscreen && (
           <button
             onClick={(e) => {
@@ -307,9 +319,6 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
           >
             {isFullscreen ? <ArrowsInSimple size={10} /> : <ArrowsOutSimple size={10} />}
           </button>
-        )}
-        {running > 0 && (
-          <span style={{ color: colors.accent, fontWeight: 600 }}>{running} active</span>
         )}
       </div>
 

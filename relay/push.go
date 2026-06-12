@@ -27,12 +27,11 @@ const (
 
 // pushRequest holds the parameters for a single push notification.
 type pushRequest struct {
-	deviceToken  string
-	title        string
-	body         string
-	sound        string
-	briefingID   string
-	briefingText string
+	deviceToken string
+	title       string
+	body        string
+	kind        string // resource kind for deep-link routing on the client
+	resourceId  string // resource ID for deep-link routing on the client
 }
 
 // APNsPusher sends push notifications via Apple's HTTP/2 APNs API.
@@ -115,12 +114,11 @@ func (p *APNsPusher) getToken() (string, error) {
 	return signed, nil
 }
 
-// apnsBriefingTextLimit is the max byte length for briefingText embedded in
-// the APNs payload. APNs caps alert payloads at 4 KB; this leaves margin for
-// aps + title + body + briefingId. If briefingText exceeds this limit it is
-// truncated and the iOS app falls back to the drain-on-reconnect path for the
-// full version.
-const apnsBriefingTextLimit = 2800
+type apnsPayload struct {
+	Aps           apsPayload `json:"aps"`
+	IonKind       string     `json:"ionKind,omitempty"`
+	IonResourceId string     `json:"ionResourceId,omitempty"`
+}
 
 type apsPayload struct {
 	Alert            apsAlert `json:"alert"`
@@ -134,26 +132,9 @@ type apsAlert struct {
 	Body  string `json:"body"`
 }
 
-// truncateBriefingText cuts briefingText to fit under the APNs payload cap
-// and appends a marker so the iOS app can hint the user that more is available.
-func truncateBriefingText(s string) string {
-	if len(s) <= apnsBriefingTextLimit {
-		return s
-	}
-	const marker = "\n…[truncated — open Briefings for full text]"
-	return s[:apnsBriefingTextLimit-len(marker)] + marker
-}
-
-func (p *APNsPusher) Send(deviceToken, title, body, sound, briefingID, briefingText string) {
+func (p *APNsPusher) Send(deviceToken, title, body, kind, resourceId string) {
 	select {
-	case p.queue <- pushRequest{
-		deviceToken:  deviceToken,
-		title:        title,
-		body:         body,
-		sound:        sound,
-		briefingID:   briefingID,
-		briefingText: briefingText,
-	}:
+	case p.queue <- pushRequest{deviceToken: deviceToken, title: title, body: body, kind: kind, resourceId: resourceId}:
 	default:
 		log.Printf("APNs push queue full, dropping notification")
 	}
@@ -175,29 +156,18 @@ func (p *APNsPusher) sendAsync(req pushRequest) {
 		return
 	}
 
-	sound := req.sound
-	if sound == "" {
-		sound = "jarvis-message.caf"
-	}
-
-	// Top-level keys: aps + arbitrary custom data (briefingId, briefingText)
-	// per APNs spec. Marshal as a map so we can omit empties cleanly.
-	payload := map[string]any{
-		"aps": apsPayload{
+	payload := apnsPayload{
+		Aps: apsPayload{
 			Alert: apsAlert{
 				Title: req.title,
 				Body:  req.body,
 			},
-			Sound:            sound,
+			Sound:            "jarvis-message.caf",
 			Category:         "PERMISSION_REQUEST",
 			ContentAvailable: 1,
 		},
-	}
-	if req.briefingID != "" {
-		payload["briefingId"] = req.briefingID
-	}
-	if req.briefingText != "" {
-		payload["briefingText"] = truncateBriefingText(req.briefingText)
+		IonKind:       req.kind,
+		IonResourceId: req.resourceId,
 	}
 
 	data, err := json.Marshal(payload)

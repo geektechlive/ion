@@ -17,6 +17,8 @@ import { vi, describe, it, expect, beforeEach } from 'vitest'
 // vi.mock factories are hoisted above all declarations, so we must
 // create the mock objects inside the factory or use vi.hoisted().
 
+vi.mock('electron', () => ({ app: { getPath: vi.fn() }, ipcMain: { on: vi.fn(), handle: vi.fn() } }))
+
 const {
   mockSend,
   mockState,

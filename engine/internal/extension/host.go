@@ -73,6 +73,12 @@ type Host struct {
 	onSendMessage  func(text string)
 	persistentEmit func(types.EngineEvent)
 
+	// persistentPublishResource is the fallback for ext/publish_resource
+	// when no hook/tool context is active (e.g., onComplete callbacks
+	// from background dispatches fire after the run exits). Set by the
+	// session manager alongside persistentEmit.
+	persistentPublishResource func(kind string, delta types.ResourceDelta) error
+
 	// Rate limit for parse-failure WARNs so a misbehaving extension that
 	// floods stdout with non-JSON cannot bury other log signal. Holds a
 	// nanosecond timestamp of the last logged parse error.
@@ -114,6 +120,17 @@ type Host struct {
 	lastExitCode   atomic.Int64 // negative sentinel = "no code"
 	lastExitSignal atomic.Pointer[string]
 
+	// exitDone is closed by captureExitStatus when cmd.Wait completes.
+	// The readLoop defer waits briefly on this channel before firing
+	// onDeath so the death handler can read actual exit codes.
+	exitDone chan struct{}
+
+	// stderrBuf captures the last N lines of subprocess stderr so they
+	// can be surfaced in engine_extension_died events. Written by the
+	// stderr reader goroutine, read by StderrTail.
+	stderrMu  sync.Mutex
+	stderrBuf []string
+
 	// Async-trigger plumbing: per-host asyncreg.Registry plus captured
 	// session key for resolving "which session does this fire belong
 	// to?". Stored as a *asyncHostState pointer so the zero-value Host
@@ -130,6 +147,12 @@ type Host struct {
 	// clears them under the same lock.
 	pendingInitWebhooks  []WebhookRoute
 	pendingInitSchedules []ScheduleJob
+
+	// pendingInitResources carries resource declarations the subprocess
+	// returned from init. The session wires them into the resource broker
+	// after the extension is fully loaded. Not guarded by async.mu
+	// (resource declarations are pure registration, no veto path).
+	pendingInitResources []types.ResourceDeclaration
 }
 
 
@@ -139,6 +162,16 @@ func (h *Host) SetPersistentEmit(fn func(types.EngineEvent)) {
 	h.notifMu.Lock()
 	defer h.notifMu.Unlock()
 	h.persistentEmit = fn
+}
+
+// SetPersistentPublishResource sets a fallback publish function for
+// ext/publish_resource when no hook/tool context is active. This is
+// needed because onComplete callbacks from background dispatches fire
+// after the run exits, when ctxStack is empty.
+func (h *Host) SetPersistentPublishResource(fn func(string, types.ResourceDelta) error) {
+	h.notifMu.Lock()
+	defer h.notifMu.Unlock()
+	h.persistentPublishResource = fn
 }
 
 // NewHost creates a new extension host with an empty SDK.
@@ -169,6 +202,19 @@ func (h *Host) SetRPCTimeout(d time.Duration) {
 // Name returns the extension's name as reported by the init handshake.
 func (h *Host) Name() string {
 	return h.name
+}
+
+// SetNameForTest sets the host's name without loading an extension.
+// Intended for unit tests in other packages that need hosts with
+// specific names for grouping/coordination testing.
+func (h *Host) SetNameForTest(name string) {
+	h.name = name
+}
+
+// MarkDeadForTest marks the host as dead without closing any channels.
+// Intended for unit tests that need to simulate a dead subprocess.
+func (h *Host) MarkDeadForTest() {
+	h.dead.Store(true)
 }
 
 // ExtensionDir returns the directory containing the extension entry point,
@@ -219,4 +265,34 @@ func (h *Host) Commands() map[string]CommandDefinition {
 // the session never reaches past the host abstraction. Nil clears.
 func (h *Host) SetOnCommandsChange(fn func()) {
 	h.sdk.SetOnCommandsChange(fn)
+}
+
+// Resources returns the resource declarations stashed from the most recent
+// init handshake. The session wires them into the resource broker after the
+// extension is fully loaded.
+func (h *Host) Resources() []types.ResourceDeclaration {
+	return h.pendingInitResources
+}
+
+// stderrBufMax is the maximum number of stderr lines retained per host.
+const stderrBufMax = 50
+
+// StderrTail returns a copy of the last N stderr lines from the subprocess.
+func (h *Host) StderrTail() []string {
+	h.stderrMu.Lock()
+	defer h.stderrMu.Unlock()
+	out := make([]string, len(h.stderrBuf))
+	copy(out, h.stderrBuf)
+	return out
+}
+
+// appendStderr adds a line to the stderr ring buffer, evicting the oldest
+// line when the buffer is full.
+func (h *Host) appendStderr(line string) {
+	h.stderrMu.Lock()
+	defer h.stderrMu.Unlock()
+	if len(h.stderrBuf) >= stderrBufMax {
+		h.stderrBuf = h.stderrBuf[1:]
+	}
+	h.stderrBuf = append(h.stderrBuf, line)
 }

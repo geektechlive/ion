@@ -82,11 +82,20 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   ],
   plan_mode_changed: ['enabled', 'planFilePath', 'planSlug'],
   plan_proposal: ['kind', 'planFilePath', 'planSlug'],
+  plan_mode_auto_exit: [
+    'planFilePath',
+    'planSlug',
+    'reason',
+    'runId',
+    'sessionId',
+    'stopReason',
+  ],
   stream_reset: [],
   compacting: ['active', 'clearedBlocks', 'messagesAfter', 'messagesBefore', 'strategy', 'summary'],
   tool_stalled: ['elapsed', 'toolId', 'toolName'],
   steer_injected: ['messageLength'],
   model_fallback: ['fallbackModel', 'reason', 'requestedModel'],
+  run_stalled: ['lastActivity', 'stalledDuration'],
 }
 
 // ─── TS SharedTypes field map ───
@@ -105,6 +114,21 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'sessionId',
     'state',
     'team',
+    'totalCostUsd',
+  ],
+  SessionStatus: [
+    'backgroundAgentCount',
+    'contextPercent',
+    'contextWindow',
+    'extensionName',
+    'hasInflightRun',
+    'key',
+    'lastEmittedAt',
+    'model',
+    'permissionDenialsPending',
+    'sessionId',
+    'state',
+    'stateSince',
     'totalCostUsd',
   ],
   EngineConfig: [

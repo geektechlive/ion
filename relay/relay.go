@@ -123,12 +123,11 @@ func sendControl(conn *websocket.Conn, msgType string, timeout time.Duration) {
 
 // relayMessage wraps a forwarded payload to check for push flags.
 type relayMessage struct {
-	Push         bool   `json:"push,omitempty"`
-	PushTitle    string `json:"title,omitempty"`
-	PushBody     string `json:"body,omitempty"`
-	Sound        string `json:"sound,omitempty"`
-	BriefingID   string `json:"briefingId,omitempty"`
-	BriefingText string `json:"briefingText,omitempty"`
+	Push             bool   `json:"push,omitempty"`
+	PushTitle        string `json:"pushTitle,omitempty"`
+	PushBody         string `json:"pushBody,omitempty"`
+	NotifyKind       string `json:"notifyKind,omitempty"`
+	NotifyResourceId string `json:"notifyResourceId,omitempty"`
 }
 
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID, role string, pusher *APNsPusher) {
@@ -234,7 +233,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 				if body == "" {
 					body = "Approval required"
 				}
-				pusher.Send(apnsToken, title, body, msg.Sound, msg.BriefingID, msg.BriefingText)
+				pusher.Send(apnsToken, title, body, msg.NotifyKind, msg.NotifyResourceId)
 			}
 		}
 	}

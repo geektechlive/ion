@@ -163,7 +163,7 @@ func startSession(t *testing.T, conn net.Conn, key, requestID string) {
 		},
 		"requestId": requestID,
 	})
-	lines := readLines(t, conn, 5, 2*time.Second)
+	lines := readLines(t, conn, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("startSession %q: no result received; lines=%v", key, lines)
@@ -257,7 +257,7 @@ func TestServerStartSession(t *testing.T) {
 
 	var resultFound bool
 	var lines []string
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 8; i++ {
 		if !scanner.Scan() {
 			break
 		}
@@ -327,7 +327,7 @@ func TestMultiClientBroadcast(t *testing.T) {
 	})
 
 	// conn1 must receive its result.
-	lines1 := readLines(t, conn1, 5, 2*time.Second)
+	lines1 := readLines(t, conn1, 8, 2*time.Second)
 	r1 := findResult(t, lines1)
 	if r1 == nil || !r1.OK {
 		errMsg := ""
@@ -338,7 +338,7 @@ func TestMultiClientBroadcast(t *testing.T) {
 	}
 
 	// conn2 should receive at least one broadcast (the engine_status event).
-	lines2 := readLines(t, conn2, 3, 2*time.Second)
+	lines2 := readLines(t, conn2, 8, 2*time.Second)
 	hasEvent := false
 	for _, l := range lines2 {
 		if strings.Contains(l, `"event"`) && strings.Contains(l, "broadcast-test") {
@@ -380,7 +380,7 @@ func TestClientDisconnectCleanup(t *testing.T) {
 		"requestId": "req-dc",
 	})
 
-	lines := readLines(t, conn, 5, 2*time.Second)
+	lines := readLines(t, conn, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil || !r.OK {
 		errMsg := ""
@@ -468,7 +468,7 @@ func TestStopSessionCommand(t *testing.T) {
 		"requestId": "req-stop",
 	})
 
-	lines := readLines(t, conn, 5, 2*time.Second)
+	lines := readLines(t, conn, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("no result for stop_session; lines=%v", lines)
@@ -485,7 +485,7 @@ func TestStopSessionCommand(t *testing.T) {
 		"cmd":       "list_sessions",
 		"requestId": "req-list",
 	})
-	listLines := readLines(t, conn, 5, 2*time.Second)
+	listLines := readLines(t, conn, 8, 2*time.Second)
 	listResult := findResult(t, listLines)
 	if listResult == nil {
 		t.Fatalf("no result for list_sessions; lines=%v", listLines)
@@ -522,7 +522,7 @@ func TestStopByPrefix(t *testing.T) {
 		"requestId": "req-prefix",
 	})
 
-	lines := readLines(t, conn, 5, 2*time.Second)
+	lines := readLines(t, conn, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("no result for stop_by_prefix; lines=%v", lines)
@@ -536,7 +536,7 @@ func TestStopByPrefix(t *testing.T) {
 		"cmd":       "list_sessions",
 		"requestId": "req-list2",
 	})
-	listLines := readLines(t, conn, 5, 2*time.Second)
+	listLines := readLines(t, conn, 8, 2*time.Second)
 	listResult := findResult(t, listLines)
 	if listResult == nil {
 		t.Fatalf("no result for list_sessions; lines=%v", listLines)
@@ -582,7 +582,7 @@ func TestForkSessionError(t *testing.T) {
 		"requestId":    "req-fork",
 	})
 
-	lines := readLines(t, conn, 5, 2*time.Second)
+	lines := readLines(t, conn, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("no result for fork_session; lines=%v", lines)
@@ -641,7 +641,7 @@ func TestListSessionsWithRequestID(t *testing.T) {
 		"requestId": "req-list",
 	})
 
-	lines := readLines(t, conn, 5, 2*time.Second)
+	lines := readLines(t, conn, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("no result frame for list_sessions with requestId; lines=%v", lines)
@@ -719,7 +719,7 @@ func TestStopNonExistentSession(t *testing.T) {
 		"requestId": "req-ghost",
 	})
 
-	lines := readLines(t, conn, 3, 2*time.Second)
+	lines := readLines(t, conn, 5, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("no result for stop_session on non-existent key; lines=%v", lines)
@@ -777,7 +777,7 @@ func TestDispatchPanicRecovery(t *testing.T) {
 	srv.dispatch(serverConn, cmd)
 
 	// Read the error result sent by the recovery guard.
-	lines := readLines(t, clientConn, 3, 2*time.Second)
+	lines := readLines(t, clientConn, 5, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("expected error result from panic recovery; lines=%v", lines)
@@ -799,7 +799,7 @@ func TestDispatchPanicRecovery(t *testing.T) {
 		"cmd":       "list_sessions",
 		"requestId": "req-after-panic",
 	})
-	afterLines := readLines(t, conn, 3, 2*time.Second)
+	afterLines := readLines(t, conn, 5, 2*time.Second)
 	rAfter := findResult(t, afterLines)
 	if rAfter == nil {
 		t.Fatalf("server unresponsive after panic; lines=%v", afterLines)
@@ -838,7 +838,7 @@ func TestDispatchPanicRecoveryRelayPath(t *testing.T) {
 		"cmd":       "list_sessions",
 		"requestId": "req-after-relay-panic",
 	})
-	lines := readLines(t, conn, 3, 2*time.Second)
+	lines := readLines(t, conn, 5, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("server unresponsive after relay panic; lines=%v", lines)
@@ -871,7 +871,7 @@ func TestDispatchPanicRecoveryServerSurvives(t *testing.T) {
 	srv.dispatch(serverConn, cmd)
 
 	// Drain the error result from the pipe client.
-	readLines(t, clientConn, 3, 1*time.Second)
+	readLines(t, clientConn, 5, 1*time.Second)
 
 	// Socket client should be completely unaffected.
 	startSession(t, conn2, "survivor", "req-survivor")
@@ -881,7 +881,7 @@ func TestDispatchPanicRecoveryServerSurvives(t *testing.T) {
 		"cmd":       "list_sessions",
 		"requestId": "req-list-survive",
 	})
-	lines := readLines(t, conn2, 5, 2*time.Second)
+	lines := readLines(t, conn2, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("conn2 unresponsive after panic; lines=%v", lines)
@@ -931,7 +931,7 @@ func TestDuplicateStartSession(t *testing.T) {
 		"requestId": "req-second",
 	})
 
-	lines := readLines(t, conn, 5, 2*time.Second)
+	lines := readLines(t, conn, 8, 2*time.Second)
 	r := findResult(t, lines)
 	if r == nil {
 		t.Fatalf("no result for duplicate start_session; lines=%v", lines)
@@ -941,5 +941,177 @@ func TestDuplicateStartSession(t *testing.T) {
 	}
 	if r.RequestID != "req-second" {
 		t.Errorf("expected requestId=req-second, got %q", r.RequestID)
+	}
+}
+
+// ─── Resource dispatch tests ───
+
+// TestResourceSubscribeRequiresKind verifies that a resource_subscribe command
+// with an empty resourceKind is rejected. The protocol validation layer rejects
+// the command before dispatch, returning an "invalid command" error result.
+func TestResourceSubscribeRequiresKind(t *testing.T) {
+	mb := newMockBackend()
+	srv := newShortPathTestServer(t, mb)
+
+	conn := dialServer(t, srv)
+	defer conn.Close()
+
+	// Send resource_subscribe with key but empty resourceKind.
+	// The protocol parser requires resourceKind to be a non-empty string,
+	// so ParseClientCommand returns nil and handleClient sends "invalid command".
+	sendJSON(t, conn, map[string]interface{}{
+		"cmd":          "resource_subscribe",
+		"key":          "some-key",
+		"resourceKind": "",
+		"requestId":    "req-res-kind",
+	})
+
+	lines := readLines(t, conn, 5, 2*time.Second)
+	r := findResult(t, lines)
+	if r == nil {
+		t.Fatalf("no result for resource_subscribe with empty kind; lines=%v", lines)
+	}
+	if r.OK {
+		t.Error("expected ok=false for resource_subscribe with empty resourceKind")
+	}
+	if r.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+}
+
+// TestResourceSubscribeNoSession verifies that a resource_subscribe command
+// referencing a session key that was never started returns an error from the
+// dispatch layer (no broker available for that key).
+func TestResourceSubscribeNoSession(t *testing.T) {
+	mb := newMockBackend()
+	srv := newShortPathTestServer(t, mb)
+
+	conn := dialServer(t, srv)
+	defer conn.Close()
+
+	// Send resource_subscribe with a valid resourceKind but a key that has
+	// no active session. This passes protocol validation but dispatchResourceSubscribe
+	// calls manager.ResourceBroker(key) which returns nil.
+	sendJSON(t, conn, map[string]interface{}{
+		"cmd":          "resource_subscribe",
+		"key":          "no-such-session",
+		"resourceKind": "notes",
+		"requestId":    "req-res-nosess",
+	})
+
+	lines := readLines(t, conn, 5, 2*time.Second)
+	r := findResult(t, lines)
+	if r == nil {
+		t.Fatalf("no result for resource_subscribe with unknown key; lines=%v", lines)
+	}
+	if r.OK {
+		t.Error("expected ok=false when subscribing to a non-existent session")
+	}
+	if r.Error == "" {
+		t.Error("expected non-empty error message")
+	}
+	if r.RequestID != "req-res-nosess" {
+		t.Errorf("expected requestId=req-res-nosess, got %q", r.RequestID)
+	}
+}
+
+// TestResourcePublishRouting verifies resource_publish dispatch behaviour:
+//   - Missing resourceKind at dispatch level returns an error.
+//   - A publish referencing a non-existent session key returns an error
+//     (no broker for that key).
+func TestResourcePublishRouting(t *testing.T) {
+	mb := newMockBackend()
+	srv := newShortPathTestServer(t, mb)
+
+	conn := dialServer(t, srv)
+	defer conn.Close()
+
+	// Case 1: resource_publish with a valid key and resourceOp (passes protocol
+	// validation) but with an empty resourceKind. dispatchResourcePublish checks
+	// resourceKind and returns an error.
+	sendJSON(t, conn, map[string]interface{}{
+		"cmd":          "resource_publish",
+		"key":          "pub-key",
+		"resourceOp":   "upsert",
+		"resourceKind": "",
+		"resourceItem": map[string]interface{}{
+			"id":             "item-1",
+			"kind":           "notes",
+			"content":        "hello",
+			"conversationId": "conv-1",
+		},
+		"requestId": "req-pub-nokind",
+	})
+
+	lines := readLines(t, conn, 5, 2*time.Second)
+	r := findResult(t, lines)
+	if r == nil {
+		t.Fatalf("no result for resource_publish with empty kind; lines=%v", lines)
+	}
+	if r.OK {
+		t.Error("expected ok=false for resource_publish with empty resourceKind")
+	}
+
+	// Case 2: resource_publish with all required fields but a key that has no
+	// session. The dispatch layer should return a "no session or broker" error.
+	sendJSON(t, conn, map[string]interface{}{
+		"cmd":        "resource_publish",
+		"key":        "nonexistent-session",
+		"resourceOp": "upsert",
+		"resourceKind": "notes",
+		"resourceItem": map[string]interface{}{
+			"id":             "item-2",
+			"kind":           "notes",
+			"content":        "hello",
+			"conversationId": "conv-1",
+		},
+		"requestId": "req-pub-nosess",
+	})
+
+	lines2 := readLines(t, conn, 5, 2*time.Second)
+	r2 := findResult(t, lines2)
+	if r2 == nil {
+		t.Fatalf("no result for resource_publish with unknown key; lines=%v", lines2)
+	}
+	if r2.OK {
+		t.Error("expected ok=false when publishing to a non-existent session")
+	}
+	if r2.RequestID != "req-pub-nosess" {
+		t.Errorf("expected requestId=req-pub-nosess, got %q", r2.RequestID)
+	}
+}
+
+// TestResourceUnsubscribeInvalidId verifies that resource_unsubscribe with a
+// bogus subscription ID does not panic and returns a graceful result. When the
+// session key has no active session, both the session broker and global broker
+// are nil, so the unsubscribe is a no-op that succeeds silently.
+func TestResourceUnsubscribeInvalidId(t *testing.T) {
+	mb := newMockBackend()
+	srv := newShortPathTestServer(t, mb)
+
+	conn := dialServer(t, srv)
+	defer conn.Close()
+
+	// Send resource_unsubscribe with a fabricated subscription ID.
+	// The key has no session, so broker lookups return nil. The dispatch
+	// path must handle this without panicking.
+	sendJSON(t, conn, map[string]interface{}{
+		"cmd":           "resource_unsubscribe",
+		"key":           "unsub-key",
+		"resourceSubId": "bogus-sub-id-12345",
+		"requestId":     "req-unsub-bogus",
+	})
+
+	lines := readLines(t, conn, 5, 2*time.Second)
+	r := findResult(t, lines)
+	if r == nil {
+		t.Fatalf("no result for resource_unsubscribe with bogus ID; lines=%v", lines)
+	}
+	// Unsubscribe is lenient: even with a non-existent ID the server returns ok=true.
+	if !r.OK {
+		t.Errorf("expected ok=true for resource_unsubscribe (lenient path), got error: %s", r.Error)
+	}
+	if r.RequestID != "req-unsub-bogus" {
+		t.Errorf("expected requestId=req-unsub-bogus, got %q", r.RequestID)
 	}
 }

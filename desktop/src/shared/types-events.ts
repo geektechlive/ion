@@ -156,8 +156,10 @@ export type NormalizedEvent =
   | { type: 'usage'; usage: UsageData }
   | { type: 'permission_request'; questionId: string; toolName: string; toolDescription?: string; toolInput?: Record<string, unknown>; options: Array<{ id: string; label: string; kind?: string }> }
   | { type: 'plan_mode_changed'; enabled: boolean; planFilePath?: string; planSlug?: string }
+  | { type: 'plan_mode_auto_exit'; stopReason: string; planFilePath?: string; planSlug?: string; reason?: string; sessionId?: string; runId?: string }
   | { type: 'stream_reset' }
   | { type: 'compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
   | { type: 'tool_stalled'; toolId: string; toolName: string; elapsed: number }
   | { type: 'steer_injected'; messageLength: number }
   | { type: 'model_fallback'; requestedModel: string; fallbackModel: string; reason: string }
+  | { type: 'run_stalled'; stalledDuration: number; lastActivity?: string }

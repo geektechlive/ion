@@ -137,7 +137,7 @@ export function InputBar() {
     if (tab?.isEngine && activeTabId && prevInst && prevInst !== activeInstanceId) {
       setEngineDraftInput(`${activeTabId}:${prevInst}`, input)
       const arrivingDraft = activeInstanceId
-        ? useSessionStore.getState().engineDraftInputs.get(`${activeTabId}:${activeInstanceId}`) ?? ''
+        ? (useSessionStore.getState().enginePanes.get(activeTabId)?.instances.find(i => i.id === activeInstanceId)?.draftInput ?? '')
         : ''
       setInput(arrivingDraft)
       setSlashFilter(null)

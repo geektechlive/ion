@@ -18,6 +18,7 @@ import { registerRemoteControlIpc } from './remote-control'
 import { registerMigrationIpc } from './migration'
 import { registerModelsIpc } from './models'
 import { registerOAuthIpc } from './oauth'
+import { registerConversationBackupIpc } from './conversation-backup'
 
 export function registerAllIpc(): void {
   registerWindowIpc()
@@ -40,4 +41,5 @@ export function registerAllIpc(): void {
   registerMigrationIpc()
   registerModelsIpc()
   registerOAuthIpc()
+  registerConversationBackupIpc()
 }

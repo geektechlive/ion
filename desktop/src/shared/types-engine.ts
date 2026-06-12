@@ -1,5 +1,46 @@
 // ─── Engine Types (native Ion extension runtime) ───
 
+import type { Message } from './types-session'
+
+// ─── Resource subsystem types (D-007) ───
+
+export interface ResourceItem {
+  id: string
+  kind: string
+  title?: string
+  content: string
+  createdAt: string
+  conversationId?: string
+  metadata?: Record<string, unknown>
+  updatedAt?: string
+  read?: boolean
+}
+
+export interface ResourceDelta {
+  op: 'create' | 'update' | 'delete' | 'mark_read'
+  item: ResourceItem
+}
+
+export interface ResourceFilter {
+  kind: string
+  conversationId?: string
+  since?: string
+  limit?: number
+}
+
+// ─── Notification types (D-009) ───
+
+export interface NotifyOpts {
+  kind: string
+  resourceId?: string
+  title: string
+  body: string
+  sound?: string
+  scope?: 'user' | 'device' | 'all'
+  conversationId?: string
+  targetSessionKey?: string
+}
+
 export interface EngineProfile {
   id: string
   name: string
@@ -38,8 +79,42 @@ export interface EngineInstance {
   label: string     // "cos 1", "cos 2"
 }
 
+/**
+ * Per-conversation state for an engine instance.
+ *
+ * Engine instances are sub-conversations under a single engine tab. This
+ * interface collects the fields that belong to an individual conversation so
+ * they can travel with the instance rather than living in flat global Maps
+ * keyed by `${tabId}:${instanceId}`.
+ *
+ * All per-instance state lives here. The 8 parallel Maps that previously
+ * held this data (engineMessages, engineModelOverrides, etc.) were removed
+ * in #203. Event handlers, selectors, snapshot, and persistence all read
+ * from and write to these fields on the instance directly.
+ */
+export interface ConversationInstance {
+  /** Scrollback messages for this instance */
+  messages: Message[]
+  /** Model override in effect for this instance (null = use tab/profile default) */
+  modelOverride: string | null
+  /** Permission mode for this instance */
+  permissionMode: 'auto' | 'plan'
+  /** Pending permission-denied tools (null = no pending denial) */
+  permissionDenied: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null
+  /** Conversation IDs accumulated by this instance across sessions */
+  conversationIds: string[]
+  /** Draft input text for this instance's input bar */
+  draftInput: string
+  /** Latest agent-state snapshot from the engine */
+  agentStates: AgentStateUpdate[]
+  /** Latest status fields from the engine (null = none received yet) */
+  statusFields: StatusFields | null
+  /** Path to the active plan file (null = not in plan mode / no plan yet) */
+  planFilePath: string | null
+}
+
 export interface EnginePaneState {
-  instances: EngineInstance[]
+  instances: Array<EngineInstance & ConversationInstance>
   activeInstanceId: string | null
 }
 
@@ -76,6 +151,48 @@ export interface StatusFields {
    *  progress. Clients use this to keep the tab status active and the
    *  interrupt button visible. */
   backgroundAgents?: number
+}
+
+/**
+ * Mirror of Go's `types.SessionStatus`. Phase 3 of the state-management
+ * overhaul carries the engine's authoritative per-session status in one
+ * typed payload that consumers can map onto their local cache without
+ * inferring state from heterogeneous events (text deltas, message-end,
+ * task-complete). See engine/internal/types/types.go for per-field
+ * semantics; the wire shape is identical.
+ *
+ * Emitted by the engine alongside the legacy `engine_status` during the
+ * transition window. Both events carry the same authoritative state;
+ * Phase 4 removes the legacy emission once every in-repo consumer has
+ * migrated to read this type.
+ */
+export interface SessionStatus {
+  key: string
+  state: string
+  /** Unix-ms timestamp when the engine entered the current state.
+   *  Zero means "not tracked yet"; populated once Phase 5 lands the
+   *  per-session state-machine. */
+  stateSince?: number
+  /** Unix-ms timestamp when the engine last emitted a session-status
+   *  event for this key. Always populated on inbound events. */
+  lastEmittedAt: number
+  /** True iff the backend has a live run for this key. The engine
+   *  cross-checks `requestID` against the backend's run set so this
+   *  flag cannot drift the way `tab.status === 'running'` did. */
+  hasInflightRun?: boolean
+  /** Number of background dispatch agents still running. Same
+   *  semantics as `StatusFields.backgroundAgents`. */
+  backgroundAgentCount?: number
+  /** Unresolved AskUserQuestion / ExitPlanMode entries retained
+   *  across status emissions. Same shape as
+   *  `StatusFields.permissionDenials`. */
+  permissionDenialsPending?: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }>
+  model?: string
+  contextPercent?: number
+  contextWindow?: number
+  totalCostUsd?: number
+  sessionId?: string
+  extensionName?: string
 }
 
 /**
@@ -141,6 +258,7 @@ export interface LlmContentBlock {
 export type EngineEvent =
   | { type: 'engine_agent_state'; agents: AgentStateUpdate[] }
   | { type: 'engine_status'; fields: StatusFields; metadata?: Record<string, unknown> }
+  | { type: 'engine_session_status'; sessionStatus: SessionStatus; metadata?: Record<string, unknown> }
   | { type: 'engine_working_message'; message: string; metadata?: Record<string, unknown> }
   | { type: 'engine_notify'; message: string; level: 'info' | 'warning' | 'error'; metadata?: Record<string, unknown> }
   | { type: 'engine_dialog'; dialogId: string; method: 'select' | 'confirm' | 'input'; title: string; message?: string; options?: string[]; defaultValue?: string }
@@ -173,6 +291,24 @@ export type EngineEvent =
   // directly so consumers don't have to scrape `permissionDenials.toolInput`
   // to recover them.
   | { type: 'engine_plan_proposal'; planProposalKind: 'exit' | string; planFilePath?: string; planSlug?: string }
+  // engine_plan_mode_auto_exit fires when the engine deterministically
+  // synthesizes an ExitPlanMode call at end-of-turn because the model
+  // ended a plan-mode run without invoking ExitPlanMode or
+  // AskUserQuestion (issue #187). It is a sibling to
+  // engine_plan_proposal: both surface the plan-approval card, but
+  // this event additionally tells consumers the exit was
+  // engine-driven rather than model-driven.
+  //
+  // Emitted BEFORE the companion engine_plan_proposal{kind:"exit"} so
+  // consumers that key off the synthesis specifically see it first.
+  // The TaskCompleteEvent that follows carries the same synthesized
+  // PermissionDenial as the model-driven path, so consumers keying
+  // off the denial path continue to render approval cards unchanged.
+  //
+  // Use cases: telemetry on prompt quality (how often does the model
+  // misroute plan exit?); subtle UI hints that the synthesis fired
+  // ("Plan surfaced automatically — review carefully").
+  | { type: 'engine_plan_mode_auto_exit'; stopReason: string; planFilePath?: string; planSlug?: string; reason?: string; sessionId?: string; runId?: string }
   | { type: 'engine_stream_reset' }
   | { type: 'engine_compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
   | { type: 'engine_tool_stalled'; toolId: string; toolName: string; toolElapsed: number }
@@ -184,6 +320,11 @@ export type EngineEvent =
   // already part of the conversation. See
   // engine/internal/types/normalized_event.go (SteerInjectedEvent).
   | { type: 'engine_steer_injected'; steerMessageLength: number }
+  // engine_run_stalled — advisory event emitted by the run-progress watchdog
+  // when a run records no forward progress for longer than the configured
+  // RunStall threshold. The authoritative completion signal is the follow-up
+  // task_complete; this event is for observability only.
+  | { type: 'engine_run_stalled'; runStalledDuration: number; runStalledLastActivity?: string }
   // engine_model_fallback — workflow signal emitted by the engine when
   // it fell back to its configured defaultModel because the requested
   // model didn't resolve to a provider. Mirrors the underlying
@@ -194,10 +335,10 @@ export type EngineEvent =
   // rather than as a live RemoteEvent. See CLAUDE.md §
   // "The typed-event corollary" for the broader rule.
   | { type: 'engine_model_fallback'; fallbackRequestedModel: string; fallbackModel: string; fallbackReason: string }
-  | { type: 'engine_extension_died'; extensionName: string; exitCode: number | null; signal: string | null }
+  | { type: 'engine_extension_died'; extensionName: string; exitCode: number | null; signal: string | null; stderrTail?: string[] }
   | { type: 'engine_extension_respawned'; extensionName: string; attemptNumber: number }
   | { type: 'engine_events_dropped'; count: number }
-  | { type: 'engine_extension_dead_permanent'; extensionName: string; attemptNumber: number }
+  | { type: 'engine_extension_dead_permanent'; extensionName: string; attemptNumber: number; stderrTail?: string[] }
   // ─── Async-trigger events (D-010 / D-011) ───
   //
   // The engine emits these for every webhook and schedule fire plus
@@ -315,4 +456,63 @@ export type EngineEvent =
       dispatchInputTokens: number
       dispatchOutputTokens: number
       dispatchToolCount: number
+    }
+  // ─── Resource subsystem events (D-007) ───
+  //
+  // engine_resource_snapshot: emitted when a client subscribes to a resource
+  // kind. Consumers REPLACE their local collection with resourceItems.
+  //
+  // engine_resource_delta: emitted when a producer publishes a change.
+  // Consumers apply the delta incrementally.
+  //
+  // Both carry resourceKind and resourceSubId for subscription correlation.
+  | {
+      type: 'engine_resource_snapshot'
+      resourceKind: string
+      resourceSubId: string
+      resourceItems: ResourceItem[]
+    }
+  | {
+      type: 'engine_resource_delta'
+      resourceKind: string
+      resourceSubId: string
+      resourceDelta: ResourceDelta
+    }
+  // ─── Notification events (D-009) ───
+  //
+  // engine_notification: emitted when an extension calls ctx.notify().
+  // The push/pushTitle/pushBody fields trigger APNs delivery through the
+  // relay when the mobile peer is not connected. The notifyKind/Title/Body
+  // fields carry structured metadata for richer client handling.
+  | {
+      type: 'engine_notification'
+      push: boolean
+      pushTitle: string
+      pushBody: string
+      notifyKind: string
+      notifyResourceId?: string
+      notifyTitle: string
+      notifyBody: string
+      notifySound?: string
+      notifyScope?: string
+    }
+  // ─── engine_intercept ───
+  //
+  // Fire-and-forget signal emitted when an extension calls ctx.intercept().
+  // The engine routes the event to the target session's stream and attaches no
+  // further semantics. Clients decide how to render and whether to act on the
+  // level hint:
+  //   "banner"   — informational, non-disruptive inline display
+  //   "redirect" — urgent; client may abort the active run and re-prompt with message
+  //
+  // There is no "current intercept state" to query — this event fires exactly
+  // once per ctx.intercept() call. Consumers must not accumulate or replace
+  // state from it. See docs/protocol/server-events.md for the full field table.
+  | {
+      type: 'engine_intercept'
+      interceptLevel: string
+      interceptTitle: string
+      interceptMessage: string
+      interceptSource?: string
+      interceptMetadata?: Record<string, unknown>
     }

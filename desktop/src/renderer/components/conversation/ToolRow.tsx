@@ -4,7 +4,7 @@ import { usePreferencesStore } from '../../preferences'
 import { InlineEditDiff } from '../InlineEditDiff'
 import type { Message } from '../../../shared/types'
 
-export function ToolRow({ tool, desc, isRunning }: { tool: Message; desc: string; isRunning: boolean }) {
+export const ToolRow = React.memo(function ToolRow({ tool, desc, isRunning }: { tool: Message; desc: string; isRunning: boolean }) {
   const colors = useColors()
   const expandToolResults = usePreferencesStore((s) => s.expandToolResults)
   const shouldAutoExpand = !!tool.autoExpandResult ||
@@ -71,4 +71,4 @@ export function ToolRow({ tool, desc, isRunning }: { tool: Message; desc: string
       )}
     </>
   )
-}
+})

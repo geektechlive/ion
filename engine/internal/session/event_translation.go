@@ -546,6 +546,29 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 			PlanModeSlug:     slug,
 		}
 
+	case *types.PlanModeAutoExitEvent:
+		// PlanModeAutoExitEvent fires when the engine deterministically
+		// synthesizes an ExitPlanMode call at end-of-turn because the
+		// model ended a plan-mode run without invoking ExitPlanMode or
+		// AskUserQuestion (issue #187). Sibling to PlanProposalEvent —
+		// both surface the plan-approval card, but this event
+		// additionally tells consumers the exit was engine-driven
+		// rather than model-driven. Same slug-fallback semantics so
+		// consumers always receive a populated display string.
+		slug := e.PlanSlug
+		if slug == "" {
+			slug = types.PlanSlugFromPath(e.PlanFilePath)
+		}
+		return types.EngineEvent{
+			Type:                       "engine_plan_mode_auto_exit",
+			PlanModeAutoExitStopReason: e.StopReason,
+			PlanModeFilePath:           e.PlanFilePath,
+			PlanModeSlug:               slug,
+			PlanModeAutoExitReason:     e.Reason,
+			PlanModeAutoExitSessionID:  e.SessionID,
+			PlanModeAutoExitRunID:      e.RunID,
+		}
+
 	case *types.StreamResetEvent:
 		return types.EngineEvent{Type: "engine_stream_reset"}
 
@@ -562,6 +585,21 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 
 	case *types.ToolStalledEvent:
 		return types.EngineEvent{Type: "engine_tool_stalled", ToolID: e.ToolID, ToolName: e.ToolName, ToolElapsed: e.Elapsed}
+
+	case *types.RunStalledEvent:
+		// Engine-wide progress watchdog tripped: this run made no
+		// forward progress for longer than the configured threshold
+		// and is about to be cancelled. Mirrors RunStalledEvent at the
+		// EngineEvent layer so clients that subscribe to the
+		// engine_-prefixed stream (desktop, iOS) see it the same way
+		// they see engine_tool_stalled. Authoritative completion still
+		// arrives via the follow-up engine_task_complete + engine_dead
+		// (or idle) events — see RunStalledEvent doc for the contract.
+		return types.EngineEvent{
+			Type:                   "engine_run_stalled",
+			RunStalledDuration:     e.StalledDuration,
+			RunStalledLastActivity: e.LastActivity,
+		}
 
 	case *types.SteerInjectedEvent:
 		// Surface mid-turn steer captures as a typed engine event so
