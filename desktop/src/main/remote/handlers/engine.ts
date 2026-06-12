@@ -368,7 +368,11 @@ export async function handleLoadEngineConversation(cmd: Extract<RemoteCommand, {
       (function() {
         var store = window.__Ion_SESSION_STORE__;
         if (!store) return [];
-        var msgs = store.getState().engineMessages.get('${escapedKey}') || [];
+        var parts = '${escapedKey}'.split(':');
+        var tabId = parts[0]; var instId = parts[1];
+        var pane = store.getState().enginePanes.get(tabId);
+        var inst = pane && instId ? pane.instances.find(function(i) { return i.id === instId; }) : null;
+        var msgs = (inst && inst.messages) || [];
         return msgs.map(function(m) {
           var content = m.content || '';
           if (m.role === 'tool' && content.length > 2048) content = content.substring(0, 2048) + '\\n... [truncated]';
@@ -418,8 +422,12 @@ async function sendCurrentEngineState(tabId: string, instanceId: string | null, 
         if (!store) return null;
         var s = store.getState();
         var key = '${escapedKey}';
-        var agents = s.engineAgentStates.get(key) || [];
-        var status = s.engineStatusFields.get(key) || null;
+        var parts = key.split(':');
+        var tabId = parts[0]; var instId = parts[1];
+        var pane = s.enginePanes.get(tabId);
+        var inst = pane && instId ? pane.instances.find(function(i) { return i.id === instId; }) : null;
+        var agents = (inst && inst.agentStates) || [];
+        var status = (inst && inst.statusFields) || null;
         var working = s.engineWorkingMessages.get(key) || '';
         var modelOverride = window.__Ion_resolveEngineModel(key);
         return { agents: agents, status: status, working: working, modelOverride: modelOverride };
@@ -505,22 +513,25 @@ export async function handleLoadAgentConversation(cmd: Extract<RemoteCommand, { 
             var store = window.__Ion_SESSION_STORE__;
             if (!store) return '';
             var convIds = ${convIdsJson};
-            var agentStates = store.getState().engineAgentStates;
-            for (var [, agents] of agentStates) {
-              for (var a of agents) {
-                var meta = a.metadata || {};
-                var dispatches = meta.dispatches || [];
-                for (var d of dispatches) {
-                  for (var cid of convIds) {
-                    if (d.conversationId === cid) return a.name;
+            var enginePanes = store.getState().enginePanes;
+            for (var [, pane] of enginePanes) {
+              for (var inst of pane.instances) {
+                var agents = inst.agentStates || [];
+                for (var a of agents) {
+                  var meta = a.metadata || {};
+                  var dispatches = meta.dispatches || [];
+                  for (var d of dispatches) {
+                    for (var cid of convIds) {
+                      if (d.conversationId === cid) return a.name;
+                    }
                   }
-                }
-                // Belt-and-suspenders: fall back to legacy fields in case
-                // dispatches[] is empty (e.g. stale renderer state).
-                var aConvId = meta.conversationId || '';
-                var aConvIds = meta.conversationIds || [];
-                for (var cid of convIds) {
-                  if (cid === aConvId || aConvIds.indexOf(cid) >= 0) return a.name;
+                  // Belt-and-suspenders: fall back to legacy fields in case
+                  // dispatches[] is empty (e.g. stale renderer state).
+                  var aConvId = meta.conversationId || '';
+                  var aConvIds = meta.conversationIds || [];
+                  for (var cid of convIds) {
+                    if (cid === aConvId || aConvIds.indexOf(cid) >= 0) return a.name;
+                  }
                 }
               }
             }

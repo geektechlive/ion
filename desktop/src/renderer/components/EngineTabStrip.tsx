@@ -43,23 +43,21 @@ export function EngineTabStrip({ tabId }: Props) {
   const instances = pane?.instances || []
   const activeId = pane?.activeInstanceId || null
   const tabs = useSessionStore((s) => s.tabs)
-  // Subscribe to enginePermissionDenied so the per-instance status dot
-  // re-renders when this tab's instances acquire or clear a pending
-  // AskUserQuestion / ExitPlanMode denial. The map identity changes on
-  // every write in engine-event-slice.ts.
-  useSessionStore((s) => s.enginePermissionDenied)
-  // Subscribe to engineStatusFields and project it into a per-instance
-  // {instanceId → state} map so the renderTab closure below can read
-  // each pill's running-state without calling hooks inside .map().
-  // engine-event-slice.ts replaces the entry for `${tabId}:${instanceId}`
-  // on every engine_status event, so the map identity changes on every
-  // status tick and React re-runs this selector. We use useShallow so
-  // we don't re-render unless the {id, state} pairs actually change.
+  // Subscribe to enginePanes so the per-instance status dot re-renders when
+  // permissionDenied or statusFields on any instance changes. Both fields now
+  // live on the instance in enginePanes — identity changes on every dual-write.
+  // The `pane` selector above already does this; keeping a named comment here
+  // so it's clear we no longer need separate subscriptions to the removed Maps.
+
+  // Project per-instance running state from enginePanes instances so the
+  // renderTab closure can read each pill's state without calling hooks inside
+  // .map(). Instance statusFields is set by engine-event-status.ts on every
+  // engine_status event. useShallow prevents re-render when pairs don't change.
   const engineStateByInstance = useSessionStore(
     useShallow((s) => {
       const out = new Map<string, string>()
-      for (const inst of pane?.instances || []) {
-        const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
+      for (const inst of s.enginePanes.get(tabId)?.instances || []) {
+        const state = inst.statusFields?.state
         if (state) out.set(inst.id, state)
       }
       return out
@@ -139,7 +137,7 @@ export function EngineTabStrip({ tabId }: Props) {
     // independent sub-conversations, so the dot is scoped to whichever
     // instance has the pending denial. The parent-tab pill in TabStrip
     // bubbles "any instance waiting" via getWaitingState().
-    const waitingState = getEngineInstanceWaitingState(`${tabId}:${inst.id}`)
+    const waitingState = getEngineInstanceWaitingState(tabId, inst.id)
     // Per-instance running indicator. When an engine instance has an
     // active run in flight, surface that on its inner pill so users
     // with multiple engine conversations in one tab can see at a glance

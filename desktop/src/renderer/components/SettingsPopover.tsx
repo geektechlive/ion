@@ -132,16 +132,16 @@ export function SettingsPopover() {
   }
 
   const handleCopyTranscript = () => {
-    const { activeTabId, tabs, engineMessages, enginePanes } = useSessionStore.getState()
+    const { activeTabId, tabs, enginePanes } = useSessionStore.getState()
     const tab = tabs.find((t) => t.id === activeTabId)
     if (!tab) return
 
     let messages: Array<{ role: string; content: string }>
     if (tab.isEngine) {
-      // Engine tabs: messages keyed by tabId:instanceId
+      // Engine tabs: messages on the active instance in enginePanes
       const pane = enginePanes.get(tab.id)
-      const key = pane?.activeInstanceId ? `${tab.id}:${pane.activeInstanceId}` : ''
-      messages = key ? (engineMessages.get(key) || []) : []
+      const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
+      messages = inst?.messages ?? []
     } else {
       messages = tab.messages
     }
@@ -160,8 +160,6 @@ export function SettingsPopover() {
       staticInfo,
       backend,
       enginePanes,
-      engineStatusFields,
-      engineConversationIds,
     } = useSessionStore.getState()
     const tab = tabs.find((t) => t.id === activeTabId)
     if (!tab) return
@@ -171,14 +169,12 @@ export function SettingsPopover() {
 
     if (tab.isEngine) {
       // Each engine restart writes a new conversation file. Copy every
-      // file the engine has produced for this instance, newest last, so
-      // the user can see the full history (including the runaway that
-      // pushed the engine to restart in the first place).
+      // file the engine has produced for this instance, newest last.
       const pane = enginePanes.get(tab.id)
-      const key = pane?.activeInstanceId ? `${tab.id}:${pane.activeInstanceId}` : ''
-      if (!key) return
-      const ids = engineConversationIds.get(key) ?? []
-      const current = engineStatusFields.get(key)?.sessionId
+      const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
+      if (!inst) return
+      const ids = inst.conversationIds
+      const current = inst.statusFields?.sessionId
       const allIds = current && !ids.includes(current) ? [...ids, current] : ids
       if (allIds.length === 0) return
       const paths = allIds.map((id) => `${homeDir}/.ion/conversations/${id}.jsonl`)
@@ -202,8 +198,6 @@ export function SettingsPopover() {
       activeTabId,
       tabs,
       enginePanes,
-      engineStatusFields,
-      engineConversationIds,
     } = useSessionStore.getState()
     const tab = tabs.find((t) => t.id === activeTabId)
     if (!tab) return
@@ -212,10 +206,10 @@ export function SettingsPopover() {
 
     if (tab.isEngine) {
       const pane = enginePanes.get(tab.id)
-      const key = pane?.activeInstanceId ? `${tab.id}:${pane.activeInstanceId}` : ''
-      if (!key) return
-      const ids = engineConversationIds.get(key) ?? []
-      const current = engineStatusFields.get(key)?.sessionId
+      const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
+      if (!inst) return
+      const ids = inst.conversationIds
+      const current = inst.statusFields?.sessionId
       const allIds = current && !ids.includes(current) ? [...ids, current] : ids
       if (allIds.length === 0) return
       console.debug('[SettingsPopover] copySessionId: engine tab, copying', allIds.length, 'id(s)')
@@ -242,14 +236,13 @@ export function SettingsPopover() {
   const activeTabId = useSessionStore((s) => s.activeTabId)
   const tabs = useSessionStore((s) => s.tabs)
   const enginePanes = useSessionStore((s) => s.enginePanes)
-  const engineStatusFields = useSessionStore((s) => s.engineStatusFields)
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const hasDebugInfo = (() => {
     if (!activeTab) return false
     if (activeTab.isEngine) {
       const pane = enginePanes.get(activeTab.id)
-      const key = pane?.activeInstanceId ? `${activeTab.id}:${pane.activeInstanceId}` : ''
-      return !!(key && engineStatusFields.get(key)?.sessionId)
+      const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
+      return !!(inst?.statusFields?.sessionId)
     }
     return !!activeTab.conversationId
   })()

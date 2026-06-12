@@ -60,20 +60,13 @@ export function AttachmentsButton() {
       // Source messages from the right place per tab type:
       //  - Conversation tabs: `tab.messages`, the per-tab message
       //    array maintained by event-slice.
-      //  - Engine tabs: `engineMessages[${tabId}:${activeInstanceId}]`,
-      //    the per-instance message map maintained by
-      //    engine-event-slice. Engine tabs leave `tab.messages` empty,
-      //    so reading it would surface an empty attachments panel
-      //    (the bug we're fixing).
+      //  - Engine tabs: `instance.messages` on the active instance in enginePanes,
+      //    the per-instance message array maintained by engine-event-slice.
       let msgs: MsgLike[] = tab?.messages ?? []
       if (tab?.isEngine) {
         const pane = s.enginePanes.get(s.activeTabId)
-        const instanceId = pane?.activeInstanceId
-        if (instanceId) {
-          msgs = (s.engineMessages.get(`${s.activeTabId}:${instanceId}`) || []) as MsgLike[]
-        } else {
-          msgs = []
-        }
+        const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
+        msgs = (inst?.messages || []) as MsgLike[]
       }
       return {
         messages: msgs,

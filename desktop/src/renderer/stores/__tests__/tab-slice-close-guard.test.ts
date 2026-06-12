@@ -125,19 +125,12 @@ function buildHarness(tabs: any[]): Harness {
   const state: any = {
     tabs,
     enginePanes: new Map(),
-    engineMessages: new Map(),
-    engineAgentStates: new Map(),
-    engineStatusFields: new Map(),
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    engineDraftInputs: new Map(),
-    engineModelOverrides: new Map(),
-    engineConversationIds: new Map(),
-    enginePermissionDenied: new Map(),
-    enginePermissionModes: new Map(),
+    engineModelFallbacks: new Map(),
     terminalPanes: new Map(),
     terminalOpenTabIds: new Set(),
     fileExplorerOpenDirs: new Set(),
@@ -164,8 +157,7 @@ describe('closeTab action-layer guard', () => {
   it('allows close when the engine tab is truly idle', () => {
     const tab = makeEngineTab('tab1')
     const h = buildHarness([tab])
-    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1' }], activeInstanceId: 'inst1' })
-    h.state.engineStatusFields.set('tab1:inst1', { state: 'idle' })
+    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1', statusFields: { state: 'idle' }, agentStates: [] }], activeInstanceId: 'inst1' })
 
     h.slice.closeTab!('tab1')
 
@@ -177,8 +169,7 @@ describe('closeTab action-layer guard', () => {
   it('refuses close when the orchestrator is running', () => {
     const tab = makeEngineTab('tab1')
     const h = buildHarness([tab])
-    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1' }], activeInstanceId: 'inst1' })
-    h.state.engineStatusFields.set('tab1:inst1', { state: 'running' })
+    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1', statusFields: { state: 'running' }, agentStates: [] }], activeInstanceId: 'inst1' })
 
     h.slice.closeTab!('tab1')
 
@@ -191,8 +182,7 @@ describe('closeTab action-layer guard', () => {
   it('refuses close when the orchestrator is connecting', () => {
     const tab = makeEngineTab('tab1')
     const h = buildHarness([tab])
-    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1' }], activeInstanceId: 'inst1' })
-    h.state.engineStatusFields.set('tab1:inst1', { state: 'connecting' })
+    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1', statusFields: { state: 'connecting' }, agentStates: [] }], activeInstanceId: 'inst1' })
 
     h.slice.closeTab!('tab1')
 
@@ -204,12 +194,14 @@ describe('closeTab action-layer guard', () => {
   it('refuses close when the orchestrator is idle but background children are running', () => {
     const tab = makeEngineTab('tab1')
     const h = buildHarness([tab])
-    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1' }], activeInstanceId: 'inst1' })
-    h.state.engineStatusFields.set('tab1:inst1', { state: 'idle' })
-    h.state.engineAgentStates.set('tab1:inst1', [
-      { name: 'agent-a', status: 'running' },
-      { name: 'agent-b', status: 'done' },
-    ])
+    h.state.enginePanes.set('tab1', {
+      instances: [{
+        id: 'inst1', label: 'inst1',
+        statusFields: { state: 'idle' },
+        agentStates: [{ name: 'agent-a', status: 'running' }, { name: 'agent-b', status: 'done' }],
+      }],
+      activeInstanceId: 'inst1',
+    })
 
     h.slice.closeTab!('tab1')
 
@@ -223,13 +215,12 @@ describe('closeTab action-layer guard', () => {
     const tab = makeEngineTab('tab1')
     const h = buildHarness([tab])
     h.state.enginePanes.set('tab1', {
-      instances: [{ id: 'inst1', label: 'inst1' }, { id: 'inst2', label: 'inst2' }],
+      instances: [
+        { id: 'inst1', label: 'inst1', statusFields: { state: 'idle' }, agentStates: [] },
+        { id: 'inst2', label: 'inst2', statusFields: { state: 'idle' }, agentStates: [{ name: 'agent-a', status: 'running' }] },
+      ],
       activeInstanceId: 'inst1',
     })
-    h.state.engineStatusFields.set('tab1:inst1', { state: 'idle' })
-    h.state.engineStatusFields.set('tab1:inst2', { state: 'idle' })
-    h.state.engineAgentStates.set('tab1:inst1', [])
-    h.state.engineAgentStates.set('tab1:inst2', [{ name: 'agent-a', status: 'running' }])
 
     h.slice.closeTab!('tab1')
 
@@ -253,13 +244,18 @@ describe('closeTab action-layer guard', () => {
   it('allows close once all children flip to terminal status', () => {
     const tab = makeEngineTab('tab1')
     const h = buildHarness([tab])
-    h.state.enginePanes.set('tab1', { instances: [{ id: 'inst1', label: 'inst1' }], activeInstanceId: 'inst1' })
-    h.state.engineStatusFields.set('tab1:inst1', { state: 'idle' })
-    h.state.engineAgentStates.set('tab1:inst1', [
-      { name: 'agent-a', status: 'done' },
-      { name: 'agent-b', status: 'cancelled' },
-      { name: 'agent-c', status: 'error' },
-    ])
+    h.state.enginePanes.set('tab1', {
+      instances: [{
+        id: 'inst1', label: 'inst1',
+        statusFields: { state: 'idle' },
+        agentStates: [
+          { name: 'agent-a', status: 'done' },
+          { name: 'agent-b', status: 'cancelled' },
+          { name: 'agent-c', status: 'error' },
+        ],
+      }],
+      activeInstanceId: 'inst1',
+    })
 
     h.slice.closeTab!('tab1')
 

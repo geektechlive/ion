@@ -1,4 +1,4 @@
-import type { TabState, NormalizedEvent, EnrichedError, Attachment, FileAttachment, TerminalPaneState, EngineInstance, EnginePaneState, AgentStateUpdate, StatusFields, Message, ImageAttachmentPayload } from '../../shared/types'
+import type { TabState, NormalizedEvent, EnrichedError, Attachment, FileAttachment, TerminalPaneState, EngineInstance, EnginePaneState, ConversationInstance, AgentStateUpdate, StatusFields, Message, ImageAttachmentPayload } from '../../shared/types'
 import type { ResourceItem } from '../../shared/types-engine'
 
 export interface StaticInfo {
@@ -49,18 +49,12 @@ export interface State {
   backend: 'api' | 'cli'
   worktreeUncommittedMap: Map<string, boolean>
 
-  engineAgentStates: Map<string, AgentStateUpdate[]>
-  engineStatusFields: Map<string, StatusFields>
   engineWorkingMessages: Map<string, string>
   engineNotifications: Map<string, Array<{ id: string; message: string; level: string; timestamp: number }>>
   engineDialogs: Map<string, { dialogId: string; method: string; title: string; options?: string[]; defaultValue?: string } | null>
   enginePinnedPrompt: Map<string, string>
   engineUsage: Map<string, { percent: number; tokens: number; cost: number }>
-  engineConversationIds: Map<string, string[]>
   enginePanes: Map<string, EnginePaneState>
-  engineMessages: Map<string, Message[]>
-  engineModelOverrides: Map<string, string>
-  engineDraftInputs: Map<string, string>
   /**
    * Pending model-fallback notice per engine instance, keyed by the
    * compound `${tabId}:${instanceId}` key. Populated when the engine
@@ -80,44 +74,6 @@ export interface State {
    * indicator. See CLAUDE.md § "The typed-event corollary".
    */
   engineModelFallbacks: Map<string, { requestedModel: string; fallbackModel: string; reason: string; at: number }>
-  /**
-   * Pending AskUserQuestion / ExitPlanMode denials per engine instance,
-   * keyed by the compound `${tabId}:${instanceId}` key. A `null` slot is
-   * the explicit "no pending denial" marker for an instance (preserved
-   * across cost-only `engine_status` ticks).
-   *
-   * Engine sub-tabs (instances under a single engine view) are independent
-   * sub-conversations. Storing denial state per-instance (vs. on the
-   * parent `tab.permissionDenied`) keeps siblings from showing each
-   * other's AskUserQuestion / ExitPlanMode cards when the user switches
-   * between them. CLI tabs continue to use `tab.permissionDenied` — this
-   * map is engine-only.
-   *
-   * Parent-pill bubbling: `getWaitingState()` in `TabStripShared.ts` folds
-   * across an engine tab's instance entries so the strip pill still glows
-   * when any sub-tab is blocked. iOS receives the active instance's
-   * denial via `RemoteTabState.permissionQueue` (see snapshot.ts) so the
-   * iOS card path continues to work unchanged at the tab level.
-   */
-  enginePermissionDenied: Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null>
-  /**
-   * Per-engine-instance permission mode, keyed by the compound
-   * `${tabId}:${instanceId}` key. Engine sub-tabs are independent
-   * sub-conversations; storing mode per-instance (vs. on the parent
-   * `tab.permissionMode`) prevents siblings from sharing plan mode
-   * state when the user toggles one of them.
-   *
-   * The parent `tab.permissionMode` stays 'auto' for engine tabs and
-   * is only meaningful for CLI tabs. All engine UI and prompt
-   * submission reads from this map instead.
-   *
-   * Follows the same compound-key lifecycle as `enginePermissionDenied`:
-   * initialized in `addEngineInstance`, deleted in `removeEngineInstance`,
-   * reset in `resetEngineInstance`, rekeyed in `moveEngineInstance`,
-   * reconciled to parent in `selectEngineInstance`, persisted and
-   * restored per-instance.
-   */
-  enginePermissionModes: Map<string, 'auto' | 'plan'>
 
   /**
    * Resource subsystem state (D-007). Resources keyed by kind — each entry
@@ -237,7 +193,7 @@ export interface State {
   resetEngineInstance: (tabId: string, instanceId: string) => void
   selectEngineInstance: (tabId: string, instanceId: string) => void
   renameEngineInstance: (tabId: string, instanceId: string, label: string) => void
-  reorderEngineInstances: (tabId: string, reordered: EngineInstance[]) => void
+  reorderEngineInstances: (tabId: string, reordered: Array<EngineInstance & ConversationInstance>) => void
   moveEngineInstance: (sourceTabId: string, instanceId: string, targetTabId: string) => void
   setEngineModel: (tabId: string, modelId: string) => void
   addEngineSystemMessage: (key: string, content: string) => void

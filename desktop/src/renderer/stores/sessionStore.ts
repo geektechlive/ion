@@ -49,27 +49,13 @@ const initialState = {
   initProgress: null,
   backend: 'api' as const,
   worktreeUncommittedMap: new Map(),
-  engineAgentStates: new Map(),
-  engineStatusFields: new Map(),
   engineWorkingMessages: new Map(),
   engineNotifications: new Map(),
   engineDialogs: new Map(),
   enginePinnedPrompt: new Map(),
   engineUsage: new Map(),
-  engineConversationIds: new Map<string, string[]>(),
   enginePanes: new Map<string, EnginePaneState>(),
-  engineMessages: new Map<string, Message[]>(),
-  engineModelOverrides: new Map<string, string>(),
-  engineDraftInputs: new Map<string, string>(),
   engineModelFallbacks: new Map<string, { requestedModel: string; fallbackModel: string; reason: string; at: number }>(),
-  // Per-engine-instance AskUserQuestion / ExitPlanMode denials. Keyed by
-  // `${tabId}:${instanceId}`. See `enginePermissionDenied` JSDoc on
-  // `State` (session-store-types.ts) for the full rationale. Mirrors the
-  // other per-instance maps (engineMessages, engineDraftInputs, etc.).
-  enginePermissionDenied: new Map<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null>(),
-  // Per-engine-instance plan/auto mode. Keyed by `${tabId}:${instanceId}`.
-  // Source of truth for engine tabs; parent tab.permissionMode stays 'auto'.
-  enginePermissionModes: new Map<string, 'auto' | 'plan'>(),
   resources: {} as Record<string, import('../../shared/types-engine').ResourceItem[]>,
   resourceSubscriptions: {} as Record<string, string>,
   readResourceIds: new Set<string>(),
@@ -121,7 +107,10 @@ export const useSessionStore = create<State>((set, get) => {
 ;(window as any).__Ion_resolveEngineModel = (compoundKey: string): string => {
   const s = useSessionStore.getState()
   const prefs = usePreferencesStore.getState()
-  return s.engineModelOverrides.get(compoundKey) || prefs.engineDefaultModel || prefs.preferredModel || 'claude-sonnet-4-6'
+  const [tabId, instanceId] = compoundKey.split(':')
+  const pane = s.enginePanes.get(tabId)
+  const inst = pane?.instances.find((i) => i.id === instanceId)
+  return inst?.modelOverride || prefs.engineDefaultModel || prefs.preferredModel || 'claude-sonnet-4-6'
 }
 ;(window as any).__serializeTerminalBuffer = serializeTerminalBuffer
 

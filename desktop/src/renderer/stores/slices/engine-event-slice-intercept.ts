@@ -1,5 +1,30 @@
 import type { StoreSet } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
+import type { EnginePaneState } from '../../../shared/types'
+import type { Message } from '../../../shared/types-session'
+
+/**
+ * Return a new enginePanes Map with `instance.messages` replaced for the
+ * instance identified by `key` (`${tabId}:${instanceId}`). No-ops silently
+ * when the pane or instance is not found (event arrived before pane was
+ * registered — safe to ignore).
+ */
+function withInstanceMessages(
+  enginePanes: Map<string, EnginePaneState>,
+  key: string,
+  messages: Message[],
+): Map<string, EnginePaneState> {
+  const [tabId, instanceId] = key.split(':')
+  const pane = enginePanes.get(tabId)
+  if (!pane) return enginePanes
+  const idx = pane.instances.findIndex((i) => i.id === instanceId)
+  if (idx === -1) return enginePanes
+  const updated = new Map(enginePanes)
+  const instances = pane.instances.slice()
+  instances[idx] = { ...instances[idx], messages }
+  updated.set(tabId, { ...pane, instances })
+  return updated
+}
 
 /**
  * Handler for `engine_intercept` events on engine-view tabs (compound
@@ -28,16 +53,17 @@ export function handleEngineInterceptEvent(
   const levelPrefix = event.interceptLevel === 'redirect' ? 'Conversation redirected: ' : ''
   const content = `**${levelPrefix}${event.interceptTitle}**\n\n${event.interceptMessage}`
   set((state) => {
-    const messages = new Map(state.engineMessages)
-    const msgs = [...(messages.get(key) || [])]
-    msgs.push({
+    const [tabId, instanceId] = key.split(':')
+    const pane = state.enginePanes.get(tabId)
+    const inst = pane?.instances.find((i) => i.id === instanceId)
+    const msgs = [...(inst?.messages || []), {
       id: nextMsgId(),
       role: 'harness' as const,
       content,
       timestamp: Date.now(),
       interceptLevel: event.interceptLevel,
-    })
-    messages.set(key, msgs)
-    return { engineMessages: messages }
+    }]
+    const enginePanes = withInstanceMessages(state.enginePanes, key, msgs)
+    return { enginePanes }
   })
 }

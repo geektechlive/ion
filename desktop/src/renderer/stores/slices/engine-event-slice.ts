@@ -1,31 +1,17 @@
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
-import { formatClearDivider, formatPlanCreatedDivider, formatSteerAppliedDivider } from '../../../shared/clear-divider'
 import { handleEngineStatusEvent } from './engine-event-status'
 import { handleEngineInterceptEvent } from './engine-event-slice-intercept'
-import { applyResourceSnapshot, applyResourceDelta } from './resource-slice'
-import type { ResourceItem } from '../../../shared/types-engine'
+import {
+  withInstanceMessages,
+  withInstanceAgentStates,
+} from './engine-event-slice-helpers'
+import {
+  handleCrossEngineEvent,
+  handleMessageEvents,
+} from './engine-event-slice-messages'
 
-/**
- * Per-tab cache of extension-registered command names, populated by
- * engine_command_registry snapshots emitted from the Go engine. Used by
- * the slash-autocomplete UI in InputBar so extension commands appear in
- * the menu alongside filesystem `.md` discoveries. Keyed by engine session
- * key (tabId or `${tabId}:${instanceId}`) — autocomplete reads under the
- * active tab/instance combination.
- *
- * Snapshot semantics: every event REPLACES the prior set. An empty
- * `commands: []` is the authoritative "no extension commands" signal and
- * clears the entry. Mirrors the main-process cache in
- * `desktop/src/main/state.ts:extensionCommandRegistry`.
- */
-const extensionCommandsByKey = new Map<string, Array<{ name: string; description?: string }>>()
-
-/** Get a snapshot of the current extension commands for an engine session key.
- *  Used by autocomplete; returns an empty array when no commands are cached. */
-export function getRendererExtensionCommands(key: string): Array<{ name: string; description?: string }> {
-  return extensionCommandsByKey.get(key) ?? []
-}
+export { getRendererExtensionCommands } from './engine-event-slice-helpers'
 
 export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<State> {
   return {
@@ -34,58 +20,7 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
       // events that apply to both CLI tabs (bare tabId key) and engine tabs
       // (compound tabId:instanceId key). We dispatch on them BEFORE the
       // engine-tab-only guard below so they reach the correct slice.
-      if (event.type === 'engine_command_registry') {
-        const listings = Array.isArray(event.commands) ? event.commands : []
-        if (listings.length === 0) {
-          extensionCommandsByKey.delete(key)
-        } else {
-          extensionCommandsByKey.set(key, listings.map((l: { name: string; description?: string }) => ({ name: l.name, description: l.description })))
-        }
-        // No store mutation here — autocomplete reads via
-        // getRendererExtensionCommands() during keystroke handling, not
-        // through reactive subscriptions. The renderer re-renders on the
-        // next keystroke and pulls a fresh list.
-        return
-      }
-      if (event.type === 'engine_command_result') {
-        // Engine confirms a command dispatch. We use this for two things:
-        //   1. The /clear divider — drawn when command='clear' and
-        //      commandError is empty. The unified pipeline collapsed the
-        //      legacy renderer-side divider injection into this single
-        //      engine-driven trigger so desktop and iOS render the divider
-        //      from the same signal.
-        //   2. (Future) /export markdown banner, /compact confirmation,
-        //      and any extension-emitted command result that wants a
-        //      visible system bubble.
-        //
-        // For now we only branch on /clear because the other built-ins
-        // (export, compact) had no renderer-side feedback in the legacy
-        // path either.
-        const cmdName = event.command || ''
-        const failed = !!event.commandError
-        const tabIdForCmd = key.includes(':') ? key.split(':')[0] : key
-        if (cmdName === 'clear' && !failed) {
-          const divider = formatClearDivider(new Date())
-          if (key.includes(':')) {
-            // Engine tab — insert into engineMessages keyed by the compound key.
-            set((state) => {
-              const messages = new Map(state.engineMessages)
-              const msgs = [...(messages.get(key) || [])]
-              msgs.push({ id: nextMsgId(), role: 'system' as const, content: divider, timestamp: Date.now() })
-              messages.set(key, msgs)
-              return { engineMessages: messages }
-            })
-          } else {
-            // CLI tab — insert into the tab's local messages array.
-            set((state) => ({
-              tabs: state.tabs.map((t) => t.id === tabIdForCmd
-                ? { ...t, messages: [...t.messages, { id: nextMsgId(), role: 'system' as const, content: divider, timestamp: Date.now() }] }
-                : t),
-            }))
-          }
-        }
-        return
-      }
+      if (handleCrossEngineEvent(set, _get, key, event)) return
 
       if (!key.includes(':')) return
 
@@ -113,9 +48,8 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           const statusSummary = agents.map((a: any) => `${a.name}:${a.status}`).join(',')
           console.log(`[store] agent_state: key=${key} count=${agents.length} replaced [${statusSummary}]`)
           set((state) => {
-            const agentStates = new Map(state.engineAgentStates)
-            agentStates.set(key, agents)
-            return { engineAgentStates: agentStates }
+            const enginePanes = withInstanceAgentStates(state.enginePanes, key, agents)
+            return { enginePanes }
           })
           break
         }
@@ -180,8 +114,10 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           const dedupKey =
             typeof dedupKeyRaw === 'string' && dedupKeyRaw.length > 0 ? dedupKeyRaw : undefined
           set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
+            const [tabIdInner, instanceId] = key.split(':')
+            const pane = state.enginePanes.get(tabIdInner)
+            const inst = pane?.instances.find((i) => i.id === instanceId)
+            const msgs = [...(inst?.messages || [])]
             if (dedupKey) {
               const prior = msgs.find((m) => m.role === 'harness' && m.dedupKey === dedupKey)
               if (prior) {
@@ -205,8 +141,8 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
               timestamp: Date.now(),
               ...(dedupKey ? { dedupKey } : {}),
             })
-            messages.set(key, msgs)
-            return { engineMessages: messages }
+            const enginePanes = withInstanceMessages(state.enginePanes, key, msgs)
+            return { enginePanes }
           })
           break
         }
@@ -226,19 +162,20 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
         }
         case 'engine_text_delta': {
           set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
+            const [tabIdInner, instanceId] = key.split(':')
+            const pane = state.enginePanes.get(tabIdInner)
+            const inst = pane?.instances.find((i) => i.id === instanceId)
+            const msgs = [...(inst?.messages || [])]
             const last = msgs[msgs.length - 1]
             if (last && last.role === 'assistant' && !last.sealed) {
               msgs[msgs.length - 1] = { ...last, content: last.content + event.text }
             } else {
               msgs.push({ id: nextMsgId(), role: 'assistant', content: event.text, timestamp: Date.now() })
             }
-            messages.set(key, msgs)
-            const pane = state.enginePanes.get(tabId)
-            const isActive = !pane || pane.activeInstanceId === key.split(':')[1]
+            const isActive = !pane || pane.activeInstanceId === instanceId
             const tabs = isActive ? state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const } : t) : state.tabs
-            return { engineMessages: messages, tabs }
+            const enginePanes = withInstanceMessages(state.enginePanes, key, msgs)
+            return { tabs, enginePanes }
           })
           break
         }
@@ -288,308 +225,25 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           // Seal the current assistant message so the next engine_text_delta
           // creates a new message instead of appending to this one.
           set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
+            const [tabIdInner, instanceId] = key.split(':')
+            const pane = state.enginePanes.get(tabIdInner)
+            const inst = pane?.instances.find((i) => i.id === instanceId)
+            const msgs = [...(inst?.messages || [])]
             const last = msgs[msgs.length - 1]
             if (last && last.role === 'assistant') {
               msgs[msgs.length - 1] = { ...last, sealed: true }
-              messages.set(key, msgs)
-              return { engineMessages: messages }
+              const enginePanes = withInstanceMessages(state.enginePanes, key, msgs)
+              return { enginePanes }
             }
             return {}
           })
           break
         }
-        case 'engine_tool_start': {
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
-            msgs.push({
-              id: event.toolId,
-              role: 'tool' as const,
-              content: '',
-              toolName: event.toolName,
-              toolId: event.toolId,
-              toolStatus: 'running' as const,
-              timestamp: Date.now(),
-            })
-            messages.set(key, msgs)
-            return { engineMessages: messages }
-          })
-          break
-        }
-        case 'engine_tool_update': {
-          // The engine streams tool input incrementally as the model
-          // generates JSON. We accumulate the partial chunks onto the
-          // tool message's `toolInput` field so the persistence layer
-          // can serialize the final value (used by PermissionDeniedCard
-          // to render AskUserQuestion / ExitPlanMode question text and
-          // plan content on a fresh launch). Without this capture,
-          // `engineMessages[*].toolInput` was always undefined and the
-          // card lost its content across restarts.
-          //
-          // Snapshot semantics: each engine_tool_update is incremental
-          // — we concatenate partial chunks. The final value is the
-          // complete JSON-string toolInput. Storing it on the message
-          // (instead of a separate map) mirrors how CLI tabs do it via
-          // event-slice.ts so PermissionDeniedCard's fallback scan
-          // (`messages.find((m) => m.toolName === 'AskUserQuestion' &&
-          // m.toolInput)`) finds it on engine tabs too.
-          if (!event.toolId) break
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = (messages.get(key) || []).map((m) => {
-              if (m.toolId !== event.toolId) return m
-              return { ...m, toolInput: (m.toolInput || '') + (event.partialInput || '') }
-            })
-            messages.set(key, msgs)
-            return { engineMessages: messages }
-          })
-          break
-        }
-        case 'engine_tool_end': {
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = (messages.get(key) || []).map((m) => {
-              if (m.toolId !== event.toolId) return m
-              return { ...m, content: event.result || '', toolStatus: (event.isError ? 'error' : 'completed') as 'error' | 'completed' }
-            })
-            messages.set(key, msgs)
-            return { engineMessages: messages }
-          })
-          break
-        }
-        case 'engine_dead': {
-          console.warn(`[Ion] handleEngineEvent engine_dead: key=${key} tabId=${tabId} exitCode=${event.exitCode}`)
-          if (event.exitCode === 0 || event.exitCode === null || event.exitCode === undefined) {
-            break
-          }
-          set((state) => {
-            const pane = state.enginePanes.get(tabId)
-            const instanceId = key.split(':')[1]
-            const otherInstances = pane?.instances.filter((i) => i.id !== instanceId) || []
-            if (otherInstances.length === 0) {
-              const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'dead' as const } : t)
-              return { tabs }
-            }
-            return {}
-          })
-          break
-        }
-        case 'engine_error': {
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
-            msgs.push({ id: nextMsgId(), role: 'system' as const, content: `Error: ${event.message}`, timestamp: Date.now() })
-            messages.set(key, msgs)
-            const pane = state.enginePanes.get(tabId)
-            const isActive = !pane || pane.activeInstanceId === key.split(':')[1]
-            const tabs = isActive
-              ? state.tabs.map((t) => t.id === tabId ? { ...t, status: 'idle' as const } : t)
-              : state.tabs
-            return { engineMessages: messages, tabs }
-          })
-          break
-        }
-        case 'engine_extension_died': {
-          set((state) => {
-            const notifications = new Map(state.engineNotifications)
-            const keyNotifications = [...(notifications.get(key) || [])]
-            keyNotifications.push({
-              id: nextMsgId(),
-              message: `Extension ${event.extensionName} died — restarting…`,
-              level: 'warning',
-              timestamp: Date.now(),
-            })
-            notifications.set(key, keyNotifications)
-            return { engineNotifications: notifications }
-          })
-          break
-        }
-        case 'engine_extension_respawned': {
-          set((state) => {
-            const notifications = new Map(state.engineNotifications)
-            const keyNotifications = [...(notifications.get(key) || [])]
-            keyNotifications.push({
-              id: nextMsgId(),
-              message: `Extension ${event.extensionName} restarted (attempt ${event.attemptNumber})`,
-              level: 'info',
-              timestamp: Date.now(),
-            })
-            notifications.set(key, keyNotifications)
-            return { engineNotifications: notifications }
-          })
-          break
-        }
-        case 'engine_extension_dead_permanent': {
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
-            msgs.push({
-              id: nextMsgId(),
-              role: 'system' as const,
-              content: `Extension ${event.extensionName} crashed ${event.attemptNumber} times in 60s and will not be restarted automatically. Close and reopen this tab to recover.`,
-              timestamp: Date.now(),
-            })
-            messages.set(key, msgs)
-            return { engineMessages: messages }
-          })
-          break
-        }
-        case 'engine_events_dropped': {
-          set((state) => {
-            const notifications = new Map(state.engineNotifications)
-            const keyNotifications = [...(notifications.get(key) || [])]
-            keyNotifications.push({
-              id: nextMsgId(),
-              message: `Connection fell behind — ${event.count} events dropped. State may be stale.`,
-              level: 'warning',
-              timestamp: Date.now(),
-            })
-            notifications.set(key, keyNotifications)
-            return { engineNotifications: notifications }
-          })
-          break
-        }
-        case 'engine_compacting': {
-          if (event.active) {
-            set((state) => {
-              const workingMessages = new Map(state.engineWorkingMessages)
-              workingMessages.set(key, 'Compacting...')
-              return { engineWorkingMessages: workingMessages }
-            })
-          } else {
-            set((state) => {
-              const workingMessages = new Map(state.engineWorkingMessages)
-              workingMessages.set(key, '')
-              if (!event.messagesBefore && !event.summary) {
-                return { engineWorkingMessages: workingMessages }
-              }
-              const parts = ['[Compaction]']
-              if (event.strategy) parts.push(event.strategy)
-              if (event.messagesBefore && event.messagesAfter != null) {
-                parts.push(`${event.messagesBefore} → ${event.messagesAfter} messages`)
-              }
-              if (event.clearedBlocks) parts.push(`${event.clearedBlocks} blocks cleared`)
-              let content = parts.join(' · ')
-              if (event.summary) content += '\n\n' + event.summary
-              const messages = new Map(state.engineMessages)
-              const msgs = [...(messages.get(key) || [])]
-              msgs.push({
-                id: nextMsgId(),
-                role: 'system' as const,
-                content,
-                timestamp: Date.now(),
-              })
-              messages.set(key, msgs)
-              return { engineWorkingMessages: workingMessages, engineMessages: messages }
-            })
-          }
-          break
-        }
-        case 'engine_plan_mode_changed': {
-          // Insert a "Plan created" divider into the engine conversation
-          // each time plan mode is entered. This fires on every entry
-          // (including re-entry after implementation), producing the
-          // repeating cycle: Session started → Plan created → Implementing
-          // → Plan created → Implementing → …
-          if (event.planModeEnabled) {
-            set((state) => {
-              const messages = new Map(state.engineMessages)
-              const msgs = [...(messages.get(key) || [])]
-              msgs.push({
-                id: nextMsgId(),
-                role: 'system' as const,
-                content: formatPlanCreatedDivider(new Date(), event.planSlug),
-                timestamp: Date.now(),
-                planFilePath: event.planFilePath,
-              })
-              messages.set(key, msgs)
-              return { engineMessages: messages }
-            })
-          }
-          break
-        }
-        case 'engine_steer_injected': {
-          // The engine drained a mid-turn steer message into the
-          // conversation as a user turn. Insert a divider so the user
-          // can see where their steer landed in the scrollback. The
-          // engine emits this from three checkpoints (between turns,
-          // before end_turn exit, after tool results) — each capture
-          // gets its own divider so the user sees the count.
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
-            msgs.push({
-              id: nextMsgId(),
-              role: 'system' as const,
-              content: formatSteerAppliedDivider(new Date(), event.steerMessageLength),
-              timestamp: Date.now(),
-            })
-            messages.set(key, msgs)
-            return { engineMessages: messages }
-          })
-          break
-        }
-        case 'engine_model_fallback': {
-          // The engine fell back to its configured defaultModel because
-          // the requested model didn't resolve to a provider. This
-          // client's policy: show a small ⚠ glyph on the affected
-          // engine instance pill via EngineTabStrip. The fact is
-          // stored per-instance (compound key) and cleared on the next
-          // engine_status state=idle for that same instance (see the
-          // `state === 'idle'` branch in engine-event-status.ts).
-          //
-          // Engine event semantics: ModelFallbackEvent is a workflow
-          // signal, not a state snapshot — it fires once at the swap
-          // site. Persisting it in renderer state is renderer policy,
-          // not engine policy; another consumer (headless harness,
-          // future CLI client) is free to ignore the event entirely.
-          // See CLAUDE.md § "The typed-event corollary".
-          set((state) => {
-            const fallbacks = new Map(state.engineModelFallbacks)
-            fallbacks.set(key, {
-              requestedModel: event.fallbackRequestedModel,
-              fallbackModel: event.fallbackModel,
-              reason: event.fallbackReason,
-              at: Date.now(),
-            })
-            return { engineModelFallbacks: fallbacks }
-          })
-          break
-        }
-        case 'engine_resource_snapshot': {
-          // Resource snapshot: replace the entire collection for this kind.
-          // applyResourceSnapshot returns a partial ResourceState (resources +
-          // resourceSubscriptions) which Zustand merges into the full store.
-          const items: ResourceItem[] = event.resourceItems ?? []
-          set((state) =>
-            applyResourceSnapshot(
-              { resources: state.resources, resourceSubscriptions: state.resourceSubscriptions, readResourceIds: state.readResourceIds },
-              event.resourceKind,
-              event.resourceSubId,
-              items,
-            ),
-          )
-          break
-        }
-        case 'engine_resource_delta': {
-          // Resource delta: incremental update for this kind.
-          if (event.resourceDelta) {
-            const delta = event.resourceDelta
-            set((state) =>
-              applyResourceDelta(
-                { resources: state.resources, resourceSubscriptions: state.resourceSubscriptions, readResourceIds: state.readResourceIds },
-                event.resourceKind,
-                delta,
-              ),
-            )
-          }
-          break
-        }
-        case 'engine_notification': {
-          // Notification from extension ctx.notify(). The relay handles
-          // APNs push delivery — desktop logs for observability.
+        default: {
+          // Delegate remaining message-writing events to engine-event-slice-messages.ts.
+          // handleMessageEvents returns true when it consumed the event, false
+          // when the type is unknown (no-op default).
+          handleMessageEvents(set, _get, key, tabId, event)
           break
         }
       }

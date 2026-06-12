@@ -5,12 +5,12 @@ import type { StatusFields } from '../../shared/types'
 /**
  * Resolve the currently-active engine instance's `StatusFields` snapshot.
  *
- * Engine status lives in `engineStatusFields`, keyed by the compound
- * `${tabId}:${instanceId}` key. Every engine-only StatusBar slot
- * (state dot, extension name, model picker engine variant, context
- * bar, cost, "via CLI" badge per-instance) reads from this same
- * source — this helper centralizes the selector so the slots don't
- * each duplicate the active-tab + active-instance lookup.
+ * Engine status is carried on the instance object in `enginePanes`, on
+ * `instance.statusFields`. Every engine-only StatusBar slot (state dot,
+ * extension name, model picker engine variant, context bar, cost, "via CLI"
+ * badge per-instance) reads from this same source — this helper centralizes
+ * the selector so the slots don't each duplicate the active-tab +
+ * active-instance lookup.
  *
  * Returns `null` when the active tab is not an engine tab or has no
  * active instance. Callers gate their rendering on `isEngine && fields`.
@@ -26,8 +26,8 @@ export function useActiveEngineStatusFields(): StatusFields | null {
       const pane = s.enginePanes.get(s.activeTabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return null
-      const fields = s.engineStatusFields.get(`${s.activeTabId}:${instanceId}`)
-      return fields ?? null
+      const inst = pane.instances.find((i) => i.id === instanceId)
+      return inst?.statusFields ?? null
     }),
   )
 }
@@ -70,10 +70,10 @@ export function useActiveEngineAgentRunningCount(): number {
     const pane = s.enginePanes.get(s.activeTabId)
     const instanceId = pane?.activeInstanceId
     if (!instanceId) return 0
-    const agents = s.engineAgentStates.get(`${s.activeTabId}:${instanceId}`)
-    if (!agents) return 0
+    const inst = pane.instances.find((i) => i.id === instanceId)
+    if (!inst) return 0
     let count = 0
-    for (const a of agents) if (a.status === 'running') count++
+    for (const a of inst.agentStates) if (a.status === 'running') count++
     return count
   })
 }

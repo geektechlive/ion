@@ -50,7 +50,12 @@ export function ModelPicker() {
   // Engine-only state sources — null on conversation tabs.
   const engineStatus = useActiveEngineStatusFields()
   const engineKey = useActiveEngineKey()
-  const engineModelOverride = useSessionStore((s) => engineKey ? s.engineModelOverrides.get(engineKey.key) : undefined)
+  const engineModelOverride = useSessionStore((s) => {
+    if (!engineKey) return undefined
+    const pane = s.enginePanes.get(engineKey.tabId)
+    const inst = pane?.instances.find((i) => i.id === engineKey.instanceId)
+    return inst?.modelOverride ?? undefined
+  })
   const popoverLayer = usePopoverLayer()
   const colors = useColors()
   const [open, setOpen] = useState(false)

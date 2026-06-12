@@ -27,16 +27,21 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       const { activeTabId } = get()
       const activeTab = get().tabs.find((t) => t.id === activeTabId)
       if (activeTab?.isEngine) {
-        // Engine tabs: write to per-instance enginePermissionModes instead of
-        // the parent tab.permissionMode, which is shared by all siblings.
+        // Engine tabs: write permissionMode directly onto the active instance.
         const pane = get().enginePanes.get(activeTabId)
         const instanceId = pane?.activeInstanceId
         if (instanceId) {
           const compoundKey = `${activeTabId}:${instanceId}`
           set((s) => {
-            const modes = new Map(s.enginePermissionModes)
-            modes.set(compoundKey, mode)
-            return { enginePermissionModes: modes }
+            const enginePanes = new Map(s.enginePanes)
+            const paneInner = enginePanes.get(activeTabId)
+            if (!paneInner) return {}
+            const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
+            if (idx === -1) return {}
+            const instances = paneInner.instances.slice()
+            instances[idx] = { ...instances[idx], permissionMode: mode }
+            enginePanes.set(activeTabId, { ...paneInner, instances })
+            return { enginePanes }
           })
           window.ion.engineSetPlanMode(compoundKey, mode === 'plan')
         }
@@ -271,12 +276,11 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
           let orchestratorRunning = false
           const childCounts: Array<{ id: string; count: number }> = []
           for (const inst of pane.instances) {
-            const key = `${tabId}:${inst.id}`
-            const state = s.engineStatusFields?.get?.(key)?.state
+            const state = inst.statusFields?.state
             if (state === 'running' || state === 'connecting' || state === 'starting') {
               orchestratorRunning = true
             }
-            const agents = s.engineAgentStates?.get?.(key) || []
+            const agents = inst.agentStates || []
             const running = agents.filter((a: any) => a?.status === 'running').length
             childCounts.push({ id: inst.id, count: running })
           }
@@ -320,33 +324,19 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         set({ terminalPanes: panes })
       }
       if (closingTab?.isEngine) {
-        const engineAgentStates = new Map(get().engineAgentStates)
-        const engineStatusFields = new Map(get().engineStatusFields)
         const engineWorkingMessages = new Map(get().engineWorkingMessages)
         const engineNotifications = new Map(get().engineNotifications)
         const engineDialogs = new Map(get().engineDialogs)
         const enginePinnedPrompt = new Map(get().enginePinnedPrompt)
         const engineUsage = new Map(get().engineUsage)
-        const engineConversationIds = new Map(get().engineConversationIds)
-        const engineMessages = new Map(get().engineMessages)
-        const engineDraftInputs = new Map(get().engineDraftInputs)
-        const enginePermissionDenied = new Map(get().enginePermissionDenied)
-        const enginePermissionModes = new Map(get().enginePermissionModes)
         const enginePanes = new Map(get().enginePanes)
-        for (const k of engineAgentStates.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineAgentStates.delete(k)
-        for (const k of engineStatusFields.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineStatusFields.delete(k)
         for (const k of engineWorkingMessages.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineWorkingMessages.delete(k)
         for (const k of engineNotifications.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineNotifications.delete(k)
         for (const k of engineDialogs.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineDialogs.delete(k)
         for (const k of enginePinnedPrompt.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePinnedPrompt.delete(k)
         for (const k of engineUsage.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineUsage.delete(k)
-        for (const k of engineConversationIds.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineConversationIds.delete(k)
-        for (const k of engineMessages.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineMessages.delete(k)
-        for (const k of engineDraftInputs.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineDraftInputs.delete(k)
-        for (const k of enginePermissionDenied.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePermissionDenied.delete(k)
-        for (const k of enginePermissionModes.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) enginePermissionModes.delete(k)
         enginePanes.delete(tabId)
-        set({ engineAgentStates, engineStatusFields, engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, engineConversationIds, engineMessages, engineDraftInputs, enginePermissionDenied, enginePermissionModes, enginePanes })
+        set({ engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, enginePanes })
       }
       if (closingTab) {
         const dir = closingTab.workingDirectory

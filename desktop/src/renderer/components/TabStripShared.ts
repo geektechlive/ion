@@ -325,8 +325,7 @@ export function getWaitingState(tab: TabState): WaitingState {
     if (!pane || pane.instances.length === 0) return null
     let hasPlanReady = false
     for (const inst of pane.instances) {
-      const entry = s.enginePermissionDenied.get(`${tab.id}:${inst.id}`)
-      const ws = waitingStateFromTools(entry?.tools)
+      const ws = waitingStateFromTools(inst.permissionDenied?.tools)
       if (ws === 'question') return 'question'
       if (ws === 'plan-ready') hasPlanReady = true
     }
@@ -339,9 +338,10 @@ export function getWaitingState(tab: TabState): WaitingState {
  *  instance identified by its compound `${tabId}:${instanceId}` key.
  *  Used by the engine sub-tab pill renderer to draw a per-instance
  *  status dot. */
-export function getEngineInstanceWaitingState(key: string): WaitingState {
-  const entry = useSessionStore.getState().enginePermissionDenied.get(key)
-  return waitingStateFromTools(entry?.tools)
+export function getEngineInstanceWaitingState(tabId: string, instanceId: string): WaitingState {
+  const pane = useSessionStore.getState().enginePanes.get(tabId)
+  const inst = pane?.instances.find((i) => i.id === instanceId)
+  return waitingStateFromTools(inst?.permissionDenied?.tools)
 }
 
 /**
@@ -360,7 +360,7 @@ export function isAnyEngineInstanceRunning(tabId: string): boolean {
   const pane = s.enginePanes.get(tabId)
   if (!pane || pane.instances.length === 0) return false
   for (const inst of pane.instances) {
-    const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
+    const state = inst.statusFields?.state
     if (state === 'running' || state === 'connecting' || state === 'starting') return true
   }
   return false
@@ -385,9 +385,7 @@ export function anyEngineInstanceHasRunningChildren(tabId: string): boolean {
   const pane = s.enginePanes.get(tabId)
   if (!pane || pane.instances.length === 0) return false
   for (const inst of pane.instances) {
-    const agents = s.engineAgentStates.get(`${tabId}:${inst.id}`)
-    if (!agents) continue
-    for (const a of agents) {
+    for (const a of inst.agentStates) {
       if (a.status === 'running') return true
     }
   }

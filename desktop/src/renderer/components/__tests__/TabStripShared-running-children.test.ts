@@ -33,10 +33,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // Stub the store module before importing the helper. The helper reads
 // `useSessionStore.getState()` synchronously, so we just need a
 // settable mock to swap the world per test.
-const state: { enginePanes: Map<string, any>; engineAgentStates: Map<string, any[]>; engineStatusFields: Map<string, any> } = {
+const state: { enginePanes: Map<string, any> } = {
   enginePanes: new Map(),
-  engineAgentStates: new Map(),
-  engineStatusFields: new Map(),
 }
 
 vi.mock('../../stores/sessionStore', () => ({
@@ -63,22 +61,24 @@ import { anyEngineInstanceHasRunningChildren, isAnyEngineInstanceRunning } from 
 
 function resetState() {
   state.enginePanes = new Map()
-  state.engineAgentStates = new Map()
-  state.engineStatusFields = new Map()
 }
 
 function setPane(tabId: string, instanceIds: string[]) {
   state.enginePanes.set(tabId, {
-    instances: instanceIds.map((id) => ({ id, label: id })),
+    instances: instanceIds.map((id) => ({ id, label: id, agentStates: [], statusFields: null })),
     activeInstanceId: instanceIds[0] || null,
   })
 }
 
 function setAgents(tabId: string, instanceId: string, statuses: string[]) {
-  state.engineAgentStates.set(
-    `${tabId}:${instanceId}`,
-    statuses.map((status, i) => ({ name: `agent-${i}`, status, metadata: {} })),
-  )
+  const pane = state.enginePanes.get(tabId)
+  if (!pane) return
+  const idx = pane.instances.findIndex((i: any) => i.id === instanceId)
+  if (idx === -1) return
+  pane.instances[idx] = {
+    ...pane.instances[idx],
+    agentStates: statuses.map((status, i) => ({ name: `agent-${i}`, status, metadata: {} })),
+  }
 }
 
 describe('anyEngineInstanceHasRunningChildren', () => {
@@ -126,14 +126,11 @@ describe('anyEngineInstanceHasRunningChildren', () => {
   })
 
   it('is independent of orchestrator state (yellow vs. orange)', () => {
-    // The orchestrator is running AND a child is running. The helper
-    // only reports on children — the orange/yellow priority happens
-    // in the renderer cascade, not here. Both states being true on
-    // the same tab is the precondition for foreground orange to win
-    // at the renderer level.
     setPane('tab1', ['inst1'])
     setAgents('tab1', 'inst1', ['running'])
-    state.engineStatusFields.set('tab1:inst1', { state: 'running' })
+    // Set statusFields on the instance directly (no legacy Map)
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = { ...pane.instances[0], statusFields: { state: 'running' } }
     expect(anyEngineInstanceHasRunningChildren('tab1')).toBe(true)
     expect(isAnyEngineInstanceRunning('tab1')).toBe(true)
   })

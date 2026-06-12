@@ -17,9 +17,9 @@ import { useActiveEngineKey } from './StatusBarEngineHelpers'
  * either `tabs[i].permissionMode` or `enginePermissionModes[key]`.
  *
  * Read paths:
- * - **Engine tabs**: `enginePermissionModes[${tabId}:${activeInstance}]`
- *   (default 'auto' when no entry). Per-instance, since each engine
- *   sub-conversation can have its own permission mode.
+ * - **Engine tabs**: `instance.permissionMode` on the active instance in
+ *   `enginePanes` (default 'auto' when no instance). Per-instance, since each
+ *   engine sub-conversation can have its own permission mode.
  * - **Conversation tabs**: `tab.permissionMode` (default 'plan').
  *
  * Engine-only confirmation modal: on engine tabs, clicking the pill
@@ -38,7 +38,9 @@ export function PermissionModePicker() {
   const isEngine = engineKey != null
   const permissionMode = useSessionStore((s) => {
     if (engineKey) {
-      return s.enginePermissionModes.get(engineKey.key) ?? 'auto'
+      const pane = s.enginePanes.get(engineKey.tabId)
+      const inst = pane?.instances.find((i) => i.id === engineKey.instanceId)
+      return inst?.permissionMode ?? 'auto'
     }
     return s.tabs.find((t) => t.id === s.activeTabId)?.permissionMode ?? 'plan'
   })

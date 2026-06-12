@@ -55,14 +55,19 @@ export async function runHandleImplement(
   }
 
   // Switch to auto mode for this specific engine instance only.
-  // Update the per-instance enginePermissionModes map directly instead of
-  // calling setPermissionMode(), which operates on the active instance
-  // at call time (fine here, but making it explicit avoids any timing risk).
+  // Write permissionMode directly onto the instance in enginePanes.
   if (key) {
+    const [tabIdForKey, instanceId] = key.split(':')
     useSessionStore.setState((s) => {
-      const modes = new Map(s.enginePermissionModes)
-      modes.set(key, 'auto')
-      return { enginePermissionModes: modes }
+      const enginePanes = new Map(s.enginePanes)
+      const pane = enginePanes.get(tabIdForKey)
+      if (!pane) return {}
+      const idx = pane.instances.findIndex((i) => i.id === instanceId)
+      if (idx === -1) return {}
+      const instances = pane.instances.slice()
+      instances[idx] = { ...instances[idx], permissionMode: 'auto' }
+      enginePanes.set(tabIdForKey, { ...pane, instances })
+      return { enginePanes }
     })
     window.ion.engineSetPlanMode(key, false)
   }

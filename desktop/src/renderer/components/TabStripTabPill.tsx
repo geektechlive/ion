@@ -57,17 +57,12 @@ export function TabPill({
   const gitOpsMode = usePreferencesStore((s) => s.gitOpsMode)
   const tabGroupMode = usePreferencesStore((s) => s.tabGroupMode)
 
-  // Subscribe to engineStatusFields so this component re-renders when
-  // any engine instance's state changes (e.g. running → idle). Without
-  // this, isAnyEngineInstanceRunning reads stale getState() data. Only
-  // engine tabs need this subscription — CLI tabs never touch the map.
-  useSessionStore((s) => tab.isEngine ? s.engineStatusFields : null)
-  // Parallel subscription for engineAgentStates so the pill re-renders
-  // when child agents start/finish. Drives both the yellow "awaiting
-  // children" StatusDot and the hard-block on the X close button.
-  // Same pattern as the engineStatusFields subscription above — only
-  // engine tabs need it.
-  useSessionStore((s) => tab.isEngine ? s.engineAgentStates : null)
+  // Subscribe to enginePanes so this component re-renders when any engine
+  // instance's statusFields or agentStates changes. Both fields now live
+  // on the instance in enginePanes — the single subscription covers what
+  // previously required separate engineStatusFields + engineAgentStates
+  // subscriptions. Only engine tabs need this.
+  useSessionStore((s) => tab.isEngine ? s.enginePanes : null)
 
   const isRunning = tab.status === 'running' || tab.status === 'connecting'
   const displayTitle = tab.customTitle || tab.title

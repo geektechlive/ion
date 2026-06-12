@@ -1,5 +1,7 @@
 // ─── Engine Types (native Ion extension runtime) ───
 
+import type { Message } from './types-session'
+
 // ─── Resource subsystem types (D-007) ───
 
 export interface ResourceItem {
@@ -77,8 +79,42 @@ export interface EngineInstance {
   label: string     // "cos 1", "cos 2"
 }
 
+/**
+ * Per-conversation state for an engine instance.
+ *
+ * Engine instances are sub-conversations under a single engine tab. This
+ * interface collects the fields that belong to an individual conversation so
+ * they can travel with the instance rather than living in flat global Maps
+ * keyed by `${tabId}:${instanceId}`.
+ *
+ * All per-instance state lives here. The 8 parallel Maps that previously
+ * held this data (engineMessages, engineModelOverrides, etc.) were removed
+ * in #203. Event handlers, selectors, snapshot, and persistence all read
+ * from and write to these fields on the instance directly.
+ */
+export interface ConversationInstance {
+  /** Scrollback messages for this instance */
+  messages: Message[]
+  /** Model override in effect for this instance (null = use tab/profile default) */
+  modelOverride: string | null
+  /** Permission mode for this instance */
+  permissionMode: 'auto' | 'plan'
+  /** Pending permission-denied tools (null = no pending denial) */
+  permissionDenied: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null
+  /** Conversation IDs accumulated by this instance across sessions */
+  conversationIds: string[]
+  /** Draft input text for this instance's input bar */
+  draftInput: string
+  /** Latest agent-state snapshot from the engine */
+  agentStates: AgentStateUpdate[]
+  /** Latest status fields from the engine (null = none received yet) */
+  statusFields: StatusFields | null
+  /** Path to the active plan file (null = not in plan mode / no plan yet) */
+  planFilePath: string | null
+}
+
 export interface EnginePaneState {
-  instances: EngineInstance[]
+  instances: Array<EngineInstance & ConversationInstance>
   activeInstanceId: string | null
 }
 

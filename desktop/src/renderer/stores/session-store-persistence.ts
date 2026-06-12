@@ -50,21 +50,17 @@ function persistTabs(useSessionStore: Store): void {
           const hPane = enginePanes.get(t.id)
           if (!hPane || hPane.instances.length === 0) return {}
           const result: Record<string, any> = { engineInstances: hPane.instances }
-          const { engineMessages: eMsgs } = useSessionStore.getState()
           const msgs: Record<string, any[]> = {}
           for (const inst of hPane.instances) {
-            const k = `${t.id}:${inst.id}`
-            const arr = eMsgs.get(k)
+            const arr = inst.messages
             if (arr && arr.length > 0) {
               msgs[inst.id] = arr.map((m) => ({ role: m.role, content: m.content, toolName: m.toolName, toolId: m.toolId, toolInput: m.toolInput, toolStatus: m.toolStatus, timestamp: m.timestamp, ...(m.dedupKey ? { dedupKey: m.dedupKey } : {}), ...(m.planFilePath ? { planFilePath: m.planFilePath } : {}), ...(m.attachments && m.attachments.length > 0 ? { attachments: m.attachments } : {}) }))
             }
           }
           if (Object.keys(msgs).length > 0) result.engineMessages = msgs
-          const { engineAgentStates: eAgents } = useSessionStore.getState()
           const agentStates: Record<string, Array<{ name: string; id?: string; status: string; metadata?: Record<string, any> }>> = {}
           for (const inst of hPane.instances) {
-            const k = `${t.id}:${inst.id}`
-            const arr = eAgents.get(k)
+            const arr = inst.agentStates
             if (arr && arr.length > 0) {
               agentStates[inst.id] = arr.map((a) => ({
                 name: a.name,
@@ -75,17 +71,15 @@ function persistTabs(useSessionStore: Store): void {
             }
           }
           if (Object.keys(agentStates).length > 0) result.engineAgentStates = agentStates
-          const { engineDraftInputs: eDrafts } = useSessionStore.getState()
           const drafts: Record<string, string> = {}
           for (const inst of hPane.instances) {
-            const d = eDrafts.get(`${t.id}:${inst.id}`)
+            const d = inst.draftInput
             if (d && d.length > 0) drafts[inst.id] = d
           }
           if (Object.keys(drafts).length > 0) result.engineDrafts = drafts
-          const { enginePermissionDenied: eDenials } = useSessionStore.getState()
           const denials: Record<string, { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> }> = {}
           for (const inst of hPane.instances) {
-            const d = eDenials.get(`${t.id}:${inst.id}`)
+            const d = inst.permissionDenied
             if (d && d.tools && d.tools.length > 0) {
               denials[inst.id] = { tools: d.tools }
             }
@@ -98,10 +92,9 @@ function persistTabs(useSessionStore: Store): void {
           // is keyed by the compound `${tabId}:${instanceId}` and may
           // hold a chain of historical IDs — we serialize only the most
           // recent (last) ID per instance.
-          const { engineConversationIds: eConvs } = useSessionStore.getState()
           const sessionIds: Record<string, string> = {}
           for (const inst of hPane.instances) {
-            const chain = eConvs.get(`${t.id}:${inst.id}`)
+            const chain = inst.conversationIds
             if (chain && chain.length > 0) {
               sessionIds[inst.id] = chain[chain.length - 1]
             }
@@ -109,30 +102,21 @@ function persistTabs(useSessionStore: Store): void {
           if (Object.keys(sessionIds).length > 0) {
             result.engineSessionIds = sessionIds
           } else if (hPane.instances.length > 0) {
-            // Diagnostic: engine tab has instances but zero session IDs
-            // were resolved from the runtime map. This is the persisted
-            // shape of the bug the plan addresses — on the next restart
-            // `engineSessionIds` will be absent and every instance
-            // starts a brand new engine conversation. Log the runtime
-            // map's actual keys so we can see whether the source map
-            // is keyed differently than the lookup expects (e.g.
-            // `tabId` only vs. `${tabId}:${instanceId}`). This log is
-            // permanent per the repo logging policy.
-            const expectedKeys = hPane.instances.map((inst) => `${t.id}:${inst.id}`)
-            const actualKeys = [...eConvs.keys()].filter((k) => k.startsWith(`${t.id}`) || k === t.id)
-            console.log(`[persist] engineSessionIds empty for engine tab=${t.id.slice(0, 8)} instances=${hPane.instances.length} expectedKeys=${JSON.stringify(expectedKeys.map((k) => k.slice(0, 16)))} actualKeysUnderTab=${JSON.stringify(actualKeys.map((k) => k.slice(0, 16)))}`)
+            // Diagnostic: engine tab has instances but zero session IDs were
+            // resolved from the instance fields. This means conversationIds
+            // was not populated — on next restart these instances will start
+            // fresh engine conversations. Log instance IDs for investigation.
+            console.log(`[persist] engineSessionIds empty for engine tab=${t.id.slice(0, 8)} instances=${hPane.instances.length} instanceIds=${JSON.stringify(hPane.instances.map((i) => i.id.slice(0, 8)))}`)
           }
-          const { engineModelOverrides: eModels } = useSessionStore.getState()
           const modelOverrides: Record<string, string> = {}
           for (const inst of hPane.instances) {
-            const m = eModels.get(`${t.id}:${inst.id}`)
+            const m = inst.modelOverride
             if (m && m.length > 0) modelOverrides[inst.id] = m
           }
           if (Object.keys(modelOverrides).length > 0) result.engineModelOverrides = modelOverrides
-          const { enginePermissionModes: eModes } = useSessionStore.getState()
           const permModes: Record<string, 'auto' | 'plan'> = {}
           for (const inst of hPane.instances) {
-            const m = eModes.get(`${t.id}:${inst.id}`)
+            const m = inst.permissionMode
             if (m && m !== 'auto') permModes[inst.id] = m
           }
           if (Object.keys(permModes).length > 0) result.enginePermissionModes = permModes
@@ -240,19 +224,20 @@ function scanForStuckTabs(useSessionStore: Store): void {
 export function setupPersistence(useSessionStore: Store): void {
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   useSessionStore.subscribe((state, prev) => {
-    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.agentDetailGeometry !== prev.agentDetailGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes || state.engineDraftInputs !== prev.engineDraftInputs || state.enginePermissionDenied !== prev.enginePermissionDenied || state.engineModelOverrides !== prev.engineModelOverrides || state.enginePermissionModes !== prev.enginePermissionModes) {
+    if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.agentDetailGeometry !== prev.agentDetailGeometry || state.terminalPanes !== prev.terminalPanes || state.enginePanes !== prev.enginePanes) {
       // Flush immediately when permissionDenied changes on any tab — this
       // state must survive a crash or force-quit (e.g. the desktop is killed
       // while an engine run is in progress and the AskUserQuestion / ExitPlanMode
-      // denial is never written to the conversation file). This covers both:
+      // denial is never written to the conversation file). This covers:
       //   - CLI tabs: `tab.permissionDenied` changing on `state.tabs`.
-      //   - Engine tabs: `enginePermissionDenied` map identity change.
+      //   - Engine tabs: `enginePanes` Map identity change (instance.permissionDenied
+      //     is written on the instance, and enginePanes is replaced on every write).
       const permissionDeniedChanged =
         (state.tabs !== prev.tabs && state.tabs.some((t, i) => {
           const p = prev.tabs[i]
           return p && t.id === p.id && t.permissionDenied !== p.permissionDenied
         })) ||
-        state.enginePermissionDenied !== prev.enginePermissionDenied
+        state.enginePanes !== prev.enginePanes
 
       // Flush immediately when a CLI tab captures its first conversationId.
       // The engine event slice already does this for engine tabs via

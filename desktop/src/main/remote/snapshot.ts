@@ -26,18 +26,16 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                 break;
               }
             }
-            // For engine tabs, scan engineMessages for last user/assistant activity
-            if (t.isEngine && !lastTs && s.engineMessages && s.engineMessages.get) {
+            // For engine tabs, scan the active instance's messages field for last activity
+            if (t.isEngine && !lastTs) {
               var ep = s.enginePanes && s.enginePanes.get ? s.enginePanes.get(t.id) : null;
-              var instId = ep ? (ep.activeInstanceId || (ep.instances && ep.instances[0] && ep.instances[0].id)) : null;
-              var eKey = instId ? (t.id + ':' + instId) : null;
-              var eMsgs = eKey ? s.engineMessages.get(eKey) : null;
-              if (eMsgs) {
-                for (var j = eMsgs.length - 1; j >= 0; j--) {
-                  if (eMsgs[j].role === 'assistant' || eMsgs[j].role === 'user') {
-                    lastTs = eMsgs[j].timestamp || 0;
-                    break;
-                  }
+              var activeInstId = ep ? (ep.activeInstanceId || (ep.instances && ep.instances[0] && ep.instances[0].id)) : null;
+              var activeInst = activeInstId && ep ? ep.instances.find(function(i) { return i.id === activeInstId; }) : null;
+              var eMsgs = activeInst ? (activeInst.messages || []) : [];
+              for (var j = eMsgs.length - 1; j >= 0; j--) {
+                if (eMsgs[j].role === 'assistant' || eMsgs[j].role === 'user') {
+                  lastTs = eMsgs[j].timestamp || 0;
+                  break;
                 }
               }
             }
@@ -59,11 +57,12 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
             // state into the parent tab fields directly (separate from
             // queue promotion), do it here — not by piping waitingState
             // through to RemoteTabState top-level.
-            if (t.isEngine === true && s.enginePermissionDenied && s.enginePermissionDenied.get) {
+            if (t.isEngine === true) {
               var ePane = s.enginePanes && s.enginePanes.get ? s.enginePanes.get(t.id) : null;
-              var activeInst = ePane ? (ePane.activeInstanceId || (ePane.instances && ePane.instances[0] && ePane.instances[0].id)) : null;
-              if (activeInst) {
-                var pdEntry = s.enginePermissionDenied.get(t.id + ':' + activeInst);
+              var activeInstId2 = ePane ? (ePane.activeInstanceId || (ePane.instances && ePane.instances[0] && ePane.instances[0].id)) : null;
+              var activeInstObj = activeInstId2 && ePane ? ePane.instances.find(function(i) { return i.id === activeInstId2; }) : null;
+              if (activeInstObj) {
+                var pdEntry = activeInstObj.permissionDenied;
                 var pdTools = pdEntry && pdEntry.tools;
                 if (pdTools && pdTools.length > 0) {
                   for (var pdi = 0; pdi < pdTools.length; pdi++) {
@@ -116,31 +115,27 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               // 'plan-ready' (matches desktop's getWaitingState helper).
               engineInstances = ePaneForList.instances.map(function(inst) {
                 var ws = null;
-                if (s.enginePermissionDenied && s.enginePermissionDenied.get) {
-                  var pdEntry = s.enginePermissionDenied.get(t.id + ':' + inst.id);
-                  var pdTools = pdEntry && pdEntry.tools;
-                  if (pdTools && pdTools.length > 0) {
+                var pdEntry = inst.permissionDenied;
+                var pdTools = pdEntry && pdEntry.tools;
+                if (pdTools && pdTools.length > 0) {
                     var hasPlanReady = false;
                     for (var k = 0; k < pdTools.length; k++) {
                       if (pdTools[k].toolName === 'AskUserQuestion') { ws = 'question'; break; }
                       if (pdTools[k].toolName === 'ExitPlanMode') hasPlanReady = true;
                     }
                     if (ws === null && hasPlanReady) ws = 'plan-ready';
-                  }
                 }
                 // Per-instance running state so iOS EngineInstanceBar can
                 // show a pulsing dot on each running sub-tab. Parallels the
                 // waitingState derivation above.
                 var instRunning = false;
-                if (s.engineStatusFields && s.engineStatusFields.get) {
-                  var sf = s.engineStatusFields.get(t.id + ':' + inst.id);
-                  if (sf) {
-                    var st = sf.state;
-                    instRunning = st === 'running' || st === 'connecting' || st === 'starting';
-                  }
+                var sf = inst.statusFields;
+                if (sf) {
+                  var st = sf.state;
+                  instRunning = st === 'running' || st === 'connecting' || st === 'starting';
                 }
                 // Per-instance running-agent-count. Folds across the
-                // instance's engineAgentStates entry to expose "how many
+                // instance's agentStates field to expose "how many
                 // dispatched background agents are still running" to iOS.
                 // Drives the yellow "awaiting children" pulse on the iOS
                 // sub-tab pill and footer, mirroring the desktop's
@@ -150,12 +145,10 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                 // same data through the snapshot so the parity table row
                 // can be honored.
                 var instRunningAgents = 0;
-                if (s.engineAgentStates && s.engineAgentStates.get) {
-                  var ags = s.engineAgentStates.get(t.id + ':' + inst.id);
-                  if (ags && Array.isArray(ags)) {
-                    for (var ai = 0; ai < ags.length; ai++) {
-                      if (ags[ai] && ags[ai].status === 'running') instRunningAgents++;
-                    }
+                var ags = inst.agentStates;
+                if (ags && Array.isArray(ags)) {
+                  for (var ai = 0; ai < ags.length; ai++) {
+                    if (ags[ai] && ags[ai].status === 'running') instRunningAgents++;
                   }
                 }
                 // Per-instance model-fallback indicator. Projects the
@@ -206,8 +199,10 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               status: (t.isEngine && anyInstanceRunning && t.status !== 'running' && t.status !== 'connecting') ? 'running' : t.status,
               workingDirectory: t.workingDirectory,
               permissionMode: (function() {
-                if (t.isEngine && activeEngineInstanceId && s.enginePermissionModes && s.enginePermissionModes.get) {
-                  return s.enginePermissionModes.get(t.id + ':' + activeEngineInstanceId) || 'auto';
+                if (t.isEngine && ePaneForList) {
+                  var aId = activeEngineInstanceId;
+                  var aInst = aId ? ePaneForList.instances.find(function(i) { return i.id === aId; }) : null;
+                  return (aInst && aInst.permissionMode) || 'auto';
                 }
                 return t.permissionMode;
               })(),

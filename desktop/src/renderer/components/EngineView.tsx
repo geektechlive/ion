@@ -47,13 +47,13 @@ export function EngineView({ tabId }: EngineViewProps) {
   })
   const messages = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? (s.engineMessages.get(k) || EMPTY_MESSAGES) : EMPTY_MESSAGES
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.messages ?? EMPTY_MESSAGES
   })
   const agentStates = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? (s.engineAgentStates.get(k) || EMPTY_AGENTS) : EMPTY_AGENTS
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.agentStates ?? EMPTY_AGENTS
   })
   const workingMessage = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
@@ -61,18 +61,20 @@ export function EngineView({ tabId }: EngineViewProps) {
     return k ? (s.engineWorkingMessages.get(k) || '') : ''
   })
   const tabStatus = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.status)
-  // PermissionDenied is stored PER ENGINE INSTANCE in
-  // `enginePermissionDenied`, keyed by `${tabId}:${instanceId}`. Engine
-  // sub-tabs (instances) are independent sub-conversations, so storing
+  // PermissionDenied is stored PER ENGINE INSTANCE on `instance.permissionDenied`.
+  // Engine sub-tabs (instances) are independent sub-conversations, so storing
   // the denial on the parent tab would show the same card on every
   // sibling sub-tab. The card is scoped to whichever instance produced
   // it; switching to a sibling without a pending denial shows no card.
   //
   // Parent-tab pill bubbling: getWaitingState() in TabStripShared.ts
-  // folds across this map for engine tabs, so the strip pill still
-  // glows when any sub-tab is blocked. iOS receives the active
+  // folds across instances for engine tabs. iOS receives the active
   // instance's denial via the snapshot path (see main/remote/snapshot.ts).
-  const permissionDenied = useSessionStore(s => key ? (s.enginePermissionDenied.get(key) || null) : null)
+  const permissionDenied = useSessionStore(s => {
+    const p = s.enginePanes.get(tabId)
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.permissionDenied ?? null
+  })
   const tabPlanFilePath = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.planFilePath)
   const tabGroupPinned = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.groupPinned)
   const tabConversationId = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.conversationId)
@@ -83,8 +85,8 @@ export function EngineView({ tabId }: EngineViewProps) {
   const unifiedTurnView = usePreferencesStore(s => s.unifiedTurnView)
   const engineModelOverride = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? s.engineModelOverrides.get(k) : undefined
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.modelOverride ?? undefined
   })
   const isRunning = tabStatus === 'running' || tabStatus === 'connecting'
   // Promote `.some(...)` to a count so we can render
@@ -213,13 +215,19 @@ export function EngineView({ tabId }: EngineViewProps) {
   // need `resetTabSession` — the engine manages its own session
   // lifecycle; we just disable plan mode and submit a new prompt.
   const clearPermissionDenied = useCallback(() => {
-    if (!key) return
+    if (!key || !activeInstanceId) return
     useSessionStore.setState((s) => {
-      const next = new Map(s.enginePermissionDenied)
-      next.set(key, null)
-      return { enginePermissionDenied: next }
+      const pane = s.enginePanes.get(tabId)
+      if (!pane) return {}
+      const idx = pane.instances.findIndex((i) => i.id === activeInstanceId)
+      if (idx === -1) return {}
+      const updatedPanes = new Map(s.enginePanes)
+      const instances = pane.instances.slice()
+      instances[idx] = { ...instances[idx], permissionDenied: null }
+      updatedPanes.set(tabId, { ...pane, instances })
+      return { enginePanes: updatedPanes }
     })
-  }, [key])
+  }, [key, tabId, activeInstanceId])
 
   const handleAnswerDenial = useCallback((answer: string) => {
     console.log(`[EngineView] handleAnswerDenial: tab=${tabId.slice(0, 8)} key=${key} answerLen=${answer.length}`)

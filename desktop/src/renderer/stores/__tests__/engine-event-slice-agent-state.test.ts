@@ -8,9 +8,8 @@
  *
  * These tests pin that contract on the desktop renderer:
  *
- *   - Non-empty payload → state is replaced with payload.
- *   - Empty payload → state is replaced with empty array (no historical
- *     preservation; that was the bug we removed).
+ *   - Non-empty payload → instance.agentStates is replaced with payload.
+ *   - Empty payload → instance.agentStates is replaced with empty array.
  *   - The slice never invents entries that aren't in the engine's payload.
  */
 
@@ -26,23 +25,33 @@ import { createEngineEventSlice } from '../slices/engine-event-slice'
 import type { State } from '../session-store-types'
 import type { AgentStateUpdate } from '../../../shared/types-engine'
 
+function makeInstance(id: string, extra: Partial<any> = {}) {
+  return {
+    id,
+    label: id,
+    messages: [],
+    modelOverride: null,
+    permissionMode: 'auto',
+    permissionDenied: null,
+    conversationIds: [],
+    draftInput: '',
+    agentStates: [] as AgentStateUpdate[],
+    statusFields: null,
+    planFilePath: null,
+    ...extra,
+  }
+}
+
 function buildHarness() {
   const state: any = {
     tabs: [{ id: 'tab1', isEngine: true, lastEventAt: 0 }],
-    engineAgentStates: new Map<string, AgentStateUpdate[]>(),
-    engineStatusFields: new Map(),
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    engineMessages: new Map(),
-    engineDraftInputs: new Map(),
-    engineModelOverrides: new Map(),
-    engineConversationIds: new Map(),
-    enginePanes: new Map(),
-    enginePermissionDenied: new Map(),
-    enginePermissionModes: new Map(),
+    engineModelFallbacks: new Map(),
+    enginePanes: new Map([['tab1', { instances: [makeInstance('inst1')], activeInstanceId: 'inst1' }]]),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
@@ -53,8 +62,15 @@ function buildHarness() {
   return { state, slice }
 }
 
+/** Read agentStates from the instance in enginePanes. */
+function getAgentStates(state: any, tabId: string, instanceId: string): AgentStateUpdate[] | undefined {
+  const pane = state.enginePanes.get(tabId)
+  const inst = pane?.instances.find((i: any) => i.id === instanceId)
+  return inst?.agentStates
+}
+
 describe('engine_agent_state snapshot contract', () => {
-  it('replaces state with non-empty payload', () => {
+  it('replaces instance.agentStates with non-empty payload', () => {
     const { state, slice } = buildHarness()
     const key = 'tab1:inst1'
 
@@ -66,31 +82,30 @@ describe('engine_agent_state snapshot contract', () => {
       ],
     } as any)
 
-    const stored = state.engineAgentStates.get(key)
+    const stored = getAgentStates(state, 'tab1', 'inst1')
     expect(stored).toBeDefined()
     expect(stored).toHaveLength(2)
     expect(stored![0].name).toBe('a')
     expect(stored![1].status).toBe('done')
   })
 
-  it('replaces state with empty array — no historical preservation', () => {
+  it('replaces instance.agentStates with empty array — no historical preservation', () => {
     const { state, slice } = buildHarness()
     const key = 'tab1:inst1'
 
-    // Seed: pretend a sticky/done agent with conversationId was previously stored.
-    // Under the old (buggy) preservation rule this row would survive an empty
-    // emission. Under the corrected contract it must be wiped because the
-    // engine no longer endorses it.
-    state.engineAgentStates.set(key, [
-      { name: 'kept', status: 'done', metadata: { conversationId: 'conv-xyz', visibility: 'sticky' } },
-    ])
+    // Seed: pretend a sticky/done agent was previously stored on the instance.
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = {
+      ...pane.instances[0],
+      agentStates: [{ name: 'kept', status: 'done', metadata: { conversationId: 'conv-xyz', visibility: 'sticky' } }],
+    }
 
     slice.handleEngineEvent(key, {
       type: 'engine_agent_state',
       agents: [],
     } as any)
 
-    const stored = state.engineAgentStates.get(key)
+    const stored = getAgentStates(state, 'tab1', 'inst1')
     expect(stored).toBeDefined()
     expect(stored).toHaveLength(0)
   })
@@ -99,17 +114,21 @@ describe('engine_agent_state snapshot contract', () => {
     const { state, slice } = buildHarness()
     const key = 'tab1:inst1'
 
-    state.engineAgentStates.set(key, [
-      { name: 'old-1', status: 'done' },
-      { name: 'old-2', status: 'done' },
-    ])
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = {
+      ...pane.instances[0],
+      agentStates: [
+        { name: 'old-1', status: 'done' },
+        { name: 'old-2', status: 'done' },
+      ],
+    }
 
     slice.handleEngineEvent(key, {
       type: 'engine_agent_state',
       agents: [{ name: 'new', status: 'running' }],
     } as any)
 
-    const stored = state.engineAgentStates.get(key)
+    const stored = getAgentStates(state, 'tab1', 'inst1')
     expect(stored).toHaveLength(1)
     expect(stored![0].name).toBe('new')
   })
@@ -118,31 +137,35 @@ describe('engine_agent_state snapshot contract', () => {
     const { state, slice } = buildHarness()
     const key = 'tab1:inst1'
 
-    state.engineAgentStates.set(key, [{ name: 'old', status: 'done' }])
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = {
+      ...pane.instances[0],
+      agentStates: [{ name: 'old', status: 'done' }],
+    }
 
-    // event.agents undefined — should be treated as []
     slice.handleEngineEvent(key, { type: 'engine_agent_state' } as any)
 
-    const stored = state.engineAgentStates.get(key)
+    const stored = getAgentStates(state, 'tab1', 'inst1')
     expect(stored).toHaveLength(0)
   })
 
   it('ignores events when key has no instance component', () => {
     const { state, slice } = buildHarness()
+    const beforePanes = state.enginePanes
 
     slice.handleEngineEvent('tab1', {
       type: 'engine_agent_state',
       agents: [{ name: 'x', status: 'running' }],
     } as any)
 
-    // No colon in key → handler returns early.
-    expect(state.engineAgentStates.size).toBe(0)
+    // No colon in key → handler returns early, enginePanes unchanged.
+    expect(state.enginePanes).toBe(beforePanes)
   })
 
-  it('writes a new Map (no in-place mutation)', () => {
+  it('writes a new enginePanes Map (no in-place mutation)', () => {
     const { state, slice } = buildHarness()
     const key = 'tab1:inst1'
-    const before = state.engineAgentStates
+    const before = state.enginePanes
 
     slice.handleEngineEvent(key, {
       type: 'engine_agent_state',
@@ -150,6 +173,6 @@ describe('engine_agent_state snapshot contract', () => {
     } as any)
 
     // The slice should construct a new Map so React detects the change.
-    expect(state.engineAgentStates).not.toBe(before)
+    expect(state.enginePanes).not.toBe(before)
   })
 })

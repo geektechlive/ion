@@ -24,15 +24,16 @@ Don't kill the user's running dev server. If a restart is needed, tell the user.
 ```
 desktop/src/
   main/                    Electron main process
-    index.ts               (4500-line god file, decomposing in Phase 2)
-    ipc/                   per-feature IPC handlers (post-decomp)
+    index.ts               entry point (delegates to ipc/ handlers)
+    ipc/                   per-feature IPC handlers
     remote/                relay/LAN transport, pairing, crypto
     cli-compat/            CLI tool compatibility shims
     utils/                 atomicWrite, secretStore
   preload/                 contextBridge IPC surface
   renderer/                React app
-    App.tsx                root (1100 lines, Phase 2)
-    stores/sessionStore.ts (3500-line god file, Phase 3 → slices/)
+    App.tsx                root
+    stores/sessionStore.ts thin orchestrator (109 lines); logic lives in stores/slices/
+    stores/slices/         feature slices (engine, tabs, permissions, attachments, etc.)
     components/            UI (flat)
     hooks/                 React hooks
   shared/types.ts          cross-process types
@@ -42,7 +43,7 @@ desktop/src/
 
 - 600-line cap per `.ts`/`.tsx`. CI hard-fails above.
 - Co-locate tests as `Foo.test.tsx` next to `Foo.tsx`. Existing `__tests__/` migrates per phase.
-- Existing god files (`main/index.ts`, `stores/sessionStore.ts`, `TabStrip.tsx`, `GitPanel.tsx`, `App.tsx`) are allowlisted. Do not extend; extract new modules.
+- `TabStrip.tsx` and `GitPanel.tsx` are allowlisted god files. Do not extend; extract new modules.
 
 ## IPC
 
@@ -53,8 +54,9 @@ desktop/src/
 
 ## State
 
-- Zustand. Single store today, splitting into slices in Phase 3.
+- Zustand. Single store (`sessionStore.ts`) composed from feature slices in `stores/slices/`.
 - Cross-slice actions live at root; don't reach across slices.
+- Engine instance state lives in `enginePanes: Map<tabId, EnginePaneState>`. Each `EnginePaneState.instances` entry is an `EngineInstance & ConversationInstance` — all per-conversation fields (messages, modelOverride, permissionMode, permissionDenied, conversationIds, draftInput, agentStates, statusFields) live directly on the instance, not in separate top-level Maps.
 - User-state persistence (tabs, labels, settings) goes through `main/utils/atomicWrite.ts`. Never `writeFileSync` directly.
 
 ## Renderer conventions
