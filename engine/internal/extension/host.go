@@ -120,6 +120,17 @@ type Host struct {
 	lastExitCode   atomic.Int64 // negative sentinel = "no code"
 	lastExitSignal atomic.Pointer[string]
 
+	// exitDone is closed by captureExitStatus when cmd.Wait completes.
+	// The readLoop defer waits briefly on this channel before firing
+	// onDeath so the death handler can read actual exit codes.
+	exitDone chan struct{}
+
+	// stderrBuf captures the last N lines of subprocess stderr so they
+	// can be surfaced in engine_extension_died events. Written by the
+	// stderr reader goroutine, read by StderrTail.
+	stderrMu  sync.Mutex
+	stderrBuf []string
+
 	// Async-trigger plumbing: per-host asyncreg.Registry plus captured
 	// session key for resolving "which session does this fire belong
 	// to?". Stored as a *asyncHostState pointer so the zero-value Host
@@ -261,4 +272,27 @@ func (h *Host) SetOnCommandsChange(fn func()) {
 // extension is fully loaded.
 func (h *Host) Resources() []types.ResourceDeclaration {
 	return h.pendingInitResources
+}
+
+// stderrBufMax is the maximum number of stderr lines retained per host.
+const stderrBufMax = 50
+
+// StderrTail returns a copy of the last N stderr lines from the subprocess.
+func (h *Host) StderrTail() []string {
+	h.stderrMu.Lock()
+	defer h.stderrMu.Unlock()
+	out := make([]string, len(h.stderrBuf))
+	copy(out, h.stderrBuf)
+	return out
+}
+
+// appendStderr adds a line to the stderr ring buffer, evicting the oldest
+// line when the buffer is full.
+func (h *Host) appendStderr(line string) {
+	h.stderrMu.Lock()
+	defer h.stderrMu.Unlock()
+	if len(h.stderrBuf) >= stderrBufMax {
+		h.stderrBuf = h.stderrBuf[1:]
+	}
+	h.stderrBuf = append(h.stderrBuf, line)
 }

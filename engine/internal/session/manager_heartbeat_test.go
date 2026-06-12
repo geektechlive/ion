@@ -280,3 +280,50 @@ func TestSetHeartbeatInterval_RestoresDefaultOnZero(t *testing.T) {
 		t.Errorf("expected interval to revert to default on negative, got %v", got)
 	}
 }
+
+// TestHeartbeat_EmitsAgentStateForEverySession verifies that each heartbeat
+// tick emits engine_agent_state alongside engine_status.  This is the
+// passive convergence mechanism for agent state — if a reconnecting
+// client missed the one-shot reconcile, its agent panel converges
+// within one heartbeat interval.
+func TestHeartbeat_EmitsAgentStateForEverySession(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	defer mgr.Shutdown()
+	mgr.SetHeartbeatInterval(50 * time.Millisecond)
+
+	_, _ = mgr.StartSession("hb-agent-a", defaultConfig())
+	_, _ = mgr.StartSession("hb-agent-b", defaultConfig())
+
+	var mu sync.Mutex
+	agentEvents := make(map[string]int)
+	mgr.OnEvent(func(key string, ev types.EngineEvent) {
+		if ev.Type == "engine_agent_state" {
+			mu.Lock()
+			agentEvents[key]++
+			mu.Unlock()
+		}
+	})
+
+	// Wait for at least two ticks.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		aCount := agentEvents["hb-agent-a"]
+		bCount := agentEvents["hb-agent-b"]
+		mu.Unlock()
+		if aCount >= 2 && bCount >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if agentEvents["hb-agent-a"] < 2 {
+		t.Errorf("expected at least 2 agent_state heartbeat emissions for hb-agent-a, got %d", agentEvents["hb-agent-a"])
+	}
+	if agentEvents["hb-agent-b"] < 2 {
+		t.Errorf("expected at least 2 agent_state heartbeat emissions for hb-agent-b, got %d", agentEvents["hb-agent-b"])
+	}
+}

@@ -88,9 +88,16 @@ func (m *Manager) runStatusHeartbeat() {
 }
 
 // emitHeartbeatTick iterates every attached session and emits a fresh
-// engine_status snapshot for each. Internal helper exported only for
-// the unit test that exercises one tick directly without waiting on
-// the timer.
+// engine_status and engine_agent_state snapshot for each.  Internal
+// helper exported only for the unit test that exercises one tick
+// directly without waiting on the timer.
+//
+// engine_status has been part of the heartbeat since Phase 2.
+// engine_agent_state was added because there is no other periodic
+// convergence mechanism for agent state — if a reconnecting client
+// misses the one-shot reconcile_state, its agent panel is stranded
+// until the next organic emission (which may never come for an idle
+// session).  Emitting agent state on every tick closes that gap.
 //
 // Each emission flows through the same computation site as
 // ReconcileState (currentSessionStatus) so a stranded requestID is
@@ -111,6 +118,19 @@ func (m *Manager) emitHeartbeatTick() {
 
 	for _, key := range keys {
 		m.emitStatusSnapshot(key, "heartbeat")
+
+		// Re-emit agent state so a reconnected client converges within
+		// one tick even if reconcile_state was lost.
+		m.mu.RLock()
+		var agentSnapshot []types.AgentStateUpdate
+		if s, ok := m.sessions[key]; ok {
+			agentSnapshot = s.agents.MergedSnapshot()
+		}
+		m.mu.RUnlock()
+		m.emit(key, types.EngineEvent{
+			Type:   "engine_agent_state",
+			Agents: agentSnapshot,
+		})
 	}
 }
 

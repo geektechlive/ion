@@ -47,6 +47,7 @@ func (m *Manager) handleHostDeath(key string, h *extension.Host) {
 		ExtensionName: h.Name(),
 		ExitCode:      exitCode,
 		Signal:        &signal,
+		StderrTail:    h.StderrTail(),
 	})
 
 	// Emit a corrective agent_state snapshot. The dead extension's cached
@@ -137,6 +138,7 @@ func (m *Manager) respawnDeadExtensions(key string) {
 					Type:          "engine_extension_dead_permanent",
 					ExtensionName: h.Name(),
 					AttemptNumber: attempt,
+					StderrTail:    h.StderrTail(),
 				})
 				continue
 			}

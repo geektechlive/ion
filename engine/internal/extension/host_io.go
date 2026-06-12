@@ -290,6 +290,17 @@ func (h *Host) readLoop(stdout *bufio.Scanner) {
 			go h.captureExitStatus()
 		}
 
+		// Give captureExitStatus a short window to reap the process so
+		// the onDeath handler can read actual exit codes instead of the
+		// sentinel values. 500 ms is generous for a process that is
+		// already dead; if the OS is slow we proceed anyway.
+		if h.exitDone != nil {
+			select {
+			case <-h.exitDone:
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+
 		// Notify the session manager so it can schedule a respawn after
 		// the active run finishes. Run in its own goroutine so the
 		// callback can take its time without blocking shutdown paths.
@@ -353,6 +364,11 @@ func (h *Host) readLoop(stdout *bufio.Scanner) {
 		} else {
 			utils.Log("extension", fmt.Sprintf("unexpected response id=%d (no pending call)", resp.ID))
 		}
+	}
+	// Log scanner errors explicitly so buffer overflows and I/O failures
+	// are never silently swallowed as "subprocess died".
+	if err := stdout.Err(); err != nil {
+		utils.Error("extension", fmt.Sprintf("stdout scanner error (ext=%s): %v", h.name, err))
 	}
 }
 
