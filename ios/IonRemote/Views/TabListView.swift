@@ -7,6 +7,7 @@ struct TabListView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var showSettings = false
+    @State private var showNotifications = false
     @State private var showNewTab = false
     // When the new-tab sheet was opened from a group header's `+` button,
     // this holds the target group's id so we can stamp `pinToGroupId` on
@@ -44,6 +45,9 @@ struct TabListView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showNotifications) {
+            NotificationsView(resourceStore: viewModel.resourceStore)
         }
         .onAppear {
             // Always refresh git info for every tab dir on appear — covers
@@ -128,10 +132,15 @@ struct TabListView: View {
                 .navigationTitle("")
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
+                        HStack(spacing: IonTheme.sm) {
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Image(systemName: "gearshape")
+                            }
+                            NotificationsBellButton(resourceStore: viewModel.resourceStore) {
+                                showNotifications = true
+                            }
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -193,6 +202,9 @@ struct TabListView: View {
                                 Image(systemName: "gearshape")
                             }
                             ConnectionQualityView(compact: true)
+                            NotificationsBellButton(resourceStore: viewModel.resourceStore) {
+                                showNotifications = true
+                            }
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {

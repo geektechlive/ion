@@ -119,6 +119,10 @@ final class SessionViewModel {
 
     // MARK: - State
 
+    /// Workspace-level resource accumulator (D-007). Populated by
+    /// engineResourceSnapshot and engineResourceDelta events.
+    let resourceStore = ResourceStore()
+
     var tabs: [RemoteTabState] = []
     var tabIds: Set<String> = []
     var liveText: [String: String] = [:]
