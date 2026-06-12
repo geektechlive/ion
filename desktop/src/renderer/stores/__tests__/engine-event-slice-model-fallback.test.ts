@@ -6,7 +6,7 @@
  * fell back to the configured `defaultModel`. The desktop renderer's
  * policy (one possible consumer choice — see CLAUDE.md § "The
  * typed-event corollary") is to display a ⚠ glyph on the affected
- * EngineStatusBar instance pill until the next idle transition.
+ * EngineTabStrip pill until the next idle transition.
  *
  * This test pins:
  *

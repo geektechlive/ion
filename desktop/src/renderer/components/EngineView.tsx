@@ -5,9 +5,8 @@ import { usePreferencesStore } from '../preferences'
 import { useColors } from '../theme'
 import { runHandleImplement } from './EngineView-implement'
 import { EngineDialog } from './EngineDialog'
-import { EngineStatusBar } from './EngineStatusBar'
+import { EngineTabStrip } from './EngineTabStrip'
 import { AgentPanel } from './AgentPanel'
-import { EngineFooter } from './EngineFooter'
 import { PermissionDeniedCard } from './PermissionDeniedCard'
 import { ArrowDown } from '@phosphor-icons/react'
 import {
@@ -55,11 +54,6 @@ export function EngineView({ tabId }: EngineViewProps) {
     const p = s.enginePanes.get(tabId)
     const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
     return k ? (s.engineAgentStates.get(k) || EMPTY_AGENTS) : EMPTY_AGENTS
-  })
-  const statusFields = useSessionStore(s => {
-    const p = s.enginePanes.get(tabId)
-    const k = p?.activeInstanceId ? `${tabId}:${p.activeInstanceId}` : ''
-    return k ? (s.engineStatusFields.get(k) || null) : null
   })
   const workingMessage = useSessionStore(s => {
     const p = s.enginePanes.get(tabId)
@@ -268,7 +262,11 @@ export function EngineView({ tabId }: EngineViewProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-      <EngineStatusBar tabId={tabId} />
+      {/* Top-of-view engine sub-tab strip. Lists this engine tab's
+          instances (sub-conversations) as draggable pills. Mirrors the
+          terminal panel's `TerminalTabStrip` at the same position.
+          iOS counterpart: `EngineInstanceBar.swift`. */}
+      <EngineTabStrip tabId={tabId} />
 
       {/* Pinned prompt header */}
       {pinnedPrompt && (
@@ -485,15 +483,9 @@ export function EngineView({ tabId }: EngineViewProps) {
         />
       </div>
 
-      {/* Status footer */}
-      <EngineFooter
-        status={statusFields ?? null}
-        isTall={isTall}
-        onToggleTall={() => toggleTallView(tabId)}
-        activeTabId={tabId}
-        engineModelOverride={engineModelOverride}
-        agentRunningCount={runningChildCount}
-      />
+      {/* Engine status bar removed — its controls have been absorbed
+          into the single unified `StatusBar` mounted at the app root.
+          See `App.tsx`. */}
 
       {/* Notification toasts */}
       <AnimatePresence>

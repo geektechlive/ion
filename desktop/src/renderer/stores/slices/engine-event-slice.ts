@@ -535,7 +535,7 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           // The engine fell back to its configured defaultModel because
           // the requested model didn't resolve to a provider. This
           // client's policy: show a small ⚠ glyph on the affected
-          // engine instance pill via the EngineStatusBar. The fact is
+          // engine instance pill via EngineTabStrip. The fact is
           // stored per-instance (compound key) and cleared on the next
           // engine_status state=idle for that same instance (see the
           // `state === 'idle'` branch in engine-event-status.ts).

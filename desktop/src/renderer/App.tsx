@@ -281,16 +281,17 @@ export default function App() {
                   <ConversationErrorBoundary>
                     <ConversationView />
                   </ConversationErrorBoundary>
-                  <StatusBar />
                 </div>
               </motion.div>
             )}
-            {/* StatusBar must always mount so useGitRepo subscribes for terminal-only/tall/engine tabs */}
-            {(isTerminalOnly || isTerminalTall || isEngine) && (
-              <div style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden', pointerEvents: 'none' }}>
-                <StatusBar />
-              </div>
-            )}
+            {/* Unified status bar. Single instance, always rendered at
+                the bottom of the active tab body regardless of tab
+                type (conversation, engine, terminal-only, terminal-tall).
+                Every state read inside StatusBar derives from
+                `s.activeTabId` so one mount serves them all — no need
+                for per-branch mounts or a hidden zero-size mount to
+                keep useGitRepo subscribed. */}
+            <StatusBar />
             </>)}
           </motion.div>
 

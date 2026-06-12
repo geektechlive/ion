@@ -144,7 +144,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                 // dispatched background agents are still running" to iOS.
                 // Drives the yellow "awaiting children" pulse on the iOS
                 // sub-tab pill and footer, mirroring the desktop's
-                // agentCountByInstance derivation in EngineStatusBar.
+                // agentCountByInstance derivation in EngineTabStrip.
                 // Per CLAUDE.md § "Common parity surfaces" — when the
                 // desktop renders a per-instance signal, iOS must see the
                 // same data through the snapshot so the parity table row

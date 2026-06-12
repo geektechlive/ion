@@ -69,7 +69,7 @@ export interface State {
    * runloop swapped to the engine's configured `defaultModel`.
    *
    * This client's policy: display a small ⚠ glyph on the affected
-   * EngineStatusBar pill with a tooltip naming the requested and
+   * EngineTabStrip pill with a tooltip naming the requested and
    * fallback models. Clear on the next `task_complete` for that
    * instance (no wall-clock timer — clients don't invent retention
    * rules per `docs/architecture/agent-state.md`).

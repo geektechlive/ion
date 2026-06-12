@@ -9,6 +9,7 @@ import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { PlanViewer } from './PlanViewer'
 import { ImageViewer } from './ImageViewer'
+import { parseAttachmentsFromMessages, type MsgLike } from './StatusBarAttachmentsParser'
 
 /* ─── Extension sets for icon picking ─── */
 
@@ -26,63 +27,6 @@ interface ParsedAttachment {
   kind: 'image' | 'file' | 'plan'
   name: string
   path: string
-}
-
-const ATTACHMENT_LINE_RE = /^\[Attached (image|file|plan): ([^\]]+)\]$/
-
-interface MsgLike {
-  role: string
-  content: string
-  attachments?: Array<{ type: string; name: string; path: string }> | undefined
-}
-
-function parseAttachmentsFromMessages(
-  messages: MsgLike[],
-  planFilePath: string | null,
-): ParsedAttachment[] {
-  const seen = new Set<string>()
-  const result: ParsedAttachment[] = []
-
-  const add = (a: ParsedAttachment) => {
-    if (seen.has(a.path)) return
-    seen.add(a.path)
-    result.push(a)
-  }
-
-  for (const msg of messages) {
-    if (msg.role !== 'user') continue
-
-    // 1. Structured attachments (available for in-session messages)
-    if (msg.attachments) {
-      for (const a of msg.attachments) {
-        const kind = (a.type === 'image' || a.type === 'plan') ? a.type : 'file' as const
-        add({ kind, name: a.name, path: a.path })
-      }
-    }
-
-    // 2. Content markers (available for historical/reloaded messages from JSONL).
-    //    The send-slice places markers as a contiguous block at the very start of
-    //    the message content, one per line, followed by a blank line. We only scan
-    //    leading lines to avoid false positives from example text in plan documents
-    //    or user prose that happens to match the marker format.
-    const lines = msg.content.split('\n')
-    for (const line of lines) {
-      const m = ATTACHMENT_LINE_RE.exec(line)
-      if (!m) break // stop at first non-marker line
-      const kind = m[1] as 'image' | 'file' | 'plan'
-      const path = m[2]
-      const name = path.includes('/') ? path.split('/').pop()! : path
-      add({ kind, name, path })
-    }
-  }
-
-  // Also include the current in-progress plan if any
-  if (planFilePath) {
-    const name = planFilePath.includes('/') ? planFilePath.split('/').pop()! : planFilePath
-    add({ kind: 'plan', name, path: planFilePath })
-  }
-
-  return result
 }
 
 function extOf(name: string): string {
@@ -113,8 +57,33 @@ export function AttachmentsButton() {
   const { messages, planFilePath, activeTabId, workingDir } = useSessionStore(
     useShallow((s) => {
       const tab = s.tabs.find((t) => t.id === s.activeTabId)
+      // Source messages from the right place per tab type:
+      //  - Conversation tabs: `tab.messages`, the per-tab message
+      //    array maintained by event-slice.
+      //  - Engine tabs: `engineMessages[${tabId}:${activeInstanceId}]`,
+      //    the per-instance message map maintained by
+      //    engine-event-slice. Engine tabs leave `tab.messages` empty,
+      //    so reading it would surface an empty attachments panel
+      //    (the bug we're fixing).
+      let msgs: MsgLike[] = tab?.messages ?? []
+      if (tab?.isEngine) {
+        const pane = s.enginePanes.get(s.activeTabId)
+        const instanceId = pane?.activeInstanceId
+        if (instanceId) {
+          msgs = (s.engineMessages.get(`${s.activeTabId}:${instanceId}`) || []) as MsgLike[]
+        } else {
+          msgs = []
+        }
+      }
       return {
-        messages: tab?.messages ?? [],
+        messages: msgs,
+        // `tab.planFilePath` is only populated by the conversation
+        // `plan_proposal` event path. Engine tabs surface their
+        // current plan through the system divider message (parsed
+        // inside `parseAttachmentsFromMessages`) or through a
+        // `Write`/`Edit` tool call against `**/plans/*.md` (also
+        // parsed inside). Either way, pass `tab.planFilePath` through
+        // as a sentinel so explicit conversation-tab flows still work.
         planFilePath: tab?.planFilePath ?? null,
         activeTabId: s.activeTabId,
         workingDir: tab?.workingDirectory ?? '~',

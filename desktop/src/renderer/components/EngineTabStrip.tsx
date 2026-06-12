@@ -13,7 +13,31 @@ interface Props {
   tabId: string
 }
 
-export function EngineStatusBar({ tabId }: Props) {
+/**
+ * Engine sub-tab strip — top-of-view tab strip listing the active tab's
+ * engine instances (sub-conversations) as draggable pills.
+ *
+ * This is a TAB STRIP, not a status bar. It owns its own outer 28px-high
+ * container slab (border-bottom, container-bg) because it lives at the
+ * top of `EngineView` above the conversation area, mirroring the
+ * positioning of `TerminalTabStrip` at the top of `TerminalPanel` and
+ * the main app `TabStrip` at the top of the window.
+ *
+ * iOS counterpart: `EngineInstanceBar.swift` (same role, same data).
+ *
+ * Behavior:
+ * - Drag-to-reorder via framer-motion `Reorder.Group`
+ * - Double-click to rename
+ * - Per-instance status dot (waiting=`question`/`plan-ready` steady glow,
+ *   `running` pulse, otherwise nothing)
+ * - Model-fallback ⚠ with tooltip showing requested vs. fallback model
+ * - Right-click → "Move to" context menu listing sibling engine tabs
+ * - Close (✕) opens the centered confirmation dialog before destroying
+ *   the instance (and possibly the parent tab if it's the last instance)
+ * - Auto-scroll-into-view when the active instance changes
+ * - Trailing `+` button adds a new engine instance to this tab
+ */
+export function EngineTabStrip({ tabId }: Props) {
   const colors = useColors()
   const pane = useSessionStore((s) => s.enginePanes.get(tabId))
   const instances = pane?.instances || []
@@ -37,26 +61,6 @@ export function EngineStatusBar({ tabId }: Props) {
       for (const inst of pane?.instances || []) {
         const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
         if (state) out.set(inst.id, state)
-      }
-      return out
-    }),
-  )
-  // Per-instance running-agent count. Mirrors `engineStateByInstance`
-  // above but reads `engineAgentStates` so the sub-tab pill can show
-  // the yellow "awaiting children" dot when the orchestrator is idle
-  // but dispatched background agents are still executing. useShallow
-  // keeps render cost low — only the {id, count} pairs that actually
-  // change trigger a re-render. See `agentRunningCount` in
-  // `getRemoteTabStates` (snapshot.ts) for the iOS-side counterpart.
-  const agentCountByInstance = useSessionStore(
-    useShallow((s) => {
-      const out = new Map<string, number>()
-      for (const inst of pane?.instances || []) {
-        const agents = s.engineAgentStates.get(`${tabId}:${inst.id}`)
-        if (!agents) continue
-        let n = 0
-        for (const a of agents) if (a.status === 'running') n++
-        if (n > 0) out.set(inst.id, n)
       }
       return out
     }),
@@ -150,35 +154,20 @@ export function EngineStatusBar({ tabId }: Props) {
     const engineState = engineStateByInstance.get(inst.id)
     const isRunningState =
       engineState === 'running' || engineState === 'starting' || engineState === 'connecting'
-    // Per-instance "awaiting children" — orchestrator idle but
-    // dispatched background agents still executing. Sits below
-    // isRunningState in the priority cascade so foreground orange
-    // beats background yellow. See EngineFooter / TabStripStatusDot
-    // for the matching cascade on other surfaces.
-    const runningAgentCount = agentCountByInstance.get(inst.id) ?? 0
-    const hasRunningAgents = runningAgentCount > 0
     const dotColor =
       waitingState === 'question' ? colors.infoText :
         waitingState === 'plan-ready' ? colors.statusComplete :
           isRunningState ? colors.statusRunning :
-            hasRunningAgents ? colors.statusWaitingChildren :
-              null
+            null
     const dotGlow =
       waitingState === 'question' ? colors.tabGlowQuestion :
         waitingState === 'plan-ready' ? colors.tabGlowPlanReady :
-          (hasRunningAgents && !isRunningState) ? colors.statusWaitingChildrenGlow :
-            null
-    // Pulse the dot for live "running" / "awaiting children" — the
-    // user-waiting dots use the steady glow established by
-    // TabStripStatusDot to distinguish "the engine is doing work"
-    // from "the engine is waiting on you".
-    const dotPulse = !waitingState && (isRunningState || hasRunningAgents)
-    // Tooltip when the dot represents background-only activity, so
-    // hovering a sub-tab pill discloses the count without the user
-    // having to expand the agent panel.
-    const dotTooltip = (!waitingState && !isRunningState && hasRunningAgents)
-      ? `${runningAgentCount} background agent${runningAgentCount === 1 ? '' : 's'} running`
-      : undefined
+          null
+    // Pulse the dot only for the live "running" indicator — the waiting
+    // dots use the steady glow established by TabStripStatusDot to
+    // distinguish "the engine is doing work" from "the engine is
+    // waiting on you".
+    const dotPulse = !waitingState && isRunningState
     return (
       <Reorder.Item
         key={inst.id}
@@ -211,7 +200,6 @@ export function EngineStatusBar({ tabId }: Props) {
         {dotColor && (
           <span
             className={`flex-shrink-0 ${dotPulse ? 'animate-pulse-dot' : ''}`}
-            title={dotTooltip}
             style={{
               width: 6,
               height: 6,
@@ -301,6 +289,12 @@ export function EngineStatusBar({ tabId }: Props) {
 
   return (
     <>
+      {/* Top-of-view tab strip slab. Mirrors `TerminalTabStrip` and the
+          main app `TabStrip`: fixed 28px height, container-bg fill, a
+          subtle bottom border to separate the strip from the
+          conversation area below. The inner Reorder.Group is
+          horizontally scrollable with a fade mask on the right edge so
+          a tab with many engine instances stays usable. */}
       <div
         data-ion-ui
         style={{
@@ -315,48 +309,48 @@ export function EngineStatusBar({ tabId }: Props) {
         }}
       >
         <div style={{ position: 'relative', minWidth: 0, flex: 1 }}>
-          <Reorder.Group
-            as="div"
-            axis="x"
-            values={instances}
-            onReorder={(reordered) => useSessionStore.getState().reorderEngineInstances(tabId, reordered)}
-            ref={scrollRef}
-            onWheel={onWheel}
+        <Reorder.Group
+          as="div"
+          axis="x"
+          values={instances}
+          onReorder={(reordered) => useSessionStore.getState().reorderEngineInstances(tabId, reordered)}
+          ref={scrollRef}
+          onWheel={onWheel}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            overflowX: 'auto',
+            minWidth: 0,
+            scrollbarWidth: 'none',
+            maskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
+            listStyle: 'none',
+            padding: 0,
+            margin: 0,
+          }}
+        >
+          {instances.map(renderTab)}
+          {/* Add instance button */}
+          <button
+            data-ion-ui
+            onClick={() => useSessionStore.getState().addEngineInstance(tabId)}
+            title="New engine instance"
             style={{
+              background: 'none',
+              border: 'none',
+              padding: '2px 4px',
+              cursor: 'pointer',
+              color: colors.textTertiary,
               display: 'flex',
               alignItems: 'center',
-              gap: 2,
-              overflowX: 'auto',
-              minWidth: 0,
-              scrollbarWidth: 'none',
-              maskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
-              WebkitMaskImage: 'linear-gradient(to right, black 0%, black calc(100% - 24px), transparent 100%)',
-              listStyle: 'none',
-              padding: 0,
-              margin: 0,
+              borderRadius: 4,
+              flexShrink: 0,
             }}
           >
-            {instances.map(renderTab)}
-            {/* Add instance button */}
-            <button
-              data-ion-ui
-              onClick={() => useSessionStore.getState().addEngineInstance(tabId)}
-              title="New engine instance"
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: '2px 4px',
-                cursor: 'pointer',
-                color: colors.textTertiary,
-                display: 'flex',
-                alignItems: 'center',
-                borderRadius: 4,
-                flexShrink: 0,
-              }}
-            >
-              <Plus size={12} />
-            </button>
-          </Reorder.Group>
+            <Plus size={12} />
+          </button>
+        </Reorder.Group>
         </div>
       </div>
       {/* Context menu: Move to another engine tab */}
