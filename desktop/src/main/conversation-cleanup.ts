@@ -1,0 +1,285 @@
+import { existsSync, readFileSync } from 'fs'
+import { engineBridge } from './state'
+import { log as _log } from './logger'
+
+function log(msg: string): void { _log('cleanup', msg) }
+
+// DRY_RUN is intentionally `true` for the first deploy cycle of this collector.
+//
+// Flipping to `false` requires verifying the dry-run output against a manual
+// count of stale conversations and confirming all open-tab conversationIds
+// appear in the engine's debug-level "skipped due to exclude" log. See
+// docs/plans/grassy-chirping-crest.md "Layer 4 — Keep dryRun=true for one
+// more deploy cycle" for the cross-check procedure. The flip lives in a
+// separate follow-up commit referencing the tracking issue.
+const DRY_RUN = true
+
+const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
+const MIN_STARTUP_DELAY_MS = 5 * 60 * 1000  // Boot gate: wait at least 5 min after main process start.
+const MAX_STARTUP_DELAY_MS = 30 * 60 * 1000 // Hard upper bound: never delay the first run past 30 min.
+const BOOT_GATE_POLL_MS = 30 * 1000         // Re-check the boot-gate condition every 30s after the min delay.
+
+/**
+ * Files the cleanup job must read to collect the protected conversationId set.
+ *
+ * tabsFiles — every `tabs-{backend}.json` (both api and cli). Each tab
+ *   contributes up to five distinct conversation IDs: `conversationId`,
+ *   `lastKnownSessionId`, `historicalSessionIds[]`, `engineSessionIds{}`
+ *   values, and `engineInstances[].conversationIds[]`. Missing any source
+ *   would risk deleting a conversation that backs a visible tab.
+ *
+ * chainsFiles — every `session-chains-{backend}.json`. Each file is a
+ *   `{ chains: { rootId: [contIds...] }, reverse: { contId: rootId } }`
+ *   object. Every key and value in both maps is a load-bearing ID: the
+ *   chain records every conversationId a tab has ever resumed, even cold
+ *   tabs and tabs not touched since the most recent engine restart.
+ *
+ * labelsFiles — every `session-labels-{backend}.json`. Each file is a flat
+ *   `{ conversationId: "user label" }` object. Every key is a labeled
+ *   conversation that the user has explicitly named and therefore values.
+ */
+export interface CleanupSources {
+  tabsFiles: string[]
+  chainsFiles: string[]
+  labelsFiles: string[]
+}
+
+/**
+ * Read every cleanup source file and union the contained conversation IDs.
+ *
+ * Logging requirements (see docs/plans/grassy-chirping-crest.md, Layer 2):
+ * every run must log a structured per-source breakdown so we can diagnose
+ * future regressions in the collector. The breakdown is printed regardless
+ * of outcome — including when sources contribute zero IDs.
+ *
+ * Safety contract: if the collection produces zero IDs and the inputs are
+ * non-empty (i.e. files exist on disk), the caller MUST treat the result
+ * as a collection failure and abort the cleanup run. The previous version
+ * silently sent `excludeIds=[]` to the engine, which under a future
+ * `DRY_RUN=false` would have deleted up to 51 tab-referenced conversations.
+ * See the `aborted=zero-ids-with-files-present` branch in `runCleanup`.
+ */
+export function collectProtectedIds(sources: CleanupSources): {
+  ids: string[]
+  breakdown: {
+    tabs: { file: string; tabCount: number; idsContributed: number }[]
+    chains: { file: string; idsContributed: number }[]
+    labels: { file: string; idsContributed: number }[]
+    filesPresent: number
+  }
+} {
+  const ids = new Set<string>()
+  const breakdown = {
+    tabs: [] as { file: string; tabCount: number; idsContributed: number }[],
+    chains: [] as { file: string; idsContributed: number }[],
+    labels: [] as { file: string; idsContributed: number }[],
+    filesPresent: 0,
+  }
+
+  for (const file of sources.tabsFiles) {
+    if (!file || !existsSync(file)) continue
+    breakdown.filesPresent++
+    const before = ids.size
+    let tabCount = 0
+    try {
+      const raw = JSON.parse(readFileSync(file, 'utf-8'))
+      const tabs: any[] = Array.isArray(raw) ? raw : raw.tabs || []
+      tabCount = tabs.length
+      for (const tab of tabs) {
+        if (typeof tab?.conversationId === 'string' && tab.conversationId) ids.add(tab.conversationId)
+        if (typeof tab?.lastKnownSessionId === 'string' && tab.lastKnownSessionId) ids.add(tab.lastKnownSessionId)
+        if (Array.isArray(tab?.historicalSessionIds)) {
+          for (const id of tab.historicalSessionIds) {
+            if (typeof id === 'string' && id) ids.add(id)
+          }
+        }
+        if (tab?.engineSessionIds && typeof tab.engineSessionIds === 'object') {
+          for (const id of Object.values(tab.engineSessionIds)) {
+            if (typeof id === 'string' && id) ids.add(id)
+          }
+        }
+        if (Array.isArray(tab?.engineInstances)) {
+          for (const inst of tab.engineInstances) {
+            if (Array.isArray(inst?.conversationIds)) {
+              for (const id of inst.conversationIds) {
+                if (typeof id === 'string' && id) ids.add(id)
+              }
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      log(`collect: failed to parse ${file}: ${err.message}`)
+    }
+    breakdown.tabs.push({ file, tabCount, idsContributed: ids.size - before })
+  }
+
+  for (const file of sources.chainsFiles) {
+    if (!file || !existsSync(file)) continue
+    breakdown.filesPresent++
+    const before = ids.size
+    try {
+      const raw = JSON.parse(readFileSync(file, 'utf-8'))
+      if (raw && typeof raw === 'object') {
+        if (raw.chains && typeof raw.chains === 'object') {
+          for (const [rootId, continuations] of Object.entries(raw.chains)) {
+            if (typeof rootId === 'string' && rootId) ids.add(rootId)
+            if (Array.isArray(continuations)) {
+              for (const id of continuations) {
+                if (typeof id === 'string' && id) ids.add(id)
+              }
+            }
+          }
+        }
+        if (raw.reverse && typeof raw.reverse === 'object') {
+          for (const [contId, rootId] of Object.entries(raw.reverse)) {
+            if (typeof contId === 'string' && contId) ids.add(contId)
+            if (typeof rootId === 'string' && rootId) ids.add(rootId)
+          }
+        }
+      }
+    } catch (err: any) {
+      log(`collect: failed to parse ${file}: ${err.message}`)
+    }
+    breakdown.chains.push({ file, idsContributed: ids.size - before })
+  }
+
+  for (const file of sources.labelsFiles) {
+    if (!file || !existsSync(file)) continue
+    breakdown.filesPresent++
+    const before = ids.size
+    try {
+      const raw = JSON.parse(readFileSync(file, 'utf-8'))
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        for (const id of Object.keys(raw)) {
+          if (typeof id === 'string' && id) ids.add(id)
+        }
+      }
+    } catch (err: any) {
+      log(`collect: failed to parse ${file}: ${err.message}`)
+    }
+    breakdown.labels.push({ file, idsContributed: ids.size - before })
+  }
+
+  return { ids: Array.from(ids), breakdown }
+}
+
+function formatBreakdown(b: ReturnType<typeof collectProtectedIds>['breakdown']): string {
+  const tabsStr = b.tabs.map((t) => `${t.file.split('/').pop()}(tabs=${t.tabCount},ids=${t.idsContributed})`).join(',')
+  const chainsStr = b.chains.map((c) => `${c.file.split('/').pop()}(ids=${c.idsContributed})`).join(',')
+  const labelsStr = b.labels.map((l) => `${l.file.split('/').pop()}(ids=${l.idsContributed})`).join(',')
+  return `filesPresent=${b.filesPresent} tabs=[${tabsStr}] chains=[${chainsStr}] labels=[${labelsStr}]`
+}
+
+async function runCleanup(sources: CleanupSources): Promise<void> {
+  try {
+    const { ids: excludeIds, breakdown } = collectProtectedIds(sources)
+
+    // Defense-in-depth safety check (see Layer 2 in the plan):
+    // if any input files exist on disk but the collector returned zero IDs,
+    // something is wrong (corrupted JSON, schema drift, file emptied mid-read).
+    // Aborting is strictly safer than letting the cleanup proceed with no
+    // desktop-side excludes.
+    //
+    // Note: the engine's Layer-1 guard (LoadDesktopProtectedIDs) reads the
+    // same chains/labels files independently, so even on abort here the
+    // engine will still refuse to delete tab-referenced conversations.
+    // This abort is the last belt on top of the suspenders.
+    if (excludeIds.length === 0 && breakdown.filesPresent > 0) {
+      log(`aborted: zero IDs collected despite ${breakdown.filesPresent} source file(s) present. ${formatBreakdown(breakdown)}`)
+      log('aborted: cleanup will NOT run this cycle. Investigate before next interval.')
+      return
+    }
+
+    log(`starting excludeIds=${excludeIds.length} dryRun=${DRY_RUN} ${formatBreakdown(breakdown)}`)
+    await engineBridge.connect()
+    const result = await engineBridge._sendWithData<{ deleted: number }>({
+      cmd: 'delete_stored_sessions',
+      maxAgeDays: 14,
+      excludeIds,
+      dryRun: DRY_RUN,
+    })
+    if (result.ok) {
+      const count = result.data?.deleted ?? 0
+      log(DRY_RUN ? `dry-run: would delete ${count} stale conversations` : `deleted ${count} stale conversations`)
+    } else {
+      log(`engine error: ${result.error}`)
+    }
+  } catch (err: any) {
+    log(`failed: ${err.message}`)
+  }
+}
+
+/**
+ * Boot gate (Layer 3 in docs/plans/grassy-chirping-crest.md): the first
+ * cleanup run waits for both conditions:
+ *
+ *  1. At least MIN_STARTUP_DELAY_MS has elapsed since process start (5 min).
+ *     Gives the renderer time to hydrate tabs from disk, the engine time
+ *     to load session histories, and the persistence layer time to write
+ *     the first SAVE_TABS snapshot.
+ *
+ *  2. The engine has at least one active session (`activeSessions.size > 0`).
+ *     Indicates the user has interacted with the app at least once since
+ *     startup. Avoids running cleanup on a freshly-launched app where the
+ *     desktop's collector might race against initial state hydration.
+ *
+ * If condition 2 stays false for MAX_STARTUP_DELAY_MS (30 min) — i.e. the
+ * user opened the app but never sent a prompt — the cleanup runs anyway.
+ * In that case the engine's Layer-1 guard (LoadDesktopProtectedIDs) is the
+ * load-bearing protection: it reads the desktop's persisted chains/labels
+ * files directly and is independent of in-process session state.
+ *
+ * After the first run, subsequent runs use the CLEANUP_INTERVAL_MS ticker
+ * with no further boot-gate checks (the boot-time race is long over by
+ * then).
+ */
+function scheduleFirstRun(sources: CleanupSources): void {
+  const startTime = Date.now()
+  const minDeadline = startTime + MIN_STARTUP_DELAY_MS
+  const maxDeadline = startTime + MAX_STARTUP_DELAY_MS
+
+  const tryRun = () => {
+    const now = Date.now()
+    const elapsedMs = now - startTime
+    const activeSessionCount = engineBridge.activeSessions.size
+
+    if (now < minDeadline) {
+      // Below the 5-minute floor: keep waiting.
+      const remainingMs = minDeadline - now
+      log(`boot-gate: waiting for min delay (${Math.ceil(remainingMs / 1000)}s remaining)`)
+      setTimeout(tryRun, Math.min(remainingMs, BOOT_GATE_POLL_MS))
+      return
+    }
+
+    if (activeSessionCount > 0 || now >= maxDeadline) {
+      const trigger = activeSessionCount > 0 ? `sessions=${activeSessionCount}` : 'max-uptime-reached'
+      log(`boot-gate: triggering first run (elapsed=${Math.round(elapsedMs / 1000)}s trigger=${trigger})`)
+      void runCleanup(sources)
+      return
+    }
+
+    // Past the min delay but still no active sessions and below max deadline:
+    // poll every 30s.
+    log(`boot-gate: waiting for first active session (elapsed=${Math.round(elapsedMs / 1000)}s sessions=0)`)
+    setTimeout(tryRun, BOOT_GATE_POLL_MS)
+  }
+
+  setTimeout(tryRun, MIN_STARTUP_DELAY_MS)
+}
+
+/**
+ * Wire up the periodic conversation cleanup.
+ *
+ * `sources` is an explicit list of files the collector reads; passing them
+ * from the caller (rather than re-deriving inside the closure) eliminates
+ * the lazy `require('./settings-store')` failure mode that caused the
+ * desktop to send `excludeIds=[]` on its first invocation. See
+ * docs/plans/grassy-chirping-crest.md Layer 2 for the post-mortem.
+ */
+export function startConversationCleanup(sources: CleanupSources): void {
+  scheduleFirstRun(sources)
+  setInterval(() => void runCleanup(sources), CLEANUP_INTERVAL_MS)
+  log(`scheduled (min startup delay ${Math.round(MIN_STARTUP_DELAY_MS / 60000)}min, max ${Math.round(MAX_STARTUP_DELAY_MS / 60000)}min, interval 24h, dryRun=${DRY_RUN})`)
+  log(`sources: tabs=${sources.tabsFiles.length} chains=${sources.chainsFiles.length} labels=${sources.labelsFiles.length}`)
+}

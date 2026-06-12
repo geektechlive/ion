@@ -65,6 +65,12 @@ export interface IonAPI {
   loadOtherBackendTabs(): Promise<Array<{ conversationId: string; title: string; customTitle: string | null; workingDirectory: string; permissionMode: string }>>
   migrateTabs(conversationIds: string[], targetBackend: 'api' | 'cli'): Promise<{ backupPaths: string[]; migrated: Array<{ conversationId: string; newConversationId: string; title: string }>; failed: Array<{ conversationId: string; title: string; error: string }> }>
 
+  // ─── Conversation backup (export/restore zip archives) ───
+  conversationExportPreview(scope: 'currently-open' | 'all'): Promise<{ ok: boolean; error?: string; conversationCount?: number; totalUncompressedBytes?: number; estimatedCompressedBytes?: number }>
+  conversationExport(args: { scope: 'currently-open' | 'all'; destinationPath?: string }): Promise<{ ok: boolean; error?: string; destinationPath?: string; conversationCount?: number; bytesWritten?: number }>
+  conversationRestorePreview(args?: { sourcePath?: string }): Promise<{ ok: boolean; error?: string; sourcePath?: string; manifest?: { version: number; createdAt: string; createdBy: string; ionVersion: string; scope: 'currently-open' | 'all'; conversationCount: number; backendSnapshot: 'api' | 'cli'; hostname: string } }>
+  conversationRestore(args: { sourcePath: string; conflictPolicy?: 'skip' | 'overwrite' | 'rename'; restoreTabs?: boolean }): Promise<{ ok: boolean; error?: string; restored: number; skipped: number; overwritten: number; renamed: number; errors: string[] }>
+  onConversationBackupProgress(callback: (data: { current: number; total: number; label: string }) => void): () => void
   // ─── Git operations ───
   gitIsRepo(directory: string): Promise<{ isRepo: boolean }>
   gitGraph(directory: string, skip?: number, limit?: number, search?: string, author?: string, extra?: { path?: string; refKind?: string; dateAfter?: string; dateBefore?: string }): Promise<GitGraphData>
@@ -286,6 +292,17 @@ const api: IonAPI = {
   switchBackend: (backend) => ipcRenderer.invoke(IPC.SWITCH_BACKEND, backend),
   loadOtherBackendTabs: () => ipcRenderer.invoke(IPC.LOAD_OTHER_BACKEND_TABS),
   migrateTabs: (conversationIds, targetBackend) => ipcRenderer.invoke(IPC.MIGRATE_TABS, { conversationIds, targetBackend }),
+
+  // ─── Conversation backup ───
+  conversationExportPreview: (scope) => ipcRenderer.invoke(IPC.CONVERSATION_EXPORT_PREVIEW, { scope }),
+  conversationExport: (args) => ipcRenderer.invoke(IPC.CONVERSATION_EXPORT, args),
+  conversationRestorePreview: (args) => ipcRenderer.invoke(IPC.CONVERSATION_RESTORE_PREVIEW, args ?? {}),
+  conversationRestore: (args) => ipcRenderer.invoke(IPC.CONVERSATION_RESTORE, args),
+  onConversationBackupProgress: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, data: { current: number; total: number; label: string }) => callback(data)
+    ipcRenderer.on(IPC.CONVERSATION_BACKUP_PROGRESS, handler)
+    return () => ipcRenderer.removeListener(IPC.CONVERSATION_BACKUP_PROGRESS, handler)
+  },
 
   // ─── Git operations ───
   gitIsRepo: (directory) => ipcRenderer.invoke(IPC.GIT_IS_REPO, directory),

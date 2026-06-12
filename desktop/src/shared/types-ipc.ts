@@ -78,6 +78,13 @@ export const IPC = {
   LOAD_TABS: 'ion:load-tabs',
   SAVE_TABS: 'ion:save-tabs',
 
+  // Conversation backup (user-driven export/restore zip archives)
+  CONVERSATION_EXPORT_PREVIEW: 'ion:conversation-export-preview',
+  CONVERSATION_EXPORT: 'ion:conversation-export',
+  CONVERSATION_RESTORE_PREVIEW: 'ion:conversation-restore-preview',
+  CONVERSATION_RESTORE: 'ion:conversation-restore',
+  CONVERSATION_BACKUP_PROGRESS: 'ion:conversation-backup-progress',
+
   // Session labels
   SAVE_SESSION_LABEL: 'ion:save-session-label',
   LOAD_SESSION_LABELS: 'ion:load-session-labels',
