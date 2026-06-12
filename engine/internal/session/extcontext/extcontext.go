@@ -89,6 +89,10 @@ type SessionAccessor interface {
 	// the engine's emit pipeline so the relay can forward it with push flags.
 	BroadcastNotification(opts types.NotifyOpts)
 
+	// BroadcastIntercept routes an intercept signal from an extension through
+	// the engine's emit pipeline to the target session's event stream.
+	BroadcastIntercept(opts extension.InterceptOpts)
+
 	// ListAllSessions returns info about all active sessions in the engine.
 	ListAllSessions() []extension.SessionListEntry
 
@@ -274,6 +278,14 @@ func NewExtContext(sa SessionAccessor, registries ...*DispatchRegistry) *extensi
 			return fmt.Errorf("notification title is required")
 		}
 		sa.BroadcastNotification(opts)
+		return nil
+	}
+
+	ctx.Intercept = func(opts extension.InterceptOpts) error {
+		if opts.Title == "" {
+			return fmt.Errorf("intercept title is required")
+		}
+		sa.BroadcastIntercept(opts)
 		return nil
 	}
 

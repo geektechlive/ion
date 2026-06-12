@@ -206,6 +206,41 @@ func (h *Host) handleNotify(id int64, raw []byte) {
 	h.sendResponse(id, json.RawMessage(`{"ok":true}`), nil)
 }
 
+// handleIntercept handles ext/intercept: an extension calls ctx.intercept() and
+// the engine routes the engine_intercept event to the target session's stream.
+// The host's extension name is attached as InterceptSource before forwarding so
+// extensions cannot spoof it.
+func (h *Host) handleIntercept(id int64, raw []byte) {
+	var req struct {
+		Params InterceptOpts `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		utils.Log("extension", fmt.Sprintf("ext/intercept: parse error: %v", err))
+		h.sendResponse(id, nil, &jsonrpcError{Code: -32602, Message: "parse error: " + err.Error()})
+		return
+	}
+
+	// Stamp the extension name as the source. Extensions cannot set this
+	// field via RPC because InterceptOpts.Source carries json:"-".
+	req.Params.Source = h.name
+
+	ctx := h.ctxStack.Current()
+	if ctx == nil || ctx.Intercept == nil {
+		utils.Debug("extension", "ext/intercept: no ctx or Intercept not wired")
+		h.sendResponse(id, nil, &jsonrpcError{Code: -32603, Message: "intercept subsystem not available"})
+		return
+	}
+
+	if err := ctx.Intercept(req.Params); err != nil {
+		utils.Log("extension", fmt.Sprintf("ext/intercept: ext=%s err=%v", h.name, err))
+		h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
+		return
+	}
+
+	utils.Debug("extension", fmt.Sprintf("ext/intercept: ext=%s level=%s title=%q target=%s", h.name, req.Params.Level, req.Params.Title, req.Params.TargetSessionKey))
+	h.sendResponse(id, json.RawMessage(`{"ok":true}`), nil)
+}
+
 // handleListSessions handles ext/list_sessions.
 func (h *Host) handleListSessions(id int64, raw []byte) {
 	ctx := h.ctxStack.Current()

@@ -59,7 +59,8 @@ func (a *agentDiscoveryTestAccessor) UpdateAgentStateByID(_ string, _ func(*type
 func (a *agentDiscoveryTestAccessor) EmitAgentSnapshot(_ string) {}
 func (a *agentDiscoveryTestAccessor) ResourceBroker() *resource.Broker       { return nil }
 func (a *agentDiscoveryTestAccessor) GlobalResourceBroker() *resource.Broker { return nil }
-func (a *agentDiscoveryTestAccessor) BroadcastNotification(_ types.NotifyOpts)       {}
+func (a *agentDiscoveryTestAccessor) BroadcastNotification(_ types.NotifyOpts)        {}
+func (a *agentDiscoveryTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)    {}
 func (a *agentDiscoveryTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
 func (a *agentDiscoveryTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil

@@ -710,6 +710,9 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 	case "ext/notify":
 		h.handleNotify(id, raw)
 
+	case "ext/intercept":
+		h.handleIntercept(id, raw)
+
 	case "ext/list_sessions":
 		h.handleListSessions(id, raw)
 

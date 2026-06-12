@@ -371,4 +371,18 @@ type EngineEvent struct {
 	NotifyBody       string `json:"notifyBody,omitempty"`
 	NotifySound      string `json:"notifySound,omitempty"`
 	NotifyScope      string `json:"notifyScope,omitempty"`
+
+	// --- engine_intercept ---
+	//
+	// Fire-and-forget signal event emitted when an extension calls ctx.Intercept.
+	// The engine attaches no semantics beyond routing the event to the target
+	// session's stream. Clients decide how to render and whether to act on the
+	// Level hint ("banner" = informational, "redirect" = urgent). There is no
+	// "current intercept state" to query — the engine emits it exactly once per
+	// ctx.Intercept() call and moves on.
+	InterceptLevel    string                 `json:"interceptLevel,omitempty"`
+	InterceptTitle    string                 `json:"interceptTitle,omitempty"`
+	InterceptMessage  string                 `json:"interceptMessage,omitempty"`
+	InterceptSource   string                 `json:"interceptSource,omitempty"` // extension name, set by engine
+	InterceptMetadata map[string]interface{} `json:"interceptMetadata,omitempty"`
 }

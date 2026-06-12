@@ -76,7 +76,8 @@ func (a *llmCallTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.Agent
 func (a *llmCallTestAccessor) EmitAgentSnapshot(_ string) {}
 func (a *llmCallTestAccessor) ResourceBroker() *resource.Broker       { return nil }
 func (a *llmCallTestAccessor) GlobalResourceBroker() *resource.Broker { return nil }
-func (a *llmCallTestAccessor) BroadcastNotification(_ types.NotifyOpts)       {}
+func (a *llmCallTestAccessor) BroadcastNotification(_ types.NotifyOpts)        {}
+func (a *llmCallTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)    {}
 func (a *llmCallTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
 func (a *llmCallTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil

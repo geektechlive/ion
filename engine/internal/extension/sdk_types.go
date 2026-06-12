@@ -201,6 +201,14 @@ type Context struct {
 	// the full content.
 	Notify func(opts types.NotifyOpts) error
 
+	// Intercept emits an engine_intercept event on the target session's stream.
+	// The engine performs no routing beyond delivering the event; clients decide
+	// how to render and whether to act on the Level hint. This is a
+	// fire-and-forget signal — the engine does not track intercept state.
+	// The extension's name is attached as InterceptSource by the engine;
+	// extensions cannot set it themselves.
+	Intercept func(opts InterceptOpts) error
+
 	// ListSessions returns info about all active sessions in the engine.
 	// Extensions use this to discover other sessions of the same extension
 	// type for cross-session notification targeting. The engine returns
@@ -222,6 +230,37 @@ type SessionListEntry struct {
 	HasActiveRun   bool   `json:"hasActiveRun"`
 	ExtensionName  string `json:"extensionName,omitempty"`
 	ConversationID string `json:"conversationId,omitempty"`
+}
+
+// InterceptOpts configures an engine_intercept signal event. The engine
+// routes the event to the target session (or the caller's session when
+// TargetSessionKey is empty) and attaches no further semantics. Clients
+// decide how to render and whether to act on the Level hint.
+type InterceptOpts struct {
+	// Level is a client hint about severity:
+	//   "banner"   — informational, non-disruptive
+	//   "redirect" — urgent, client may abort + re-prompt
+	// The engine does not validate or branch on this value.
+	Level string `json:"level"`
+
+	// Title is a short headline. Required.
+	Title string `json:"title"`
+
+	// Message is the body content. For "redirect" level, clients may use
+	// this as the injected user prompt if they choose to redirect.
+	Message string `json:"message"`
+
+	// TargetSessionKey identifies which session receives the event.
+	// When empty, the event emits on the caller's own session.
+	TargetSessionKey string `json:"targetSessionKey,omitempty"`
+
+	// Metadata is an opaque map forwarded to clients unchanged.
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+
+	// Source is set by the engine from the host's extension name before
+	// the event is emitted. Extensions cannot set this field directly;
+	// the json:"-" tag ensures it is never deserialized from extension RPC.
+	Source string `json:"-"`
 }
 
 // DispatchAgentOpts configures an engine-native agent dispatch.
