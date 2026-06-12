@@ -13,6 +13,73 @@ import {
 
 export { getRendererExtensionCommands } from './engine-event-slice-helpers'
 
+// ---------------------------------------------------------------------------
+// Delta accumulator for batched text delta updates.
+// Instead of updating the Zustand store on every engine_text_delta (50-200/sec),
+// we accumulate deltas here and flush to the store at ~60fps via requestAnimationFrame.
+// This reduces store updates from 200/sec to ~60/sec, cutting GC pressure by ~70%.
+// ---------------------------------------------------------------------------
+const pendingDeltas = new Map<string, string>()
+let deltaFlushScheduled = false
+let deltaFlushSet: StoreSet | null = null
+// Track which tabIds received text deltas since the last RAF flush.
+// lastEventAt is updated for these tabs inside flushPendingDeltas()
+// instead of on every raw delta — coalescing 200 set() calls/sec into 1.
+const tabsWithEvents = new Set<string>()
+
+function flushPendingDeltas(): void {
+  deltaFlushScheduled = false
+  if (!deltaFlushSet) return
+
+  // Flush accumulated text deltas into the store.
+  if (pendingDeltas.size > 0) {
+    const batch = new Map(pendingDeltas)
+    pendingDeltas.clear()
+    deltaFlushSet((state) => {
+      let enginePanes = state.enginePanes
+      for (const [batchKey, text] of batch) {
+        const [tabIdInner, instanceId] = batchKey.split(':')
+        const pane = enginePanes.get(tabIdInner)
+        const inst = pane?.instances.find((i) => i.id === instanceId)
+        const msgs = [...(inst?.messages || [])]
+        const last = msgs[msgs.length - 1]
+        if (last && last.role === 'assistant' && !last.sealed) {
+          msgs[msgs.length - 1] = { ...last, content: last.content + text }
+        } else {
+          msgs.push({ id: nextMsgId(), role: 'assistant', content: text, timestamp: Date.now() })
+        }
+        enginePanes = withInstanceMessages(enginePanes, batchKey, msgs)
+      }
+      return { enginePanes }
+    })
+  }
+
+  // Flush batched lastEventAt for tabs that received text deltas.
+  // This coalesces 50-200 tabs.map() calls/sec into 1 per animation frame,
+  // preventing the persistence subscriber from re-serializing the entire
+  // tabs file on every raw delta.
+  if (tabsWithEvents.size > 0) {
+    const touchedTabs = new Set(tabsWithEvents)
+    tabsWithEvents.clear()
+    deltaFlushSet((s) => ({
+      tabs: s.tabs.map((t) => touchedTabs.has(t.id) ? { ...t, lastEventAt: Date.now() } : t),
+    }))
+  }
+}
+
+/** Flush any buffered text deltas synchronously. Useful for cleanup / testing. */
+export function flushEngineTextDeltas(): void {
+  flushPendingDeltas()
+}
+
+/** Remove pending delta state for a closed tab to prevent memory leaks. */
+export function cleanupTabDeltas(tabId: string): void {
+  for (const key of pendingDeltas.keys()) {
+    if (key.startsWith(`${tabId}:`)) pendingDeltas.delete(key)
+  }
+  tabsWithEvents.delete(tabId)
+}
+
 export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<State> {
   return {
     handleEngineEvent: (key, event) => {
@@ -25,9 +92,6 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
       if (!key.includes(':')) return
 
       const tabId = key.split(':')[0]
-      set((s) => ({
-        tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, lastEventAt: Date.now() } : t)),
-      }))
       switch (event.type) {
         case 'engine_agent_state': {
           // Engine contract: `engine_agent_state` is a COMPLETE SNAPSHOT
@@ -161,44 +225,43 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_text_delta': {
-          set((state) => {
-            const [tabIdInner, instanceId] = key.split(':')
-            const pane = state.enginePanes.get(tabIdInner)
-            const inst = pane?.instances.find((i) => i.id === instanceId)
-            const msgs = [...(inst?.messages || [])]
-            const last = msgs[msgs.length - 1]
-            if (last && last.role === 'assistant' && !last.sealed) {
-              msgs[msgs.length - 1] = { ...last, content: last.content + event.text }
-            } else {
-              msgs.push({ id: nextMsgId(), role: 'assistant', content: event.text, timestamp: Date.now() })
-            }
-            // Phase 4 of the state-management overhaul. We previously
-            // inferred `tab.status = 'running'` from text-delta arrival
-            // (gated on the active sub-instance). That inference was
-            // wrong on two counts:
-            //
-            //   1. CLAUDE.md "The typed-event corollary" — engine_status
-            //      is the engine's typed signal for state. Text deltas
-            //      are message content, not state. Inferring state from
-            //      content forces every consumer to keep parallel
-            //      bookkeeping and creates the gaps Phase 1 + 2 had to
-            //      paper over.
-            //
-            //   2. The engine already emits engine_status state=running
-            //      on prompt dispatch (engine/internal/session/
-            //      prompt_dispatch.go) and the new engine_session_status
-            //      mirror reaches the renderer through the same
-            //      channel. There is no surface where the running state
-            //      arrives via text-delta and not via engine_status —
-            //      so the inference was always redundant. Deleting it
-            //      removes a stranding pathway (Bug 1 in the original
-            //      plan) without losing any user-visible signal.
-            const enginePanes = withInstanceMessages(state.enginePanes, key, msgs)
-            return { enginePanes }
-          })
+          // Batch text deltas at ~60fps to reduce GC pressure.
+          // Instead of a full store update per delta (6+ object allocations each),
+          // we accumulate the text and flush once per animation frame.
+          //
+          // Phase 4 note: we no longer infer tab.status from text-delta
+          // arrival — engine_status is the authoritative signal (see
+          // engine-event-status.ts). This case is purely message content.
+          pendingDeltas.set(key, (pendingDeltas.get(key) || '') + event.text)
+          tabsWithEvents.add(tabId)
+          deltaFlushSet = set
+          if (!deltaFlushScheduled) {
+            deltaFlushScheduled = true
+            requestAnimationFrame(flushPendingDeltas)
+          }
           break
         }
         case 'engine_message_end': {
+          // Flush any pending text deltas before processing message_end
+          // to ensure the final message content is complete before sealing.
+          if (pendingDeltas.has(key)) {
+            const pendingText = pendingDeltas.get(key)!
+            pendingDeltas.delete(key)
+            set((state) => {
+              const [tabIdInner, instanceId] = key.split(':')
+              const pane = state.enginePanes.get(tabIdInner)
+              const inst = pane?.instances.find((i) => i.id === instanceId)
+              const msgs = [...(inst?.messages || [])]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant' && !last.sealed) {
+                msgs[msgs.length - 1] = { ...last, content: last.content + pendingText }
+              } else {
+                msgs.push({ id: nextMsgId(), role: 'assistant', content: pendingText, timestamp: Date.now() })
+              }
+              const enginePanes = withInstanceMessages(state.enginePanes, key, msgs)
+              return { enginePanes }
+            })
+          }
           // IMPORTANT: `engine_message_end` fires at the end of EVERY LLM
           // message, not at run completion. A single SendPrompt commonly
           // produces several LLM messages (assistant → tool_use →
@@ -265,6 +328,17 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           handleMessageEvents(set, _get, key, tabId, event)
           break
         }
+      }
+
+      // Update lastEventAt for the tab that received this event.
+      // Placed AFTER the switch so it doesn't create a wasted tabs rewrite
+      // that gets immediately superseded (e.g. engine_message_end already
+      // maps tabs for contextTokens). Skipped for engine_text_delta — those
+      // are batched at ~60fps via tabsWithEvents + flushPendingDeltas().
+      if (event.type !== 'engine_text_delta') {
+        set((s) => ({
+          tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, lastEventAt: Date.now() } : t)),
+        }))
       }
     },
   }

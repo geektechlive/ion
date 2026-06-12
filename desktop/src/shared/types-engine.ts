@@ -335,10 +335,10 @@ export type EngineEvent =
   // rather than as a live RemoteEvent. See CLAUDE.md §
   // "The typed-event corollary" for the broader rule.
   | { type: 'engine_model_fallback'; fallbackRequestedModel: string; fallbackModel: string; fallbackReason: string }
-  | { type: 'engine_extension_died'; extensionName: string; exitCode: number | null; signal: string | null }
+  | { type: 'engine_extension_died'; extensionName: string; exitCode: number | null; signal: string | null; stderrTail?: string[] }
   | { type: 'engine_extension_respawned'; extensionName: string; attemptNumber: number }
   | { type: 'engine_events_dropped'; count: number }
-  | { type: 'engine_extension_dead_permanent'; extensionName: string; attemptNumber: number }
+  | { type: 'engine_extension_dead_permanent'; extensionName: string; attemptNumber: number; stderrTail?: string[] }
   // ─── Async-trigger events (D-010 / D-011) ───
   //
   // The engine emits these for every webhook and schedule fire plus

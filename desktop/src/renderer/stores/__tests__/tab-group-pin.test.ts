@@ -147,6 +147,7 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     attachments: [],
     draftInput: '',
     messages: [],
+    messageCount: 0,
     title: 'New Tab',
     customTitle: null,
     lastResult: null,

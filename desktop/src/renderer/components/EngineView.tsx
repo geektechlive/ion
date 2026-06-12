@@ -23,6 +23,9 @@ const EMPTY_NOTIFICATIONS: any[] = []
 const EMPTY_MESSAGES: any[] = []
 const EMPTY_AGENTS: any[] = []
 
+const INITIAL_RENDER_CAP = 100
+const PAGE_SIZE = 100
+
 // ─── Main Component ───
 
 interface EngineViewProps {
@@ -105,6 +108,12 @@ export function EngineView({ tabId }: EngineViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
   const [showScrollBtn, setShowScrollBtn] = useState(false)
+  const [renderOffset, setRenderOffset] = useState(0)
+
+  // Reset pagination when switching engine instances
+  useEffect(() => {
+    setRenderOffset(0)
+  }, [activeInstanceId])
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return
@@ -116,7 +125,11 @@ export function EngineView({ tabId }: EngineViewProps) {
   }, [])
 
   // Include all messages (user messages shown inline, plus pinned prompt header)
-  const visibleMessages = messages
+  const totalCount = messages.length
+  let startIndex = Math.max(0, totalCount - INITIAL_RENDER_CAP - renderOffset * PAGE_SIZE)
+  const visibleMessages = startIndex > 0 ? messages.slice(startIndex) : messages
+  const hasOlder = startIndex > 0
+  const hiddenCount = totalCount - visibleMessages.length
   const grouped = useMemo(() => groupMessages(visibleMessages, { includeUser: true, unifiedTurnView }), [visibleMessages, unifiedTurnView])
 
   const hasContent = visibleMessages.some(m => m.role === 'assistant' && (m.content || '').length > 0)
@@ -254,6 +267,10 @@ export function EngineView({ tabId }: EngineViewProps) {
     await handleImplement(clearContext)
   }, [tabId, handleImplement])
 
+  const handleLoadOlder = useCallback(() => {
+    setRenderOffset((o) => o + 1)
+  }, [])
+
   // No instances placeholder — all hooks MUST be declared above this point
   // to satisfy React's rules of hooks (constant hook count across renders).
   if (!pane || pane.instances.length === 0) {
@@ -342,6 +359,19 @@ export function EngineView({ tabId }: EngineViewProps) {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Load older messages (pagination) */}
+          {hasOlder && (
+            <div className="flex justify-center py-2">
+              <button
+                onClick={handleLoadOlder}
+                className="text-[11px] px-3 py-1 rounded-full transition-colors"
+                style={{ color: colors.textTertiary, border: `1px solid ${colors.toolBorder}` }}
+              >
+                Load {Math.min(PAGE_SIZE, hiddenCount)} older messages ({hiddenCount} hidden)
+              </button>
+            </div>
+          )}
 
           {/* Grouped conversation messages */}
           {grouped.length > 0 && (

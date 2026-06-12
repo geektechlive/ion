@@ -2,6 +2,7 @@ import type { Message, AgentStateUpdate, ConversationInstance, EngineInstance } 
 import type { PersistedTab } from '../../shared/types-persistence'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
+import { isExtensionErrorMessage } from '../stores/session-store-persistence'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
@@ -75,7 +76,9 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
   if (st.engineInstances && st.engineInstances.length > 0) {
     if (st.engineMessages) {
       for (const inst of st.engineInstances) {
-        const saved = st.engineMessages[inst.id]
+        const saved = st.engineMessages[inst.id]?.filter(
+          (m) => !isExtensionErrorMessage({ role: m.role || '', content: m.content || '' }),
+        )
         if (saved && saved.length > 0) {
           instanceMessages.set(inst.id, saved.map((m) => ({
             id: crypto.randomUUID(),

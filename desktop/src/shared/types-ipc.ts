@@ -97,6 +97,9 @@ export const IPC = {
   // Conversation retrieval (agent child sessions)
   GET_CONVERSATION: 'ion:get-conversation',
 
+  // Batch conversation loading (all sessions in a chain in one roundtrip)
+  LOAD_CHAIN_HISTORY: 'ion:load-chain-history',
+
   // Backend mode
   GET_BACKEND: 'ion:get-backend',
   SWITCH_BACKEND: 'ion:switch-backend',

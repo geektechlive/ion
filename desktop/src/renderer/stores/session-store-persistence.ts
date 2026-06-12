@@ -5,6 +5,28 @@ import type { useSessionStore as UseSessionStoreType } from './sessionStore'
 
 type Store = typeof UseSessionStoreType
 
+/**
+ * Extension error messages are operational diagnostics, not conversation
+ * content. They should never be persisted — they clutter restored conversations
+ * with stale errors from previous sessions. This predicate identifies them so
+ * they can be stripped on save and restore.
+ */
+export function isExtensionErrorMessage(m: { role: string; content: string }): boolean {
+  if (m.role !== 'system') return false
+  const c = m.content
+  // extension subprocess died — hooks disabled until restart
+  if (c.startsWith('Error: extension') && c.includes('subprocess died')) return true
+  // Extension X crashed N times in 60s and will not be restarted
+  if (c.includes('crashed') && c.includes('will not be restarted')) return true
+  // extension hook session_start failed: jsonrpc error ...
+  if (c.startsWith('Error: extension hook') && c.includes('failed:')) return true
+  // extension load failed: ...
+  if (c.startsWith('Error: extension load failed')) return true
+  // extension X respawn failed: ...
+  if (c.startsWith('Error: extension') && c.includes('respawn failed')) return true
+  return false
+}
+
 function persistTabs(useSessionStore: Store): void {
   const { tabs, activeTabId } = useSessionStore.getState()
   const activeTab = tabs.find((t) => t.id === activeTabId)
@@ -27,6 +49,7 @@ function persistTabs(useSessionStore: Store): void {
         hasChosenDirectory: t.hasChosenDirectory,
         additionalDirs: t.additionalDirs,
         permissionMode: t.permissionMode,
+        messageCount: t.messages?.length ?? t.messageCount ?? 0,
         ...(t.historicalSessionIds.length > 0 ? { historicalSessionIds: t.historicalSessionIds } : {}),
         ...(t.lastKnownSessionId ? { lastKnownSessionId: t.lastKnownSessionId } : {}),
         ...(t.bashResults.length > 0 ? { bashResults: t.bashResults } : {}),
@@ -49,10 +72,15 @@ function persistTabs(useSessionStore: Store): void {
         ...(t.isEngine ? (() => {
           const hPane = enginePanes.get(t.id)
           if (!hPane || hPane.instances.length === 0) return {}
-          const result: Record<string, any> = { engineInstances: hPane.instances }
+          // Strip messages and agentStates from the persisted instances —
+          // they are already serialized into the separate engineMessages
+          // and engineAgentStates maps below. Writing them twice doubled
+          // the tabs file size (~13.5 MB of redundant data in a 28.8 MB
+          // file), causing startup parse overhead and persistence churn.
+          const result: Record<string, any> = { engineInstances: hPane.instances.map(({ messages, agentStates, ...rest }) => rest) }
           const msgs: Record<string, any[]> = {}
           for (const inst of hPane.instances) {
-            const arr = inst.messages
+            const arr = inst.messages?.filter((m) => !isExtensionErrorMessage(m))
             if (arr && arr.length > 0) {
               msgs[inst.id] = arr.map((m) => ({ role: m.role, content: m.content, toolName: m.toolName, toolId: m.toolId, toolInput: m.toolInput, toolStatus: m.toolStatus, timestamp: m.timestamp, ...(m.dedupKey ? { dedupKey: m.dedupKey } : {}), ...(m.planFilePath ? { planFilePath: m.planFilePath } : {}), ...(m.attachments && m.attachments.length > 0 ? { attachments: m.attachments } : {}) }))
             }
@@ -230,14 +258,30 @@ export function setupPersistence(useSessionStore: Store): void {
       // while an engine run is in progress and the AskUserQuestion / ExitPlanMode
       // denial is never written to the conversation file). This covers:
       //   - CLI tabs: `tab.permissionDenied` changing on `state.tabs`.
-      //   - Engine tabs: `enginePanes` Map identity change (instance.permissionDenied
-      //     is written on the instance, and enginePanes is replaced on every write).
+      //   - Engine tabs: per-instance `permissionDenied` changing on enginePanes.
+      //
+      // IMPORTANT: The engine-tab check must compare per-instance permissionDenied
+      // precisely — NOT use `state.enginePanes !== prev.enginePanes`. The Map
+      // identity changes on every RAF text-delta flush (~60fps during streaming)
+      // because withInstanceMessages creates a new Map. Using the coarse check
+      // bypassed the 100ms debounce and caused persistTabs() (4 synchronous
+      // filesystem ops + full JSON serialization) to fire at 60fps.
       const permissionDeniedChanged =
         (state.tabs !== prev.tabs && state.tabs.some((t, i) => {
           const p = prev.tabs[i]
           return p && t.id === p.id && t.permissionDenied !== p.permissionDenied
         })) ||
-        state.enginePanes !== prev.enginePanes
+        (state.enginePanes !== prev.enginePanes && (() => {
+          for (const [tabId, pane] of state.enginePanes) {
+            const prevPane = prev.enginePanes.get(tabId)
+            if (!prevPane) continue
+            for (const inst of pane.instances) {
+              const prevInst = prevPane.instances.find((p) => p.id === inst.id)
+              if (prevInst && inst.permissionDenied !== prevInst.permissionDenied) return true
+            }
+          }
+          return false
+        })())
 
       // Flush immediately when a CLI tab captures its first conversationId.
       // The engine event slice already does this for engine tabs via

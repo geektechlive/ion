@@ -143,7 +143,7 @@ export function SettingsPopover() {
       const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
       messages = inst?.messages ?? []
     } else {
-      messages = tab.messages
+      messages = tab.messages ?? []
     }
 
     const transcript = formatTranscript(messages)

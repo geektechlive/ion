@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { IPC } from '../../../shared/types'
 import { log as _log } from '../../logger'
-import { state, sessionPlane, engineBridge } from '../../state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, lastForwardedEngineTabStatus, extensionCommandRegistry } from '../../state'
 import { broadcast } from '../../broadcast'
 import { terminalManager } from '../../terminal-manager-instance'
 import { readSettings, SETTINGS_DEFAULTS } from '../../settings-store'
@@ -145,10 +145,21 @@ export async function handleCreateEngineTab(cmd: Extract<RemoteCommand, { type: 
 }
 
 export function handleCloseTab(cmd: Extract<RemoteCommand, { type: 'close_tab' }>): void {
-  sessionPlane.closeTab(cmd.tabId)
-  terminalManager.destroyByPrefix(`${cmd.tabId}:`)
-  broadcast(IPC.REMOTE_CLOSE_TAB, cmd.tabId)
-  state.remoteTransport?.send({ type: 'tab_closed', tabId: cmd.tabId })
+  const tabId = cmd.tabId
+  sessionPlane.closeTab(tabId)
+  terminalManager.destroyByPrefix(`${tabId}:`)
+  engineBridge.stopByPrefix(`${tabId}:`)
+  broadcast(IPC.REMOTE_CLOSE_TAB, tabId)
+  state.remoteTransport?.send({ type: 'tab_closed', tabId })
+
+  // Clean up all per-tab main-process state to prevent memory leaks.
+  activeAssistantMessages.delete(tabId)
+  activeToolInputs.delete(tabId)
+  lastMessagePreview.delete(tabId)
+  lastForwardedEngineTabStatus.delete(tabId)
+  for (const key of extensionCommandRegistry.keys()) {
+    if (key === tabId || key.startsWith(`${tabId}:`)) extensionCommandRegistry.delete(key)
+  }
 }
 
 /**

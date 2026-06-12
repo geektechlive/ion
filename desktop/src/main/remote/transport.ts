@@ -13,6 +13,7 @@ import { EventEmitter } from 'events'
 import { RelayClient, type RelayClientOptions } from './relay-client'
 import { LANServer, type LANServerOptions } from './lan-server'
 import { encrypt, decrypt } from './crypto'
+import { compressPayload, decompressPayload } from './transport-compression'
 import { startLanAuth, handleLanAuthResponse, type LanAuthCtx } from './transport-lan-auth'
 import { log as _log } from '../logger'
 import type {
@@ -258,8 +259,11 @@ export class RemoteTransport extends EventEmitter {
   /** Encrypt and send an event to all connected devices. Returns true if sent to at least one. */
   private _sendToAll(event: RemoteEvent, push: boolean, pushTitle?: string, pushBody?: string): boolean {
     const plaintext = JSON.stringify(event)
+    // Compress: raw DEFLATE (no gzip header) + 0x01 version prefix.
+    // iOS uses Apple Compression framework with COMPRESSION_ZLIB to decompress.
+    const wire = compressPayload(plaintext)
     if (event.type === 'snapshot') {
-      log(`snapshot payload: ${plaintext.length} bytes, ${(event as any).tabs?.length ?? 0} tabs`)
+      log(`snapshot payload: ${plaintext.length} bytes → ${wire.length} bytes compressed, ${(event as any).tabs?.length ?? 0} tabs`)
     }
     let sentAny = false
 
@@ -274,7 +278,7 @@ export class RemoteTransport extends EventEmitter {
       // Encrypt per-device.
       if (secret && secret.length === 32) {
         try {
-          const { nonce, ciphertext } = encrypt(plaintext, secret)
+          const { nonce, ciphertext } = encrypt(wire, secret)
           ;(msg as any).nonce = nonce
           ;(msg as any).ciphertext = ciphertext
         } catch (err) {
@@ -416,6 +420,7 @@ export class RemoteTransport extends EventEmitter {
     if (!secret) return
 
     const plaintext = JSON.stringify(event)
+    const wire = compressPayload(plaintext)
     const msg: WireMessage = {
       seq: ++this.seq,
       ts: Date.now(),
@@ -424,7 +429,7 @@ export class RemoteTransport extends EventEmitter {
 
     if (secret.length === 32) {
       try {
-        const { nonce, ciphertext } = encrypt(plaintext, secret)
+        const { nonce, ciphertext } = encrypt(wire, secret)
         ;(msg as any).nonce = nonce
         ;(msg as any).ciphertext = ciphertext
       } catch (err) {
@@ -473,7 +478,15 @@ export class RemoteTransport extends EventEmitter {
         log(`decryption failed for seq=${msg.seq} from ${deviceId}`)
         return
       }
-      payload = decrypted
+      // Check version prefix: 0x01 = deflate-compressed payload.
+      // iOS does not currently send compressed payloads, but this
+      // handles the case symmetrically for forward compatibility.
+      try {
+        payload = decompressPayload(decrypted)
+      } catch (err) {
+        log(`decompression failed for seq=${msg.seq} from ${deviceId}: ${(err as Error).message}`)
+        return
+      }
     } else if (secret && msg.payload) {
       // Shared secret is set but message is plaintext -- reject it.
       log(`rejecting plaintext message seq=${msg.seq} from ${deviceId} (encryption required)`)

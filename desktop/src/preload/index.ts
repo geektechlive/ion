@@ -60,6 +60,7 @@ export interface IonAPI {
   loadSessionChains(): Promise<{ chains: Record<string, string[]>; reverse: Record<string, string> }>
   saveSessionChains(data: { chains: Record<string, string[]>; reverse: Record<string, string> }): Promise<void>
   getConversation(conversationId: string, offset?: number, limit?: number): Promise<{ messages: any[]; total: number; hasMore: boolean }>
+  loadChainHistory(sessionIds: string[]): Promise<SessionLoadMessage[]>
   getBackend(): Promise<'api' | 'cli'>
   switchBackend(backend: 'api' | 'cli'): Promise<void>
   loadOtherBackendTabs(): Promise<Array<{ conversationId: string; title: string; customTitle: string | null; workingDirectory: string; permissionMode: string }>>
@@ -292,6 +293,8 @@ const api: IonAPI = {
   saveSessionChains: (data) => ipcRenderer.invoke(IPC.SAVE_SESSION_CHAINS, data),
   getConversation: (conversationId: string, offset = 0, limit = 50) =>
     ipcRenderer.invoke(IPC.GET_CONVERSATION, { conversationId, offset, limit }),
+  loadChainHistory: (sessionIds: string[]) =>
+    ipcRenderer.invoke(IPC.LOAD_CHAIN_HISTORY, sessionIds),
   getBackend: () => ipcRenderer.invoke(IPC.GET_BACKEND),
   switchBackend: (backend) => ipcRenderer.invoke(IPC.SWITCH_BACKEND, backend),
   loadOtherBackendTabs: () => ipcRenderer.invoke(IPC.LOAD_OTHER_BACKEND_TABS),

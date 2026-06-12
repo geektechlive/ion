@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { state, modelCache, engineBridge } from '../state'
 import { readSettings } from '../settings-store'
 import { getRemoteTabStates } from './snapshot'
@@ -5,6 +6,23 @@ import { reconcileGitWatchedDirectories } from './git-watcher-bridge'
 import { log as _log } from '../logger'
 
 function log(msg: string): void { _log('snapshot-polling', msg) }
+
+let lastSnapshotHash: string | null = null
+
+/**
+ * Pure helper: compute a SHA-256 hex digest of the JSON-serialized
+ * snapshot event object.  Exported for unit testability.
+ */
+export function hashSnapshot(event: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify(event)).digest('hex')
+}
+
+/**
+ * Reset the cached snapshot hash.  Exported for testability.
+ */
+export function resetSnapshotHash(): void {
+  lastSnapshotHash = null
+}
 
 /**
  * Threshold (in milliseconds) for the stale-key detection. Exported
@@ -23,18 +41,34 @@ export function startTabSnapshotPolling(): void {
       const recentDirectories: string[] = Array.isArray(settings.recentBaseDirectories) ? settings.recentBaseDirectories : []
       const tabGroupMode = settings.tabGroupMode || 'off'
       const tabGroups = Array.isArray(settings.tabGroups) ? settings.tabGroups.map((g: any) => ({ id: g.id, label: g.label, isDefault: g.isDefault, order: g.order })) : []
-      state.remoteTransport?.send({ type: 'snapshot', tabs, recentDirectories, tabGroupMode, tabGroups, preferredModel: settings.preferredModel || undefined, engineDefaultModel: settings.engineDefaultModel || undefined, availableModels: modelCache.models.length > 0 ? modelCache.models : undefined, resources: Object.keys(resourceManifest).length > 0 ? resourceManifest : undefined })
+      const snapshotEvent: Record<string, unknown> = {
+        type: 'snapshot',
+        tabs,
+        recentDirectories,
+        tabGroupMode,
+        tabGroups,
+        preferredModel: settings.preferredModel || undefined,
+        engineDefaultModel: settings.engineDefaultModel || undefined,
+        availableModels: modelCache.models.length > 0 ? modelCache.models : undefined,
+        resources: Object.keys(resourceManifest).length > 0 ? resourceManifest : undefined,
+      }
+      const hash = hashSnapshot(snapshotEvent)
+      if (hash === lastSnapshotHash) {
+        log('snapshot unchanged, skipping send')
+      } else {
+        lastSnapshotHash = hash
+        state.remoteTransport?.send(snapshotEvent as any)
+        log(`snapshot hash changed: ${hash.slice(0, 12)}…`)
+      }
       // Reconcile git-watcher bridge with current tab directories
+      // (independent of whether the snapshot was sent)
       const directories = new Set(tabs.map(t => t.workingDirectory).filter(Boolean))
       reconcileGitWatchedDirectories(directories)
-      // Stale-status convergence sweep. Iterates every engine session
-      // key the bridge knows about (via activeSessions, which is the
-      // canonical "we asked the engine to start this session" registry)
-      // and asks the engine to re-emit engine_status for any key whose
-      // last-known emission is older than STALE_STATUS_THRESHOLD_MS.
-      // The engine handler is cheap (single snapshot emit, no agent
-      // state); doing this on the same 5 s tick as the snapshot send
-      // bounds iOS-perceived staleness to roughly one tick.
+      // Stale-status convergence sweep (independent of whether the
+      // snapshot was sent). Iterates every engine session key the
+      // bridge knows about (via activeSessions) and asks the engine to
+      // re-emit engine_status for any key whose last-known emission is
+      // older than STALE_STATUS_THRESHOLD_MS.
       sweepStaleEngineStatuses()
     } catch {}
   }, 5_000)
@@ -45,6 +79,7 @@ export function stopTabSnapshotPolling(): void {
     clearInterval(state.tabSnapshotInterval)
     state.tabSnapshotInterval = null
   }
+  lastSnapshotHash = null
 }
 
 /**

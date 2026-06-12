@@ -3,6 +3,7 @@ import { usePreferencesStore } from '../../preferences'
 import { destroyTerminalInstance } from '../../components/TerminalPanel'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { makeLocalTab, isBlankConversationTab } from '../session-store-helpers'
+import { cleanupTabDeltas } from './engine-event-slice'
 
 export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -236,6 +237,12 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       // Publish focused session key as a workspace resource so extensions
       // can route notifications to the active tab. Fire-and-forget.
       window.ion.notifyTabFocus(tabId)
+
+      // If skeleton tab (messages not yet loaded), load them asynchronously
+      const targetTabAfter = get().tabs.find(t => t.id === tabId)
+      if (targetTabAfter?.messages === null && targetTabAfter.conversationId) {
+        get().loadSkeletonMessages(tabId)
+      }
     },
 
     closeTab: (tabId) => {
@@ -337,6 +344,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         for (const k of engineUsage.keys()) if (k === tabId || k.startsWith(`${tabId}:`)) engineUsage.delete(k)
         enginePanes.delete(tabId)
         set({ engineWorkingMessages, engineNotifications, engineDialogs, enginePinnedPrompt, engineUsage, enginePanes })
+        cleanupTabDeltas(tabId)
       }
       if (closingTab) {
         const dir = closingTab.workingDirectory
@@ -540,7 +548,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
             ? {
                 ...t,
                 messages: [
-                  ...t.messages,
+                  ...(t.messages ?? []),
                   { id: `msg-${Date.now()}-${Math.random()}`, role: 'system' as const, content, timestamp: Date.now() },
                 ],
               }

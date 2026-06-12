@@ -58,7 +58,7 @@ export function DirectoryPicker() {
   if (!tab) return null
 
   const isRunning = tab.status === 'running' || tab.status === 'connecting'
-  const isEmpty = tab.messages.length === 0
+  const isEmpty = (tab.messages?.length ?? 0) === 0
   const hasExtraDirs = tab.additionalDirs.length > 0
   const baseLocked = !isEmpty
 

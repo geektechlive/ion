@@ -67,7 +67,9 @@ export interface TabState {
   draftInput: string
   /** One-shot field: set by rewind, consumed by InputBar to pre-fill input, then cleared */
   pendingInput?: string
-  messages: Message[]
+  messages: Message[] | null
+  /** Persisted message count — used for blank-tab detection when messages are lazily loaded (null). */
+  messageCount: number
   title: string
   /** User-provided custom tab name (overrides auto-generated title when set) */
   customTitle: string | null

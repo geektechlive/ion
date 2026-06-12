@@ -17,7 +17,7 @@ interface AgentTurnGroupProps {
   skipMotion?: boolean
 }
 
-export function AgentTurnGroup({
+export const AgentTurnGroup = React.memo(function AgentTurnGroup({
   tools,
   assistantMessages,
   isActive,
@@ -123,4 +123,4 @@ export function AgentTurnGroup({
       {inner}
     </motion.div>
   )
-}
+})

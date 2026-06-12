@@ -148,6 +148,8 @@ export interface State {
   forkFromMessage: (tabId: string, messageId: string) => Promise<string | null>
   resumeSession: (sessionId: string, title?: string, projectPath?: string, customTitle?: string | null, encodedDir?: string | null) => Promise<string>
   resumeSessionWithChain: (sessionId: string, historicalSessionIds: string[], title?: string, projectPath?: string, customTitle?: string | null, encodedDir?: string | null) => Promise<string>
+  /** Load messages for a skeleton tab (messages: null) on demand. Called by selectTab. */
+  loadSkeletonMessages: (tabId: string) => Promise<void>
   addSystemMessage: (content: string) => void
   startBashCommand: (command: string, execId: string) => { toolMsgId: string; tabId: string }
   completeBashCommand: (tabId: string, toolMsgId: string, command: string, stdout: string, stderr: string, exitCode: number | null) => void

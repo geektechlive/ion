@@ -176,3 +176,198 @@ describe('engine_agent_state snapshot contract', () => {
     expect(state.enginePanes).not.toBe(before)
   })
 })
+
+describe('engine_dead flips running agents to error', () => {
+  it('flips running agents to error and preserves done/idle/cancelled agents', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    // Seed agents in various statuses
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = {
+      ...pane.instances[0],
+      agentStates: [
+        { name: 'a', status: 'running', metadata: { lastWork: 'Using Read...' } },
+        { name: 'b', status: 'done', metadata: { lastWork: 'finished', elapsed: 42 } },
+        { name: 'c', status: 'idle', metadata: {} },
+        { name: 'd', status: 'cancelled', metadata: {} },
+        { name: 'e', status: 'running', metadata: { lastWork: 'Using Bash...' } },
+      ],
+    }
+
+    slice.handleEngineEvent(key, { type: 'engine_dead', exitCode: 1 } as any)
+
+    const stored = getAgentStates(state, 'tab1', 'inst1')
+    expect(stored).toHaveLength(5)
+    // Running agents flipped to error
+    expect(stored![0]).toEqual({ name: 'a', status: 'error', metadata: { lastWork: 'Using Read...' } })
+    expect(stored![4]).toEqual({ name: 'e', status: 'error', metadata: { lastWork: 'Using Bash...' } })
+    // Non-running agents preserved unchanged
+    expect(stored![1]).toEqual({ name: 'b', status: 'done', metadata: { lastWork: 'finished', elapsed: 42 } })
+    expect(stored![2]).toEqual({ name: 'c', status: 'idle', metadata: {} })
+    expect(stored![3]).toEqual({ name: 'd', status: 'cancelled', metadata: {} })
+  })
+
+  it('is a no-op when no agents are running', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    const pane = state.enginePanes.get('tab1')
+    const originalAgents = [
+      { name: 'a', status: 'done', metadata: {} },
+      { name: 'b', status: 'idle', metadata: {} },
+    ]
+    pane.instances[0] = { ...pane.instances[0], agentStates: originalAgents }
+    const beforePanes = state.enginePanes
+
+    slice.handleEngineEvent(key, { type: 'engine_dead', exitCode: 1 } as any)
+
+    // No running agents → withRunningAgentsErrored returns original Map
+    expect(state.enginePanes).toBe(beforePanes)
+  })
+
+  it('does not flip agents on clean exit (exitCode 0)', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = {
+      ...pane.instances[0],
+      agentStates: [{ name: 'a', status: 'running', metadata: {} }],
+    }
+
+    slice.handleEngineEvent(key, { type: 'engine_dead', exitCode: 0 } as any)
+
+    // exitCode 0 → early return, agents untouched
+    const stored = getAgentStates(state, 'tab1', 'inst1')
+    expect(stored![0].status).toBe('running')
+  })
+})
+
+describe('engine_error flips running agents to error', () => {
+  it('flips running agents to error while adding error message', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = {
+      ...pane.instances[0],
+      agentStates: [
+        { name: 'a', status: 'running', metadata: { lastWork: 'Using Read...' } },
+        { name: 'b', status: 'done', metadata: { elapsed: 10 } },
+      ],
+    }
+
+    slice.handleEngineEvent(key, { type: 'engine_error', message: 'something broke' } as any)
+
+    const stored = getAgentStates(state, 'tab1', 'inst1')
+    expect(stored).toHaveLength(2)
+    expect(stored![0].status).toBe('error')
+    expect(stored![0].metadata).toEqual({ lastWork: 'Using Read...' })
+    expect(stored![1].status).toBe('done')
+    expect(stored![1].metadata).toEqual({ elapsed: 10 })
+
+    // Also verify the error message was added to messages
+    const inst = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst1')
+    expect(inst.messages).toHaveLength(1)
+    expect(inst.messages[0].content).toBe('Error: something broke')
+  })
+
+  it('extension_died errors route to notifications, not messages', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    const pane = state.enginePanes.get('tab1')
+    pane.instances[0] = {
+      ...pane.instances[0],
+      agentStates: [
+        { name: 'a', status: 'running', metadata: { lastWork: 'Using Read...' } },
+      ],
+    }
+
+    slice.handleEngineEvent(key, {
+      type: 'engine_error',
+      message: 'extension (unknown) subprocess died — hooks disabled until restart',
+      errorCode: 'extension_died',
+    } as any)
+
+    // Running agents still flip to error
+    const stored = getAgentStates(state, 'tab1', 'inst1')
+    expect(stored![0].status).toBe('error')
+
+    // No system message added to the conversation stream
+    const inst = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst1')
+    expect(inst.messages).toHaveLength(0)
+
+    // Notification toast added instead
+    const notifs = state.engineNotifications.get(key)
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0].level).toBe('error')
+    expect(notifs[0].message).toContain('subprocess died')
+  })
+
+  it('hook_failed errors route to notifications, not messages', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    slice.handleEngineEvent(key, {
+      type: 'engine_error',
+      message: 'extension hook session_start failed: jsonrpc error -32603: ctx.runOnce is not a function',
+      errorCode: 'hook_failed',
+    } as any)
+
+    // No system message in the conversation stream
+    const inst = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst1')
+    expect(inst.messages).toHaveLength(0)
+
+    // Notification toast added
+    const notifs = state.engineNotifications.get(key)
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0].level).toBe('error')
+    expect(notifs[0].message).toContain('hook session_start failed')
+  })
+
+  it('extension_load_failed errors route to notifications, not messages', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    slice.handleEngineEvent(key, {
+      type: 'engine_error',
+      message: 'extension load failed: compilation error',
+      errorCode: 'extension_load_failed',
+    } as any)
+
+    const inst = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst1')
+    expect(inst.messages).toHaveLength(0)
+
+    const notifs = state.engineNotifications.get(key)
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0].level).toBe('error')
+    expect(notifs[0].message).toContain('extension load failed')
+  })
+})
+
+describe('engine_extension_dead_permanent routes to notifications', () => {
+  it('adds a notification instead of a conversation message', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst1'
+
+    slice.handleEngineEvent(key, {
+      type: 'engine_extension_dead_permanent',
+      extensionName: 'my-ext',
+      attemptNumber: 4,
+    } as any)
+
+    // No system message in the conversation stream
+    const inst = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst1')
+    expect(inst.messages).toHaveLength(0)
+
+    // Notification toast added
+    const notifs = state.engineNotifications.get(key)
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0].level).toBe('error')
+    expect(notifs[0].message).toContain('my-ext')
+    expect(notifs[0].message).toContain('4 times in 60s')
+    expect(notifs[0].message).toContain('will not be restarted')
+  })
+})

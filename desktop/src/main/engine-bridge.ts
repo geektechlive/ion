@@ -46,27 +46,12 @@ export class EngineBridge extends EventEmitter {
   private requestCounter = 0
   private connectPromise: Promise<void> | null = null
   private reconnectDisabled = false
-  // Treated as internal to the engine-bridge.* module group (used by
-  // engine-bridge-start-session.ts). Not `private` so sibling files in
-  // the same module group can read/write the registry without forcing
-  // every helper back into this already-cap-bound file.
+  private _drainScheduled = false
+  // Package-internal (used by engine-bridge-start-session.ts and other siblings).
   activeSessions = new Map<string, { config: EngineConfig; conversationId?: string }>()
   /** Client-side key aliases: oldKey → newKey. Rewrites incoming event keys. */
   private keyAliases = new Map<string, string>()
-  /**
-   * Phase 2 of the state-management overhaul. Tracks the last time the
-   * engine emitted an `engine_status` event for each session key. The
-   * snapshot poller (`snapshot-polling.ts`) reads this map to decide
-   * which keys are stale enough to warrant a `query_session_status`
-   * RPC. Updated in the inbound event-dispatch path (above).
-   *
-   * Kept on the bridge (not the renderer) because the bridge is the
-   * single arrival point for engine events and the only component
-   * that observes every event regardless of which renderer slice owns
-   * the resulting state. A renderer-side map would miss events that
-   * arrive after the renderer has unmounted (e.g. a background tab
-   * before iOS has subscribed).
-   */
+  /** Tracks last `engine_status` receipt per key for stale-sweep polling. */
   lastEngineStatusAt = new Map<string, number>()
 
   constructor() {
@@ -147,13 +132,7 @@ export class EngineBridge extends EventEmitter {
 
       conn.on('data', (chunk: Buffer) => {
         this.buffer += chunk.toString()
-        let nl: number
-        while ((nl = this.buffer.indexOf('\n')) !== -1) {
-          const line = this.buffer.slice(0, nl)
-          this.buffer = this.buffer.slice(nl + 1)
-          if (!line.trim()) continue
-          this._handleMessage(line)
-        }
+        this._drainBuffer()
       })
 
       conn.on('close', () => {
@@ -217,7 +196,35 @@ export class EngineBridge extends EventEmitter {
     this.requestCallbacks.clear()
   }
 
-  /** Re-register all tracked sessions on a reconnected engine. */
+  /**
+   * Process up to BATCH_SIZE messages then yield via setImmediate.
+   * Prevents the main process from blocking for 5+ seconds when a large
+   * burst of events arrives in one TCP chunk, which triggers the engine's
+   * 5s write-deadline eviction → disconnect/reconnect storm.
+   */
+  private _drainBuffer(): void {
+    if (this._drainScheduled) return
+    const BATCH_SIZE = 10
+    let processed = 0
+    let nl: number
+    while (processed < BATCH_SIZE && (nl = this.buffer.indexOf('\n')) !== -1) {
+      const line = this.buffer.slice(0, nl)
+      this.buffer = this.buffer.slice(nl + 1)
+      if (line.trim()) {
+        this._handleMessage(line)
+        processed++
+      }
+    }
+    if (this.buffer.indexOf('\n') !== -1) {
+      this._drainScheduled = true
+      setImmediate(() => {
+        this._drainScheduled = false
+        this._drainBuffer()
+      })
+    }
+  }
+
+  /** Re-register all tracked sessions, then reconcile (see startSession()). */
   private _reRegisterSessions(): void {
     for (const [key, entry] of this.activeSessions) {
       log(`Re-registering session after reconnect: key=${key}`)
@@ -225,9 +232,9 @@ export class EngineBridge extends EventEmitter {
       if (entry.conversationId) {
         config.sessionId = entry.conversationId
       }
-      this._sendWithResult({ cmd: 'start_session', key, config }).catch(() => {
-        warn(`Failed to re-register session ${key}`)
-      })
+      this._sendWithResult({ cmd: 'start_session', key, config })
+        .then((result) => { if (result.ok) this.sendReconcileState(key) })
+        .catch(() => { warn(`Failed to re-register session ${key}`) })
     }
   }
 
@@ -405,10 +412,7 @@ export class EngineBridge extends EventEmitter {
     const alive = !!(this.conn && !this.conn.destroyed)
     log(`sendAbort: key=${key} connected=${this.connected} connAlive=${alive}`)
     if (!alive) {
-      // Socket is gone. Best-effort: schedule a reconnect so subsequent
-      // commands have a chance to land. Renderer-side watchdog will recover
-      // the stuck tab if no event arrives.
-      warn(`sendAbort: socket dead — abort cannot reach engine; renderer watchdog will recover tab=${key}`)
+      warn(`sendAbort: socket dead — scheduling reconnect; renderer watchdog will recover tab=${key}`)
       this._scheduleReconnect()
       return
     }
@@ -446,15 +450,9 @@ export class EngineBridge extends EventEmitter {
     this._send({ cmd: 'permission_response', key, questionId, optionId })
   }
 
-  // Public escape hatch: forwards a fully-shaped ClientCommand to the engine. Companion modules use this to ship additional command/response helpers without growing the bridge file past its cap.
   sendRaw(payload: Record<string, unknown>): void { this._send(payload) }
 
   sendSetPlanMode(key: string, enabled: boolean, allowedTools?: string[], source?: string, allowedBashCommands?: string[]): void {
-    // JSON.stringify renders `undefined` as the string "undefined" and `[]` as
-    // "[]" so the tri-valued projection (undefined / empty / non-empty) is
-    // visible at a glance in `~/.ion/desktop.log`. Length alone collapses
-    // undefined and [] (both → 0) and hides the user-clear case behind the
-    // no-change case, defeating the purpose of the log line.
     log(`sendSetPlanMode: key=${key} enabled=${enabled} source=${source ?? 'unknown'} bashCmds=${JSON.stringify(allowedBashCommands)}`)
     this._send({ cmd: 'set_plan_mode', key, enabled, allowedTools, source, planModeAllowedBashCommands: allowedBashCommands })
   }

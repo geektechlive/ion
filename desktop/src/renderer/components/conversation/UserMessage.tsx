@@ -29,7 +29,7 @@ function parseSlashCommand(content: string): { command: string; args: string } |
 }
 
 /** User message bubble (right-aligned). */
-export function UserMessage({ message, skipMotion }: { message: Message; skipMotion?: boolean }) {
+export const UserMessage = React.memo(function UserMessage({ message, skipMotion }: { message: Message; skipMotion?: boolean }) {
   const colors = useColors()
   const enableClaudeCompat = usePreferencesStore((s) => s.enableClaudeCompat)
   const isBashCmd = !!message.userExecuted
@@ -141,10 +141,10 @@ export function UserMessage({ message, skipMotion }: { message: Message; skipMot
       {content}
     </motion.div>
   )
-}
+})
 
 /** Queued user message (waiting for previous turn to finish). */
-export function QueuedMessage({ content, onEdit }: { content: string; onEdit?: () => void }) {
+export const QueuedMessage = React.memo(function QueuedMessage({ content, onEdit }: { content: string; onEdit?: () => void }) {
   const colors = useColors()
   const enableClaudeCompat = usePreferencesStore((s) => s.enableClaudeCompat)
 
@@ -203,4 +203,4 @@ export function QueuedMessage({ content, onEdit }: { content: string; onEdit?: (
       </div>
     </motion.div>
   )
-}
+})

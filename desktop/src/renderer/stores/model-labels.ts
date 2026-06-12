@@ -46,10 +46,18 @@ export function getModelDisplayLabel(modelId: string): string {
   const compact = normalizedId
     .replace(/^claude-/, '')
     .replace(/-\d{8}$/, '')
+  // Match "family-major-minor" (e.g. sonnet-4-6 → Sonnet 4.6)
   const familyMatch = compact.match(/^([a-z]+)-(\d+)-(\d+)$/i)
   if (familyMatch) {
     const family = familyMatch[1][0].toUpperCase() + familyMatch[1].slice(1).toLowerCase()
     const label = `${family} ${familyMatch[2]}.${familyMatch[3]}`
+    return has1MContext ? `${label} (1M)` : label
+  }
+  // Match "family-major" (e.g. fable-5 → Fable 5)
+  const singleVersionMatch = compact.match(/^([a-z]+)-(\d+)$/i)
+  if (singleVersionMatch) {
+    const family = singleVersionMatch[1][0].toUpperCase() + singleVersionMatch[1].slice(1).toLowerCase()
+    const label = `${family} ${singleVersionMatch[2]}`
     return has1MContext ? `${label} (1M)` : label
   }
 

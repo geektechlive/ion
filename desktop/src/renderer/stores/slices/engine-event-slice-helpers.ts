@@ -80,3 +80,33 @@ export function withInstanceAgentStates(
   updated.set(tabId, { ...pane, instances })
   return updated
 }
+
+/**
+ * Flip any `running` agent entries to `error` for the instance identified
+ * by `key`. Entries in other statuses (done, idle, error, cancelled) are
+ * preserved unchanged.
+ *
+ * Used on `engine_dead` and `engine_error` to prevent stranded running-agent
+ * entries that block tab close, show false "awaiting children" indicators,
+ * and keep the interrupt button visible when no agent is actually running.
+ */
+export function withRunningAgentsErrored(
+  enginePanes: Map<string, EnginePaneState>,
+  key: string,
+): Map<string, EnginePaneState> {
+  const [tabId, instanceId] = key.split(':')
+  const pane = enginePanes.get(tabId)
+  if (!pane) return enginePanes
+  const idx = pane.instances.findIndex((i) => i.id === instanceId)
+  if (idx === -1) return enginePanes
+  const inst = pane.instances[idx]
+  if (!inst.agentStates?.some((a) => a.status === 'running')) return enginePanes
+  const agentStates = inst.agentStates.map((a) =>
+    a.status === 'running' ? { ...a, status: 'error' as const } : a,
+  )
+  const updated = new Map(enginePanes)
+  const instances = pane.instances.slice()
+  instances[idx] = { ...instances[idx], agentStates }
+  updated.set(tabId, { ...pane, instances })
+  return updated
+}

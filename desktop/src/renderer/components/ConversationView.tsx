@@ -59,8 +59,8 @@ export function ConversationView() {
   }, [])
 
   // Auto-scroll when content changes and user is near bottom.
-  const msgCount = tab?.messages.length ?? 0
-  const lastMsg = tab?.messages[tab.messages.length - 1]
+  const msgCount = tab?.messages?.length ?? 0
+  const lastMsg = tab?.messages?.at(-1)
   const permissionQueueLen = tab?.permissionQueue?.length ?? 0
   const queuedCount = tab?.queuedPrompts?.length ?? 0
   const scrollTrigger = `${msgCount}:${lastMsg?.content?.length ?? 0}:${permissionQueueLen}:${queuedCount}`
@@ -130,12 +130,28 @@ export function ConversationView() {
 
   if (!tab) return null
 
+  // Skeleton tab: messages haven't been loaded yet (lazy loading in progress)
+  if (tab.messages === null) {
+    return (
+      <div className="flex items-center justify-center h-full" style={{ color: colors.textSecondary }}>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="flex gap-[3px]">
+            <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: colors.statusRunning, animationDelay: '0ms' }} />
+            <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: colors.statusRunning, animationDelay: '150ms' }} />
+            <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: colors.statusRunning, animationDelay: '300ms' }} />
+          </span>
+          Loading conversation…
+        </div>
+      </div>
+    )
+  }
+
   const isRunning = tab.status === 'running' || tab.status === 'connecting'
   const isDead = tab.status === 'dead'
   const isFailed = tab.status === 'failed'
-  const showInterrupt = (isRunning || tab.bashExecuting) && tab.messages.some((m) => m.role === 'user')
+  const showInterrupt = (isRunning || tab.bashExecuting) && (tab.messages ?? []).some((m) => m.role === 'user')
 
-  if (tab.messages.length === 0) {
+  if ((tab.messages?.length ?? 0) === 0) {
     return <EmptyState />
   }
 
@@ -143,7 +159,7 @@ export function ConversationView() {
   const historicalThreshold = Math.max(0, totalCount - 20)
 
   const handleRetry = () => {
-    const lastUserMsg = [...tab.messages].reverse().find((m) => m.role === 'user')
+    const lastUserMsg = [...(tab.messages ?? [])].reverse().find((m) => m.role === 'user')
     if (lastUserMsg) {
       sendMessage(lastUserMsg.content)
     }
@@ -239,7 +255,7 @@ export function ConversationView() {
               tabId={tab.id}
               sessionId={tab.conversationId}
               projectPath={staticInfo?.projectPath || process.cwd()}
-              messages={tab.messages}
+              messages={tab.messages ?? []}
               tabPlanFilePath={tab.planFilePath}
               tabGroupPinned={tab.groupPinned}
               onDismiss={permissionDeniedHandlers.onDismiss}
@@ -339,7 +355,7 @@ export function ConversationView() {
       </div>{/* end scroll + activity wrapper */}
 
       {/* Task list — pinned below scroll area */}
-      <TodoListPanel messages={tab.messages} isRunning={isRunning} />
+      <TodoListPanel messages={tab.messages ?? []} isRunning={isRunning} />
     </div>
   )
 }

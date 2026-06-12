@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/types'
 import type { RunOptions } from '../../shared/types'
 import { log as _log } from '../logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, DEBUG_MODE } from '../state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, lastForwardedEngineTabStatus, extensionCommandRegistry, DEBUG_MODE } from '../state'
 import { terminalManager } from '../terminal-manager-instance'
 import { getRemoteTabStates } from '../remote/snapshot'
 import { expandSlashCommand } from '../cli-compat/slash-expand'
@@ -183,6 +183,13 @@ export function registerSessionIpc(): void {
       state.remoteTransport.send({ type: 'tab_closed', tabId })
     }
 
+    // Clean up all per-tab main-process state to prevent memory leaks.
     activeAssistantMessages.delete(tabId)
+    activeToolInputs.delete(tabId)
+    lastMessagePreview.delete(tabId)
+    lastForwardedEngineTabStatus.delete(tabId)
+    for (const key of extensionCommandRegistry.keys()) {
+      if (key === tabId || key.startsWith(`${tabId}:`)) extensionCommandRegistry.delete(key)
+    }
   })
 }

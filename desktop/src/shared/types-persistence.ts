@@ -80,6 +80,8 @@ export interface PersistedTab {
   lastEventAt?: number | null
   /** Short single-line preview of the last visible message (~80 chars). */
   lastMessagePreview?: string | null
+  /** Persisted message count for blank-tab detection when messages are lazily loaded. */
+  messageCount?: number
 }
 
 export interface PersistedEditorFile {
