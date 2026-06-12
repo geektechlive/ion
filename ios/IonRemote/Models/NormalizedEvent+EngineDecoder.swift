@@ -58,6 +58,13 @@ extension RemoteEvent {
             let elapsed = try container.decode(Double.self, forKey: .elapsed)
             return .engineToolStalled(tabId: tabId, instanceId: instanceId, toolId: toolId, toolName: toolName, elapsed: elapsed)
 
+        case .engineRunStalled:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let stalledDuration = try container.decodeIfPresent(Double.self, forKey: .runStalledDuration) ?? 0
+            let lastActivity = try container.decodeIfPresent(String.self, forKey: .runStalledLastActivity)
+            return .engineRunStalled(tabId: tabId, instanceId: instanceId, stalledDuration: stalledDuration, lastActivity: lastActivity)
+
         case .engineSteerInjected:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)

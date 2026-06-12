@@ -59,6 +59,14 @@ enum RemoteEvent: Codable, Sendable {
     case engineToolUpdate(tabId: String, instanceId: String?)
     case engineToolComplete(tabId: String, instanceId: String?)
     case engineToolStalled(tabId: String, instanceId: String?, toolId: String, toolName: String, elapsed: Double)
+    /// Engine progress watchdog tripped: this run made no forward
+    /// progress (no provider stream events, no tool results, no turn
+    /// boundaries) for longer than the configured threshold and the
+    /// engine has cancelled it as a safety backstop. Advisory only —
+    /// the authoritative completion signal still arrives via the
+    /// follow-up engine_task_complete + engine_dead/idle events. See
+    /// the Go-side RunStalledEvent doc for the watchdog contract.
+    case engineRunStalled(tabId: String, instanceId: String?, stalledDuration: Double, lastActivity: String?)
     /// Engine drained a mid-turn steer message into the conversation as
     /// a user turn before the next LLM call. The desktop renders a
     /// "Steer applied" divider into the engineMessages scrollback; iOS
@@ -331,6 +339,7 @@ enum RemoteEvent: Codable, Sendable {
         case engineToolUpdate = "engine_tool_update"
         case engineToolComplete = "engine_tool_complete"
         case engineToolStalled = "engine_tool_stalled"
+        case engineRunStalled = "engine_run_stalled"
         case engineSteerInjected = "engine_steer_injected"
         case engineScheduleFired = "engine_schedule_fired"
         case engineLlmCall = "engine_llm_call"
@@ -414,6 +423,12 @@ enum RemoteEvent: Codable, Sendable {
         // engine_steer_injected — mid-turn steer drain confirmation.
         // Mirrors EngineEvent.SteerMessageLength's JSON tag.
         case steerMessageLength
+        // engine_run_stalled — engine progress watchdog tripped. Mirrors
+        // EngineEvent.RunStalledDuration / RunStalledLastActivity JSON tags.
+        // See the Go-side RunStalledEvent doc for the watchdog contract;
+        // iOS observes only and may render the advisory event as a
+        // diagnostic indicator separate from a generic engine_error.
+        case runStalledDuration, runStalledLastActivity
         // engine_plan_proposal — workflow event for plan-mode proposals.
         // The engine emits these field names (no instanceId; the proposal
         // is always at the tab level, not per-instance).

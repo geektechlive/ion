@@ -236,6 +236,51 @@ final class ContractSyncEngineEventsTests: XCTestCase {
     /// surface for the event (e.g. a "model nudged" status indicator)
     /// can read the complete record without contract changes.
 
+    // MARK: - RunStalledEvent decode
+
+    /// The engine emits engine_run_stalled when the progress watchdog
+    /// detects no forward progress for longer than the configured
+    /// threshold. Advisory only; the authoritative completion signal is
+    /// the follow-up engine_task_complete. iOS decodes the event via
+    /// NormalizedEvent.swift CodingKeys; this test pins the wire format.
+    func testRunStalledDecode() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.normalizedEvents["run_stalled"] else {
+            XCTFail("run_stalled not found in Go manifest")
+            return
+        }
+
+        let json = """
+        {
+            "type": "engine_run_stalled",
+            "tabId": "t1",
+            "instanceId": "i1",
+            "runStalledDuration": 45.2,
+            "runStalledLastActivity": "provider stream chunk"
+        }
+        """.data(using: .utf8)!
+
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineRunStalled(let tabId, let instanceId, let stalledDuration, let lastActivity) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(stalledDuration, 45.2, accuracy: 0.001)
+            XCTAssertEqual(lastActivity, "provider stream chunk")
+        } else {
+            XCTFail("Expected engineRunStalled, got \(event)")
+        }
+
+        let swiftHandled: Set<String> = [
+            "stalledDuration", "lastActivity",
+        ]
+        let goSet = Set(goFields ?? [])
+        let unhandled = goSet.subtracting(swiftHandled)
+        XCTAssert(
+            unhandled.isEmpty,
+            "Go run_stalled has fields not tracked in Swift test: \(unhandled.sorted())"
+        )
+    }
+
     // MARK: - ModelFallbackEvent field-set
 
     /// The engine emits engine_model_fallback when the provider falls back
@@ -267,7 +312,6 @@ final class ContractSyncEngineEventsTests: XCTestCase {
             "Go model_fallback has fields not tracked in Swift test: \(untracked.sorted())"
         )
     }
-
 
     func testEngineEarlyStopDecisionRequestDecode() throws {
         let json = """

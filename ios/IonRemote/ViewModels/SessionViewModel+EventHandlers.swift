@@ -220,6 +220,9 @@ extension SessionViewModel {
             let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
             activeTools[key]?[toolId]?.isStalled = true
 
+        case .engineRunStalled(let tabId, let instanceId, let stalledDuration, let lastActivity):
+            handleEngineRunStalled(tabId: tabId, instanceId: instanceId, stalledDuration: stalledDuration, lastActivity: lastActivity)
+
         case .engineSteerInjected(let tabId, let instanceId, let messageLength):
             handleEngineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
 
