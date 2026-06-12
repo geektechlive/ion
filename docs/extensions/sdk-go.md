@@ -503,3 +503,30 @@ The Host:
 6. Routes tool and command calls to the subprocess
 7. Handles extension-initiated notifications and requests
 8. Kills the subprocess on Dispose
+
+## Resources, Notifications, and Cross-Session Messaging
+
+The Go SDK context exposes methods for the resource subsystem, push notifications, and cross-session communication.
+
+**Resource subsystem:**
+
+- **`ctx.Resources.Declare(kind string)`** -- declare a resource collection. Returns a handle with a `Publish(op, item)` method that routes to the session or global broker depending on `item.ConversationID`.
+- **`ctx.Resources.OnQuery(kind string, handler func() ([]ResourceItem, error))`** -- register a query handler called when a client subscribes to provide the initial snapshot.
+
+**Notifications:**
+
+- **`ctx.Notify(opts NotifyOpts)`** -- emit a push notification through the engine/relay pipeline. `NotifyOpts` carries `Kind`, `ResourceID`, `Title`, `Body`, `Sound`, `Scope`, `ConversationID`, and `TargetSessionKey`. The `Push`, `PushTitle`, and `PushBody` fields on the resulting `engine_notification` event trigger APNs delivery when the relay is connected.
+
+**Cross-session messaging:**
+
+- **`ctx.Sessions.List()`** -- returns `[]SessionListEntry` with `Key`, `HasActiveRun`, `ExtensionName`, `ConversationID`. Only sessions running the same extension type are returned.
+- **`ctx.Sessions.Send(targetKey, kind string, payload map[string]interface{})`** -- send a structured message to another session. The engine enforces same extension type; cross-type sends return an error. The receiving session's `session_message` hook fires with `SessionMessageInfo{SenderSessionKey, Kind, Payload}`.
+
+**Intercept:**
+
+- **`ctx.Intercept(opts InterceptOpts)`** -- emit an `engine_intercept` event on a target session's stream. `InterceptOpts` carries `Level` (`"banner"` or `"redirect"`), `Title` (required), `Message`, `TargetSessionKey` (optional, defaults to caller's session), and `Metadata` (opaque map). The engine stamps `Source` from the extension name; extensions cannot override it.
+
+**Cross-instance dedup:**
+
+- **`ctx.RunOnceCheck(operationID string, debounceMs int64) (execute bool, reason string)`** -- check whether this instance should execute the named operation. Returns `execute=true` when this instance wins the dedup check. `reason` is one of `"in_progress"`, `"debounced"`, or `"already_ran"` when `execute=false`.
+- **`ctx.RunOnceComplete(operationID string, failed bool)`** -- record the outcome. When `failed=true`, the lock is released without updating the last-run timestamp so the next instance can retry immediately.

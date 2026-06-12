@@ -1,6 +1,6 @@
 ---
 title: Client Commands
-description: All 20 client commands in the Ion Engine socket protocol.
+description: Client commands in the Ion Engine socket protocol.
 sidebar_position: 2
 ---
 
@@ -466,3 +466,102 @@ Save a custom label for a session.
 ```
 
 **Response:** `ServerResult` with `ok: true` on success.
+
+---
+
+### resource_subscribe
+
+Subscribe to resource updates for a specific kind. The engine streams a snapshot event immediately on subscribe, then delta events as the resource collection changes.
+
+| Field            | Type                    | Required | Description                                                                  |
+|------------------|-------------------------|----------|------------------------------------------------------------------------------|
+| `cmd`            | `"resource_subscribe"`  | yes      | Command discriminator                                                        |
+| `key`            | string                  | yes      | Session key                                                                  |
+| `resourceKind`   | string                  | yes      | Resource kind to subscribe to (e.g. `"tasks"`, `"notifications"`)            |
+| `resourceFilter` | ResourceFilter object   | no       | Optional filter applied to the subscription                                  |
+| `resourceGlobal` | boolean                 | no       | When `true`, subscribes to the Manager-level global broker instead of the per-session broker. Default `false`. |
+| `requestId`      | string                  | no       | Correlates with ServerResult                                                 |
+
+```json
+{"cmd":"resource_subscribe","key":"abc-123","resourceKind":"tasks","requestId":"r20"}
+```
+
+**Response:** `ServerResult` with `data: { subscriptionId: string }`. Use `subscriptionId` to unsubscribe later.
+
+---
+
+### resource_unsubscribe
+
+Tear down an active resource subscription.
+
+| Field           | Type                      | Required | Description                                       |
+|-----------------|---------------------------|----------|---------------------------------------------------|
+| `cmd`           | `"resource_unsubscribe"`  | yes      | Command discriminator                             |
+| `key`           | string                    | yes      | Session key                                       |
+| `resourceSubId` | string                    | yes      | The `subscriptionId` returned by `resource_subscribe` |
+| `requestId`     | string                    | no       | Correlates with ServerResult                      |
+
+```json
+{"cmd":"resource_unsubscribe","key":"abc-123","resourceSubId":"sub-001","requestId":"r21"}
+```
+
+**Response:** `ServerResult` with `ok: true`. Tears down subscriptions on both session and global brokers.
+
+---
+
+### resource_publish
+
+Publish a resource operation from the client. Routes to the global broker when `resourceItem.conversationId` is empty, to the session broker otherwise. Uses `PublishDirect` — no registered producer is required.
+
+| Field          | Type                    | Required | Description                                                                      |
+|----------------|-------------------------|----------|----------------------------------------------------------------------------------|
+| `cmd`          | `"resource_publish"`    | yes      | Command discriminator                                                            |
+| `key`          | string                  | yes      | Session key                                                                      |
+| `resourceKind` | string                  | no       | Resource kind (informational; the kind is carried on `resourceItem`)             |
+| `resourceOp`   | string                  | yes      | Operation: one of `"create"`, `"update"`, `"delete"`, `"mark_read"`              |
+| `resourceItem` | ResourceItem object     | no       | The resource item to publish                                                     |
+| `requestId`    | string                  | no       | Correlates with ServerResult                                                     |
+
+```json
+{"cmd":"resource_publish","key":"abc-123","resourceOp":"update","resourceItem":{"id":"item-1","conversationId":"conv-1"},"requestId":"r22"}
+```
+
+**Response:** `ServerResult` with `ok: true`.
+
+---
+
+### query_session_status
+
+Request an immediate `engine_session_status` emission for a session. The status is emitted on the session's event stream, not as the RPC result. Useful for freshly reconnected clients that need current status without waiting for the next heartbeat.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `cmd` | `"query_session_status"` | yes | Command discriminator |
+| `key` | string | yes | Session key |
+| `requestId` | string | no | Correlates with ServerResult |
+
+```json
+{"cmd":"query_session_status","key":"abc-123","requestId":"r30"}
+```
+
+**Response:** `ServerResult` with `ok: true`. The session status arrives as an `engine_session_status` event on the stream.
+
+---
+
+### delete_stored_sessions
+
+Remove stale conversation files from disk. All filter fields are optional with sane defaults.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `cmd` | `"delete_stored_sessions"` | yes | Command discriminator |
+| `maxAgeDays` | number | no | Delete conversations older than this many days (default: 14) |
+| `excludeIds` | string[] | no | Conversation IDs to keep regardless of age |
+| `dryRun` | boolean | no | When `true`, report what would be deleted without deleting (default: `false`) |
+| `requestId` | string | no | Correlates with ServerResult |
+
+```json
+{"cmd":"delete_stored_sessions","maxAgeDays":30,"excludeIds":["conv-important"],"dryRun":true,"requestId":"r31"}
+```
+
+**Response:** `ServerResult` with `data: { deleted: number, totalSize: number, dryRun: boolean }`.

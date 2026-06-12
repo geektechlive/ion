@@ -691,3 +691,99 @@ Observation-only advisory events emitted by the webhook server, scheduler, and a
 | `engine_schedule_skipped`         | Schedule fire (skip) | `asyncKind`, `asyncId`, `asyncReason`                         | `asyncReason`: `"disabled"`, `"no_resolver"`, `"no_session"`, `"predicate_error"`. |
 | `engine_schedule_failed`          | Schedule fire (error)| `asyncKind`, `asyncId`, `asyncReason`, `asyncDurationMs`      | Handler threw; `asyncReason` carries the error message. |
 | `engine_async_fire_dropped`       | Shared error         | `asyncKind`, `asyncId`, `asyncReason`                         | Fire could not proceed. `asyncReason`: `"no_session"`, `"cap_exceeded"`, `"subprocess_dead"`, `"unregistered"`, `"no_resolver"`. |
+
+#### engine_resource_snapshot
+
+Snapshot-replace semantics. Sent when a client first subscribes to a resource kind and whenever a full refresh is needed. Consumers must replace their local collection for this kind with the snapshot contents.
+
+| Field           | Type              | Description                                         |
+|-----------------|-------------------|-----------------------------------------------------|
+| `type`          | `"engine_resource_snapshot"` | Event type                             |
+| `resourceKind`  | string            | The subscribed resource kind                        |
+| `resourceSubId` | string            | Subscription ID (from `resource_subscribe` response)|
+| `resourceItems` | ResourceItem[]    | Complete current collection for this kind           |
+
+#### engine_resource_delta
+
+Incremental resource update. Sent after the initial snapshot whenever an item is created, updated, deleted, or marked read.
+
+| Field           | Type              | Description                                         |
+|-----------------|-------------------|-----------------------------------------------------|
+| `type`          | `"engine_resource_delta"` | Event type                               |
+| `resourceKind`  | string            | The subscribed resource kind                        |
+| `resourceSubId` | string            | Subscription ID                                     |
+| `resourceDelta` | object            | Delta descriptor (see below)                        |
+
+**ResourceDelta:**
+
+| Field  | Type         | Description                                              |
+|--------|--------------|----------------------------------------------------------|
+| `op`   | string       | One of `"create"`, `"update"`, `"delete"`, `"mark_read"` |
+| `item` | ResourceItem | The affected item                                        |
+
+#### engine_notification
+
+Push notification signal from an extension. The `push`/`pushTitle`/`pushBody` fields trigger APNs delivery through the relay when the iOS client is connected. The `notify*` fields carry the in-app notification payload for desktop and web clients.
+
+| Field              | Type    | Description                                                                 |
+|--------------------|---------|-----------------------------------------------------------------------------|
+| `type`             | `"engine_notification"` | Event type                                                    |
+| `push`             | boolean | When `true`, triggers an APNs push through the relay                        |
+| `pushTitle`        | string  | APNs alert title                                                            |
+| `pushBody`         | string  | APNs alert body                                                             |
+| `notifyKind`       | string  | Application-defined notification kind                                       |
+| `notifyResourceId` | string  | Optional resource ID the notification relates to                            |
+| `notifyTitle`      | string  | In-app notification title                                                   |
+| `notifyBody`       | string  | In-app notification body                                                    |
+| `notifySound`      | boolean | Whether to play a sound on delivery                                         |
+| `notifyScope`      | string  | Optional scope hint (e.g. `"session"`, `"global"`)                          |
+
+#### engine_session_status
+
+Typed per-session status snapshot. Emitted alongside the legacy `engine_status` during the transition window and re-emitted by the heartbeat every 30 seconds. Semantics: snapshot-replace per session key. Consumers replace their cached status for the given key with this payload.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"engine_session_status"` | Event type |
+| `sessionStatus` | SessionStatus | Complete status payload (see below) |
+
+**SessionStatus fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | Session key (tabId or tabId:instanceId) |
+| `state` | string | Authoritative state: `"idle"`, `"running"` |
+| `stateSince` | number | Unix-ms timestamp when the session entered the current state |
+| `lastEmittedAt` | number | Unix-ms timestamp of this emission |
+| `hasInflightRun` | boolean | True when the backend has a live run |
+| `backgroundAgentCount` | number | Number of background dispatch agents still running |
+| `permissionDenialsPending` | array | Unresolved AskUserQuestion / ExitPlanMode entries |
+| `model` | string | Model the most recent run resolved to |
+| `contextPercent` | number | Context-window usage percent |
+| `contextWindow` | number | Model's context window in tokens |
+| `totalCostUsd` | number | Cumulative conversation cost in USD |
+| `sessionId` | string | Conversation ID |
+| `extensionName` | string | Name of the loaded extension |
+
+#### engine_run_stalled
+
+Advisory workflow signal emitted once per run when the engine's progress watchdog detects no forward progress for longer than the configured threshold and cancels the run. Not retained or replayed on reconnect. The authoritative completion signal is the follow-up `engine_task_complete`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"engine_run_stalled"` | Event type |
+| `runStalledDuration` | number | Seconds since last progress event |
+| `runStalledLastActivity` | string | Description of the most recent progress event (optional) |
+
+#### engine_intercept
+
+Fire-and-forget signal emitted when an extension calls `ctx.Intercept()`. The engine attaches no semantics beyond routing. Not retained or replayed on reconnect.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"engine_intercept"` | Event type |
+| `interceptLevel` | string | `"banner"` (informational) or `"redirect"` (urgent) |
+| `interceptTitle` | string | Short headline |
+| `interceptMessage` | string | Body content |
+| `interceptSource` | string | Extension name (set by engine, not caller) |
+| `interceptMetadata` | object | Opaque map forwarded to clients unchanged |
