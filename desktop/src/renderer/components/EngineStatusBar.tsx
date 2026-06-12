@@ -7,6 +7,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import type { EngineInstance } from '../../shared/types'
 import { getEngineInstanceWaitingState } from './TabStripShared'
 import { Tooltip } from './git/Tooltip'
+import { EngineInstanceCloseConfirmDialog } from './EngineInstanceCloseConfirmDialog'
 
 interface Props {
   tabId: string
@@ -36,6 +37,26 @@ export function EngineStatusBar({ tabId }: Props) {
       for (const inst of pane?.instances || []) {
         const state = s.engineStatusFields.get(`${tabId}:${inst.id}`)?.state
         if (state) out.set(inst.id, state)
+      }
+      return out
+    }),
+  )
+  // Per-instance running-agent count. Mirrors `engineStateByInstance`
+  // above but reads `engineAgentStates` so the sub-tab pill can show
+  // the yellow "awaiting children" dot when the orchestrator is idle
+  // but dispatched background agents are still executing. useShallow
+  // keeps render cost low — only the {id, count} pairs that actually
+  // change trigger a re-render. See `agentRunningCount` in
+  // `getRemoteTabStates` (snapshot.ts) for the iOS-side counterpart.
+  const agentCountByInstance = useSessionStore(
+    useShallow((s) => {
+      const out = new Map<string, number>()
+      for (const inst of pane?.instances || []) {
+        const agents = s.engineAgentStates.get(`${tabId}:${inst.id}`)
+        if (!agents) continue
+        let n = 0
+        for (const a of agents) if (a.status === 'running') n++
+        if (n > 0) out.set(inst.id, n)
       }
       return out
     }),
@@ -77,6 +98,13 @@ export function EngineStatusBar({ tabId }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editLabel, setEditLabel] = useState('')
   const [contextMenu, setContextMenu] = useState<{ instId: string; x: number; y: number } | null>(null)
+  // Pending sub-tab close confirmation. The X button on a sub-tab pill
+  // sets this; the EngineInstanceCloseConfirmDialog (rendered at the
+  // bottom of this component) reads it and gates the actual
+  // removeEngineInstance call behind a modal pop-up. We keep the id only
+  // and resolve the label/last-instance flag at render time so we don't
+  // hold stale references if the underlying instance list changes.
+  const [confirmingCloseInstId, setConfirmingCloseInstId] = useState<string | null>(null)
 
   const startRename = (inst: EngineInstance) => {
     setEditingId(inst.id)
@@ -122,20 +150,35 @@ export function EngineStatusBar({ tabId }: Props) {
     const engineState = engineStateByInstance.get(inst.id)
     const isRunningState =
       engineState === 'running' || engineState === 'starting' || engineState === 'connecting'
+    // Per-instance "awaiting children" — orchestrator idle but
+    // dispatched background agents still executing. Sits below
+    // isRunningState in the priority cascade so foreground orange
+    // beats background yellow. See EngineFooter / TabStripStatusDot
+    // for the matching cascade on other surfaces.
+    const runningAgentCount = agentCountByInstance.get(inst.id) ?? 0
+    const hasRunningAgents = runningAgentCount > 0
     const dotColor =
       waitingState === 'question' ? colors.infoText :
         waitingState === 'plan-ready' ? colors.statusComplete :
           isRunningState ? colors.statusRunning :
-            null
+            hasRunningAgents ? colors.statusWaitingChildren :
+              null
     const dotGlow =
       waitingState === 'question' ? colors.tabGlowQuestion :
         waitingState === 'plan-ready' ? colors.tabGlowPlanReady :
-          null
-    // Pulse the dot only for the live "running" indicator — the waiting
-    // dots use the steady glow established by TabStripStatusDot to
-    // distinguish "the engine is doing work" from "the engine is
-    // waiting on you".
-    const dotPulse = !waitingState && isRunningState
+          (hasRunningAgents && !isRunningState) ? colors.statusWaitingChildrenGlow :
+            null
+    // Pulse the dot for live "running" / "awaiting children" — the
+    // user-waiting dots use the steady glow established by
+    // TabStripStatusDot to distinguish "the engine is doing work"
+    // from "the engine is waiting on you".
+    const dotPulse = !waitingState && (isRunningState || hasRunningAgents)
+    // Tooltip when the dot represents background-only activity, so
+    // hovering a sub-tab pill discloses the count without the user
+    // having to expand the agent panel.
+    const dotTooltip = (!waitingState && !isRunningState && hasRunningAgents)
+      ? `${runningAgentCount} background agent${runningAgentCount === 1 ? '' : 's'} running`
+      : undefined
     return (
       <Reorder.Item
         key={inst.id}
@@ -168,6 +211,7 @@ export function EngineStatusBar({ tabId }: Props) {
         {dotColor && (
           <span
             className={`flex-shrink-0 ${dotPulse ? 'animate-pulse-dot' : ''}`}
+            title={dotTooltip}
             style={{
               width: 6,
               height: 6,
@@ -227,11 +271,18 @@ export function EngineStatusBar({ tabId }: Props) {
             </Tooltip>
           )
         })()}
-        {/* Close button */}
+        {/* Close button. Sets pending-close state so the
+            EngineInstanceCloseConfirmDialog (rendered below) can confirm
+            the destructive action via a centered modal. We deliberately
+            do NOT call removeEngineInstance directly here — closing a
+            sub-tab is just as destructive as closing the parent tab (and
+            removing the last instance closes the parent tab too via
+            engine-slice.ts), so a stray click on a tiny icon should not
+            be enough to lose work. */}
         <button
           data-ion-ui
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); useSessionStore.getState().removeEngineInstance(tabId, inst.id) }}
+          onClick={(e) => { e.stopPropagation(); setConfirmingCloseInstId(inst.id) }}
           style={{
             background: 'none',
             border: 'none',
@@ -356,6 +407,38 @@ export function EngineStatusBar({ tabId }: Props) {
           ))}
         </div>
       )}
+      {/* Close-instance confirmation modal. Rendered here (not inside
+          the Reorder.Item) so the dialog markup is outside the small
+          draggable pill — keeps the modal lifecycle decoupled from
+          instance reorders and avoids portal-anchor surprises. The
+          dialog re-resolves the instance from `instances` on every
+          render so a concurrent removal or rename doesn't strand the
+          modal with stale data. */}
+      {(() => {
+        if (!confirmingCloseInstId) return null
+        const inst = (pane?.instances || []).find((i) => i.id === confirmingCloseInstId)
+        if (!inst) {
+          // Instance vanished (race with a remote removal, tab close,
+          // etc.). Drop the pending state so we don't render an empty
+          // dialog on the next paint.
+          return null
+        }
+        const parentTab = tabs.find((t) => t.id === tabId)
+        const parentTitle = parentTab?.customTitle || parentTab?.title || 'engine tab'
+        const isLast = (pane?.instances.length || 0) <= 1
+        return (
+          <EngineInstanceCloseConfirmDialog
+            instanceLabel={inst.label}
+            tabTitle={parentTitle}
+            isLastInstance={isLast}
+            onConfirm={() => {
+              useSessionStore.getState().removeEngineInstance(tabId, confirmingCloseInstId)
+              setConfirmingCloseInstId(null)
+            }}
+            onCancel={() => setConfirmingCloseInstId(null)}
+          />
+        )
+      })()}
     </>
   )
 }

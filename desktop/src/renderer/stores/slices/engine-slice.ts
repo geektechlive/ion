@@ -153,6 +153,14 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         : pane.activeInstanceId
       if (remaining.length === 0) {
         panes.delete(tabId)
+        // The user explicitly closed the last engine sub-tab via the
+        // EngineInstanceCloseConfirmDialog, and engineAbort fired
+        // above for the corresponding key. The closeTab guard reads
+        // engineStatusFields / engineAgentStates by tabId:instanceId;
+        // by the time it runs the abort will have started flipping
+        // those entries to idle. If a race window exists, the guard
+        // logs a refusal and the tab stays open — the user can
+        // re-attempt close once children finish aborting.
         get().closeTab(tabId)
         set({ enginePanes: panes })
       } else {
@@ -404,7 +412,10 @@ export function createEngineSlice(set: StoreSet, get: StoreGet): Partial<State> 
         enginePermissionDenied,
       })
 
-      // Close source tab if it's now empty
+      // Close source tab if it's now empty. If the source tab still
+      // has running orchestrators/children (race window or unrelated
+      // sibling instance not moved), the closeTab guard will refuse
+      // and log — the source tab stays open until it's truly idle.
       if (sourceRemaining.length === 0) {
         get().closeTab(sourceTabId)
       }

@@ -4,7 +4,7 @@ import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { useSessionStore } from '../stores/sessionStore'
 import type { TabState } from '../../shared/types'
-import { getWaitingState, isAnyEngineInstanceRunning, formatRelativeShort } from './TabStripShared'
+import { getWaitingState, isAnyEngineInstanceRunning, anyEngineInstanceHasRunningChildren, formatRelativeShort } from './TabStripShared'
 import { StatusDot } from './TabStripStatusDot'
 import { InlineRenameInput } from './TabStripInlineRenameInput'
 
@@ -62,6 +62,12 @@ export function TabPill({
   // this, isAnyEngineInstanceRunning reads stale getState() data. Only
   // engine tabs need this subscription — CLI tabs never touch the map.
   useSessionStore((s) => tab.isEngine ? s.engineStatusFields : null)
+  // Parallel subscription for engineAgentStates so the pill re-renders
+  // when child agents start/finish. Drives both the yellow "awaiting
+  // children" StatusDot and the hard-block on the X close button.
+  // Same pattern as the engineStatusFields subscription above — only
+  // engine tabs need it.
+  useSessionStore((s) => tab.isEngine ? s.engineAgentStates : null)
 
   const isRunning = tab.status === 'running' || tab.status === 'connecting'
   const displayTitle = tab.customTitle || tab.title
@@ -69,7 +75,19 @@ export function TabPill({
   // For engine tabs, check if any sub-tab instance is running so the
   // main tab pill pulses even when the active instance is idle.
   const anyInstanceRunning = tab.isEngine && isAnyEngineInstanceRunning(tab.id)
+  // Parallel "any sub-instance has running dispatched background
+  // children" derivation — drives the yellow "awaiting children" dot
+  // and the hard-block on the X close button. Foreground orange wins
+  // over background yellow in the StatusDot priority cascade.
+  const anyInstanceHasRunningChildren = tab.isEngine && anyEngineInstanceHasRunningChildren(tab.id)
   const effectiveStatus = (anyInstanceRunning && !isRunning) ? 'running' as const : tab.status
+  // Combined "must not close" predicate. Hard-blocks the X close
+  // button below. Mirrors the action-layer guard in tab-slice.ts
+  // closeTab so every entry point — UI affordance, keyboard shortcut,
+  // programmatic call — refuses to destroy a tab whose orchestrator
+  // is running or whose dispatched background agents are still
+  // executing. The user must stop the tab first.
+  const closeBlocked = isRunning || anyInstanceHasRunningChildren
 
   // Derive waiting-for-user state from permission denials
   const waitingState = getWaitingState(tab)
@@ -82,10 +100,14 @@ export function TabPill({
       : null
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    if (e.button === 1) { e.preventDefault(); if (!tab.worktree && !isRunning && !tab.bashExecuting) onClose(); return }
+    // Middle-click close. Honors the same closeBlocked predicate as the
+    // X button below — never allow middle-click to bypass the guard
+    // when an orchestrator is running OR dispatched background agents
+    // are still in flight.
+    if (e.button === 1) { e.preventDefault(); if (!tab.worktree && !closeBlocked && !tab.bashExecuting) onClose(); return }
     if (e.button !== 0) return
     onDragPointerDown(tab.id, e)
-  }, [onClose, onDragPointerDown, tab.id, tab.worktree, tab.bashExecuting, isRunning])
+  }, [onClose, onDragPointerDown, tab.id, tab.worktree, tab.bashExecuting, closeBlocked])
 
   return (
     <div
@@ -129,7 +151,7 @@ export function TabPill({
           onOpenColorPicker(tab.id, { x: e.clientX, y: e.clientY })
         }}
       >
-        <StatusDot status={effectiveStatus} hasUnread={tab.hasUnread} hasPermission={tab.permissionQueue.length > 0} bashExecuting={tab.bashExecuting} waitingState={waitingState} pillIcon={tab.pillIcon} />
+        <StatusDot status={effectiveStatus} hasUnread={tab.hasUnread} hasPermission={tab.permissionQueue.length > 0} bashExecuting={tab.bashExecuting} waitingState={waitingState} pillIcon={tab.pillIcon} hasRunningChildren={anyInstanceHasRunningChildren} />
       </span>
       {tab.groupPinned && tabGroupMode === 'manual' && (
         <PushPin size={10} color={colors.textTertiary} className="flex-shrink-0" style={{ opacity: 0.7 }} />
@@ -210,7 +232,13 @@ export function TabPill({
             Yes
           </button>
         </div>
-      ) : !isRunning && (
+      ) : !closeBlocked && (
+        // Hide the X close button while the orchestrator is running OR
+        // dispatched background children are still executing. The user
+        // must explicitly stop the tab (via the in-pane Interrupt
+        // button or by waiting for completion) before close becomes
+        // available. Mirrors the action-layer guard in tab-slice.ts
+        // closeTab — UI and action layer enforce the same rule.
         <button
           onClick={(e) => { e.stopPropagation(); onConfirmClose() }}
           className="flex-shrink-0 rounded-full w-4 h-4 flex items-center justify-center transition-opacity"

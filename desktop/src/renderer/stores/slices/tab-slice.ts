@@ -231,6 +231,63 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
     closeTab: (tabId) => {
       const closingTab = get().tabs.find((t) => t.id === tabId)
+      // ─── Action-layer guard: hard-block engine tab close while
+      // orchestrator is running OR dispatched background agents are
+      // still executing. Mirrors the X-button suppression in
+      // TabStripTabPill.tsx and exists for defense-in-depth — catches
+      // keyboard shortcuts (Cmd+W → CloseTabConfirmDialog), group-pill
+      // close paths, and any future entry point we haven't enumerated.
+      //
+      // No escape hatch: there is no `force` flag. Either the tab is
+      // completely idle (no orchestrator activity, no dispatched
+      // background children) and close is allowed, or the tab is
+      // active and the user must stop it first (via the in-pane
+      // Interrupt button, or by waiting for natural completion). The
+      // user's path to close an active engine tab is: interrupt →
+      // wait for idle → close. This protects dispatched background
+      // agents from accidental SIGTERM via tab close.
+      //
+      // Internal cleanup paths (`removeEngineInstance` last-instance
+      // close, `moveEngineInstance` source-cleanup) abort the
+      // orchestrator above the call site, which propagates to
+      // children — by the time those paths reach this guard, the
+      // tab's state should already be quiescent. If a race window
+      // means agents haven't yet flipped to terminal status, the
+      // guard fires, the warn is logged, and the next snapshot tick
+      // (after agents finish aborting) allows the close.
+      //
+      // CLI tabs are intentionally NOT gated — CLI tabs have no
+      // dispatched-agent concept and their existing Cmd+W → confirm
+      // flow is correct as-is. The guard is engine-tab-only because
+      // engine tabs are where the dispatched-agent kill footgun lives.
+      if (closingTab?.isEngine) {
+        const s = get() as any
+        const pane = s.enginePanes?.get?.(tabId)
+        if (pane && pane.instances) {
+          let orchestratorRunning = false
+          const childCounts: Array<{ id: string; count: number }> = []
+          for (const inst of pane.instances) {
+            const key = `${tabId}:${inst.id}`
+            const state = s.engineStatusFields?.get?.(key)?.state
+            if (state === 'running' || state === 'connecting' || state === 'starting') {
+              orchestratorRunning = true
+            }
+            const agents = s.engineAgentStates?.get?.(key) || []
+            const running = agents.filter((a: any) => a?.status === 'running').length
+            childCounts.push({ id: inst.id, count: running })
+          }
+          const childRunning = childCounts.some((c) => c.count > 0)
+          if (orchestratorRunning || childRunning) {
+            console.warn(
+              `[closeTab] refused engine tab close: tabId=${tabId.slice(0, 8)} ` +
+              `orchestratorRunning=${orchestratorRunning} ` +
+              `childCounts=${JSON.stringify(childCounts.map((c) => `${c.id.slice(0, 6)}:${c.count}`))}` +
+              ' — user must stop the tab (interrupt + wait for children) before closing'
+            )
+            return
+          }
+        }
+      }
       if (closingTab?.worktree) {
         window.ion.gitWorktreeRemove(
           closingTab.worktree.repoPath,

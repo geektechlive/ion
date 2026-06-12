@@ -2,6 +2,7 @@ import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
 import { formatClearDivider, formatPlanCreatedDivider, formatSteerAppliedDivider } from '../../../shared/clear-divider'
 import { handleEngineStatusEvent } from './engine-event-status'
+import { handleEngineInterceptEvent } from './engine-event-slice-intercept'
 import { applyResourceSnapshot, applyResourceDelta } from './resource-slice'
 import type { ResourceItem } from '../../../shared/types-engine'
 
@@ -210,34 +211,9 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
           break
         }
         case 'engine_intercept': {
-          // Render an inline banner in the conversation scrollback so the user
-          // can see that an intercept fired — which extension triggered it,
-          // what it said, and whether the run was redirected. Uses role:
-          // 'harness' so the groupMessages pipeline routes it through the
-          // InterceptBanner component (via tool-helpers kind: 'intercept').
-          // The `interceptLevel` field on the message lets InterceptBanner
-          // choose visual weight: 'redirect' gets the amber/urgent style;
-          // 'banner' gets a lighter informational style.
-          //
-          // Content format: markdown so the title renders as bold and the
-          // body gets normal prose treatment. The level prefix ("Conversation
-          // redirected:") is prepended for 'redirect' level so the user sees
-          // the action label even if the title is terse.
-          const levelPrefix = event.interceptLevel === 'redirect' ? 'Conversation redirected: ' : ''
-          const content = `**${levelPrefix}${event.interceptTitle}**\n\n${event.interceptMessage}`
-          set((state) => {
-            const messages = new Map(state.engineMessages)
-            const msgs = [...(messages.get(key) || [])]
-            msgs.push({
-              id: nextMsgId(),
-              role: 'harness' as const,
-              content,
-              timestamp: Date.now(),
-              interceptLevel: event.interceptLevel,
-            })
-            messages.set(key, msgs)
-            return { engineMessages: messages }
-          })
+          // Extracted to engine-event-slice-intercept.ts to keep this file
+          // under the 600-line TypeScript cap. See that file for full comments.
+          handleEngineInterceptEvent(set, key, event)
           break
         }
         case 'engine_dialog': {

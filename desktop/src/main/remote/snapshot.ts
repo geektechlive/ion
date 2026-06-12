@@ -139,6 +139,25 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                     instRunning = st === 'running' || st === 'connecting' || st === 'starting';
                   }
                 }
+                // Per-instance running-agent-count. Folds across the
+                // instance's engineAgentStates entry to expose "how many
+                // dispatched background agents are still running" to iOS.
+                // Drives the yellow "awaiting children" pulse on the iOS
+                // sub-tab pill and footer, mirroring the desktop's
+                // agentCountByInstance derivation in EngineStatusBar.
+                // Per CLAUDE.md § "Common parity surfaces" — when the
+                // desktop renders a per-instance signal, iOS must see the
+                // same data through the snapshot so the parity table row
+                // can be honored.
+                var instRunningAgents = 0;
+                if (s.engineAgentStates && s.engineAgentStates.get) {
+                  var ags = s.engineAgentStates.get(t.id + ':' + inst.id);
+                  if (ags && Array.isArray(ags)) {
+                    for (var ai = 0; ai < ags.length; ai++) {
+                      if (ags[ai] && ags[ai].status === 'running') instRunningAgents++;
+                    }
+                  }
+                }
                 // Per-instance model-fallback indicator. Projects the
                 // renderer's engineModelFallbacks map onto each instance
                 // so iOS can render a matching ⚠ glyph on its
@@ -158,7 +177,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
                     mfOut = { requestedModel: mf.requestedModel, fallbackModel: mf.fallbackModel };
                   }
                 }
-                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, modelFallback: mfOut };
+                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, runningAgentCount: instRunningAgents > 0 ? instRunningAgents : undefined, modelFallback: mfOut };
               });
               activeEngineInstanceId = ePaneForList.activeInstanceId || ePaneForList.instances[0].id;
             }
@@ -167,9 +186,17 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
             // if the active instance is idle. Parallels the desktop's
             // isAnyEngineInstanceRunning helper in TabStripShared.ts.
             var anyInstanceRunning = false;
+            // Parallel aggregate for "any instance has running background
+            // children" — drives the iOS parent tab pill's yellow
+            // "awaiting children" dot. Folds across the per-instance
+            // runningAgentCount we just derived. See CLAUDE.md §
+            // "Common parity surfaces" parity table row.
+            var anyInstanceHasRunningChildren = false;
             if (engineInstances) {
               for (var ei = 0; ei < engineInstances.length; ei++) {
-                if (engineInstances[ei].isRunning) { anyInstanceRunning = true; break; }
+                if (engineInstances[ei].isRunning) anyInstanceRunning = true;
+                if ((engineInstances[ei].runningAgentCount || 0) > 0) anyInstanceHasRunningChildren = true;
+                if (anyInstanceRunning && anyInstanceHasRunningChildren) break;
               }
             }
             return {
@@ -192,6 +219,12 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               groupId: t.groupId || null,
               modelOverride: t.modelOverride || null,
               groupPinned: t.groupPinned || false,
+              // Top-level aggregate of "any sub-instance has running
+              // background children". iOS reads this on the parent tab
+              // pill so the yellow "awaiting children" dot fires without
+              // folding across engineInstances client-side. Mirrors the
+              // desktop's anyEngineInstanceHasRunningChildren helper.
+              hasRunningChildren: anyInstanceHasRunningChildren || undefined,
               conversationId: t.conversationId || null,
               lastMessageContent: lastMsg,
               lastActivityTs: lastTs || 0,
@@ -255,6 +288,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
         groupId: t.groupId || null,
         modelOverride: t.modelOverride || null,
         groupPinned: t.groupPinned || false,
+        hasRunningChildren: t.hasRunningChildren || undefined,
         conversationId: t.conversationId || undefined,
         lastActivityAt: t.lastActivityTs || undefined,
         pillColor: t.pillColor || null,

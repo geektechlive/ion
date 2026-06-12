@@ -16,6 +16,12 @@ interface Props {
   onToggleTall: () => void
   activeTabId: string
   engineModelOverride?: string
+  /** Number of dispatched background agents currently in the `running`
+   *  state for this engine instance. When `status.state === 'idle'`
+   *  and this is > 0, the footer shows the yellow "awaiting children"
+   *  pulse + label instead of the bare `[idle]` text. Passed by the
+   *  parent `EngineView` from `agentStates.filter(...).length`. */
+  agentRunningCount?: number
 }
 
 function renderContextBar(percent: number): string {
@@ -29,7 +35,7 @@ function formatTokens(n: number): string {
   return `${Math.round(n / 1000)}k`
 }
 
-export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engineModelOverride }: Props) {
+export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engineModelOverride, agentRunningCount = 0 }: Props) {
   const colors = useColors()
   const popoverLayer = usePopoverLayer()
   const setEngineModel = useSessionStore((s) => s.setEngineModel)
@@ -134,7 +140,52 @@ export function EngineFooter({ status, isTall, onToggleTall, activeTabId, engine
             {status.extensionName && (
               <span style={{ color: colors.accent, fontWeight: 600 }}>{status.extensionName}</span>
             )}
-            <span style={{ color: colors.textTertiary }}>[{status.state}]</span>
+            {/* State label & dot.
+              *
+              * Three visual states:
+              *   - state === 'running'  → orange `statusRunning` pulse + `[running]`
+              *   - state === 'idle' AND agentRunningCount > 0 →
+              *       yellow `statusWaitingChildren` pulse +
+              *       `[waiting for N background agent(s)]`
+              *   - everything else (idle with no children, error, etc.) →
+              *       no dot, `[{state}]` (existing behaviour)
+              *
+              * Foreground orange beats background yellow because the
+              * orchestrator's own activity is the strongest signal —
+              * matches the priority cascade in
+              * `TabStripStatusDot.tsx` / `TabStripShared.getTabStatusColor`.
+              * The pulse animation reuses `.animate-pulse-dot`, only
+              * the background color differs between the two pulsing
+              * branches.
+              */}
+            {(() => {
+              const isRun = status.state === 'running'
+              const isWaitingChildren = status.state === 'idle' && agentRunningCount > 0
+              if (!isRun && !isWaitingChildren) {
+                return <span style={{ color: colors.textTertiary }}>[{status.state}]</span>
+              }
+              const dotColor = isRun ? colors.statusRunning : colors.statusWaitingChildren
+              const labelColor = isRun ? colors.statusRunning : colors.statusWaitingChildren
+              const label = isRun
+                ? 'running'
+                : `waiting for ${agentRunningCount} background agent${agentRunningCount === 1 ? '' : 's'}`
+              return (
+                <span style={{ color: colors.textTertiary, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span
+                    className="animate-pulse-dot"
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      background: dotColor,
+                      display: 'inline-block',
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ color: labelColor }}>[{label}]</span>
+                </span>
+              )
+            })()}
             {status.team && <>
               <span style={{ color: colors.textTertiary }}>|</span>
               <span style={{ color: colors.textSecondary }}>{status.team}</span>

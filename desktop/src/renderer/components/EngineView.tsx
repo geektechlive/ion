@@ -93,7 +93,15 @@ export function EngineView({ tabId }: EngineViewProps) {
     return k ? s.engineModelOverrides.get(k) : undefined
   })
   const isRunning = tabStatus === 'running' || tabStatus === 'connecting'
-  const hasRunningChildren = agentStates.some(a => a.status === 'running')
+  // Promote `.some(...)` to a count so we can render
+  // "waiting for N background agent(s)" in the footer and Thinking
+  // indicator. Computing both `runningChildCount` (number) and
+  // `hasRunningChildren` (boolean) keeps existing call sites working
+  // without scattering `.length > 0` checks. The boolean is still
+  // used by the Interrupt-button visibility predicate further down,
+  // which only cares about presence.
+  const runningChildCount = agentStates.filter(a => a.status === 'running').length
+  const hasRunningChildren = runningChildCount > 0
   const [agentPanelFullscreen, setAgentPanelFullscreen] = useState(false)
   // Per-instance agent panel heights — persisted only for the tab's lifetime.
   // Key is the engine instance compound key (tabId:instanceId).
@@ -116,7 +124,26 @@ export function EngineView({ tabId }: EngineViewProps) {
   const grouped = useMemo(() => groupMessages(visibleMessages, { includeUser: true, unifiedTurnView }), [visibleMessages, unifiedTurnView])
 
   const hasContent = visibleMessages.some(m => m.role === 'assistant' && (m.content || '').length > 0)
-  const showThinking = isRunning && !hasContent && agentStates.filter(a => a.status === 'running').length === 0
+  // Thinking indicator visibility — three modes:
+  //   - foreground "Thinking…" (orange): orchestrator is running AND
+  //     no assistant content has streamed yet AND no children are
+  //     running. This is the original behaviour: show "Thinking…"
+  //     between submit and first token while children haven't been
+  //     dispatched.
+  //   - background "Waiting for background agents…" (yellow):
+  //     orchestrator is idle but at least one dispatched agent is
+  //     still running. The label and dot color change so users
+  //     understand the conversation is parked awaiting children, not
+  //     stopped.
+  //   - hidden otherwise.
+  // The yellow branch wins when both could fire (orchestrator running
+  // AND content) — but since we check `!isRunning` for the yellow
+  // branch, that combination produces neither, which is correct: the
+  // streaming-content pulse-dot in the message area is the right
+  // signal then.
+  const showThinkingForeground = isRunning && !hasContent && runningChildCount === 0
+  const showWaitingChildren = !isRunning && hasRunningChildren
+  const showThinking = showThinkingForeground || showWaitingChildren
 
   // Auto-scroll (only when user is near bottom)
   useEffect(() => {
@@ -342,7 +369,20 @@ export function EngineView({ tabId }: EngineViewProps) {
       {/* Scrollable conversation area */}
       <div style={{ flex: agentPanelFullscreen ? 0 : 1, maxHeight: agentPanelFullscreen ? 100 : undefined, position: 'relative', overflow: 'hidden' }}>
         <div ref={scrollRef} onScroll={handleScroll} style={{ height: '100%', overflowY: 'auto', padding: '8px 12px' }}>
-          {/* Thinking indicator */}
+          {/* Thinking indicator.
+              *
+              * Two visual modes, chosen by `showWaitingChildren`:
+              *   - foreground (showThinkingForeground): orange
+              *     `colors.accent` dot, label "Thinking…"
+              *   - background (showWaitingChildren): yellow
+              *     `colors.statusWaitingChildren` dot, label
+              *     "Waiting for background agents…"
+              * The yellow branch matches the footer state-label color
+              * and the parent-tab/sub-tab pill dot so the visual
+              * vocabulary is consistent across every surface. The dot
+              * uses the same `.animate-pulse-dot` animation; only the
+              * background color differs.
+              */}
           <AnimatePresence>
             {showThinking && (
               <motion.div
@@ -363,10 +403,14 @@ export function EngineView({ tabId }: EngineViewProps) {
                   className="animate-pulse-dot"
                   style={{
                     width: 6, height: 6, borderRadius: '50%',
-                    background: colors.accent, display: 'inline-block',
+                    background: showWaitingChildren ? colors.statusWaitingChildren : colors.accent, display: 'inline-block',
                   }}
                 />
-                <span>Thinking...</span>
+                <span>
+                  {showWaitingChildren
+                    ? `Waiting for background agent${runningChildCount === 1 ? '' : 's'}…`
+                    : 'Thinking...'}
+                </span>
               </motion.div>
             )}
           </AnimatePresence>
@@ -517,6 +561,7 @@ export function EngineView({ tabId }: EngineViewProps) {
         onToggleTall={() => toggleTallView(tabId)}
         activeTabId={tabId}
         engineModelOverride={engineModelOverride}
+        agentRunningCount={runningChildCount}
       />
 
       {/* Notification toasts */}
