@@ -158,6 +158,10 @@ export interface IonAPI {
   /** Publish a mark_read delta for a resource. Propagates the read state to
    *  all subscribers (including iOS) via the engine's resource broker. */
   markResourceRead(kind: string, resourceId: string): void
+  /** Get persisted read resource IDs from the main process. */
+  getReadResourceIds(): Promise<string[]>
+  /** Get persisted resources from disk (cold-load fallback). */
+  getPersistedResources(): Promise<Array<{ id: string; kind: string; title?: string; content: string; createdAt: string; conversationId?: string; metadata?: Record<string, unknown>; read?: boolean }>>
   /** Publish a delete op for a resource. Removes the item from all
    *  subscribers (including iOS) via the engine's resource broker. */
   publishResourceDelete(kind: string, resourceId: string): void
@@ -400,6 +404,8 @@ const api: IonAPI = {
   engineRemapSession: (oldKey, newKey) => ipcRenderer.invoke(IPC.ENGINE_REMAP_SESSION, { oldKey, newKey }),
   notifyTabFocus: (tabId) => ipcRenderer.send(IPC.NOTIFY_TAB_FOCUS, { tabId }),
   markResourceRead: (kind, resourceId) => ipcRenderer.send(IPC.MARK_RESOURCE_READ, { kind, resourceId }),
+  getReadResourceIds: () => ipcRenderer.invoke(IPC.GET_READ_RESOURCE_IDS),
+  getPersistedResources: () => ipcRenderer.invoke(IPC.GET_PERSISTED_RESOURCES),
   publishResourceDelete: (kind, resourceId) => ipcRenderer.send(IPC.DELETE_RESOURCE, { kind, resourceId }),
   onEngineEvent: (callback) => {
     const handler = (_e: Electron.IpcRendererEvent, key: string, event: any) => callback(key, event)

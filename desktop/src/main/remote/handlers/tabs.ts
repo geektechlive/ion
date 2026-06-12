@@ -56,8 +56,8 @@ async function createTabFromCommand(
 function notifyTabCreated(tabId: string): void {
   setTimeout(async () => {
     try {
-      const tabs = await getRemoteTabStates()
-      const newTab = tabs.find(t => t.id === tabId)
+      const { tabs } = await getRemoteTabStates()
+      const newTab = tabs.find((t: any) => t.id === tabId)
       if (newTab) state.remoteTransport?.send({ type: 'tab_created', tab: newTab })
     } catch {}
   }, 500)

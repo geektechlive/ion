@@ -64,7 +64,7 @@ export function registerSessionIpc(): void {
     log(`IPC CREATE_TAB → ${tabId}`)
 
     if (state.remoteTransport) {
-      getRemoteTabStates().then(tabStates => {
+      getRemoteTabStates().then(({ tabs: tabStates }) => {
         const newTab = tabStates.find(t => t.id === tabId)
         if (newTab) {
           state.remoteTransport?.send({ type: 'tab_created', tab: newTab })

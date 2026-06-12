@@ -7,6 +7,13 @@
  * only reached after the `if (!key.includes(':')) return` guard. Global
  * resources arrived with key="" and were silently dropped.
  *
+ * Also pins the notification-panel visibility contract (regression for the
+ * d306b769 / global-notifications-empty bug):
+ *   - The store holds all items flat, keyed by kind.
+ *   - NotificationsPanel renders only items without conversationId.
+ *   - A snapshot containing mixed global + conversation items must preserve
+ *     the global items so the panel is not empty after delivery.
+ *
  * Tests:
  *   - engine_resource_snapshot with key="" updates the store (global path)
  *   - engine_resource_snapshot with key="tab:inst" updates the store (session path)
@@ -18,6 +25,7 @@
  *   - applyResourceSnapshot merges read=true items into readResourceIds
  *   - engine_notification with key="" is handled (does not throw, returns)
  *   - engine_notification with key="tab:inst" is handled (does not throw, returns)
+ *   - mixed snapshot: global items (no conversationId) survive the panel filter
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -93,20 +101,48 @@ describe('engine_resource_snapshot', () => {
     expect(state.resourceSubscriptions['briefing']).toBe('sub-session')
   })
 
-  it('replaces the entire collection (snapshot semantics)', () => {
+  it('replaces the entire collection when incoming count equals or exceeds existing', () => {
     const { state, set } = makeResourceState()
     // Prime with two items.
     state.resources['briefing'] = [makeItem({ id: 'old-1' }), makeItem({ id: 'old-2' })]
 
+    // Snapshot with same count: replaces (full snapshot semantics).
     handleCrossEngineEvent(set, () => state, '', {
       type: 'engine_resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-replace',
-      resourceItems: [makeItem({ id: 'new-1' })],
+      resourceItems: [makeItem({ id: 'new-1' }), makeItem({ id: 'new-2' })],
     })
 
-    expect(state.resources['briefing']).toHaveLength(1)
-    expect(state.resources['briefing'][0].id).toBe('new-1')
+    expect(state.resources['briefing']).toHaveLength(2)
+    expect(state.resources['briefing'].map((i: ResourceItem) => i.id)).toEqual(['new-1', 'new-2'])
+  })
+
+  it('merges when partial snapshot has fewer items than existing (protects disk-seeded items)', () => {
+    const { state, set } = makeResourceState()
+    // Prime with three items (simulating disk cold-load).
+    state.resources['briefing'] = [
+      makeItem({ id: 'old-1' }),
+      makeItem({ id: 'old-2' }),
+      makeItem({ id: 'old-3' }),
+    ]
+
+    // Partial snapshot (e.g. extension respawn with fresh in-memory state, only 1 item known).
+    handleCrossEngineEvent(set, () => state, '', {
+      type: 'engine_resource_snapshot',
+      resourceKind: 'briefing',
+      resourceSubId: 'sub-partial',
+      resourceItems: [makeItem({ id: 'old-2', content: 'updated content' })],
+    })
+
+    // All 3 items survive. old-2 is updated (incoming wins on conflict).
+    expect(state.resources['briefing']).toHaveLength(3)
+    const ids = state.resources['briefing'].map((i: ResourceItem) => i.id)
+    expect(ids).toContain('old-1')
+    expect(ids).toContain('old-2')
+    expect(ids).toContain('old-3')
+    const updated = state.resources['briefing'].find((i: ResourceItem) => i.id === 'old-2')
+    expect(updated?.content).toBe('updated content')
   })
 
   it('merges read=true items from snapshot into readResourceIds', () => {
@@ -257,7 +293,68 @@ describe('engine_resource_delta', () => {
   })
 })
 
-// ── Notification tests ─────────────────────────────────────────────────────
+// ── Notification panel filter regression ──────────────────────────────────
+//
+// Pins the contract broken in d306b769 (global notifications empty bug).
+//
+// NotificationsPanel renders items filtered by !item.conversationId.
+// A per-session snapshot may contain both global items (no conversationId)
+// and conversation-scoped items (with conversationId). After the snapshot,
+// the panel must show at least the global items.
+
+describe('notification panel visibility — global items survive mixed snapshot', () => {
+  it('global items (no conversationId) pass the panel filter after a mixed snapshot', () => {
+    const { state, set } = makeResourceState()
+
+    const globalItem = makeItem({ id: 'global-1', kind: 'briefing' }) // no conversationId
+    const convItem = makeItem({ id: 'conv-1', kind: 'briefing', conversationId: 'conv-abc' })
+
+    handleCrossEngineEvent(set, () => state, 'tab1:inst1', {
+      type: 'engine_resource_snapshot',
+      resourceKind: 'briefing',
+      resourceSubId: 'sub-mixed',
+      resourceItems: [globalItem, convItem],
+    })
+
+    // Store has both items.
+    expect(state.resources['briefing']).toHaveLength(2)
+
+    // Simulate the NotificationsPanel filter: only show items without conversationId.
+    const panelItems = (state.resources['briefing'] as ResourceItem[]).filter(
+      (item) => !item.conversationId,
+    )
+    expect(panelItems).toHaveLength(1)
+    expect(panelItems[0].id).toBe('global-1')
+  })
+
+  it('an empty snapshot does NOT wipe existing items (disk-seed guard)', () => {
+    // Multiple sessions fire engine_resource_snapshot on connect. If the
+    // extension's HandleQuery fails (subprocess died) or the subscription
+    // races with extension init, the snapshot arrives with 0 items. The
+    // disk-seed injects persisted items into the store, but subsequent
+    // empty snapshots from other sessions would wipe them without the
+    // guard in applyResourceSnapshot.
+    const { state, set } = makeResourceState()
+
+    // Prime with real data from disk-seed injection.
+    state.resources['briefing'] = [
+      makeItem({ id: 'real-1' }),
+      makeItem({ id: 'real-2' }),
+    ]
+
+    // SubscribeDirect delivers empty snapshot (Items: nil → []).
+    handleCrossEngineEvent(set, () => state, '', {
+      type: 'engine_resource_snapshot',
+      resourceKind: 'briefing',
+      resourceSubId: 'sub-direct-empty',
+      resourceItems: [],
+    })
+
+    // Empty snapshot must NOT wipe the existing items.
+    expect(state.resources['briefing']).toHaveLength(2)
+    expect(state.resources['briefing'][0].id).toBe('real-1')
+  })
+})
 
 describe('engine_notification', () => {
   it('is handled and returns true when key is "" (global)', () => {

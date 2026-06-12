@@ -5,6 +5,7 @@ import { Bell, X } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
+import { BriefingViewer } from './BriefingViewer'
 import type { ResourceItem } from '../../shared/types-engine'
 
 function formatTime(iso: string): string {
@@ -26,17 +27,14 @@ function ResourceCard({
   item: ResourceItem
   isRead: boolean
   colors: ReturnType<typeof useColors>
-  onOpen: () => void
+  onOpen: (data: { title: string; content: string }) => void
   onDelete: () => void
 }) {
-  const [expanded, setExpanded] = useState(false)
   const title = item.title || (item.metadata?.agentName as string) || item.kind || 'Notification'
 
   const handleClick = () => {
-    onOpen()
-    // Propagate read state to engine for cross-device sync (iOS).
+    onOpen({ title, content: item.content })
     window.ion?.markResourceRead?.(item.kind, item.id)
-    setExpanded((e) => !e)
   }
 
   const handleDelete = (e: React.MouseEvent) => {
@@ -83,22 +81,12 @@ function ResourceCard({
           <X size={11} weight="bold" />
         </span>
       </div>
-      {!expanded && (
-        <p
-          className="text-[11px] ml-3.5 line-clamp-2"
-          style={{ color: colors.textSecondary, margin: 0, lineHeight: 1.4 }}
-        >
-          {item.content.slice(0, 120)}
-        </p>
-      )}
-      {expanded && (
-        <pre
-          className="text-[11px] ml-3.5 whitespace-pre-wrap break-words"
-          style={{ color: colors.textSecondary, margin: 0, lineHeight: 1.5, fontFamily: 'inherit' }}
-        >
-          {item.content}
-        </pre>
-      )}
+      <p
+        className="text-[11px] ml-3.5 line-clamp-2"
+        style={{ color: colors.textSecondary, margin: 0, lineHeight: 1.4 }}
+      >
+        {item.content.slice(0, 120)}
+      </p>
     </button>
   )
 }
@@ -118,9 +106,12 @@ export function NotificationsPanel() {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ right: number; top?: number; bottom?: number; maxHeight?: number }>({ right: 0 })
+  const [briefingData, setBriefingData] = useState<{ title: string; content: string } | null>(null)
 
-  // Flatten all resource kinds into one sorted list
+  // Flatten all resource kinds into one sorted list, excluding conversation-scoped
+  // items - those are shown in the per-conversation attachments panel instead.
   const allItems: ResourceItem[] = Object.values(allResources).flat()
+    .filter((item) => !item.conversationId) // Only global/workspace items
   const sorted = [...allItems].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   const unreadCount = sorted.filter((item) => !readResourceIds.has(item.id)).length
 
@@ -232,7 +223,11 @@ export function NotificationsPanel() {
                   item={item}
                   isRead={readResourceIds.has(item.id)}
                   colors={colors}
-                  onOpen={() => markResourceRead(item.id)}
+                  onOpen={(data) => {
+                    markResourceRead(item.id)
+                    setBriefingData(data)
+                    setOpen(false)
+                  }}
                   onDelete={() => deleteResource(item.kind, item.id)}
                 />
               </React.Fragment>
@@ -240,6 +235,15 @@ export function NotificationsPanel() {
           </div>
         </motion.div>,
         popoverLayer,
+      )}
+
+      {/* BriefingViewer modal */}
+      {briefingData && (
+        <BriefingViewer
+          title={briefingData.title}
+          content={briefingData.content}
+          onClose={() => setBriefingData(null)}
+        />
       )}
     </>
   )

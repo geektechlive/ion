@@ -43,6 +43,7 @@ export interface State {
   fileEditorStates: Map<string, FileEditorDirState>
   editorGeometry: { x: number; y: number; w: number; h: number }
   planGeometry: { x: number; y: number; w: number; h: number }
+  briefingGeometry: { x: number; y: number; w: number; h: number }
   agentDetailGeometry: { x: number; y: number; w: number; h: number }
   tabsReady: boolean
   initProgress: string | null
@@ -140,6 +141,7 @@ export interface State {
   toggleEditorReadOnly: (dir: string, fileId: string) => void
   setEditorGeometry: (geo: { x: number; y: number; w: number; h: number }) => void
   setPlanGeometry: (geo: { x: number; y: number; w: number; h: number }) => void
+  setBriefingGeometry: (geo: { x: number; y: number; w: number; h: number }) => void
   setAgentDetailGeometry: (geo: { x: number; y: number; w: number; h: number }) => void
   forkTab: (sourceTabId: string) => Promise<string | null>
   rewindToMessage: (tabId: string, messageId: string) => void

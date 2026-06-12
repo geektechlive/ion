@@ -1,21 +1,39 @@
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, readdirSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 import { state, sessionPlane, lastMessagePreview } from '../state'
 import { TABS_FILE } from '../settings-store'
+import { isResourceRead } from '../event-wiring-resources'
 import { log } from '../logger'
 import type { RemoteTabState } from './protocol'
 import type { TabStatus } from '../../shared/types'
 
-export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
-  let rendererTabs: any[] = []
+export type ResourceManifest = Record<string, Array<{ id: string; kind: string; title?: string; createdAt: string; read?: boolean; conversationId?: string }>>
+
+export interface RemoteTabSnapshot {
+  tabs: RemoteTabState[]
+  resourceManifest: ResourceManifest
+}
+
+export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
+  let rendererResult: { tabs: any[]; resourceManifest: ResourceManifest } = { tabs: [], resourceManifest: {} }
   try {
-    rendererTabs = await state.mainWindow?.webContents.executeJavaScript(`
+    rendererResult = await state.mainWindow?.webContents.executeJavaScript(`
       (function() {
         try {
           var store = window.__Ion_SESSION_STORE__;
-          if (!store) return [];
+          if (!store) return { tabs: [], resourceManifest: {} };
           var s = store.getState();
           var panes = s.terminalPanes;
-          return s.tabs.map(function(t) {
+          var resources = s.resources || {};
+          var readIds = s.readResourceIds instanceof Set ? Array.from(s.readResourceIds) : [];
+          var resourceManifest = {};
+          Object.keys(resources).forEach(function(kind) {
+            resourceManifest[kind] = (resources[kind] || []).map(function(r) {
+              return { id: r.id, kind: r.kind, title: r.title || '', createdAt: r.createdAt, read: readIds.indexOf(r.id) >= 0, conversationId: r.conversationId || undefined };
+            });
+          });
+          var tabs = s.tabs.map(function(t) {
             var msgs = t.messages || [];
             var lastMsg = null;
             var lastTs = 0;
@@ -291,11 +309,58 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
               pillIcon: t.pillIcon || null,
             };
           });
-        } catch(e) { return []; }
+          return { tabs: tabs, resourceManifest: resourceManifest };
+        } catch(e) { return { tabs: [], resourceManifest: {} }; }
       })()
-    `) || []
+    `) || { tabs: [], resourceManifest: {} }
   } catch {
-    rendererTabs = []
+    rendererResult = { tabs: [], resourceManifest: {} }
+  }
+
+  const rendererTabs = rendererResult.tabs
+  let resourceManifest: ResourceManifest = rendererResult.resourceManifest || {}
+
+  // Fallback: if the renderer store is empty (desktop just restarted,
+  // subscription hasn't resolved yet), read resource metadata from disk.
+  // The extension persists resources to ~/.ion/resources/global/*.json.
+  if (Object.keys(resourceManifest).length === 0) {
+    try {
+      const globalDir = join(homedir(), '.ion', 'resources', 'global')
+      if (existsSync(globalDir)) {
+        const files = readdirSync(globalDir).filter(f => f.endsWith('.json'))
+        if (files.length > 0) {
+          const items: Array<{ id: string; kind: string; title?: string; createdAt: string; read?: boolean }> = []
+          for (const f of files) {
+            try {
+              const data = JSON.parse(readFileSync(join(globalDir, f), 'utf-8'))
+              if (data.id && data.kind) {
+                items.push({ id: data.id, kind: data.kind, title: data.title, createdAt: data.createdAt || '', read: isResourceRead(data.id) })
+              }
+            } catch { /* skip corrupt files */ }
+          }
+          if (items.length > 0) {
+            const byKind: ResourceManifest = {}
+            for (const item of items) {
+              if (!byKind[item.kind]) byKind[item.kind] = []
+              byKind[item.kind].push(item)
+            }
+            resourceManifest = byKind
+            log('snapshot', `resource manifest cold-loaded from disk: ${items.length} items`)
+          }
+        }
+      }
+    } catch { /* disk read failure is non-fatal */ }
+  }
+
+  // Apply persisted read state from the main process. The renderer's
+  // readResourceIds may be stale or empty after restart. The main-process
+  // persistence file (~/.ion/resource-read-state.json) is the source of truth.
+  for (const kind of Object.keys(resourceManifest)) {
+    for (const item of resourceManifest[kind]) {
+      if (isResourceRead(item.id)) {
+        item.read = true
+      }
+    }
   }
 
   if (rendererTabs.length > 0) {
@@ -361,7 +426,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
       return (b.lastActivityAt || 0) - (a.lastActivityAt || 0)
     })
 
-    return mapped
+    return { tabs: mapped, resourceManifest }
   }
 
   const health = sessionPlane.getHealth()
@@ -429,5 +494,5 @@ export async function getRemoteTabStates(): Promise<RemoteTabState[]> {
     return (b.lastActivityAt || 0) - (a.lastActivityAt || 0)
   })
 
-  return results
+  return { tabs: results, resourceManifest: {} }
 }

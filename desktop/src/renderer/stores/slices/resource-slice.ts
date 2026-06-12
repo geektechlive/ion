@@ -52,9 +52,36 @@ export function applyResourceSnapshot(
       ? new Set([...state.readResourceIds, ...newReadIds])
       : state.readResourceIds
 
+  // Guard: protect disk-seeded items from being lost to partial or empty snapshots.
+  //
+  // Multiple sessions fire engine_resource_snapshot on connect. If the extension's
+  // HandleQuery fails (subprocess died mid-query) or the subscription races with
+  // extension init, the snapshot arrives with 0 items. After extension respawn,
+  // RewireQueryHandlerAndResnapshot fires but the fresh subprocess may only return
+  // items from its current session (e.g. 2 items when disk has 13). Without this
+  // guard, both cases wipe the disk-seeded collection.
+  //
+  // Strategy:
+  //   - Empty snapshot (items=0): keep existing. Extension wasn't ready.
+  //   - Full snapshot (items >= existing): use incoming. It's authoritative.
+  //   - Partial snapshot (items < existing): merge. Union existing + incoming,
+  //     deduplicating by ID so incoming items win on conflict (they're freshest).
+  const existing = state.resources[kind] ?? []
+  let merged: ResourceItem[]
+  if (items.length === 0) {
+    merged = existing
+  } else if (items.length >= existing.length) {
+    merged = items
+  } else {
+    // Partial snapshot: take the union so no disk-seeded items are lost.
+    const incomingById = new Map(items.map((item) => [item.id, item]))
+    const survivingExisting = existing.filter((item) => !incomingById.has(item.id))
+    merged = [...survivingExisting, ...items]
+  }
+
   return {
     ...state,
-    resources: { ...state.resources, [kind]: items },
+    resources: { ...state.resources, [kind]: merged },
     resourceSubscriptions: { ...state.resourceSubscriptions, [kind]: subId },
     readResourceIds,
   }

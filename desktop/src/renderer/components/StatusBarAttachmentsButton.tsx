@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Paperclip, FileText, Image, FileCode, File, ListChecks,
+  Paperclip, FileText, Image, FileCode, File, ListChecks, BookOpen, CaretRight,
 } from '@phosphor-icons/react'
 import { useShallow } from 'zustand/shallow'
 import { useSessionStore } from '../stores/sessionStore'
@@ -9,7 +9,9 @@ import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { PlanViewer } from './PlanViewer'
 import { ImageViewer } from './ImageViewer'
+import { BriefingViewer } from './BriefingViewer'
 import { parseAttachmentsFromMessages, type MsgLike } from './StatusBarAttachmentsParser'
+import type { ResourceItem } from '../../shared/types-engine'
 
 /* ─── Extension sets for icon picking ─── */
 
@@ -53,8 +55,18 @@ export function AttachmentsButton() {
   const [pos, setPos] = useState({ bottom: 0, left: 0 })
   const [planData, setPlanData] = useState<{ content: string; fileName: string; filePath: string } | null>(null)
   const [imagePreview, setImagePreview] = useState<{ path: string; name: string } | null>(null)
+  const [briefingData, setBriefingData] = useState<{ title: string; content: string } | null>(null)
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set())
 
-  const { messages, planFilePath, activeTabId, workingDir } = useSessionStore(
+  const toggleSection = useCallback((key: string) => {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) { next.delete(key) } else { next.add(key) }
+      return next
+    })
+  }, [])
+
+  const { messages, planFilePath, activeTabId, workingDir, briefings } = useSessionStore(
     useShallow((s) => {
       const tab = s.tabs.find((t) => t.id === s.activeTabId)
       // Source messages from the right place per tab type:
@@ -68,6 +80,12 @@ export function AttachmentsButton() {
         const inst = pane?.activeInstanceId ? pane.instances.find(i => i.id === pane.activeInstanceId) : null
         msgs = (inst?.messages || []) as MsgLike[]
       }
+      // Conversation-scoped resources: filter global resources to items whose
+      // conversationId matches the current tab's conversation.
+      const tabConvId = tab?.conversationId ?? null
+      const convBriefings: ResourceItem[] = tabConvId
+        ? Object.values(s.resources).flat().filter((r) => r.conversationId === tabConvId)
+        : []
       return {
         messages: msgs,
         // `tab.planFilePath` is only populated by the conversation
@@ -80,6 +98,7 @@ export function AttachmentsButton() {
         planFilePath: tab?.planFilePath ?? null,
         activeTabId: s.activeTabId,
         workingDir: tab?.workingDirectory ?? '~',
+        briefings: convBriefings,
       }
     }),
   )
@@ -167,7 +186,7 @@ export function AttachmentsButton() {
 
   /* ─── Render ─── */
 
-  const count = attachments.length
+  const count = attachments.length + briefings.length
 
   return (
     <>
@@ -242,7 +261,10 @@ export function AttachmentsButton() {
               {/* Plans section */}
               {plans.length > 0 && (
                 <div>
-                  <div
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('plans')}
+                    className="flex items-center gap-1 w-full"
                     style={{
                       fontSize: 9,
                       fontWeight: 600,
@@ -250,11 +272,23 @@ export function AttachmentsButton() {
                       letterSpacing: '0.05em',
                       color: 'rgba(34, 197, 94, 0.7)',
                       padding: '4px 12px 2px',
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
                     }}
                   >
-                    Plans
-                  </div>
-                  {plans.map((a) => (
+                    <CaretRight
+                      size={8}
+                      weight="bold"
+                      style={{
+                        flexShrink: 0,
+                        transition: 'transform 0.15s',
+                        transform: collapsedSections.has('plans') ? 'rotate(0deg)' : 'rotate(90deg)',
+                      }}
+                    />
+                    <span>Plans ({plans.length})</span>
+                  </button>
+                  {!collapsedSections.has('plans') && plans.map((a) => (
                     <button
                       key={a.path}
                       onClick={() => handlePlanClick(a.path)}
@@ -295,7 +329,10 @@ export function AttachmentsButton() {
               {/* Files section */}
               {files.length > 0 && (
                 <div>
-                  <div
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('files')}
+                    className="flex items-center gap-1 w-full"
                     style={{
                       fontSize: 9,
                       fontWeight: 600,
@@ -303,11 +340,23 @@ export function AttachmentsButton() {
                       letterSpacing: '0.05em',
                       color: colors.textTertiary,
                       padding: '4px 12px 2px',
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
                     }}
                   >
-                    Files
-                  </div>
-                  {files.map((a) => (
+                    <CaretRight
+                      size={8}
+                      weight="bold"
+                      style={{
+                        flexShrink: 0,
+                        transition: 'transform 0.15s',
+                        transform: collapsedSections.has('files') ? 'rotate(0deg)' : 'rotate(90deg)',
+                      }}
+                    />
+                    <span>Files ({files.length})</span>
+                  </button>
+                  {!collapsedSections.has('files') && files.map((a) => (
                     <button
                       key={a.path}
                       onClick={() => handleFileClick(a)}
@@ -335,6 +384,92 @@ export function AttachmentsButton() {
                   ))}
                 </div>
               )}
+
+              {/* Separator before briefings */}
+              {(plans.length > 0 || files.length > 0) && briefings.length > 0 && (
+                <div
+                  style={{
+                    height: 1,
+                    background: colors.popoverBorder,
+                    margin: '4px 10px',
+                  }}
+                />
+              )}
+
+              {/* Briefings section - conversation-scoped resources */}
+              {briefings.length > 0 && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('briefings')}
+                    className="flex items-center gap-1 w-full"
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                      color: 'rgba(139, 92, 246, 0.7)',
+                      padding: '4px 12px 2px',
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <CaretRight
+                      size={8}
+                      weight="bold"
+                      style={{
+                        flexShrink: 0,
+                        transition: 'transform 0.15s',
+                        transform: collapsedSections.has('briefings') ? 'rotate(0deg)' : 'rotate(90deg)',
+                      }}
+                    />
+                    <span>Briefings ({briefings.length})</span>
+                  </button>
+                  {!collapsedSections.has('briefings') && briefings.map((item) => {
+                    const title = item.title || item.kind || 'Briefing'
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => {
+                          setBriefingData({ title, content: item.content })
+                          setOpen(false)
+                        }}
+                        className="flex items-center gap-2 w-full text-left transition-colors"
+                        style={{
+                          padding: '4px 12px',
+                          fontSize: 11,
+                          color: 'rgba(139, 92, 246, 0.85)',
+                          cursor: 'pointer',
+                          background: 'transparent',
+                          border: 'none',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(139, 92, 246, 0.08)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'transparent'
+                        }}
+                      >
+                        <BookOpen size={13} style={{ flexShrink: 0 }} />
+                        <span className="truncate flex-1">{title}</span>
+                        <span
+                          style={{
+                            fontSize: 9,
+                            flexShrink: 0,
+                            color: 'rgba(139, 92, 246, 0.5)',
+                            fontWeight: 600,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                          }}
+                        >
+                          {item.kind}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </>
           )}
         </div>,
@@ -357,6 +492,15 @@ export function AttachmentsButton() {
           filePath={imagePreview.path}
           fileName={imagePreview.name}
           onClose={() => setImagePreview(null)}
+        />
+      )}
+
+      {/* BriefingViewer modal */}
+      {briefingData && (
+        <BriefingViewer
+          title={briefingData.title}
+          content={briefingData.content}
+          onClose={() => setBriefingData(null)}
         />
       )}
     </>

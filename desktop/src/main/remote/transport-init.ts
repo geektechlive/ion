@@ -70,7 +70,7 @@ export function initRemoteTransport(settings: Record<string, unknown>): void {
 
     log('[Remote] peer connected, sending auto-snapshot')
     setTimeout(async () => {
-      const tabs = await getRemoteTabStates()
+      const { tabs, resourceManifest } = await getRemoteTabStates()
 
       try {
         const peerSettings = readSettings()
@@ -86,6 +86,7 @@ export function initRemoteTransport(settings: Record<string, unknown>): void {
           preferredModel: peerSettings.preferredModel || undefined,
           engineDefaultModel: peerSettings.engineDefaultModel || undefined,
           availableModels: modelCache.models.length > 0 ? modelCache.models : undefined,
+          resources: Object.keys(resourceManifest).length > 0 ? resourceManifest : undefined,
         })
         const peerRelayUrl = (peerSettings.relayUrl as string) || ''
         const peerRelayApiKey = (peerSettings.relayApiKey as string) || ''

@@ -35,7 +35,8 @@ export async function handleLoadAttachments(
         try {
           var store = window.__Ion_SESSION_STORE__;
           if (!store) return [];
-          var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTabId}'; });
+          var s = store.getState();
+          var tab = s.tabs.find(function(t) { return t.id === '${escapedTabId}'; });
           if (!tab) return [];
           var msgs = tab.messages || [];
           var seen = {};
@@ -67,6 +68,32 @@ export async function handleLoadAttachments(
           if (tab.planFilePath && !seen[tab.planFilePath]) {
             var pp = tab.planFilePath.split('/');
             result.push({ type: 'plan', name: pp[pp.length - 1] || 'plan.md', path: tab.planFilePath });
+          }
+          // Include conversation-scoped resources (briefings) for this tab.
+          // These are keyed by conversationId in s.resources and are not
+          // attached to messages — they arrive through the resource broker.
+          // Encode as type='briefing' with path='resource:<id>' so iOS can
+          // look them up in its ResourceStore without a file read roundtrip.
+          var convId = tab.conversationId || null;
+          if (convId) {
+            var resources = s.resources || {};
+            Object.keys(resources).forEach(function(kind) {
+              var items = resources[kind] || [];
+              for (var ri = 0; ri < items.length; ri++) {
+                var item = items[ri];
+                if (item.conversationId === convId) {
+                  var resourcePath = 'resource:' + item.id;
+                  if (!seen[resourcePath]) {
+                    seen[resourcePath] = true;
+                    result.push({
+                      type: 'briefing',
+                      name: item.title || item.kind || 'Briefing',
+                      path: resourcePath,
+                    });
+                  }
+                }
+              }
+            });
           }
           return result;
         } catch(e) { return []; }

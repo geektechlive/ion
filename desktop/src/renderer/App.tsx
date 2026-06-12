@@ -57,6 +57,45 @@ export default function App() {
     setupModelSync()
   }, [])
 
+  // Load persisted read-resource IDs from the main process so the
+  // notifications panel shows correct read/unread state on startup.
+  useEffect(() => {
+    window.ion.getReadResourceIds().then((ids: string[]) => {
+      if (ids.length > 0) {
+        useSessionStore.setState({ readResourceIds: new Set(ids) })
+      }
+    }).catch(() => {})
+  }, [])
+
+  // Cold-load persisted resources from disk so the notifications panel
+  // has data immediately, even if engine subscriptions fail or return
+  // empty (e.g. extension subprocess crash-loops during startup).
+  useEffect(() => {
+    window.ion.getPersistedResources().then((items: any[]) => {
+      if (items.length > 0) {
+        const byKind: Record<string, any[]> = {}
+        const readIds: string[] = []
+        for (const item of items) {
+          if (!byKind[item.kind]) byKind[item.kind] = []
+          byKind[item.kind].push(item)
+          if (item.read) readIds.push(item.id)
+        }
+        useSessionStore.setState((state) => {
+          // Merge: don't overwrite if engine subscriptions already populated
+          const merged = { ...state.resources }
+          for (const [kind, kindItems] of Object.entries(byKind)) {
+            if (!merged[kind] || merged[kind].length === 0) {
+              merged[kind] = kindItems
+            }
+          }
+          const mergedReadIds = new Set(state.readResourceIds)
+          for (const id of readIds) mergedReadIds.add(id)
+          return { resources: merged, readResourceIds: mergedReadIds }
+        })
+      }
+    }).catch(() => {})
+  }, [])
+
   // Initialize remote-fs store (queries main for isRemote)
   useEffect(() => {
     void useRemoteFsStore.getState().init()

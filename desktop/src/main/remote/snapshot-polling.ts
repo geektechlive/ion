@@ -18,12 +18,12 @@ export function startTabSnapshotPolling(): void {
   state.tabSnapshotInterval = setInterval(async () => {
     if (!state.remoteTransport || state.remoteTransport.state === 'disconnected') return
     try {
-      const tabs = await getRemoteTabStates()
+      const { tabs, resourceManifest } = await getRemoteTabStates()
       const settings = readSettings()
       const recentDirectories: string[] = Array.isArray(settings.recentBaseDirectories) ? settings.recentBaseDirectories : []
       const tabGroupMode = settings.tabGroupMode || 'off'
       const tabGroups = Array.isArray(settings.tabGroups) ? settings.tabGroups.map((g: any) => ({ id: g.id, label: g.label, isDefault: g.isDefault, order: g.order })) : []
-      state.remoteTransport?.send({ type: 'snapshot', tabs, recentDirectories, tabGroupMode, tabGroups, preferredModel: settings.preferredModel || undefined, engineDefaultModel: settings.engineDefaultModel || undefined, availableModels: modelCache.models.length > 0 ? modelCache.models : undefined })
+      state.remoteTransport?.send({ type: 'snapshot', tabs, recentDirectories, tabGroupMode, tabGroups, preferredModel: settings.preferredModel || undefined, engineDefaultModel: settings.engineDefaultModel || undefined, availableModels: modelCache.models.length > 0 ? modelCache.models : undefined, resources: Object.keys(resourceManifest).length > 0 ? resourceManifest : undefined })
       // Reconcile git-watcher bridge with current tab directories
       const directories = new Set(tabs.map(t => t.workingDirectory).filter(Boolean))
       reconcileGitWatchedDirectories(directories)

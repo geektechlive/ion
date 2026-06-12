@@ -238,6 +238,8 @@ export const IPC = {
   // Resource focus tracking
   NOTIFY_TAB_FOCUS: 'ion:notify-tab-focus',
   MARK_RESOURCE_READ: 'ion:mark-resource-read',
+  GET_READ_RESOURCE_IDS: 'ion:get-read-resource-ids',
+  GET_PERSISTED_RESOURCES: 'ion:get-persisted-resources',
   DELETE_RESOURCE: 'ion:delete-resource',
 
   // Model & provider management
