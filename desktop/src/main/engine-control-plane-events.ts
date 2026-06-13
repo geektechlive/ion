@@ -1,6 +1,7 @@
 import type { EngineBridge } from './engine-bridge'
 import type { EngineEvent, NormalizedEvent, TabStatus, EnrichedError } from '../shared/types'
 import { log as _log, debug as _debug, error as _error } from './logger'
+import { handleExportEvent } from './engine-export-handler'
 
 const TAG = 'SessionPlane'
 function log(msg: string): void { _log(TAG, msg) }
@@ -290,6 +291,18 @@ export function handleEngineEvent(
       // and tabId; the wiring layer in event-wiring.ts does the routing.
       log(`intercept: tabId=${tabId} level=${event.interceptLevel} title=${event.interceptTitle}`)
       ctx.emit('engine_intercept', tabId, event)
+      break
+
+    case 'engine_export':
+      // The engine has rendered a /export payload. Surface the save-as
+      // dialog so the user can write it to disk. The engine_command_result
+      // arrives next and is handled by the existing result-routing path.
+      // exportFormat is the engine-resolved format (markdown/json/html/jsonl);
+      // the handler maps it to a file extension without sniffing the payload.
+      log(`export: tabId=${tabId} format=${event.exportFormat ?? 'absent'} payloadBytes=${event.message?.length ?? 0}`)
+      // Fire-and-forget: the dialog is async but the engine event stream
+      // continues without waiting. Errors are logged inside the handler.
+      void handleExportEvent(event.message || '', event.exportFormat)
       break
   }
 }

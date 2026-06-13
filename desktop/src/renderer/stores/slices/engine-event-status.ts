@@ -201,6 +201,17 @@ export function handleEngineStatusEvent(
           updates.conversationId = sessionId
           updates.lastKnownSessionId = sessionId
         }
+        // Project the engine-reported context window onto the parent tab
+        // so the local-percent recomputation in StatusBarContextIndicator
+        // has the engine's truth to divide by. Without this, the indicator
+        // falls back to the picker-selected model's nominal window, which
+        // produces a 100% reading whenever the picker disagrees with the
+        // engine (e.g. opus-running conversation displayed under a Sonnet
+        // picker selection).
+        const incomingWindow = event.fields?.contextWindow
+        if (typeof incomingWindow === 'number' && incomingWindow > 0 && t.contextWindow !== incomingWindow) {
+          updates.contextWindow = incomingWindow
+        }
         if (isRunning && t.status !== 'running' && isActive) {
           updates.status = 'running' as const
         }

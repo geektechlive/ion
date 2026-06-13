@@ -47,6 +47,15 @@ export interface RemoteTabState {
   permissionQueue: PermissionRequest[]
   lastMessage: string | null
   contextTokens: number | null
+  /**
+   * Engine-reported context window size (tokens) of the model the engine
+   * actually used on the most recent turn. Mirrors TabState.contextWindow.
+   * iOS reads this as the denominator when recomputing context percent
+   * locally so the indicator stays accurate even when the picker-selected
+   * model disagrees with the engine. Falls back to the picker model's
+   * nominal window when null (cold-start tabs).
+   */
+  contextWindow: number | null
   modelOverride?: string | null
   messageCount: number
   queuedPrompts: string[]

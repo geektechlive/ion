@@ -381,6 +381,16 @@ export type EngineEvent =
   // pipeline awaits this event to decide between "dispatch landed, draw
   // the divider" and "engine disclaims, fall through to `.md` expansion".
   | { type: 'engine_command_result'; message?: string; command?: string; commandError?: string }
+  // engine_export carries the rendered export output for a /export command.
+  // The engine's dispatchExport emits this event with the rendered string
+  // on `message` BEFORE the matching engine_command_result, so consumers
+  // can capture the payload and persist it / surface a save dialog.
+  // `exportFormat` is the format the engine resolved from the /export args
+  // (markdown | json | html | jsonl; markdown when args is empty) — consumers
+  // use it to pick a file extension / MIME type directly rather than sniffing
+  // the payload bytes. See engine/internal/session/command_dispatch.go's
+  // EngineEventExport constant for the wire type string declaration.
+  | { type: 'engine_export'; message: string; exportFormat?: string }
   // engine_command_registry is a complete SNAPSHOT of the session's
   // extension-registered slash commands. Emitted at session_start (after
   // extensions wire up) and on every subsequent change (mid-session

@@ -97,6 +97,7 @@ function makeEngineTab(id: string) {
     bashResults: [],
     contextTokens: null,
     contextPercent: null,
+    contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
     sessionModel: null,

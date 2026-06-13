@@ -296,6 +296,10 @@ export function createEngineEventSlice(set: StoreSet, _get: StoreGet): Partial<S
             const isActive = !pane || pane.activeInstanceId === key.split(':')[1]
             const tabs = isActive && event.usage ? state.tabs.map((t) => {
               if (t.id !== tabId) return t
+              // engine_message_end carries contextPercent and tokens but
+              // NOT contextWindow — the window comes through engine_status
+              // (see engine-event-status.ts). Renderer reads tab.contextWindow
+              // as the denominator; this slice just carries the tokens/percent.
               return {
                 ...t,
                 contextTokens: event.usage!.inputTokens,

@@ -129,6 +129,21 @@ export interface TabState {
   contextTokens: number | null
   /** Engine-computed context usage percentage (accounts for model-specific context window) */
   contextPercent: number | null
+  /**
+   * Engine-reported context window size (tokens) for the model the engine
+   * actually used on the most recent turn. Distinct from the picker-selected
+   * model's nominal window — when the user switches the model picker
+   * between turns, this field stays anchored to the model that produced
+   * `contextTokens`. Renderers MUST use this as the denominator when
+   * computing percent locally; substituting the picker model's window
+   * produces a 100% reading whenever the picker disagrees with the engine.
+   *
+   * Null on a fresh tab (no engine response yet) and during the
+   * StatusFields-merge window before the engine has resolved the model's
+   * context window. Renderers fall back to the picker model's nominal
+   * window only when this is null.
+   */
+  contextWindow: number | null
   /** True while the engine is actively compacting context */
   isCompacting: boolean
   /** Terminal-focused tab with no conversation */
