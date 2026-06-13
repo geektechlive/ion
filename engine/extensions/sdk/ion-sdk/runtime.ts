@@ -39,6 +39,7 @@ import type {
   HistoryMatch,
   IonContext,
   IonSDK,
+  InterceptOpts,
   LLMCallOpts,
   LLMCallResult,
   NotifyOpts,
@@ -329,6 +330,9 @@ function buildContext(ctxData: any): IonContext {
     },
     async notify(opts: NotifyOpts): Promise<void> {
       await request('ext/notify', opts)
+    },
+    async intercept(opts: InterceptOpts): Promise<void> {
+      await request('ext/intercept', opts)
     },
     sessions: {
       async list(): Promise<SessionListEntry[]> {

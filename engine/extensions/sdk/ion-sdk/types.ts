@@ -683,6 +683,21 @@ export interface IonContext {
    */
   notify(opts: NotifyOpts): Promise<void>
 
+  /**
+   * Emit an engine_intercept event on a target session's stream. Clients
+   * render banners or redirects based on the level field.
+   *
+   * @example
+   * ```ts
+   * const sessions = await ctx.sessions.list()
+   * for (const s of sessions) {
+   *   if (s.key === ctx.sessionKey) continue
+   *   await ctx.intercept({ level: 'banner', title: 'Deploy complete', targetSessionKey: s.key })
+   * }
+   * ```
+   */
+  intercept(opts: InterceptOpts): Promise<void>
+
   /** List all active sessions in the engine. Extensions use this to discover
    *  other sessions (e.g. for cross-session notification targeting). The engine
    *  returns all sessions; filter by extensionName on your side. */
@@ -1245,6 +1260,37 @@ export interface BeforePlanModeExitResult {
 }
 
 /**
+ * Payload for the `before_plan_mode_auto_exit` hook. Fired immediately
+ * before the engine synthesizes an auto-exit from plan mode when the
+ * assistant ends its turn without calling ExitPlanMode.
+ */
+export interface BeforePlanModeAutoExitInfo {
+  sessionId: string
+  runId: string
+  /** Provider stop reason ("end_turn" or "stop") that triggered synthesis. */
+  stopReason: string
+  /** Resolved plan file path the synthesized PermissionDenial will reference. */
+  planFilePath: string
+  /** Concatenated text content of the final assistant turn. */
+  assistantText: string
+  /** Tool names the assistant emitted (not ExitPlanMode). Empty if text-only. */
+  emittedTools?: string[]
+}
+
+/**
+ * Optional return value from a `before_plan_mode_auto_exit` handler.
+ * Returning undefined defers to the engine default (allow synthesis).
+ */
+export interface BeforePlanModeAutoExitResult {
+  /** When true, blocks synthesis; run completes as normal end_turn. */
+  suppress?: boolean
+  /** Override the resolved plan file path. Empty = no change. */
+  planFilePath?: string
+  /** Override the default reason string in the synthesized PermissionDenial. */
+  reason?: string
+}
+
+/**
  * Payload for the `before_early_stop_decision` hook. Fires after the
  * model emits `end_turn` / `stop` and after the engine has updated its
  * cumulative output-token counter, but **before** it evaluates the
@@ -1507,6 +1553,7 @@ export interface HookPayloadMap {
   // state-vs-workflow distinction these hooks live alongside.
   before_plan_mode_enter: PlanModeEnterInfo
   before_plan_mode_exit: BeforePlanModeExitInfo
+  before_plan_mode_auto_exit: BeforePlanModeAutoExitInfo
 
   // System inject (1) -- fired before the engine injects any system message.
   // The `kind` discriminator carries the reason (plan_mode_reminder,
@@ -1898,4 +1945,19 @@ export interface NotifyOpts {
   /** When set, the engine emits the notification on the target session's
    *  event stream instead of the caller's. The target must exist. */
   targetSessionKey?: string
+}
+
+/** Options for ctx.intercept(). Emits an engine_intercept event on a target session's stream.
+ *  The engine stamps interceptSource from the extension name; extensions cannot override it. */
+export interface InterceptOpts {
+  /** "banner" (informational) or "redirect" (urgent). */
+  level: 'banner' | 'redirect'
+  /** Short headline. */
+  title: string
+  /** Body content. */
+  message?: string
+  /** Target session key. Defaults to the caller's session. */
+  targetSessionKey?: string
+  /** Opaque map forwarded to clients unchanged. */
+  metadata?: Record<string, unknown>
 }
