@@ -9,6 +9,15 @@ struct ConversationStatusBar: View {
     let preferredModel: String
     let contextPercent: Double?
     let contextTokens: Int?
+    /// Engine-reported context window size (tokens) of the model the engine
+    /// used on the most recent turn. Mirrors RemoteTabState.contextWindow.
+    /// When non-nil, resolvedContextPercent's fallback uses this value as
+    /// the denominator instead of the picker-selected model's nominal
+    /// window. The two diverge whenever the user changes the picker
+    /// between turns (e.g. opus-running session displayed under Sonnet
+    /// picker selection); honoring the engine's truth prevents the
+    /// 100% / 498k / 200k display bug fixed in plan cosy-pacing-bee.md.
+    let engineContextWindow: Int?
     let isRunning: Bool
     let permissionMode: PermissionMode?
     let availableModels: [RemoteModelEntry]
@@ -46,10 +55,23 @@ struct ConversationStatusBar: View {
         if let cp = contextPercent {
             return cp
         }
-        if let tokens = contextTokens,
-           let model = availableModels.first(where: { $0.id == effectiveModel }),
-           model.contextWindow > 0 {
-            return Double(tokens) / Double(model.contextWindow) * 100.0
+        if let tokens = contextTokens {
+            // Prefer the engine-reported window over the picker-selected
+            // model's nominal window. They diverge whenever the user
+            // changes the picker between turns; honoring the engine's
+            // truth keeps the indicator accurate. Falls back to the
+            // picker model's window only when the engine has not yet
+            // reported (cold-start tabs). See plan cosy-pacing-bee.md for
+            // the regression this fix prevents.
+            let denominator: Int
+            if let engineWindow = engineContextWindow, engineWindow > 0 {
+                denominator = engineWindow
+            } else if let model = availableModels.first(where: { $0.id == effectiveModel }), model.contextWindow > 0 {
+                denominator = model.contextWindow
+            } else {
+                return nil
+            }
+            return Double(tokens) / Double(denominator) * 100.0
         }
         return nil
     }

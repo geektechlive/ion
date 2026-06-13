@@ -2,15 +2,8 @@ import Foundation
 
 /// Events sent from Ion to the iOS app.
 /// Mirrors `RemoteEvent` in `src/main/remote/protocol.ts`.
-/// Manual tab group definition synced from the desktop.
-struct RemoteTabGroup: Codable, Identifiable, Sendable {
-    let id: String
-    let label: String
-    let isDefault: Bool
-    var order: Int
-}
-
-enum RemoteEvent: Codable, Sendable {
+/// (RemoteTabGroup, used by the snapshot event, lives in RemoteTabGroup.swift.)
+enum RemoteEvent: Sendable {
     case snapshot(tabs: [RemoteTabState], recentDirectories: [String], tabGroupMode: String?, tabGroups: [RemoteTabGroup]?, preferredModel: String?, engineDefaultModel: String?, availableModels: [RemoteModelEntry]?, customName: String?, customIcon: String?, remoteDisplayUpdatedAt: Date?, resources: [String: [[String: AnyCodable]]]?)
     case tabCreated(tab: RemoteTabState)
     case tabClosed(tabId: String)
@@ -212,6 +205,22 @@ enum RemoteEvent: Codable, Sendable {
         command: String?,
         commandError: String?
     )
+    /// Engine has finished rendering a /export command's output. The
+    /// payload string carries the entire rendered export. `exportFormat`
+    /// is the engine-resolved format ("markdown" | "json" | "html" |
+    /// "jsonl"; "markdown" by default), so the share sheet can attach a
+    /// correctly-typed file rather than an untyped string. Nil when the
+    /// engine predates the exportFormat field. Emitted BEFORE the
+    /// matching engineCommandResult; iOS opens a share sheet so the
+    /// user can save, AirDrop, or copy. See engine/internal/session/
+    /// command_dispatch.go's EngineEventExport constant for the wire
+    /// type string declaration.
+    case engineExport(
+        tabId: String,
+        instanceId: String?,
+        message: String,
+        exportFormat: String?
+    )
     /// Resource snapshot: emitted when a client subscribes to a resource kind.
     /// Consumers replace their local collection with the items payload.
     /// iOS observes this event but does not act on it in Phase 1 — decoding
@@ -382,6 +391,7 @@ enum RemoteEvent: Codable, Sendable {
         case engineEarlyStopDecisionRequest = "engine_early_stop_decision_request"
         case engineCommandRegistry = "engine_command_registry"
         case engineCommandResult = "engine_command_result"
+        case engineExport = "engine_export"
         case engineResourceSnapshot = "engine_resource_snapshot"
         case engineResourceDelta = "engine_resource_delta"
         case engineNotification = "engine_notification"
@@ -407,6 +417,13 @@ enum RemoteEvent: Codable, Sendable {
         case resourceContent = "resource_content"
     }
 
+    // CodingKeys and the init(from:)/encode(to:) requirements must live in
+    // this file with the `: Codable` conformance on the primary declaration:
+    // both are referenced by bare name from the per-family extension helpers
+    // (NormalizedEvent+<Family>.swift), and Swift only resolves the nested
+    // CodingKeys / TypeKey types when they are members of the primary type's
+    // own file. (RemoteTabGroup was extracted to its own file for headroom;
+    // see RemoteTabGroup.swift.)
     enum CodingKeys: String, CodingKey {
         case type
         case tabs, tab, tabId, status, text, toolName, toolId
@@ -487,6 +504,11 @@ enum RemoteEvent: Codable, Sendable {
         // is the failure reason or "unknown_command" when the engine
         // disclaims the name.
         case command, commandError
+        // engine_export — `exportFormat` is the engine-resolved format
+        // ("markdown" | "json" | "html" | "jsonl") that drives the share
+        // sheet's file extension. Mirrors EngineEvent.ExportFormat's JSON
+        // tag. The rendered payload rides on the shared `message` key.
+        case exportFormat
         // engine_resource_snapshot / engine_resource_delta — resource
         // subsystem events (D-007). iOS observes but does not act on
         // these in Phase 1. Field names mirror the Go-side json tags.
@@ -520,72 +542,6 @@ enum RemoteEvent: Codable, Sendable {
         // Full content is fetched on demand via request_resource_content.
         case resources
     }
-
-    // MARK: - Decoder
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let type = try container.decode(TypeKey.self, forKey: .type)
-
-        if let event = try Self.decodeLifecycle(type: type, container: container) {
-            self = event
-            return
-        }
-        if let event = try Self.decodeStream(type: type, container: container) {
-            self = event
-            return
-        }
-        if let event = try Self.decodePermission(type: type, container: container) {
-            self = event
-            return
-        }
-        if let event = try Self.decodeTerminal(type: type, container: container) {
-            self = event
-            return
-        }
-        if let event = try Self.decodeEngine(type: type, container: container) {
-            self = event
-            return
-        }
-        if let event = try Self.decodeResource(type: type, container: container) {
-            self = event
-            return
-        }
-        if let event = try Self.decodeGit(type: type, container: container) {
-            self = event
-            return
-        }
-        if let event = try Self.decodeFiles(type: type, container: container) {
-            self = event
-            return
-        }
-        // Should be unreachable: every TypeKey must be handled by exactly one family.
-        throw DecodingError.dataCorruptedError(
-            forKey: .type,
-            in: container,
-            debugDescription: "Unhandled event type: \(type.rawValue)"
-        )
-    }
-
-    // MARK: - Encoder
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-
-        if try encodeLifecycle(into: &container) { return }
-        if try encodeStream(into: &container) { return }
-        if try encodePermission(into: &container) { return }
-        if try encodeTerminal(into: &container) { return }
-        if try encodeEngine(into: &container) { return }
-        if try encodeResource(into: &container) { return }
-        if try encodeGit(into: &container) { return }
-        if try encodeFiles(into: &container) { return }
-        // Unreachable: every case must be encoded by exactly one family.
-    }
 }
 
-// MARK: - TabStatus
 
-enum TabStatus: String, Codable, Sendable {
-    case connecting, idle, running, completed, failed, dead
-}

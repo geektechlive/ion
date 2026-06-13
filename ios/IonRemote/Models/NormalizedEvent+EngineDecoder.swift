@@ -314,6 +314,23 @@ extension RemoteEvent {
                 commandError: commandError
             )
 
+        case .engineExport:
+            // Engine has rendered a /export payload. iOS surfaces it
+            // via a share sheet (see SessionViewModel handler). The
+            // engine reports the resolved format on `exportFormat`
+            // (markdown by default) so the share sheet can attach a
+            // correctly-typed file; nil when the engine predates the field.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let message = try container.decode(String.self, forKey: .message)
+            let exportFormat = try container.decodeIfPresent(String.self, forKey: .exportFormat)
+            return .engineExport(
+                tabId: tabId,
+                instanceId: instanceId,
+                message: message,
+                exportFormat: exportFormat
+            )
+
         case .desktopSettingsSnapshot:
             // Per-desktop user-preferences projection. The whole payload
             // is wholesale-replace: SessionViewModel discards its

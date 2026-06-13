@@ -13,6 +13,16 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     var lastMessage: String?
     var contextTokens: Int?
     var contextPercent: Double?
+    /// Engine-reported context window size (tokens) of the model the
+    /// engine actually used on the most recent turn. Distinct from the
+    /// picker-selected model's nominal window. ConversationStatusBar
+    /// reads this as the denominator when computing percent locally so
+    /// the indicator stays accurate even when the picker disagrees with
+    /// the engine. Nil on cold-start tabs (no engine response yet); the
+    /// indicator falls back to the picker model's nominal window in that
+    /// case. See the desktop's TabState.contextWindow docs for the full
+    /// rationale.
+    var contextWindow: Int?
     var messageCount: Int?
     var queuedPrompts: [String]?
     var isTerminalOnly: Bool?

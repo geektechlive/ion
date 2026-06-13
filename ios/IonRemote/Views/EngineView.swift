@@ -563,6 +563,7 @@ struct EngineView: View {
                     preferredModel: fields.model,
                     contextPercent: fields.contextPercent,
                     contextTokens: nil,
+                    engineContextWindow: fields.contextWindow > 0 ? fields.contextWindow : nil,
                     isRunning: isRunning,
                     permissionMode: viewModel.tab(for: tabId)?.permissionMode,
                     availableModels: viewModel.availableModels,

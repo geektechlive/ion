@@ -349,6 +349,14 @@ extension SessionViewModel {
         case .engineCommandResult:
             handleEngineCommandResult()
 
+        case .engineExport(let tabId, _, let message, let exportFormat):
+            // Engine has rendered a /export payload. Stash it on the
+            // view model so a SwiftUI share-sheet observer can pick it
+            // up. Bound to ConversationView via the .sheet/.share
+            // mechanism in SessionViewModel's pendingExport state.
+            // exportFormat drives the shared file's extension.
+            handleEngineExport(tabId: tabId, payload: message, format: exportFormat)
+
         case .desktopSettingsSnapshot(let settings, let schema, let groups):
             // Per-desktop user-preferences projection. Snapshot semantics
             // — replace the cached state wholesale. The view layer binds
