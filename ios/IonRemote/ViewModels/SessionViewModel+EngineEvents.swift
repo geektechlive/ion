@@ -82,9 +82,8 @@ extension SessionViewModel {
     func handleEngineToolStart(tabId: String, instanceId: String?, toolName: String, toolId: String) {
         DiagnosticLog.log("ENGINE: tool-start tabId=\(tabId.prefix(8)) tool=\(toolName) toolId=\(toolId.prefix(8))")
         let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-        let runningAgent = engineAgentStates[key]?.first { $0.status == "running" && $0.type != "chief" }
+        // JARVIS-SPECIFIC: engineAgentStates not available in this fork; agentName stays nil.
         var info = ActiveToolInfo(id: toolId, toolName: toolName, startTime: Date())
-        info.agentName = runningAgent?.displayName
         activeTools[key, default: [:]][toolId] = info
         // Add tool message to conversation
         let msg = Message(id: toolId, role: .tool, content: "", toolName: toolName, toolId: toolId, toolStatus: .running, timestamp: Date().timeIntervalSince1970 * 1000)

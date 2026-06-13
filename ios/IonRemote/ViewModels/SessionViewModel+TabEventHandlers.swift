@@ -66,24 +66,9 @@ extension SessionViewModel {
                     activeTools.removeValue(forKey: key)
                 }
 
-                // Engine tab TTS: speak the last assistant response once per turn.
-                // tab_status:idle fires exactly once at turn end — engine_message_end
-                // fires once per sub-message (multiple times when tool calls are involved),
-                // so triggering there causes repeated speech.
-                // De-duplicate with lastSpokenEngineMessageCount so repeated idle events
-                // (reconnects, upstream re-delivery) don't re-speak the same response.
-                if status == .idle {
-                    let key = engineCompoundKey(tabId: tabId)
-                    let msgs = engineMessages[key] ?? []
-                    let prevCount = lastSpokenEngineMessageCount[key] ?? 0
-                    if let last = msgs.last(where: { $0.role == .assistant }),
-                       msgs.count > prevCount,
-                       !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        lastSpokenEngineMessageCount[key] = msgs.count
-                        DiagnosticLog.log("VOICE-TTS: tabIdle speaking \(last.content.count) chars tabId=\(tabId.prefix(8))")
-                        voiceService.speak(text: last.content, messageId: last.id, tabId: tabId)
-                    }
-                }
+                // JARVIS-SPECIFIC: Voice readback fires in handleTaskComplete via liveText
+                // (relay sends assistant output as text_chunk → liveText, not engine_text_delta
+                // → engineMessages which does not exist in this fork). No action needed here.
             }
         }
         // Track idle-since timestamp for sidebar display

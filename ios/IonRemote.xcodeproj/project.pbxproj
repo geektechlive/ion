@@ -154,7 +154,6 @@
 		A1B2C3D4E5F60001009A01AA /* SessionViewModel+TabGroupCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009A00AA /* SessionViewModel+TabGroupCommands.swift */; };
 		A1B2C3D4E5F60001009B01AA /* TabListNewTabSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009B00AA /* TabListNewTabSheet.swift */; };
 		A1B2C3D4E5F60001009C01AA /* TabListGroupHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009C00AA /* TabListGroupHeader.swift */; };
-		A1B2C3D4E5F60001009D01AA /* SafeDecodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009D00AA /* SafeDecodable.swift */; };
 		A1B2C3D4E5F60001009E01AA /* TabRowContextMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009E00AA /* TabRowContextMenu.swift */; };
 		A1B2C3D4E5F60001009F01AA /* NormalizedEvent+Resource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009F00AA /* NormalizedEvent+Resource.swift */; };
 		A1B2C3D4E5F6000100A101AA /* NormalizedEvent+PlanModeAutoExit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100A100AA /* NormalizedEvent+PlanModeAutoExit.swift */; };
@@ -178,8 +177,7 @@
 		A1B2C3D4E5F60001F10008AA /* ArcReactorBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001F10007AA /* ArcReactorBackground.swift */; };
 		A1B2C3D4E5F60001F1000AAA /* ThinkingScanLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001F10009AA /* ThinkingScanLine.swift */; };
 		A1B2C3D4E5F60001F1000BAA /* FuzzyMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001F1000CAA /* FuzzyMatch.swift */; };
-		A1B2C3D4E5F60001009F01AA /* SafeDecodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009F00AA /* SafeDecodable.swift */; };
-		A1B2C3D4E5F60001009E01AA /* TabRowContextMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009E00AA /* TabRowContextMenu.swift */; };
+		A1B2C3D4E5F6000100B000AA /* SafeDecodable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6000100B001AA /* SafeDecodable.swift */; };
 		A1B2C3D4E5F60001FF0003AA /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = A1B2C3D4E5F60001FF0001AA /* Markdown */; };
 		A1B2C3D4E5F60001FF0005AA /* MarkdownFormatterFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001FF0004AA /* MarkdownFormatterFixtures.swift */; };
 		A1B2C3D4E5F60001FF0007AA /* MarkdownFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001FF0006AA /* MarkdownFormatterTests.swift */; };
@@ -354,7 +352,7 @@
 		A1B2C3D4E5F60001009A00AA /* SessionViewModel+TabGroupCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+TabGroupCommands.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009B00AA /* TabListNewTabSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabListNewTabSheet.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009C00AA /* TabListGroupHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabListGroupHeader.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60001009D00AA /* SafeDecodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeDecodable.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001009D00AA /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009E00AA /* TabRowContextMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabRowContextMenu.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001009F00AA /* NormalizedEvent+Resource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NormalizedEvent+Resource.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6000100A100AA /* NormalizedEvent+PlanModeAutoExit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NormalizedEvent+PlanModeAutoExit.swift"; sourceTree = "<group>"; };
@@ -378,8 +376,7 @@
 		A1B2C3D4E5F60001F10007AA /* ArcReactorBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArcReactorBackground.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001F10009AA /* ThinkingScanLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingScanLine.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001F1000CAA /* FuzzyMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatch.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60001009F00AA /* SafeDecodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeDecodable.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60001009E00AA /* TabRowContextMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabRowContextMenu.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6000100B001AA /* SafeDecodable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeDecodable.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001FF0004AA /* MarkdownFormatterFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFormatterFixtures.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001FF0006AA /* MarkdownFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFormatterTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001FF0010AA /* FrontmatterSplitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontmatterSplitter.swift; sourceTree = "<group>"; };
@@ -484,8 +481,6 @@
 				A1B2C3D4E5F60001000500AA /* ConnectionQuality.swift */,
 				A1B2C3D4E5F60001000601AA /* DiscoveredSlashCommand.swift */,
 				A1B2C3D4E5F60001001101AA /* RemoteModelEntry.swift */,
-				A1B2C3D4E5F60001000811AA /* BriefingItem.swift */,
-				A1B2C3D4E5F60001000803AA /* BriefingsStore.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -695,7 +690,7 @@
 				A1B2C3D4E5F60001005301AA /* AttachmentImageCache.swift */,
 				A1B2C3D4E5F60001005305AA /* RemoteImageFetcher.swift */,
 				A1B2C3D4E5F60001009001AA /* TabSearchHelper.swift */,
-				A1B2C3D4E5F60001009F00AA /* SafeDecodable.swift */,
+				A1B2C3D4E5F6000100B001AA /* SafeDecodable.swift */,
 				A1B2C3D4E5F60001F1000CAA /* FuzzyMatch.swift */,
 				A1B2C3D4E5F60001FF0010AA /* FrontmatterSplitter.swift */,
 			);
@@ -1001,7 +996,7 @@
 				A1B2C3D4E5F60001F10008AA /* ArcReactorBackground.swift in Sources */,
 				A1B2C3D4E5F60001F1000AAA /* ThinkingScanLine.swift in Sources */,
 				A1B2C3D4E5F60001009000AA /* TabSearchHelper.swift in Sources */,
-				A1B2C3D4E5F60001009F01AA /* SafeDecodable.swift in Sources */,
+				A1B2C3D4E5F6000100B000AA /* SafeDecodable.swift in Sources */,
 				A1B2C3D4E5F60001F1000BAA /* FuzzyMatch.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
