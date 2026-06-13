@@ -147,7 +147,7 @@ export type RemoteCommand =
   | { type: 'rename_terminal_instance'; tabId: string; instanceId: string; label: string }
   | { type: 'rewind'; tabId: string; messageId: string }
   | { type: 'fork_from_message'; tabId: string; messageId: string }
-  | { type: 'engine_rewind'; tabId: string; instanceId: string; messageId: string }
+  | { type: 'engine_rewind'; tabId: string; instanceId: string; messageId: string; userTurnIndex?: number }
   | { type: 'create_engine_tab'; workingDirectory?: string; profileId?: string }
   | { type: 'engine_prompt'; tabId: string; instanceId?: string; text: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean }
   | { type: 'engine_abort'; tabId: string; instanceId?: string }
@@ -280,7 +280,11 @@ export type RemoteEvent =
   | { type: 'engine_instance_moved'; sourceTabId: string; instanceId: string; targetTabId: string }
   | { type: 'engine_conversation_history'; tabId: string; instanceId?: string | null; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number; dedupKey?: string }> }
   | { type: 'agent_conversation_history'; agentName: string; conversationId?: string; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number }> }
-  | { type: 'input_prefill'; tabId: string; text: string; switchTo?: boolean }
+  // input_prefill seeds a remote client's input box with text (e.g. the
+  // rewound user message after a rewind). `instanceId` is set when the
+  // prefill targets a specific engine instance's draft (engine_rewind);
+  // absent/null for CLI-tab rewinds, where the tab has a single input.
+  | { type: 'input_prefill'; tabId: string; text: string; switchTo?: boolean; instanceId?: string | null }
   | { type: 'engine_profiles'; profiles: Array<{ id: string; name: string; extensions: string[] }> }
   // ─── Desktop settings projection (Part 7) ───────────────────────────
   // Snapshot of the desktop's projectable user preferences. Emitted once

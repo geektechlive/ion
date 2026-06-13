@@ -152,6 +152,10 @@ export interface IonAPI {
   engineCommand(key: string, command: string, args: string): Promise<void>
   engineStop(key: string): Promise<void>
   engineRemapSession(oldKey: string, newKey: string): Promise<void>
+  /** Broadcast a fresh engine_conversation_history for tabId/instanceId to all
+   *  connected remote devices. Called by the renderer after a rewind restart so
+   *  iOS replaces its now-stale truncated message list immediately. */
+  engineBroadcastHistory(tabId: string, instanceId: string | null): Promise<void>
   /** Notify the main process that the user focused a tab. The main
    *  process publishes the session key as a desktop.focus resource so
    *  extensions can route to the active session. */
@@ -405,6 +409,7 @@ const api: IonAPI = {
   engineCommand: (key, command, args) => ipcRenderer.invoke(IPC.ENGINE_COMMAND, { key, command, args }),
   engineStop: (key) => ipcRenderer.invoke(IPC.ENGINE_STOP, { key }),
   engineRemapSession: (oldKey, newKey) => ipcRenderer.invoke(IPC.ENGINE_REMAP_SESSION, { oldKey, newKey }),
+  engineBroadcastHistory: (tabId, instanceId) => ipcRenderer.invoke(IPC.ENGINE_BROADCAST_HISTORY, { tabId, instanceId }),
   notifyTabFocus: (tabId) => ipcRenderer.send(IPC.NOTIFY_TAB_FOCUS, { tabId }),
   markResourceRead: (kind, resourceId) => ipcRenderer.send(IPC.MARK_RESOURCE_READ, { kind, resourceId }),
   getReadResourceIds: () => ipcRenderer.invoke(IPC.GET_READ_RESOURCE_IDS),

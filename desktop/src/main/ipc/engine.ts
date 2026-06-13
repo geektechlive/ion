@@ -5,6 +5,7 @@ import { log as _log } from '../logger'
 import { engineBridge, sessionPlane, state } from '../state'
 import { processIncomingPrompt } from '../prompt-pipeline'
 import { encodeImageAttachments } from '../remote/attachment-encoder'
+import { broadcastEngineHistory } from '../remote/handlers/engine-history'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -149,6 +150,11 @@ export function registerEngineIpc(): void {
   ipcMain.handle(IPC.ENGINE_REMAP_SESSION, (_event, { oldKey, newKey }: { oldKey: string; newKey: string }) => {
     log(`IPC ENGINE_REMAP_SESSION: ${oldKey} -> ${newKey}`)
     engineBridge.remapSession(oldKey, newKey)
+  })
+
+  ipcMain.handle(IPC.ENGINE_BROADCAST_HISTORY, async (_event, { tabId, instanceId }: { tabId: string; instanceId: string | null }) => {
+    log(`IPC ENGINE_BROADCAST_HISTORY: tabId=${tabId} instanceId=${instanceId || 'null'}`)
+    await broadcastEngineHistory(tabId, instanceId)
   })
 
   ipcMain.on(IPC.SET_PERMISSION_MODE, (_event, payload: { tabId: string; mode: string; source?: string }) => {

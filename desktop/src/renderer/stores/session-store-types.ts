@@ -201,7 +201,7 @@ export interface State {
    * input bar with the target message's text. Prior conversation context is
    * injected as a system prompt on the next send (one-shot).
    */
-  rewindEngineInstance: (tabId: string, instanceId: string, messageId: string) => void
+  rewindEngineInstance: (tabId: string, instanceId: string, messageId: string, userTurnIndex?: number) => void
   selectEngineInstance: (tabId: string, instanceId: string) => void
   renameEngineInstance: (tabId: string, instanceId: string, label: string) => void
   reorderEngineInstances: (tabId: string, reordered: Array<EngineInstance & ConversationInstance>) => void

@@ -237,6 +237,7 @@ export const IPC = {
   ENGINE_STOP: 'ion:engine-stop',
   ENGINE_EVENT: 'ion:engine-event',
   ENGINE_REMAP_SESSION: 'ion:engine-remap-session',
+  ENGINE_BROADCAST_HISTORY: 'ion:engine-broadcast-history',
 
   // Resource focus tracking
   NOTIFY_TAB_FOCUS: 'ion:notify-tab-focus',
