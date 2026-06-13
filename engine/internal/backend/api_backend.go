@@ -151,6 +151,18 @@ type ApiBackend struct {
 	onError      func(string, error)
 
 	authResolver *auth.Resolver
+
+	// lastRunConfig caches the RunConfig from the most recent
+	// StartRunWithConfig call so out-of-run operations (CompactNow,
+	// triggered by /compact between turns) can replay the session's
+	// hooks, session-memory helpers, and security config without
+	// constructing them from scratch.
+	//
+	// Guarded by mu. A nil value means "no run has started on this
+	// backend instance yet"; CompactNow falls back to a zero-valued
+	// RunConfig in that case, which exercises the same code paths the
+	// run loop uses when callers invoke StartRun (the no-hook path).
+	lastRunConfig *RunConfig
 }
 
 // NewApiBackend creates an ApiBackend ready for use.
@@ -250,6 +262,12 @@ func (b *ApiBackend) StartRunWithConfig(requestID string, options types.RunOptio
 
 	b.mu.Lock()
 	b.activeRuns[requestID] = run
+	// Cache the RunConfig so CompactNow (invoked between turns when no
+	// activeRun exists) can replay the session's hooks/memory helpers.
+	// Captured under the same lock that owns activeRuns to avoid races
+	// with a concurrent CompactNow read. nil cfg is allowed and stored
+	// verbatim — the read path treats nil as "no hooks available".
+	b.lastRunConfig = cfg
 	b.mu.Unlock()
 
 	go b.runLoop(ctx, run, options)

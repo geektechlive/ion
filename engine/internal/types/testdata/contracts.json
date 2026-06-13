@@ -163,6 +163,7 @@
     "errorCategory",
     "errorCode",
     "exitCode",
+    "exportFormat",
     "extensionName",
     "fallbackModel",
     "fallbackReason",
