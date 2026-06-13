@@ -6,6 +6,7 @@ import (
 
 	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/types"
+	"github.com/dsswift/ion/engine/internal/utils"
 )
 
 // maxConsecutiveCompactions caps the number of proactive compactions that
@@ -102,9 +103,11 @@ func buildUserContentBlocks(prompt string, attachments []types.ImageAttachment) 
 		})
 	}
 	if len(blocks) == 0 {
-		// All attachments invalid AND prompt empty: emit a single empty
-		// text block so AddUserMessage's blocks branch is well-formed.
-		blocks = append(blocks, types.LlmContentBlock{Type: "text", Text: ""})
+		// All attachments invalid AND prompt empty: emit a placeholder text
+		// block so AddUserMessage's blocks branch is well-formed. Must be
+		// non-empty — Anthropic rejects cache_control on empty text blocks.
+		utils.Debug("ApiBackend", "buildUserContentBlocks: emitting placeholder for empty prompt + invalid attachments")
+		blocks = append(blocks, types.LlmContentBlock{Type: "text", Text: "(empty prompt)"})
 	}
 	return blocks
 }
