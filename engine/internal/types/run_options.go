@@ -9,9 +9,28 @@ package types
 
 // RunOptions configures a Claude run.
 type RunOptions struct {
-	Prompt             string          `json:"prompt"`
-	ProjectPath        string          `json:"projectPath"`
-	SessionID          string          `json:"sessionId,omitempty"`
+	Prompt      string `json:"prompt"`
+	ProjectPath string `json:"projectPath"`
+	SessionID   string `json:"sessionId,omitempty"`
+	// CliResumeSessionID is the claude-native session UUID passed to
+	// `claude --resume`. It belongs to a *different identity space* than
+	// SessionID: the CLI backend (Claude Code subprocess) issues and owns
+	// its own session UUIDs, whereas SessionID is Ion's conversation-file
+	// identity (`{unix-millis}-{12hex}`) used by the API backend to
+	// load/create `~/.ion/conversations/<id>.*`.
+	//
+	// Resume semantics for the CLI backend:
+	//   - First CLI run of a session: empty → the backend omits --resume
+	//     entirely (claude starts a fresh session and reports its UUID,
+	//     which the manager captures from SessionInitEvent/TaskCompleteEvent
+	//     on run exit).
+	//   - Subsequent runs: the captured claude UUID → `--resume <uuid>`.
+	//
+	// The API backend ignores this field; it resumes via SessionID. Passing
+	// Ion's SessionID (the `{millis}-{hex}` id) to `claude --resume` is the
+	// defect this field fixes — claude rejects non-UUID resume ids with exit
+	// code 1, killing every fresh manager-driven CLI run.
+	CliResumeSessionID string          `json:"cliResumeSessionId,omitempty"`
 	AllowedTools       []string        `json:"allowedTools,omitempty"`
 	SuppressTools      []string        `json:"suppressTools,omitempty"`
 	MaxTurns           int             `json:"maxTurns,omitempty"`

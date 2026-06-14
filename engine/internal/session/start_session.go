@@ -416,8 +416,18 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	// with this ID — so the conversation file will use this same ID.
 	convID := config.SessionID
 	if convID == "" {
-		convID = conversation.NewConversationID()
-		utils.Log("Session", fmt.Sprintf("StartSession: key=%s pre-minted conversationID=%s", key, convID))
+		// Check the durable binding store: if this key was previously bound
+		// to a conversation, resume it rather than minting a new id.
+		// This makes the engine resilient to restarts even when the client
+		// does not carry the conversationId forward (B2 fix for issue #230).
+		bPath := bindingsPath()
+		if bound := lookupBinding(bPath, key); bound != "" {
+			convID = bound
+			utils.Log("Session", fmt.Sprintf("StartSession: key=%s resuming bound conversationID=%s from binding store", key, convID))
+		} else {
+			convID = conversation.NewConversationID()
+			utils.Log("Session", fmt.Sprintf("StartSession: key=%s pre-minted conversationID=%s (no binding found)", key, convID))
+		}
 	}
 
 	s := &engineSession{
@@ -465,6 +475,11 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	m.sessions[key] = s
 
 	m.mu.Unlock()
+
+	// Persist the key->conversationId binding for restart resilience (B2 fix
+	// for issue #230). Written immediately after session creation so a crash
+	// mid-startup still leaves the binding on disk for the next restart.
+	saveBinding(bindingsPath(), key, convID)
 
 	// Rehydrate agent dispatch state from the conversation file if the
 	// session is resuming an existing conversation. This runs before

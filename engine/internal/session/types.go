@@ -40,10 +40,21 @@ type pendingPrompt struct {
 
 // engineSession holds the state for a single session managed by the Manager.
 type engineSession struct {
-	key                         string
-	config                      types.EngineConfig
-	requestID                   string // empty when no active run
-	conversationID              string
+	key            string
+	config         types.EngineConfig
+	requestID      string // empty when no active run
+	conversationID string
+	// cliSessionID is the claude-native session UUID captured from CLI run
+	// exits (the backend reports it via SessionInitEvent/TaskCompleteEvent →
+	// emitExit → handleRunExit). It is the ONLY value fed to `claude
+	// --resume` (via RunOptions.CliResumeSessionID). It is deliberately kept
+	// distinct from conversationID: conversationID is Ion's durable
+	// conversation-file identity (`{millis}-{12hex}`, the basename of the
+	// `~/.ion/conversations/<id>.*` files) and must never be overwritten with
+	// a claude UUID — doing so would break compaction, export, /clear, tree
+	// navigation, and the client-facing session id, all of which key on the
+	// Ion id. Empty until the first successful CLI run reports a UUID.
+	cliSessionID                string
 	agents                      *agents.Registry
 	extensionName               string // friendly name broadcast by the extension
 	suppressedTools             []string

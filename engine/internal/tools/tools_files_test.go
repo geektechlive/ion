@@ -732,7 +732,7 @@ func TestParallelEditsSameFile(t *testing.T) {
 	const editsToMake = 10
 	var sb strings.Builder
 	for i := 0; i < totalLines; i++ {
-		sb.WriteString(fmt.Sprintf("line-%02d\n", i))
+		fmt.Fprintf(&sb, "line-%02d\n", i)
 	}
 	if err := os.WriteFile(filePath, []byte(sb.String()), 0o644); err != nil {
 		t.Fatalf("setup: write file: %v", err)
