@@ -177,7 +177,7 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 			if len(raw) > 400 {
 				raw = raw[:400] + "...(truncated)"
 			}
-			utils.Log("OpenAI", fmt.Sprintf("doStream: tool_calls chunk #%d id=%s model=%s: %s", toolChunksSeen, p.id, opts.Model, raw))
+			utils.Debug("OpenAI", fmt.Sprintf("doStream: tool_calls chunk #%d id=%s model=%s: %s", toolChunksSeen, p.id, opts.Model, raw))
 		}
 
 		var chunk openaiChunk
@@ -296,11 +296,18 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 				utils.Error("OpenAI", fmt.Sprintf("doStream: finish_reason=error id=%s model=%s code=%s retryable=%v msg=%s", p.id, opts.Model, pe.Code, pe.Retryable, pe.Message))
 				return pe
 			}
-			// Close any open block
+			// Close any open block exactly once. Reset the block state after
+			// emitting content_block_stop so a trailing chunk that also carries
+			// a finish_reason (OpenRouter sends one after the tool-call turn)
+			// does not emit a second content_block_stop for the same block --
+			// a duplicate stop downstream re-parses an already-reset buffer and
+			// clobbers the tool input back to empty.
 			if inTextBlock || currentToolID != "" {
 				if err := sendEvent(ctx, events, types.LlmStreamEvent{Type: "content_block_stop", BlockIndex: contentIndex}); err != nil {
 					return err
 				}
+				inTextBlock = false
+				currentToolID = ""
 			}
 			stopReason := translateFinishReason(choice.FinishReason)
 			if err := sendEvent(ctx, events, types.LlmStreamEvent{

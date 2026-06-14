@@ -150,7 +150,19 @@ func (b *ApiBackend) processStream(
 				if block.Type == "tool_use" || block.Type == "server_tool_use" {
 					raw := currentPartialJSON.String()
 					if raw == "" {
-						block.Input = map[string]any{}
+						// Do NOT clobber an already-parsed input. Some
+						// OpenAI-compatible providers (observed: gpt-4o-mini via
+						// OpenRouter) emit content_block_stop more than once for a
+						// single tool call — a trailing finish_reason chunk
+						// produces a second stop. The first stop parsed the
+						// streamed arguments and reset the buffer, so the second
+						// sees raw=="". Overwriting with {} here erased the real
+						// arguments and made every tool call arrive empty
+						// ("query/url is required"), looping the agent. Only
+						// default to {} when nothing has been parsed yet.
+						if block.Input == nil {
+							block.Input = map[string]any{}
+						}
 					} else {
 						var input map[string]any
 						if err := json.Unmarshal([]byte(raw), &input); err == nil {
@@ -164,7 +176,6 @@ func (b *ApiBackend) processStream(
 							block.Input = map[string]any{}
 						}
 					}
-					utils.Log("ApiBackend", fmt.Sprintf("stream tool_use stop: idx=%d name=%s rawLen=%d deltas=%d", currentBlockIndex, block.Name, len(raw), dbgInputDeltas))
 					currentPartialJSON.Reset()
 				}
 			}
