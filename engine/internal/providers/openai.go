@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,7 +57,7 @@ func NewOpenAIProvider(opts *ProviderOptions) LlmProvider {
 		apiKey:     apiKey,
 		baseURL:    baseURL,
 		authHeader: authHeader,
-		client:  &http.Client{Transport: network.GetHTTPTransport()},
+		client:     &http.Client{Transport: network.GetHTTPTransport()},
 	}
 	utils.Log("OpenAI", fmt.Sprintf("NewOpenAIProvider: id=%s baseURL=%s apiKeyLen=%d authHeader=%s", id, baseURL, len(apiKey), authHeader))
 	return result
@@ -168,6 +170,17 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 			continue
 		}
 
+		// In-stream provider error: an OpenAI-compatible provider can return
+		// HTTP 200 and then signal an upstream failure via a top-level error
+		// object (frequently with empty choices). Surface it as a ProviderError
+		// so WithRetry can retry a transient failure and the run never exits 0
+		// with empty output.
+		if chunk.Error != nil {
+			pe := classifyOpenAIStreamError(chunk.Error)
+			utils.Error("OpenAI", fmt.Sprintf("doStream: in-stream error id=%s model=%s code=%s retryable=%v msg=%s", p.id, opts.Model, pe.Code, pe.Retryable, pe.Message))
+			return pe
+		}
+
 		if len(chunk.Choices) == 0 {
 			continue
 		}
@@ -259,6 +272,15 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 
 		// Finish reason
 		if choice.FinishReason != "" {
+			// A finish_reason of "error" is an upstream failure delivered
+			// without a transport error. Convert it to a ProviderError (chunk
+			// error detail when present, else a generic transient one) instead
+			// of forwarding "error" as a benign stop reason.
+			if choice.FinishReason == "error" {
+				pe := classifyOpenAIStreamError(chunk.Error)
+				utils.Error("OpenAI", fmt.Sprintf("doStream: finish_reason=error id=%s model=%s code=%s retryable=%v msg=%s", p.id, opts.Model, pe.Code, pe.Retryable, pe.Message))
+				return pe
+			}
 			// Close any open block
 			if inTextBlock || currentToolID != "" {
 				if err := sendEvent(ctx, events, types.LlmStreamEvent{Type: "content_block_stop", BlockIndex: contentIndex}); err != nil {
@@ -302,10 +324,10 @@ func (p *openaiProvider) buildRequestBody(opts types.LlmStreamOptions) map[strin
 	}
 
 	body := map[string]any{
-		"model":                  opts.Model,
-		"max_completion_tokens":  maxTokens,
-		"stream":                 true,
-		"messages":               formatOpenAIMessages(opts.System, opts.Messages),
+		"model":                 opts.Model,
+		"max_completion_tokens": maxTokens,
+		"stream":                true,
+		"messages":              formatOpenAIMessages(opts.System, opts.Messages),
 	}
 
 	if len(opts.Tools) > 0 {
@@ -471,9 +493,61 @@ func sendEvent(ctx context.Context, ch chan<- types.LlmStreamEvent, ev types.Llm
 // --- OpenAI SSE JSON structures ---
 
 type openaiChunk struct {
-	ID      string         `json:"id"`
-	Choices []openaiChoice `json:"choices"`
-	Usage   *openaiUsage   `json:"usage,omitempty"`
+	ID      string             `json:"id"`
+	Choices []openaiChoice     `json:"choices"`
+	Usage   *openaiUsage       `json:"usage,omitempty"`
+	Error   *openaiStreamError `json:"error,omitempty"`
+}
+
+// openaiStreamError captures an error object delivered inside the SSE body.
+// OpenAI-compatible providers (notably OpenRouter) can return HTTP 200 and
+// then signal an upstream failure mid-stream, either as a top-level
+// {"error":{...}} chunk (often with empty choices) or as a choice with
+// finish_reason:"error". The Code field is `any` because OpenRouter sends it
+// as a number (HTTP-status-like) while OpenAI uses a string.
+type openaiStreamError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Code    any    `json:"code"`
+}
+
+// httpStatus returns the numeric HTTP-status-like value embedded in the error
+// code (OpenRouter convention), or 0 when the code is non-numeric/absent.
+func (e *openaiStreamError) httpStatus() int {
+	if e == nil {
+		return 0
+	}
+	switch c := e.Code.(type) {
+	case float64:
+		return int(c)
+	case int:
+		return c
+	case string:
+		if n, err := strconv.Atoi(c); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// classifyOpenAIStreamError converts an in-stream provider error (delivered
+// inside an HTTP 200 SSE body) into a *ProviderError. Mid-stream errors are
+// overwhelmingly transient upstream hiccups, so the default is retryable;
+// when the provider supplies an HTTP-status-like code, the existing
+// FromOpenAIError classifier maps known-terminal statuses (auth, bad request)
+// to non-retryable. The point is to never let an in-stream error fall through
+// as a benign stop reason that exits the run 0 with empty output.
+func classifyOpenAIStreamError(e *openaiStreamError) *ProviderError {
+	msg := "provider returned an in-stream error"
+	if e != nil && e.Message != "" {
+		msg = e.Message
+	}
+	if status := e.httpStatus(); status != 0 {
+		return FromOpenAIError(errors.New(msg), status, msg)
+	}
+	// No usable status code: treat as a transient upstream failure so
+	// WithRetry gets a chance, rather than swallowing it as success.
+	return &ProviderError{Code: ErrOverloaded, Message: msg, Retryable: true}
 }
 
 type openaiChoice struct {

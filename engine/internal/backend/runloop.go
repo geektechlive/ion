@@ -714,6 +714,9 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			}
 
 		default:
+			if b.handleErrorStopReason(run, conv.ID, stopReason, turn) {
+				return
+			}
 			// Unknown stop reason; break the loop
 			utils.Log("ApiBackend", "unexpected stop reason: "+stopReason)
 			b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
