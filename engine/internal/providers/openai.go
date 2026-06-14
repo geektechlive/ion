@@ -157,12 +157,27 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 		currentToolID   string
 		totalInputToks  int
 		totalOutputToks int
+		toolChunksSeen  int
 	)
 
 	sseCh, sseErr := ParseSSEStream(resp.Body)
 	for sse := range sseCh {
 		if sse.Data == "" {
 			continue
+		}
+
+		// Observability for tool-call assembly: log the first few raw chunks
+		// that carry a tool_calls delta. Provider tool-call streaming shapes
+		// diverge (single-chunk args vs incremental, id/index placement), and a
+		// mis-parse silently drops arguments -- log the ground truth so that
+		// class of bug is diagnosable from ~/.ion/engine.log alone.
+		if toolChunksSeen < 3 && strings.Contains(sse.Data, "tool_calls") {
+			toolChunksSeen++
+			raw := sse.Data
+			if len(raw) > 400 {
+				raw = raw[:400] + "...(truncated)"
+			}
+			utils.Log("OpenAI", fmt.Sprintf("doStream: tool_calls chunk #%d id=%s model=%s: %s", toolChunksSeen, p.id, opts.Model, raw))
 		}
 
 		var chunk openaiChunk
