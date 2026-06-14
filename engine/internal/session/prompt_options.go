@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"strings"
 
 	ioncontext "github.com/dsswift/ion/engine/internal/context"
@@ -8,6 +9,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/gitcontext"
 	"github.com/dsswift/ion/engine/internal/modelconfig"
 	"github.com/dsswift/ion/engine/internal/types"
+	"github.com/dsswift/ion/engine/internal/utils"
 )
 
 func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) types.RunOptions {
@@ -191,21 +193,75 @@ func resolveModelTier(opts *types.RunOptions) {
 	}
 }
 
-// injectContextFiles discovers CLAUDE.md/ION.md files and appends them to the system prompt.
-func injectContextFiles(s *engineSession, opts *types.RunOptions) {
+// injectContextFiles discovers CLAUDE.md/ION.md files from the working directory
+// and appends them to the system prompt.
+//
+// Each discovered file is offered to the documented context_discover and
+// context_load hooks (see docs/hooks/reference.md) before it is injected:
+//   - context_discover: a handler returning true rejects the file (skipped entirely).
+//   - context_load: a handler may reject the file or return rewritten content.
+//
+// With no handler registered both hooks abstain and every discovered file is
+// injected verbatim, so this is behavior-preserving for consumers that do not
+// opt in. The hooks were previously implemented and unit-tested but never fired
+// on this path; wiring them here makes the engine honor its published contract.
+func (m *Manager) injectContextFiles(s *engineSession, key string, opts *types.RunOptions) {
 	if s.config.WorkingDirectory == "" {
 		return
 	}
 	ctxFiles := ioncontext.WalkContextFiles(s.config.WorkingDirectory, ioncontext.IonPreset())
+	if len(ctxFiles) == 0 {
+		return
+	}
+
+	// Build an extension context only when at least one host can answer the hook.
+	var extGroup *extension.ExtensionGroup
+	var extCtx *extension.Context
+	if s.extGroup != nil && !s.extGroup.IsEmpty() {
+		extGroup = s.extGroup
+		extCtx = m.newExtContext(s, key)
+	}
+
 	var ctxContent strings.Builder
+	injected, rejected := 0, 0
 	for _, cf := range ctxFiles {
+		content := cf.Content
+		if extGroup != nil {
+			reject, err := extGroup.FireContextDiscover(extCtx, extension.ContextDiscoverInfo{
+				Path:   cf.Path,
+				Source: cf.Source,
+			})
+			if err != nil {
+				utils.Log("Session", fmt.Sprintf("context_discover error for %s: %v (injecting anyway)", cf.Path, err))
+			} else if reject {
+				utils.Log("Session", fmt.Sprintf("context_discover rejected %s -- skipping injection", cf.Path))
+				rejected++
+				continue
+			}
+			modified, reject2, err2 := extGroup.FireContextLoad(extCtx, extension.ContextLoadInfo{
+				Path:    cf.Path,
+				Content: content,
+				Source:  cf.Source,
+			})
+			if err2 != nil {
+				utils.Log("Session", fmt.Sprintf("context_load error for %s: %v (using original content)", cf.Path, err2))
+			} else if reject2 {
+				utils.Log("Session", fmt.Sprintf("context_load rejected %s -- skipping injection", cf.Path))
+				rejected++
+				continue
+			} else if modified != "" {
+				content = modified
+			}
+		}
 		ctxContent.WriteString("\n# Context from " + cf.Path + "\n")
-		ctxContent.WriteString(cf.Content)
+		ctxContent.WriteString(content)
 		ctxContent.WriteString("\n")
+		injected++
 	}
 	if ctxContent.Len() > 0 {
 		opts.AppendSystemPrompt += ctxContent.String()
 	}
+	utils.Log("Session", fmt.Sprintf("injectContextFiles: %d injected, %d rejected (of %d discovered)", injected, rejected, len(ctxFiles)))
 }
 
 // injectExtensionContext fires context_inject and capability injection on each host.

@@ -180,7 +180,7 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 		opts.Model = s.lastModel
 	}
 
-	injectContextFiles(s, &opts)
+	m.injectContextFiles(s, key, &opts)
 	m.injectExtensionContext(s, key, &opts)
 	injectGitContext(s, &opts)
 
