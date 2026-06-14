@@ -41,6 +41,7 @@ vi.mock('../../preferences', () => ({
 import { createEngineRewindActions } from '../slices/engine-slice-rewind'
 import type { State } from '../session-store-types'
 import type { EngineInstance, EnginePaneState, ConversationInstance } from '../../../shared/types-engine'
+import { formatClearDivider } from '../../../shared/clear-divider'
 
 function makeTab(id: string) {
   return {
@@ -176,5 +177,43 @@ describe('rewindEngineInstance — broadcast after restart', () => {
     // engineStop → engineStart → engineBroadcastHistory chain is async; flush.
     await new Promise((r) => setTimeout(r, 0))
     expect(broadcastSpy).toHaveBeenCalledWith('tab1', 'inst1')
+  })
+})
+
+describe('rewindEngineInstance — pending-card restoration after rewind', () => {
+  // History whose kept slice (everything before the rewind target) ends with a
+  // pending AskUserQuestion → the card must be restored on the rewound instance.
+  const ASK_THEN_TARGET = [
+    { id: 'u-0', role: 'user', content: 'do a thing', timestamp: 1 },
+    { id: 'a-1', role: 'assistant', content: 'thinking', timestamp: 2 },
+    { id: 'q-1', role: 'assistant', content: '', timestamp: 3, toolName: 'AskUserQuestion', toolId: 'tu-q', toolInput: '{"question":"which?"}' } as any,
+    { id: 'u-1', role: 'user', content: 'rewind here', timestamp: 4 },
+  ]
+
+  it('restores the AskUserQuestion card when the kept history ends with it', () => {
+    const { state, slice } = buildHarness(ASK_THEN_TARGET)
+    // Rewind to u-1 → keep [u-0, a-1, q-1]; that slice ends with the question.
+    slice.rewindEngineInstance('tab1', 'inst1', 'u-1')
+    const inst = state.enginePanes.get('tab1')!.instances[0]
+    expect(inst.permissionDenied).not.toBeNull()
+    expect(inst.permissionDenied!.tools[0].toolName).toBe('AskUserQuestion')
+  })
+
+  // Same question, but a /clear divider sits between the question and the
+  // rewind target → the kept slice ends with the clear, which dismisses the
+  // card. Regression guard: a cleared question must NOT be resurrected.
+  const ASK_THEN_CLEAR_THEN_TARGET = [
+    { id: 'u-0', role: 'user', content: 'do a thing', timestamp: 1 },
+    { id: 'q-1', role: 'assistant', content: '', timestamp: 2, toolName: 'AskUserQuestion', toolId: 'tu-q', toolInput: '{"question":"which?"}' } as any,
+    { id: 'c-1', role: 'system', content: formatClearDivider(new Date()), timestamp: 3 },
+    { id: 'u-1', role: 'user', content: 'rewind here', timestamp: 4 },
+  ]
+
+  it('does NOT restore the card when a /clear divider follows the question in the kept history', () => {
+    const { state, slice } = buildHarness(ASK_THEN_CLEAR_THEN_TARGET)
+    // Rewind to u-1 → keep [u-0, q-1, c-1]; the clear divider dismisses it.
+    slice.rewindEngineInstance('tab1', 'inst1', 'u-1')
+    const inst = state.enginePanes.get('tab1')!.instances[0]
+    expect(inst.permissionDenied).toBeNull()
   })
 })

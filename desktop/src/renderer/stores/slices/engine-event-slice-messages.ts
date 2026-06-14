@@ -43,6 +43,7 @@ import { formatClearDivider, formatPlanCreatedDivider, formatSteerAppliedDivider
 import { applyResourceSnapshot, applyResourceDelta } from './resource-slice'
 import type { ResourceItem } from '../../../shared/types-engine'
 import { extensionCommandsByKey, withInstanceMessages, withRunningAgentsErrored } from './engine-event-slice-helpers'
+import { withInstancePatch } from './engine-event-status'
 
 /**
  * Handle cross-cutting events that apply to both CLI tabs (bare tabId key)
@@ -90,20 +91,36 @@ export function handleCrossEngineEvent(
     if (cmdName === 'clear' && !failed) {
       const divider = formatClearDivider(new Date())
       if (key.includes(':')) {
-        // Engine tab — insert into instance messages.
+        // Engine tab — insert the clear divider into instance messages AND
+        // clear any pending AskUserQuestion / ExitPlanMode card on this
+        // instance. /clear is a checkpoint that dismisses the pending
+        // question along with the conversation history. The engine already
+        // stopped retaining/re-emitting the denial (command_dispatch.go
+        // dispatchClear), but the renderer's engine_status handler PRESERVES
+        // an existing permissionDenied on denial-free ticks (anti-flicker),
+        // so a nil-denial status snapshot will NOT clear an already-displayed
+        // card. We clear it here, on the explicit /clear signal. Only the
+        // instance addressed by the compound key is touched, not every
+        // instance on the tab.
         set((state) => {
           const [tabIdInner, instanceId] = key.split(':')
           const pane = state.enginePanes.get(tabIdInner)
           const inst = pane?.instances.find((i) => i.id === instanceId)
           const msgs = [...(inst?.messages || []), { id: nextMsgId(), role: 'system' as const, content: divider, timestamp: Date.now() }]
-          const enginePanes = withInstanceMessages(state.enginePanes, key, msgs)
+          const withMsgs = withInstanceMessages(state.enginePanes, key, msgs)
+          const enginePanes = withInstancePatch(withMsgs, key, { permissionDenied: null })
           return { enginePanes }
         })
       } else {
-        // CLI tab — insert into the tab's local messages array.
+        // CLI tab — insert the clear divider into the tab's local messages
+        // array AND clear any pending permissionDenied card. The waiting
+        // pill is derived from permissionDenied (TabStripShared.getWaitingState),
+        // so clearing it settles the pill back to idle. Same rationale as the
+        // engine-tab branch above: the explicit /clear signal is where we
+        // dismiss the card, since denial-free status ticks preserve it.
         set((state) => ({
           tabs: state.tabs.map((t) => t.id === tabIdForCmd
-            ? { ...t, messages: [...(t.messages ?? []), { id: nextMsgId(), role: 'system' as const, content: divider, timestamp: Date.now() }] }
+            ? { ...t, messages: [...(t.messages ?? []), { id: nextMsgId(), role: 'system' as const, content: divider, timestamp: Date.now() }], permissionDenied: null }
             : t),
         }))
       }

@@ -6,7 +6,7 @@ import type { EngineEvent, EnginePaneState, StatusFields } from '../../../shared
  * the instance identified by `key` (`${tabId}:${instanceId}`). No-ops
  * silently when the pane or instance is not found.
  */
-function withInstancePatch(
+export function withInstancePatch(
   enginePanes: Map<string, EnginePaneState>,
   key: string,
   patch: Partial<{

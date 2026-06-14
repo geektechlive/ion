@@ -252,3 +252,84 @@ describe('engine_status.permissionDenials → instance.permissionDenied', () => 
     expect(tab.permissionDenied).toBeNull()
   })
 })
+
+describe('engine_command_result clear → permissionDenied dismissed', () => {
+  it('clears instance.permissionDenied on /clear for an engine tab and appends the divider', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst-a'
+
+    // First: an AskUserQuestion denial populates instance.permissionDenied.
+    slice.handleEngineEvent(key, {
+      type: 'engine_status',
+      fields: {
+        label: 'engine',
+        state: 'idle',
+        model: 'sonnet',
+        contextPercent: 12,
+        contextWindow: 200000,
+        permissionDenials: [
+          { toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'Pick one' } },
+        ],
+      },
+    } as any)
+    expect(getPermissionDenied(state, key)).not.toBeNull()
+
+    const before = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst-a').messages.length
+
+    // Then: /clear dismisses the card AND appends the clear divider.
+    slice.handleEngineEvent(key, {
+      type: 'engine_command_result',
+      command: 'clear',
+    } as any)
+
+    expect(getPermissionDenied(state, key)).toBeNull()
+    const inst = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst-a')
+    expect(inst.messages.length).toBe(before + 1)
+    expect(inst.messages[inst.messages.length - 1].role).toBe('system')
+
+    // Sibling instance is untouched — only the addressed instance is cleared.
+    const sibling = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst-b')
+    expect(sibling.messages.length).toBe(0)
+  })
+
+  it('clears tab.permissionDenied on /clear for a CLI tab and appends the divider', () => {
+    const { state, slice } = buildHarness()
+    // Mark the CLI tab as carrying a pending card (CLI denials live on the tab).
+    const cliTab = state.tabs.find((t: any) => t.id === 'tab1')
+    cliTab.isEngine = false
+    cliTab.messages = []
+    cliTab.permissionDenied = { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }] }
+
+    slice.handleEngineEvent('tab1', {
+      type: 'engine_command_result',
+      command: 'clear',
+    } as any)
+
+    const tab = state.tabs.find((t: any) => t.id === 'tab1')
+    expect(tab.permissionDenied).toBeNull()
+    expect(tab.messages.length).toBe(1)
+    expect(tab.messages[0].role).toBe('system')
+  })
+
+  it('does not clear permissionDenied when the clear command failed', () => {
+    const { state, slice } = buildHarness()
+    const key = 'tab1:inst-a'
+    slice.handleEngineEvent(key, {
+      type: 'engine_status',
+      fields: {
+        label: 'engine', state: 'idle', model: 'sonnet', contextPercent: 0, contextWindow: 200000,
+        permissionDenials: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }],
+      },
+    } as any)
+    expect(getPermissionDenied(state, key)).not.toBeNull()
+
+    slice.handleEngineEvent(key, {
+      type: 'engine_command_result',
+      command: 'clear',
+      commandError: 'boom',
+    } as any)
+
+    // Failed clear must not dismiss the card.
+    expect(getPermissionDenied(state, key)).not.toBeNull()
+  })
+})

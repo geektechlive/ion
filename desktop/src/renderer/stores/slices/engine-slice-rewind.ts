@@ -28,6 +28,7 @@
 
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
+import { lastPendingCardTool } from '../../../shared/pending-card'
 
 export function createEngineRewindActions(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -129,9 +130,12 @@ export function createEngineRewindActions(set: StoreSet, get: StoreGet): Partial
         if (!raw) return undefined
         try { return JSON.parse(raw) } catch { return undefined }
       }
-      const lastToolMsg = [...rewoundMessages].reverse().find((m) => m.toolName)
-      const restoredDenied = (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion')
-        ? { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseInput(lastToolMsg.toolInput) }] }
+      // Shared pending-card rule: a rewound history restores the card only when
+      // the last AskUserQuestion / ExitPlanMode is still outstanding (no
+      // trailing /clear divider or user message dismissed it).
+      const foundCard = lastPendingCardTool(rewoundMessages)
+      const restoredDenied = foundCard
+        ? { tools: [{ toolName: foundCard.toolName, toolUseId: foundCard.toolId || 'restored', toolInput: parseInput(foundCard.toolInput) }] }
         : null
 
       panes.set(tabId, {

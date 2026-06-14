@@ -2,12 +2,28 @@ import type { TabState, Message } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { makeLocalTab, nextMsgId } from '../session-store-helpers'
+import { lastPendingCardTool, type PendingCardMessage } from '../../../shared/pending-card'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
   if (!raw) return undefined
   try { return JSON.parse(raw) } catch { return undefined }
 }
+
+/**
+ * Build a restored `permissionDenied` entry from a message history using the
+ * shared pending-card rule (returns null when no card should be restored —
+ * e.g. a trailing /clear divider or user message dismissed it). Single seam so
+ * every fork/resume/rewind path in this slice applies the identical rule.
+ */
+function buildRestoredDenied(
+  messages: readonly PendingCardMessage[],
+): { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null {
+  const found = lastPendingCardTool(messages)
+  if (!found) return null
+  return { tools: [{ toolName: found.toolName, toolUseId: found.toolId || 'restored', toolInput: parseToolInput(found.toolInput) }] }
+}
+
 
 export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -23,10 +39,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           id: nextMsgId(),
         }))
 
-        const lastToolMsg = [...messages].reverse().find((m) => m.toolName)
-        const restoredDenied = (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion')
-          ? { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastToolMsg.toolInput) }] }
-          : null
+        const restoredDenied = buildRestoredDenied(messages)
 
         const sourceDisplay = source.customTitle || source.title
         const baseMatch = sourceDisplay.match(/^(.+?)\s*\(\d+\)$/)
@@ -80,10 +93,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
       console.log(`[store] rewindToMessage: tabId=${tabId.slice(0, 8)} msgIdx=${idx} totalMsgs=${tab.messages.length} keepMsgs=${idx} oldSessionId=${oldSessionId?.slice(0, 16) ?? 'none'} historicalChainLen=${historicalSessionIds.length}`)
 
       const rewoundMessages = tab.messages.slice(0, idx)
-      const lastToolMsg = [...rewoundMessages].reverse().find((m) => m.toolName)
-      const restoredDenied = (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion')
-        ? { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastToolMsg.toolInput) }] }
-        : null
+      const restoredDenied = buildRestoredDenied(rewoundMessages)
 
       window.ion.resetTabSession(tabId)
       set((s) => ({
@@ -123,10 +133,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           id: nextMsgId(),
         }))
 
-        const lastToolMsg = [...messages].reverse().find((m) => m.toolName)
-        const restoredDenied = (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion')
-          ? { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastToolMsg.toolInput) }] }
-          : null
+        const restoredDenied = buildRestoredDenied(messages)
 
         const sourceDisplay = source.customTitle || source.title
         const baseMatch = sourceDisplay.match(/^(.+?)\s*\(\d+\)$/)
@@ -196,10 +203,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           timestamp: m.timestamp,
         }))
 
-        const lastToolMsg = [...messages].reverse().find((m) => m.toolName)
-        const restoredDenied = (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion')
-          ? { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastToolMsg.toolInput) }] }
-          : null
+        const restoredDenied = buildRestoredDenied(messages)
 
         const { tabGroupMode, tabGroups } = usePreferencesStore.getState()
         const groupId = tabGroupMode === 'manual'
@@ -282,10 +286,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
         const currentTab = get().tabs.find((t) => t.id === tabId)
         let restoredDenied = currentTab?.permissionDenied ?? null
         if (!restoredDenied) {
-          const lastToolMsg = [...allMessages].reverse().find((m) => m.toolName)
-          if (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion') {
-            restoredDenied = { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastToolMsg.toolInput) }] }
-          }
+          restoredDenied = buildRestoredDenied(allMessages)
         }
 
         set((s) => ({
@@ -353,10 +354,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           })
         }
 
-        const lastToolMsg = [...allMessages].reverse().find((m) => m.toolName)
-        const restoredDenied = (lastToolMsg?.toolName === 'ExitPlanMode' || lastToolMsg?.toolName === 'AskUserQuestion')
-          ? { tools: [{ toolName: lastToolMsg.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastToolMsg.toolInput) }] }
-          : null
+        const restoredDenied = buildRestoredDenied(allMessages)
 
         const { tabGroupMode, tabGroups } = usePreferencesStore.getState()
         const groupId = tabGroupMode === 'manual'

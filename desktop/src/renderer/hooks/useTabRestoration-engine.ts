@@ -3,6 +3,7 @@ import type { PersistedTab } from '../../shared/types-persistence'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { isExtensionErrorMessage } from '../stores/session-store-persistence'
+import { pendingCardOutcome } from '../../shared/pending-card'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
@@ -210,18 +211,26 @@ export function restoreEngineTab(st: PersistedTab, restoredTabIds: Array<{ tabId
         if (instancePermissionDenied.get(inst.id)) continue
         const msgs = st.engineMessages[inst.id]
         if (!msgs || msgs.length === 0) continue
-        // Find the most recent tool message.
-        const lastTool = [...msgs].reverse().find((m) => m.toolName)
-        if (!lastTool) continue
-        if (lastTool.toolName !== 'AskUserQuestion' && lastTool.toolName !== 'ExitPlanMode') continue
+        // Decide via the shared pending-card rule: restore the card only when
+        // the last AskUserQuestion / ExitPlanMode tool is genuinely still
+        // outstanding (no trailing /clear divider, no trailing user message).
+        // This is the fix for the resurrected-card bug — a conversation cleared
+        // after its last question must NOT rebuild the card from history.
+        const outcome = pendingCardOutcome(msgs)
+        if (outcome.kind !== 'found') {
+          if (outcome.kind === 'suppressed-by-clear' || outcome.kind === 'suppressed-by-user') {
+            console.log(`[restore] engine denial suppressed for ${tabId.slice(0, 8)}:${inst.id.slice(0, 8)} reason=${outcome.kind}`)
+          }
+          continue
+        }
         instancePermissionDenied.set(inst.id, {
           tools: [{
-            toolName: lastTool.toolName,
-            toolUseId: lastTool.toolId || 'restored',
-            toolInput: parseToolInput(lastTool.toolInput),
+            toolName: outcome.toolName,
+            toolUseId: outcome.toolId || 'restored',
+            toolInput: parseToolInput(outcome.toolInput),
           }],
         })
-        console.log(`[restore] engine denial synthesized from history for ${tabId.slice(0, 8)}:${inst.id.slice(0, 8)} tool=${lastTool.toolName} toolId=${(lastTool.toolId || 'none').slice(0, 16)} hasInput=${lastTool.toolInput ? 'yes' : 'no'}`)
+        console.log(`[restore] engine denial synthesized from history for ${tabId.slice(0, 8)}:${inst.id.slice(0, 8)} tool=${outcome.toolName} toolId=${(outcome.toolId || 'none').slice(0, 16)} hasInput=${outcome.toolInput ? 'yes' : 'no'}`)
       }
     }
 

@@ -5,6 +5,7 @@ import { usePreferencesStore } from '../preferences'
 import { setSavedBuffer } from '../components/TerminalInstance'
 import { restoreEngineTab } from './useTabRestoration-engine'
 import { makeLocalTab } from '../stores/session-store-helpers'
+import { lastPendingCardTool } from '../../shared/pending-card'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
@@ -271,9 +272,14 @@ export function useTabRestoration() {
               const tab = useSessionStore.getState().tabs.find((t) => t.id === tabId)
               let restoredDenied = tab?.permissionDenied ?? null
               if (!restoredDenied && !tab?.conversationId) {
-                const lastTool = [...combinedMessages].reverse().find((m) => m.toolName)
-                if (lastTool?.toolName === 'ExitPlanMode' || lastTool?.toolName === 'AskUserQuestion') {
-                  restoredDenied = { tools: [{ toolName: lastTool.toolName, toolUseId: 'restored', toolInput: parseToolInput(lastTool.toolInput) }] }
+                // Shared pending-card rule: restore only when the last
+                // AskUserQuestion / ExitPlanMode is still outstanding (no
+                // trailing /clear divider, no trailing user message).
+                const found = lastPendingCardTool(combinedMessages)
+                if (found) {
+                  restoredDenied = { tools: [{ toolName: found.toolName, toolUseId: found.toolId || 'restored', toolInput: parseToolInput(found.toolInput) }] }
+                } else {
+                  console.log(`[restore] tab ${tabId.slice(0, 8)} no pending card restored (suppressed or none)`)
                 }
               }
 
