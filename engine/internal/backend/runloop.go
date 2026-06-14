@@ -116,14 +116,10 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	// Build tool definitions (built-in + external/MCP + capabilities + filters)
 	toolDefs, serverTools := b.buildToolDefs(run, opts, provider)
 
-	// Resolve context window for compaction checks
-	contextWindow := conversation.DefaultContext
-	if info := providers.GetModelInfo(model); info != nil {
-		contextWindow = info.ContextWindow
-		utils.Log("ApiBackend", fmt.Sprintf("context window: model=%s window=%d (from registry)", model, contextWindow))
-	} else {
-		utils.Warn("ApiBackend", fmt.Sprintf("context window: model=%s window=%d (fallback, model not in registry)", model, contextWindow))
-	}
+	// Resolve context window for compaction checks. resolveContextWindow falls
+	// back to DefaultContext when the registry has no usable (>0) window so a
+	// catalog gap can't drive compaction's targetTokens to 0.
+	contextWindow := resolveContextWindow(model)
 
 	// Track consecutive prompt_too_long compaction failures to prevent infinite loops
 	promptTooLongRetries := 0

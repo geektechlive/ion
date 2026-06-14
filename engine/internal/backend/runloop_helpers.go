@@ -2,11 +2,35 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/types"
+	"github.com/dsswift/ion/engine/internal/utils"
 )
+
+// resolveContextWindow returns the model's context window for compaction math.
+// A registry entry may exist with ContextWindow==0 (e.g. an OpenRouter model
+// that the catalog does not fully describe). Treating that 0 as the real
+// window is catastrophic: compaction's targetTokens becomes 0, so every turn
+// truncates the conversation to nothing and the agent can never use a tool
+// result to compose its answer. Fall back to conversation.DefaultContext
+// whenever the registry has no usable (>0) window, and log which branch ran.
+func resolveContextWindow(model string) int {
+	info := providers.GetModelInfo(model)
+	switch {
+	case info != nil && info.ContextWindow > 0:
+		utils.Log("ApiBackend", fmt.Sprintf("context window: model=%s window=%d (from registry)", model, info.ContextWindow))
+		return info.ContextWindow
+	case info != nil:
+		utils.Warn("ApiBackend", fmt.Sprintf("context window: model=%s registry entry has no window; using default=%d", model, conversation.DefaultContext))
+	default:
+		utils.Warn("ApiBackend", fmt.Sprintf("context window: model=%s not in registry; using default=%d", model, conversation.DefaultContext))
+	}
+	return conversation.DefaultContext
+}
 
 // maxConsecutiveCompactions caps the number of proactive compactions that
 // can fire back-to-back without a successful API response in between. After
