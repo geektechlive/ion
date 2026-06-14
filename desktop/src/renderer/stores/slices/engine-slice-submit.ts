@@ -16,11 +16,12 @@
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId } from '../session-store-helpers'
+import { parseSessionKey } from '../../../shared/session-key'
 
 export function createEngineSubmitActions(set: StoreSet, get: StoreGet): Partial<State> {
   return {
     submitEnginePrompt: (tabId, text, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase) => {
-      const pane = get().enginePanes.get(tabId)
+      const pane = get().conversationPanes.get(tabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
@@ -54,8 +55,8 @@ export function createEngineSubmitActions(set: StoreSet, get: StoreGet): Partial
         const pinnedPrompt = new Map(state.enginePinnedPrompt)
         pinnedPrompt.set(key, text)
         // Add user message and clear permissionDenied on the instance.
-        const enginePanes = new Map(state.enginePanes)
-        const paneInner = enginePanes.get(tabId)
+        const conversationPanes = new Map(state.conversationPanes)
+        const paneInner = conversationPanes.get(tabId)
         if (paneInner) {
           const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
           if (idx !== -1) {
@@ -75,15 +76,15 @@ export function createEngineSubmitActions(set: StoreSet, get: StoreGet): Partial
               // the engine-side clearing in `prompt_dispatch.go`.
               permissionDenied: null,
             }
-            enginePanes.set(tabId, { ...paneInner, instances })
+            conversationPanes.set(tabId, { ...paneInner, instances })
           }
         }
         const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'running' as const, attachments: [] } : t)
-        return { enginePinnedPrompt: pinnedPrompt, enginePanes, tabs }
+        return { enginePinnedPrompt: pinnedPrompt, conversationPanes, tabs }
       })
       const prefs = usePreferencesStore.getState()
       // Re-read inst from store in case set() above updated panes
-      const currentInst = get().enginePanes.get(tabId)?.instances.find((i) => i.id === instanceId)
+      const currentInst = get().conversationPanes.get(tabId)?.instances.find((i) => i.id === instanceId)
       const rawModel = currentInst?.modelOverride || prefs.engineDefaultModel || prefs.preferredModel || undefined
       // Filter out invalid model values (e.g. "unknown" from stale state)
       // so the engine's own defaultModel resolution handles the fallback.
@@ -115,59 +116,59 @@ export function createEngineSubmitActions(set: StoreSet, get: StoreGet): Partial
         // Clear forkedFromConversationIds — one-shot injection.
         console.log(`[engine] rewind context cleared forkedFromConversationIds: key=${key}`)
         set((state) => {
-          const enginePanes = new Map(state.enginePanes)
-          const paneInner = enginePanes.get(tabId)
+          const conversationPanes = new Map(state.conversationPanes)
+          const paneInner = conversationPanes.get(tabId)
           if (paneInner) {
             const idx2 = paneInner.instances.findIndex((i) => i.id === instanceId)
             if (idx2 !== -1) {
               const instances = paneInner.instances.slice()
               instances[idx2] = { ...instances[idx2], forkedFromConversationIds: null }
-              enginePanes.set(tabId, { ...paneInner, instances })
+              conversationPanes.set(tabId, { ...paneInner, instances })
             }
           }
-          return { enginePanes }
+          return { conversationPanes }
         })
       }
 
       window.ion.enginePrompt(key, text, modelOverride, effectiveSystemPrompt, imageAttachments, rawAttachments, implementationPhase).then((result) => {
         if (result && !result.ok) {
           set((state) => {
-            const enginePanes = new Map(state.enginePanes)
-            const paneInner = enginePanes.get(tabId)
+            const conversationPanes = new Map(state.conversationPanes)
+            const paneInner = conversationPanes.get(tabId)
             if (paneInner) {
               const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
               if (idx !== -1) {
                 const instances = paneInner.instances.slice()
                 const msgs = [...(instances[idx].messages || []), { id: nextMsgId(), role: 'system' as const, content: `Error: ${result.error}`, timestamp: Date.now() }]
                 instances[idx] = { ...instances[idx], messages: msgs }
-                enginePanes.set(tabId, { ...paneInner, instances })
+                conversationPanes.set(tabId, { ...paneInner, instances })
               }
             }
             const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'idle' as const } : t)
-            return { enginePanes, tabs }
+            return { conversationPanes, tabs }
           })
         }
       }).catch((err: any) => {
         set((state) => {
-          const enginePanes = new Map(state.enginePanes)
-          const paneInner = enginePanes.get(tabId)
+          const conversationPanes = new Map(state.conversationPanes)
+          const paneInner = conversationPanes.get(tabId)
           if (paneInner) {
             const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
             if (idx !== -1) {
               const instances = paneInner.instances.slice()
               const msgs = [...(instances[idx].messages || []), { id: nextMsgId(), role: 'system' as const, content: `Error: ${err.message}`, timestamp: Date.now() }]
               instances[idx] = { ...instances[idx], messages: msgs }
-              enginePanes.set(tabId, { ...paneInner, instances })
+              conversationPanes.set(tabId, { ...paneInner, instances })
             }
           }
           const tabs = state.tabs.map((t) => t.id === tabId ? { ...t, status: 'idle' as const } : t)
-          return { enginePanes, tabs }
+          return { conversationPanes, tabs }
         })
       })
     },
 
     respondEngineDialog: (tabId, dialogId, value) => {
-      const pane = get().enginePanes.get(tabId)
+      const pane = get().conversationPanes.get(tabId)
       const instanceId = pane?.activeInstanceId
       if (!instanceId) return
       const key = `${tabId}:${instanceId}`
@@ -180,35 +181,35 @@ export function createEngineSubmitActions(set: StoreSet, get: StoreGet): Partial
     },
 
     addEngineSystemMessage: (key, content) => {
-      // Write system message directly onto the instance in enginePanes.
+      // Write system message directly onto the instance in conversationPanes.
       set((state) => {
-        const [tabId, instanceId] = key.split(':')
-        const enginePanes = new Map(state.enginePanes)
-        const paneInner = enginePanes.get(tabId)
+        const { tabId, instanceId } = parseSessionKey(key)
+        const conversationPanes = new Map(state.conversationPanes)
+        const paneInner = conversationPanes.get(tabId)
         if (!paneInner) return {}
         const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
         if (idx === -1) return {}
         const instances = paneInner.instances.slice()
         const msgs = [...(instances[idx].messages || []), { id: nextMsgId(), role: 'system' as const, content, timestamp: Date.now() }]
         instances[idx] = { ...instances[idx], messages: msgs }
-        enginePanes.set(tabId, { ...paneInner, instances })
-        return { enginePanes }
+        conversationPanes.set(tabId, { ...paneInner, instances })
+        return { conversationPanes }
       })
     },
 
     setEngineDraftInput: (key, text) => {
-      // Write draftInput directly onto the instance in enginePanes.
+      // Write draftInput directly onto the instance in conversationPanes.
       set((state) => {
-        const [tabId, instanceId] = key.split(':')
-        const enginePanes = new Map(state.enginePanes)
-        const paneInner = enginePanes.get(tabId)
+        const { tabId, instanceId } = parseSessionKey(key)
+        const conversationPanes = new Map(state.conversationPanes)
+        const paneInner = conversationPanes.get(tabId)
         if (!paneInner) return {}
         const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
         if (idx === -1) return {}
         const instances = paneInner.instances.slice()
         instances[idx] = { ...instances[idx], draftInput: text }
-        enginePanes.set(tabId, { ...paneInner, instances })
-        return { enginePanes }
+        conversationPanes.set(tabId, { ...paneInner, instances })
+        return { conversationPanes }
       })
     },
   }

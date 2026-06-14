@@ -30,15 +30,10 @@ vi.mock('../session-store-helpers', () => ({
     lastEventAt: null,
     hasUnread: false,
     currentActivity: '',
-    permissionQueue: [],
-    permissionDenied: null,
+    permissionMode: 'auto' as const,
     attachments: [],
-    draftInput: '',
-    messages: [],
     customTitle: null,
     lastResult: null,
-    sessionModel: null,
-    modelOverride: null,
     sessionTools: [],
     sessionMcpServers: [],
     sessionSkills: [],
@@ -47,8 +42,6 @@ vi.mock('../session-store-helpers', () => ({
     workingDirectory: '~',
     hasChosenDirectory: false,
     additionalDirs: [],
-    permissionMode: 'auto' as const,
-    planFilePath: null,
     bashResults: [],
     bashExecuting: false,
     bashExecId: null,
@@ -65,10 +58,11 @@ vi.mock('../session-store-helpers', () => ({
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    isEngine: false,
+    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
   })),
+  initialModelOverride: vi.fn(() => null),
   nextMsgId: vi.fn(() => `msg-${Math.random()}`),
   playNotificationIfHidden: vi.fn(async () => {}),
   cancelDoneGroupMove: vi.fn(() => false),
@@ -103,6 +97,8 @@ import { createSendSlice } from '../slices/send-slice'
 import { createTabSlice } from '../slices/tab-slice'
 import type { State } from '../session-store-types'
 import type { TabState } from '../../../shared/types'
+import type { ConversationInstance } from '../../../shared/types-engine'
+import { seedMainPane, mainInstance } from './helpers/conversation-test-helpers'
 
 // ── global window stub ────────────────────────────────────────────────────────
 
@@ -131,17 +127,10 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     lastEventAt: null,
     hasUnread: false,
     currentActivity: '',
-    permissionQueue: [],
-    permissionDenied: null,
     attachments: [],
-    draftInput: '',
-    messages: [],
-    messageCount: 0,
     title: 'New Tab',
     customTitle: null,
     lastResult: null,
-    sessionModel: null,
-    modelOverride: null,
     sessionTools: [],
     sessionMcpServers: [],
     sessionSkills: [],
@@ -151,7 +140,6 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     hasChosenDirectory: true,
     additionalDirs: [],
     permissionMode: 'auto',
-    planFilePath: null,
     bashResults: [],
     bashExecuting: false,
     bashExecId: null,
@@ -168,14 +156,17 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    isEngine: false,
+    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
     ...overrides,
   }
 }
 
-function buildHarness(initialTab: TabState) {
+function buildHarness(
+  initialTab: TabState,
+  instanceOverrides: Partial<ConversationInstance> = {},
+) {
   const state: any = {
     tabs: [initialTab],
     activeTabId: initialTab.id,
@@ -196,7 +187,10 @@ function buildHarness(initialTab: TabState) {
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    enginePanes: new Map(),
+    conversationPanes: seedMainPane(initialTab.id, {
+      permissionMode: initialTab.permissionMode,
+      ...instanceOverrides,
+    }),
     engineModelFallbacks: new Map(),
     fileExplorerOpenDirs: new Set(),
     fileEditorOpenDirs: new Set(),
@@ -257,27 +251,25 @@ describe('permissionDenied clearing on new prompt', () => {
   })
 
   it('sendMessage clears permissionDenied', () => {
-    const tab = makeTab({
+    const tab = makeTab()
+    const { state } = buildHarness(tab, {
       permissionDenied: { tools: [{ toolName: 'ExitPlanMode', toolUseId: 'tu1' }] } as any,
     })
-    const { state } = buildHarness(tab)
 
     state.sendMessage('amend')
 
-    const updated = state.tabs.find((t: TabState) => t.id === 'tab-1')
-    expect(updated.permissionDenied).toBeNull()
+    expect(mainInstance(state.conversationPanes, 'tab-1')?.permissionDenied).toBeNull()
   })
 
   it('submitRemotePrompt clears permissionDenied', () => {
-    const tab = makeTab({
+    const tab = makeTab()
+    const { state } = buildHarness(tab, {
       permissionDenied: { tools: [{ toolName: 'ExitPlanMode', toolUseId: 'tu1' }] } as any,
     })
-    const { state } = buildHarness(tab)
 
     state.submitRemotePrompt('tab-1', 'amend')
 
-    const updated = state.tabs.find((t: TabState) => t.id === 'tab-1')
-    expect(updated.permissionDenied).toBeNull()
+    expect(mainInstance(state.conversationPanes, 'tab-1')?.permissionDenied).toBeNull()
   })
 })
 
@@ -288,8 +280,8 @@ describe('planFilePath forwarding from tab state', () => {
   })
 
   it('sendMessage passes planFilePath to window.ion.prompt options', () => {
-    const tab = makeTab({ planFilePath: '/plans/test.md' })
-    const { state } = buildHarness(tab)
+    const tab = makeTab()
+    const { state } = buildHarness(tab, { planFilePath: '/plans/test.md' })
 
     state.sendMessage('impl')
 
@@ -299,8 +291,8 @@ describe('planFilePath forwarding from tab state', () => {
   })
 
   it('submitRemotePrompt passes planFilePath to window.ion.prompt options', () => {
-    const tab = makeTab({ planFilePath: '/plans/test.md' })
-    const { state } = buildHarness(tab)
+    const tab = makeTab()
+    const { state } = buildHarness(tab, { planFilePath: '/plans/test.md' })
 
     state.submitRemotePrompt('tab-1', 'impl')
 

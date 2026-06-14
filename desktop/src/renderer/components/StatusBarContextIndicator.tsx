@@ -6,6 +6,7 @@ import { getDynamicContextWindow } from '../stores/model-labels'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
+import { activeInstance } from '../stores/conversation-instance'
 
 /* ─── Context Percentage Indicator ─── */
 
@@ -16,6 +17,9 @@ export function ContextIndicator() {
   const { contextTokens, contextPercent, engineContextWindow, modelOverride, sessionModel } = useSessionStore(
     useShallow((s) => {
       const tab = s.tabs.find((t) => t.id === s.activeTabId)
+      // Per-conversation model state now lives on the active instance
+      // (`modelOverride` / `sessionModel`), resolved via `activeInstance`.
+      const inst = tab ? activeInstance(s.conversationPanes, tab.id) : null
       return {
         contextTokens: tab?.contextTokens ?? null,
         contextPercent: tab?.contextPercent ?? null,
@@ -25,8 +29,8 @@ export function ContextIndicator() {
         // this as the denominator when recomputing percent locally;
         // see the rationale at types-session.ts contextWindow doc.
         engineContextWindow: tab?.contextWindow ?? null,
-        modelOverride: tab?.modelOverride ?? null,
-        sessionModel: tab?.sessionModel ?? null,
+        modelOverride: inst?.modelOverride ?? null,
+        sessionModel: inst?.sessionModel ?? null,
       }
     }),
   )

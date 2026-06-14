@@ -30,6 +30,7 @@ export interface IonAPI {
   respondPermission(tabId: string, questionId: string, optionId: string): Promise<boolean>
   approveDeniedTools(tabId: string, toolNames: string[]): Promise<boolean>
   initSession(tabId: string): void
+  ensureEngineSession(args: { tabId: string; workingDirectory: string; conversationId?: string | null; permissionMode?: 'auto' | 'plan' }): Promise<{ ok: boolean; error?: string }>
   resetTabSession(tabId: string): void
   listSessions(projectPath?: string): Promise<SessionMeta[]>
   listAllSessions(): Promise<SessionMeta[]>
@@ -254,6 +255,7 @@ const api: IonAPI = {
   approveDeniedTools: (tabId: string, toolNames: string[]) =>
     ipcRenderer.invoke(IPC.APPROVE_DENIED_TOOLS, { tabId, toolNames }),
   initSession: (tabId) => ipcRenderer.send(IPC.INIT_SESSION, tabId),
+  ensureEngineSession: (args) => ipcRenderer.invoke(IPC.ENSURE_ENGINE_SESSION, args),
   resetTabSession: (tabId) => ipcRenderer.send(IPC.RESET_TAB_SESSION, tabId),
   listSessions: (projectPath?: string) => ipcRenderer.invoke(IPC.LIST_SESSIONS, projectPath),
   listAllSessions: () => ipcRenderer.invoke(IPC.LIST_ALL_SESSIONS),

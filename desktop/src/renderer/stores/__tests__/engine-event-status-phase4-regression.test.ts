@@ -61,7 +61,7 @@ function buildHarness(opts: { tabStatus?: string; activeInstanceId?: string; ins
     tabs: [
       {
         id: 'tab1',
-        isEngine: true,
+        hasEngineExtension: true,
         status: opts.tabStatus ?? 'idle',
         conversationId: undefined,
         lastKnownSessionId: undefined,
@@ -75,7 +75,7 @@ function buildHarness(opts: { tabStatus?: string; activeInstanceId?: string; ins
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     engineModelFallbacks: new Map(),
-    enginePanes: new Map([[
+    conversationPanes: new Map([[
       'tab1',
       {
         instances: opts.instances ?? [makeInstance('inst1')],
@@ -93,7 +93,7 @@ function buildHarness(opts: { tabStatus?: string; activeInstanceId?: string; ins
 }
 
 function getInstance(state: any, tabId: string, instanceId: string) {
-  return state.enginePanes.get(tabId)?.instances.find((i: any) => i.id === instanceId)
+  return state.conversationPanes.get(tabId)?.instances.find((i: any) => i.id === instanceId)
 }
 
 describe('engine_status — Phase 4 regression: behaviors that survive the refactor', () => {

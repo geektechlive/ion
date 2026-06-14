@@ -40,14 +40,14 @@ vi.mock('../../preferences', () => ({
 
 import { createEngineRewindActions } from '../slices/engine-slice-rewind'
 import type { State } from '../session-store-types'
-import type { EngineInstance, EnginePaneState, ConversationInstance } from '../../../shared/types-engine'
+import type { ConversationRef, ConversationPane, ConversationInstance } from '../../../shared/types-engine'
 import { formatClearDivider } from '../../../shared/clear-divider'
 
 function makeTab(id: string) {
   return {
     id,
     title: 'Engine',
-    isEngine: true,
+    hasEngineExtension: true,
     engineProfileId: null,
     workingDirectory: '/tmp',
     hasChosenDirectory: false,
@@ -62,14 +62,17 @@ function makeTab(id: string) {
 function makeInstance(
   id: string,
   messages: Array<{ id: string; role: string; content: string; timestamp: number; toolName?: string }>,
-): EngineInstance & ConversationInstance {
+): ConversationRef & ConversationInstance {
   return {
     id,
     label: 'Engine',
     messages: messages as any,
+    messageCount: messages.length,
     modelOverride: null,
+    sessionModel: null,
     permissionMode: 'auto',
     permissionDenied: null,
+    permissionQueue: [],
     conversationIds: ['conv-prior'],
     draftInput: '',
     agentStates: [],
@@ -82,7 +85,7 @@ function makeInstance(
 function buildHarness(messages: Array<{ id: string; role: string; content: string; timestamp: number; toolName?: string }>) {
   const state: any = {
     tabs: [makeTab('tab1')],
-    enginePanes: new Map<string, EnginePaneState>([
+    conversationPanes: new Map<string, ConversationPane>([
       ['tab1', { instances: [makeInstance('inst1', messages)], activeInstanceId: 'inst1' }],
     ]),
     engineWorkingMessages: new Map(),
@@ -130,7 +133,7 @@ describe('rewindEngineInstance — target resolution', () => {
     const { state, slice } = buildHarness(INTERLEAVED)
     // Rewind to the second user message by its real id.
     slice.rewindEngineInstance('tab1', 'inst1', 'u-real-1')
-    const inst = state.enginePanes.get('tab1')!.instances[0]
+    const inst = state.conversationPanes.get('tab1')!.instances[0]
     // keepMsgs = index of u-real-1 (3) → first 3 messages retained.
     expect(inst.messages.map((m: any) => m.id)).toEqual(['u-real-0', 'a-1', 't-1'])
     expect(state.tabs[0].pendingInput).toBe('second prompt')
@@ -142,7 +145,7 @@ describe('rewindEngineInstance — target resolution', () => {
     // (the second user turn). Must resolve to u-real-1 at index 3 despite the
     // interleaved assistant/tool rows.
     slice.rewindEngineInstance('tab1', 'inst1', 'UUID-NOT-IN-STORE', 1)
-    const inst = state.enginePanes.get('tab1')!.instances[0]
+    const inst = state.conversationPanes.get('tab1')!.instances[0]
     expect(inst.messages.map((m: any) => m.id)).toEqual(['u-real-0', 'a-1', 't-1'])
     expect(state.tabs[0].pendingInput).toBe('second prompt')
   })
@@ -150,23 +153,23 @@ describe('rewindEngineInstance — target resolution', () => {
   it('resolves userTurnIndex=0 to the first user message', () => {
     const { state, slice } = buildHarness(INTERLEAVED)
     slice.rewindEngineInstance('tab1', 'inst1', 'UUID-NOT-IN-STORE', 0)
-    const inst = state.enginePanes.get('tab1')!.instances[0]
+    const inst = state.conversationPanes.get('tab1')!.instances[0]
     expect(inst.messages).toEqual([]) // nothing kept before the first user turn
     expect(state.tabs[0].pendingInput).toBe('first prompt')
   })
 
   it('no-ops when id is absent and userTurnIndex is out of range', () => {
     const { state, slice } = buildHarness(INTERLEAVED)
-    const before = state.enginePanes.get('tab1')!.instances[0].messages.length
+    const before = state.conversationPanes.get('tab1')!.instances[0].messages.length
     slice.rewindEngineInstance('tab1', 'inst1', 'UUID-NOT-IN-STORE', 99)
-    expect(state.enginePanes.get('tab1')!.instances[0].messages.length).toBe(before)
+    expect(state.conversationPanes.get('tab1')!.instances[0].messages.length).toBe(before)
   })
 
   it('no-ops when id is absent and no userTurnIndex is supplied', () => {
     const { state, slice } = buildHarness(INTERLEAVED)
-    const before = state.enginePanes.get('tab1')!.instances[0].messages.length
+    const before = state.conversationPanes.get('tab1')!.instances[0].messages.length
     slice.rewindEngineInstance('tab1', 'inst1', 'UUID-NOT-IN-STORE')
-    expect(state.enginePanes.get('tab1')!.instances[0].messages.length).toBe(before)
+    expect(state.conversationPanes.get('tab1')!.instances[0].messages.length).toBe(before)
   })
 })
 
@@ -194,7 +197,7 @@ describe('rewindEngineInstance — pending-card restoration after rewind', () =>
     const { state, slice } = buildHarness(ASK_THEN_TARGET)
     // Rewind to u-1 → keep [u-0, a-1, q-1]; that slice ends with the question.
     slice.rewindEngineInstance('tab1', 'inst1', 'u-1')
-    const inst = state.enginePanes.get('tab1')!.instances[0]
+    const inst = state.conversationPanes.get('tab1')!.instances[0]
     expect(inst.permissionDenied).not.toBeNull()
     expect(inst.permissionDenied!.tools[0].toolName).toBe('AskUserQuestion')
   })
@@ -213,7 +216,7 @@ describe('rewindEngineInstance — pending-card restoration after rewind', () =>
     const { state, slice } = buildHarness(ASK_THEN_CLEAR_THEN_TARGET)
     // Rewind to u-1 → keep [u-0, q-1, c-1]; the clear divider dismisses it.
     slice.rewindEngineInstance('tab1', 'inst1', 'u-1')
-    const inst = state.enginePanes.get('tab1')!.instances[0]
+    const inst = state.conversationPanes.get('tab1')!.instances[0]
     expect(inst.permissionDenied).toBeNull()
   })
 })

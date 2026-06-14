@@ -60,10 +60,12 @@ export interface RemoteTabState {
   messageCount: number
   queuedPrompts: string[]
   isTerminalOnly?: boolean
-  isEngine?: boolean
+  /** True when the conversation hosts an engine extension. Wire field consumed
+   *  by iOS (RemoteTabState.swift). Not a backend flag. */
+  hasEngineExtension?: boolean
   engineProfileId?: string | null
-  engineInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null; isRunning?: boolean; runningAgentCount?: number; modelFallback?: { requestedModel: string; fallbackModel: string }; conversationIds?: string[] }>
-  activeEngineInstanceId?: string | null
+  conversationInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null; isRunning?: boolean; runningAgentCount?: number; modelFallback?: { requestedModel: string; fallbackModel: string }; conversationIds?: string[] }>
+  activeConversationInstanceId?: string | null
   terminalInstances?: TerminalInstanceInfo[]
   activeTerminalInstanceId?: string | null
   groupId?: string | null
@@ -71,7 +73,7 @@ export interface RemoteTabState {
   groupPinned?: boolean
   /**
    * Aggregated "any sub-instance has running background children" flag,
-   * folded across `engineInstances[*].runningAgentCount`. Optional so
+   * folded across `conversationInstances[*].runningAgentCount`. Optional so
    * older iOS builds that don't decode the field continue to work; iOS
    * uses this to drive the parent tab pill's yellow "awaiting children"
    * dot. See CLAUDE.md § "Common parity surfaces" for the desktop/iOS

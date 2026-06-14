@@ -40,7 +40,7 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
       (function() {
         var store = window.__Ion_SESSION_STORE__;
         if (!store) return null;
-        var pane = store.getState().enginePanes.get('${escapedTab}');
+        var pane = store.getState().conversationPanes.get('${escapedTab}');
         return pane && pane.activeInstanceId ? pane.activeInstanceId : null;
       })()
     `)
@@ -63,7 +63,7 @@ export async function handleEnginePrompt(cmd: Extract<RemoteCommand, { type: 'en
         (function() {
           var store = window.__Ion_SESSION_STORE__;
           if (!store) return null;
-          var pane = store.getState().enginePanes.get('${escapedTab}');
+          var pane = store.getState().conversationPanes.get('${escapedTab}');
           if (!pane) return null;
           var inst = pane.instances.find(function(i) { return i.id === '${instanceId!.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'; });
           return inst ? { id: inst.id, label: inst.label } : null;
@@ -240,7 +240,7 @@ export async function handleEngineAddInstance(cmd: Extract<RemoteCommand, { type
         (function() {
           var store = window.__Ion_SESSION_STORE__;
           if (!store) return null;
-          var pane = store.getState().enginePanes.get('${escaped}');
+          var pane = store.getState().conversationPanes.get('${escaped}');
           if (!pane) return null;
           var escapedId = '${instanceId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}';
           var inst = pane.instances.find(function(i) { return i.id === escapedId; });
@@ -390,7 +390,7 @@ async function sendCurrentEngineState(tabId: string, instanceId: string | null, 
         var key = '${escapedKey}';
         var parts = key.split(':');
         var tabId = parts[0]; var instId = parts[1];
-        var pane = s.enginePanes.get(tabId);
+        var pane = s.conversationPanes.get(tabId);
         var inst = pane && instId ? pane.instances.find(function(i) { return i.id === instId; }) : null;
         var agents = (inst && inst.agentStates) || [];
         var status = (inst && inst.statusFields) || null;
@@ -479,8 +479,8 @@ export async function handleLoadAgentConversation(cmd: Extract<RemoteCommand, { 
             var store = window.__Ion_SESSION_STORE__;
             if (!store) return '';
             var convIds = ${convIdsJson};
-            var enginePanes = store.getState().enginePanes;
-            for (var [, pane] of enginePanes) {
+            var conversationPanes = store.getState().conversationPanes;
+            for (var [, pane] of conversationPanes) {
               for (var inst of pane.instances) {
                 var agents = inst.agentStates || [];
                 for (var a of agents) {

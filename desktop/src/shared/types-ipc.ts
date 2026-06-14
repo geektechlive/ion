@@ -28,6 +28,7 @@ export const IPC = {
   RESPOND_PERMISSION: 'ion:respond-permission',
   APPROVE_DENIED_TOOLS: 'ion:approve-denied-tools',
   INIT_SESSION: 'ion:init-session',
+  ENSURE_ENGINE_SESSION: 'ion:ensure-engine-session',
   RESET_TAB_SESSION: 'ion:reset-tab-session',
   ANIMATE_HEIGHT: 'ion:animate-height',
   LIST_SESSIONS: 'ion:list-sessions',

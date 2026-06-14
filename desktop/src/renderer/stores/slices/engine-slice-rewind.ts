@@ -38,7 +38,7 @@ export function createEngineRewindActions(set: StoreSet, get: StoreGet): Partial
         console.warn(`[engine] rewindEngineInstance: tab not found tabId=${tabId.slice(0, 8)}`)
         return
       }
-      const panes = new Map(get().enginePanes)
+      const panes = new Map(get().conversationPanes)
       const pane = panes.get(tabId)
       if (!pane) {
         console.warn(`[engine] rewindEngineInstance: pane not found tabId=${tabId.slice(0, 8)}`)
@@ -145,9 +145,12 @@ export function createEngineRewindActions(set: StoreSet, get: StoreGet): Partial
           return {
             ...i,
             messages: rewoundMessages,
+            messageCount: rewoundMessages.length,  // keep count in lockstep with truncated history
             modelOverride: i.modelOverride,  // preserve model selection across rewind
+            sessionModel: null,  // fresh session reports its model on the next status event
             permissionMode: i.permissionMode, // preserve permission mode across rewind
             permissionDenied: restoredDenied,
+            permissionQueue: [],
             conversationIds: [],
             draftInput: targetMessage.content,
             agentStates: [],
@@ -171,7 +174,7 @@ export function createEngineRewindActions(set: StoreSet, get: StoreGet): Partial
       engineUsage.delete(key)
 
       set((state) => ({
-        enginePanes: panes,
+        conversationPanes: panes,
         engineWorkingMessages,
         engineNotifications,
         engineDialogs,

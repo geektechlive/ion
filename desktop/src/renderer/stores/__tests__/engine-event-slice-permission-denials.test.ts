@@ -5,7 +5,7 @@
  * denial on the next engine_status event under `fields.permissionDenials`.
  * For engine-view tabs (compound `tabId:instanceId` key), the slice
  * translates this signal into `instance.permissionDenied` on the matching
- * ConversationInstance in `enginePanes` — keyed by the FULL compound key
+ * ConversationInstance in `conversationPanes` — keyed by the FULL compound key
  * split into tabId + instanceId. The CLI synthesis path in
  * engine-control-plane-events.ts:handleStatusEvent is bypassed for these
  * tabs because EngineControlPlane is keyed by bare tabId only.
@@ -33,19 +33,19 @@ import { createEngineEventSlice } from '../slices/engine-event-slice'
 import type { State } from '../session-store-types'
 
 function makeInstance(id: string) {
-  return { id, label: id, messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null }
+  return { id, label: id, messages: [], messageCount: 0, modelOverride: null, sessionModel: null, permissionMode: 'auto', permissionDenied: null, permissionQueue: [], conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null, forkedFromConversationIds: null }
 }
 
 function buildHarness() {
   const state: any = {
-    tabs: [{ id: 'tab1', isEngine: true, lastEventAt: 0, status: 'running', permissionDenied: null }],
+    tabs: [{ id: 'tab1', hasEngineExtension: true, lastEventAt: 0, status: 'running', permissionDenied: null }],
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     engineModelFallbacks: new Map(),
-    enginePanes: new Map([['tab1', {
+    conversationPanes: new Map([['tab1', {
       instances: [makeInstance('inst-a'), makeInstance('inst-b'), makeInstance('inst1')],
       activeInstanceId: 'inst-a',
     }]]),
@@ -61,7 +61,7 @@ function buildHarness() {
 
 function getPermissionDenied(state: any, key: string) {
   const [tabId, instanceId] = key.split(':')
-  const pane = state.enginePanes.get(tabId)
+  const pane = state.conversationPanes.get(tabId)
   return pane?.instances.find((i: any) => i.id === instanceId)?.permissionDenied
 }
 
@@ -243,7 +243,7 @@ describe('engine_status.permissionDenials → instance.permissionDenied', () => 
     } as any)
 
     // No instance in the pane received a denial.
-    const pane = state.enginePanes.get('tab1')
+    const pane = state.conversationPanes.get('tab1')
     for (const inst of pane.instances) {
       expect(inst.permissionDenied).toBeNull()
     }
@@ -274,7 +274,7 @@ describe('engine_command_result clear → permissionDenied dismissed', () => {
     } as any)
     expect(getPermissionDenied(state, key)).not.toBeNull()
 
-    const before = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst-a').messages.length
+    const before = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'inst-a').messages.length
 
     // Then: /clear dismisses the card AND appends the clear divider.
     slice.handleEngineEvent(key, {
@@ -283,32 +283,39 @@ describe('engine_command_result clear → permissionDenied dismissed', () => {
     } as any)
 
     expect(getPermissionDenied(state, key)).toBeNull()
-    const inst = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst-a')
+    const inst = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'inst-a')
     expect(inst.messages.length).toBe(before + 1)
     expect(inst.messages[inst.messages.length - 1].role).toBe('system')
 
     // Sibling instance is untouched — only the addressed instance is cleared.
-    const sibling = state.enginePanes.get('tab1').instances.find((i: any) => i.id === 'inst-b')
+    const sibling = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'inst-b')
     expect(sibling.messages.length).toBe(0)
   })
 
-  it('clears tab.permissionDenied on /clear for a CLI tab and appends the divider', () => {
+  it('clears the main-instance permissionDenied on /clear for a CLI tab and appends the divider', () => {
     const { state, slice } = buildHarness()
-    // Mark the CLI tab as carrying a pending card (CLI denials live on the tab).
+    // Mark the CLI tab as carrying a pending card. Per-conversation denial
+    // state lives on the tab's `main` instance now, so seed a main pane
+    // carrying the pending denial.
     const cliTab = state.tabs.find((t: any) => t.id === 'tab1')
-    cliTab.isEngine = false
-    cliTab.messages = []
-    cliTab.permissionDenied = { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }] }
+    cliTab.hasEngineExtension = false
+    state.conversationPanes = new Map(state.conversationPanes)
+    state.conversationPanes.set('tab1', {
+      activeInstanceId: 'main',
+      instances: [makeInstance('main')],
+    })
+    const mainInst = state.conversationPanes.get('tab1').instances[0]
+    mainInst.permissionDenied = { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }] }
 
     slice.handleEngineEvent('tab1', {
       type: 'engine_command_result',
       command: 'clear',
     } as any)
 
-    const tab = state.tabs.find((t: any) => t.id === 'tab1')
-    expect(tab.permissionDenied).toBeNull()
-    expect(tab.messages.length).toBe(1)
-    expect(tab.messages[0].role).toBe('system')
+    const inst = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'main')
+    expect(inst.permissionDenied).toBeNull()
+    expect(inst.messages.length).toBe(1)
+    expect(inst.messages[0].role).toBe('system')
   })
 
   it('does not clear permissionDenied when the clear command failed', () => {

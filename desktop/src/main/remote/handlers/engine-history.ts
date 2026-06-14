@@ -49,7 +49,7 @@ export async function readEngineHistoryFromStore(
       (function() {
         var store = window.__Ion_SESSION_STORE__;
         if (!store) return '${escapedTab}';
-        var pane = store.getState().enginePanes.get('${escapedTab}');
+        var pane = store.getState().conversationPanes.get('${escapedTab}');
         return pane && pane.activeInstanceId ? '${escapedTab}:' + pane.activeInstanceId : '${escapedTab}';
       })()
     `) || tabId
@@ -60,7 +60,7 @@ export async function readEngineHistoryFromStore(
       if (!store) return [];
       var parts = '${escapedKey}'.split(':');
       var tabId = parts[0]; var instId = parts[1];
-      var pane = store.getState().enginePanes.get(tabId);
+      var pane = store.getState().conversationPanes.get(tabId);
       var inst = pane && instId ? pane.instances.find(function(i) { return i.id === instId; }) : null;
       var msgs = (inst && inst.messages) || [];
       return msgs.map(function(m) {
@@ -77,6 +77,9 @@ export async function readEngineHistoryFromStore(
       });
     })()
   `)) as EngineHistoryMessage[] || []
+  // Wire-key parse: a compound key carries the instanceId; a bare key (plain
+  // conversation) has none. The null-vs-id distinction is intentional here
+  // (not parseSessionKey, which would map bare → 'main').
   const resolvedInstanceId = compoundKey.includes(':') ? compoundKey.split(':')[1] : null
   return { instanceId: resolvedInstanceId, messages, escapedKey }
 }

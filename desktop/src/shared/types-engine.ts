@@ -74,7 +74,7 @@ export interface EngineConfig {
   claudeCompat?: boolean
 }
 
-export interface EngineInstance {
+export interface ConversationRef {
   id: string        // crypto.randomUUID().slice(0,8)
   label: string     // "cos 1", "cos 2"
 }
@@ -95,12 +95,38 @@ export interface EngineInstance {
 export interface ConversationInstance {
   /** Scrollback messages for this instance */
   messages: Message[]
+  /**
+   * Persisted message count, used as the blank-tab / lazy-load proxy when
+   * `messages` is loaded but the on-disk count needs to survive a skeleton
+   * (unopened) restore. Set to `messages.length` whenever messages are
+   * loaded; read as `messages?.length ?? messageCount ?? 0`. Mirrors the
+   * old `TabState.messageCount` semantics, now instance-scoped — a normal
+   * tab's `main` instance carries the count its `TabState` used to hold.
+   */
+  messageCount: number
   /** Model override in effect for this instance (null = use tab/profile default) */
   modelOverride: string | null
+  /**
+   * Engine-reported active model for this conversation (from `session_init`
+   * for normal tabs, mirrored from `statusFields.model` for engine tabs).
+   * Distinct from `modelOverride` (the user's picker selection): this is the
+   * model the engine actually ran. Used as the picker's display fallback.
+   * Null until the first session_init / status event.
+   */
+  sessionModel: string | null
   /** Permission mode for this instance */
   permissionMode: 'auto' | 'plan'
   /** Pending permission-denied tools (null = no pending denial) */
   permissionDenied: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null
+  /**
+   * Live interactive permission requests awaiting a user click for this
+   * conversation. CLI/normal tabs populate this from `permission_request`
+   * events on their `main` instance; engine instances gain the same
+   * per-instance queue (the snapshot already scopes denial cards by
+   * instanceId). Distinct from `permissionDenied`, which is the
+   * non-interactive fallback card built from task_complete denials.
+   */
+  permissionQueue: import('./types-session').PermissionRequest[]
   /** Conversation IDs accumulated by this instance across sessions */
   conversationIds: string[]
   /** Draft input text for this instance's input bar */
@@ -116,8 +142,8 @@ export interface ConversationInstance {
   forkedFromConversationIds: string[] | null
 }
 
-export interface EnginePaneState {
-  instances: Array<EngineInstance & ConversationInstance>
+export interface ConversationPane {
+  instances: Array<ConversationRef & ConversationInstance>
   activeInstanceId: string | null
 }
 

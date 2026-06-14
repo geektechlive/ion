@@ -64,25 +64,18 @@ export interface TabState {
   lastEventAt: number | null
   hasUnread: boolean
   currentActivity: string
-  permissionQueue: PermissionRequest[]
-  /** Fallback card when tools were denied and no interactive permission is available */
-  permissionDenied: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null
   attachments: FileAttachment[]
-  /** Draft input text for this tab's input bar (scoped per-tab) */
-  draftInput: string
-  /** One-shot field: set by rewind, consumed by InputBar to pre-fill input, then cleared */
+  /**
+   * One-shot field: set by rewind, consumed by InputBar to pre-fill input,
+   * then cleared. Tab-level because rewind targets the tab's active
+   * conversation and the InputBar is tab-scoped.
+   */
   pendingInput?: string
-  messages: Message[] | null
-  /** Persisted message count — used for blank-tab detection when messages are lazily loaded (null). */
-  messageCount: number
   title: string
   /** User-provided custom tab name (overrides auto-generated title when set) */
   customTitle: string | null
   /** Last run's result data (cost, tokens, duration) */
   lastResult: RunResult | null
-  /** Session metadata from init event */
-  sessionModel: string | null
-  modelOverride: string | null
   sessionTools: string[]
   sessionMcpServers: Array<{ name: string; status: string }>
   sessionSkills: string[]
@@ -97,8 +90,6 @@ export interface TabState {
   additionalDirs: string[]
   /** Per-tab permission mode: 'auto' auto-approves, 'plan' uses CLI plan mode */
   permissionMode: 'auto' | 'plan'
-  /** Path to the last plan file produced during plan mode */
-  planFilePath: string | null
   /** Pending bash command results to send as context with next prompt */
   bashResults: Array<{ command: string; stdout: string; stderr: string }>
   /** Whether a bash command is currently executing in this tab */
@@ -148,8 +139,14 @@ export interface TabState {
   isCompacting: boolean
   /** Terminal-focused tab with no conversation */
   isTerminalOnly: boolean
-  /** Whether this tab runs an engine session instead of CLI backend */
-  isEngine: boolean
+  /**
+   * True when this conversation hosts an engine extension (multi-instance UI,
+   * profiles, sub-conversations). This is NOT a backend flag — it does not
+   * imply a CLI vs API backend (those are orthogonal; ~99% of conversations
+   * run on the API backend). It names ONLY the presence of an engine extension
+   * running inside the conversation.
+   */
+  hasEngineExtension: boolean
   /** Engine profile ID used for this tab (references EngineProfile.id) */
   engineProfileId: string | null
   /** Short single-line preview of the last visible message (~80 chars), used
