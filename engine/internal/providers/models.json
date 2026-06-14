@@ -55,6 +55,14 @@
     "supportsImages": true
   },
   {
+    "id": "openai/gpt-4o-mini",
+    "providerId": "openrouter",
+    "contextWindow": 128000,
+    "costPer1kInput": 0.00015,
+    "costPer1kOutput": 0.0006,
+    "supportsImages": true
+  },
+  {
     "id": "o4-mini",
     "providerId": "openai",
     "contextWindow": 200000,
