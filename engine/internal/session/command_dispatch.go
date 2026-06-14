@@ -115,62 +115,35 @@ func (m *Manager) emitCommandResult(key, command string, err error) {
 	})
 }
 
-// dispatchClear handles the built-in /clear command. Wipes the
-// LLM-visible conversation history, resets the context-percent counter,
-// re-fires session_start so the harness can re-prime, and emits a
-// command_result. Same path used to live inline in SendCommand; the
-// extraction is mechanical.
+// dispatchClear handles the built-in /clear command on a live session. It
+// routes the wipe + denial-clear through the shared clearConversationCore so
+// the file-only path (ClearConversationFile) and this path carry identical
+// semantics, then re-fires session_start (a /clear is a checkpoint that
+// re-primes the harness) and emits the shared clear signal. See clear_core.go
+// for the rationale behind the single shared core.
 func (m *Manager) dispatchClear(s *engineSession, key string) {
-	if s.conversationID == "" {
-		utils.Debug("Session", fmt.Sprintf("clear: no conversationID set on session %s, nothing to wipe", key))
-		// Still emit success on a never-talked-to session so consumers
-		// see the same "clear executed" signal regardless of whether
-		// there was any conversation to wipe. The conversation was
-		// already "empty" so /clear semantically succeeded.
-		m.emitCommandResult(key, "clear", nil)
-		return
-	}
-	conv, err := conversation.Load(s.conversationID, "")
+	// Run the shared core with this session's key as the known owner. The
+	// core clears retained AskUserQuestion / ExitPlanMode denials on the
+	// session (so heartbeat / ReconcileState / QuerySessionStatus stop
+	// re-publishing a stale card) and wipes the on-disk Messages, preserving
+	// the .tree.jsonl tree. It does not emit — we emit below so the
+	// session_start re-fire is sequenced correctly relative to the signal.
+	res, err := m.clearConversationCore(s.conversationID, key)
 	if err != nil {
-		if errors.Is(err, conversation.ErrNotFound) {
-			// Pre-minted ID with no prompt sent yet — conversation file
-			// doesn't exist. Treat as already-empty (same as the "" path).
-			utils.Debug("Session", fmt.Sprintf("clear: conversation %s not found, treating as empty", s.conversationID))
-			m.emitCommandResult(key, "clear", nil)
-			return
-		}
-		utils.Log("Session", fmt.Sprintf("clear: failed to load conversation %s: %v", s.conversationID, err))
+		utils.Log("Session", fmt.Sprintf("clear: key=%s core failed convID=%s: %v", key, s.conversationID, err))
 		m.emitCommandResult(key, "clear", err)
 		return
 	}
-	conv.Messages = nil
-	conv.LastInputTokens = 0
-	conv.LastInputTokensMsgCount = 0
-	_ = conversation.Save(conv, "")
-	s.lastContextPct = 0
-	utils.Log("Session", fmt.Sprintf("cleared conversation id=%s for session %s — .tree.jsonl preserved", s.conversationID, key))
-	// Emit the engine_status snapshot first so consumers can mirror the
-	// reset context-percent before they see the command_result event. The
-	// order matters: consumers that mirror context-percent from every
-	// engine_status event would briefly observe a stale percent if the
-	// command_result arrived first.
-	m.emit(key, types.EngineEvent{
-		Type: "engine_status",
-		Fields: &types.StatusFields{
-			State:          m.sessionState(s),
-			ContextPercent: 0,
-			ContextWindow:  s.lastContextWindow,
-			Model:          s.lastModel,
-			TotalCostUsd:   s.lastTotalCost,
-		},
-	})
+	utils.Log("Session", fmt.Sprintf("clear: key=%s core done convID=%s wiped=%t deniedCleared=%d", key, s.conversationID, res.wiped, res.deniedCleared))
+
 	// Re-fire session_start so the harness can re-prime the now-empty
-	// conversation. `/clear` is a checkpoint, not a session restart —
-	// the session, extension subprocesses, and MCP connections stay
-	// alive. Only the LLM-visible history was wiped above; firing
-	// session_start gives the harness a chance to inject whatever
-	// bootstrap context it would normally inject for a fresh session.
-	// Same pattern as start_session.go's bootstrap path.
+	// conversation. `/clear` is a checkpoint, not a session restart — the
+	// session, extension subprocesses, and MCP connections stay alive. Only
+	// the LLM-visible history was wiped above; firing session_start gives the
+	// harness a chance to inject whatever bootstrap context it would normally
+	// inject for a fresh session. Same pattern as start_session.go's bootstrap
+	// path. Fired before the clear signal so any harness-injected state is in
+	// place when consumers observe the reset.
 	if s.extGroup != nil && !s.extGroup.IsEmpty() {
 		utils.Log("Session", fmt.Sprintf("firing session_start on clear for session %s", key))
 		ctx := m.newExtContext(s, key)
@@ -179,11 +152,13 @@ func (m *Manager) dispatchClear(s *engineSession, key string) {
 	} else {
 		utils.Debug("Session", fmt.Sprintf("clear: no extensions loaded for %s, skipping session_start re-fire", key))
 	}
-	// Emit an engine-driven result so consumers see a single
-	// authoritative "clear executed" event rather than inferring it
-	// locally. The Command field carries the name verbatim so a
-	// subscriber can switch on it without re-parsing EventMessage.
-	m.emitCommandResult(key, "clear", nil)
+
+	// Emit the single shared clear signal: engine_status (empty denials,
+	// reset context-percent) followed by engine_command_result{clear}. This
+	// is the same signal ClearConversationFile emits when it finds a live
+	// session, so desktop and iOS dismiss the card identically regardless of
+	// which clear entry point ran.
+	m.emitClearSignal(key)
 }
 
 // compactable is the local interface satisfied by any backend that can
