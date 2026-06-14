@@ -25,6 +25,7 @@ func (b *ApiBackend) processStream(
 	var stopReason string
 	var cumUsage types.LlmUsage
 	var toolCallIndex int
+	var dbgInputDeltas int // diagnostic: input_json_delta events seen this stream
 
 	for ev := range events {
 		if ctx.Err() != nil {
@@ -128,6 +129,7 @@ func (b *ApiBackend) processStream(
 			}
 
 			if delta.Type == "input_json_delta" && delta.PartialJSON != "" {
+				dbgInputDeltas++
 				currentPartialJSON.WriteString(delta.PartialJSON)
 				if currentBlockIndex < len(assistantBlocks) {
 					toolID := assistantBlocks[currentBlockIndex].ID
@@ -162,6 +164,7 @@ func (b *ApiBackend) processStream(
 							block.Input = map[string]any{}
 						}
 					}
+					utils.Log("ApiBackend", fmt.Sprintf("stream tool_use stop: idx=%d name=%s rawLen=%d deltas=%d", currentBlockIndex, block.Name, len(raw), dbgInputDeltas))
 					currentPartialJSON.Reset()
 				}
 			}
@@ -178,6 +181,16 @@ func (b *ApiBackend) processStream(
 				// Accumulate final usage
 				cumUsage.OutputTokens += ev.DeltaUsage.OutputTokens
 			}
+		}
+	}
+
+	// Diagnostic: a tool_use block whose Input never got set means
+	// content_block_stop did not finalize it (no finish_reason / no stop event)
+	// -- the model's streamed arguments were accumulated but never parsed in.
+	for i := range assistantBlocks {
+		b2 := &assistantBlocks[i]
+		if (b2.Type == "tool_use" || b2.Type == "server_tool_use") && b2.Input == nil {
+			utils.Warn("ApiBackend", fmt.Sprintf("stream end: UNCLOSED tool_use idx=%d name=%s stopReason=%q deltas=%d pendingRawLen=%d", i, b2.Name, stopReason, dbgInputDeltas, currentPartialJSON.Len()))
 		}
 	}
 
