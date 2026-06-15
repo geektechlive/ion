@@ -28,6 +28,18 @@ vi.mock('../../../logger', () => ({
   log: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(),
 }))
 
+// history.ts statically imports ../revoke, whose chain
+// (revoke -> settings-store -> utils/secretStore) evaluates
+// `import { app, safeStorage } from 'electron'` at module-eval time.
+// Loading electron throws in CI ("Electron failed to install correctly")
+// because the Electron binary is not downloaded for the unit-test job.
+// Mock electron so the chain resolves without the real binary — the same
+// pattern every other main-process suite that reaches electron uses.
+vi.mock('electron', () => ({
+  app: { isPackaged: false, getPath: vi.fn() },
+  safeStorage: { isEncryptionAvailable: vi.fn(() => false), encryptString: vi.fn(), decryptString: vi.fn() },
+}))
+
 vi.mock('../revoke', () => ({ revokeDeviceLocally: vi.fn() }))
 
 import { handleEngineRewind } from '../history'
