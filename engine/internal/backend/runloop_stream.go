@@ -25,7 +25,6 @@ func (b *ApiBackend) processStream(
 	var stopReason string
 	var cumUsage types.LlmUsage
 	var toolCallIndex int
-	var dbgInputDeltas int // diagnostic: input_json_delta events seen this stream
 
 	for ev := range events {
 		if ctx.Err() != nil {
@@ -129,7 +128,6 @@ func (b *ApiBackend) processStream(
 			}
 
 			if delta.Type == "input_json_delta" && delta.PartialJSON != "" {
-				dbgInputDeltas++
 				currentPartialJSON.WriteString(delta.PartialJSON)
 				if currentBlockIndex < len(assistantBlocks) {
 					toolID := assistantBlocks[currentBlockIndex].ID
@@ -150,18 +148,17 @@ func (b *ApiBackend) processStream(
 				if block.Type == "tool_use" || block.Type == "server_tool_use" {
 					raw := currentPartialJSON.String()
 					if raw == "" {
-						// Do NOT clobber an already-parsed input. Some
-						// OpenAI-compatible providers (observed: gpt-4o-mini via
-						// OpenRouter) emit content_block_stop more than once for a
-						// single tool call — a trailing finish_reason chunk
-						// produces a second stop. The first stop parsed the
-						// streamed arguments and reset the buffer, so the second
-						// sees raw=="". Overwriting with {} here erased the real
-						// arguments and made every tool call arrive empty
-						// ("query/url is required"), looping the agent. Only
-						// default to {} when nothing has been parsed yet.
+						// Defect-1 guard: a duplicate content_block_stop for the
+						// same block (e.g. OpenRouter emitting a trailing
+						// finish_reason chunk after the tool-call turn) arrives
+						// with an empty accumulator because the first stop already
+						// parsed and reset it. Only default to {} when the input
+						// has not already been set — never clobber a parsed input.
 						if block.Input == nil {
+							utils.Debug("ApiBackend", fmt.Sprintf("content_block_stop: empty accumulator, defaulting input to {} (toolID=%s name=%s idx=%d)", block.ID, block.Name, currentBlockIndex))
 							block.Input = map[string]any{}
+						} else {
+							utils.Debug("ApiBackend", fmt.Sprintf("content_block_stop: empty accumulator but input already set, preserving (toolID=%s name=%s idx=%d)", block.ID, block.Name, currentBlockIndex))
 						}
 					} else {
 						var input map[string]any
@@ -192,16 +189,6 @@ func (b *ApiBackend) processStream(
 				// Accumulate final usage
 				cumUsage.OutputTokens += ev.DeltaUsage.OutputTokens
 			}
-		}
-	}
-
-	// Diagnostic: a tool_use block whose Input never got set means
-	// content_block_stop did not finalize it (no finish_reason / no stop event)
-	// -- the model's streamed arguments were accumulated but never parsed in.
-	for i := range assistantBlocks {
-		b2 := &assistantBlocks[i]
-		if (b2.Type == "tool_use" || b2.Type == "server_tool_use") && b2.Input == nil {
-			utils.Warn("ApiBackend", fmt.Sprintf("stream end: UNCLOSED tool_use idx=%d name=%s stopReason=%q deltas=%d pendingRawLen=%d", i, b2.Name, stopReason, dbgInputDeltas, currentPartialJSON.Len()))
 		}
 	}
 

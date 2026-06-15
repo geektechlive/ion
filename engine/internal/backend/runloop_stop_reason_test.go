@@ -1,64 +1,106 @@
 package backend
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
-// A bare "error" stop reason reaching the run loop's switch must surface as a
-// real failure: an ErrorEvent plus a non-zero exit, never a silent code-0
-// success (which would be indistinguishable from a staffer with nothing to
-// say).
-func TestHandleErrorStopReasonSurfacesFailure(t *testing.T) {
-	b := NewApiBackend()
-
-	var gotEvent *types.ErrorEvent
-	b.OnNormalized(func(_ string, ev types.NormalizedEvent) {
-		if ee, ok := ev.Data.(*types.ErrorEvent); ok {
-			gotEvent = ee
-		}
-	})
-	var exitCode *int
-	b.OnExit(func(_ string, code *int, _ *string, _ string) {
-		exitCode = code
-	})
-
-	run := &activeRun{requestID: "t-run"}
-	handled := b.handleErrorStopReason(run, "conv-1", "error", 2)
-
-	if !handled {
-		t.Fatal("expected handleErrorStopReason to handle an \"error\" stop reason")
-	}
-	if gotEvent == nil {
-		t.Fatal("expected an ErrorEvent to be emitted")
-	}
-	if !gotEvent.IsError || gotEvent.ErrorCode != "provider_stream_error" {
-		t.Errorf("unexpected ErrorEvent: %+v", gotEvent)
-	}
-	if exitCode == nil || *exitCode == 0 {
-		t.Errorf("expected non-zero exit code, got %v", exitCode)
+// customStopResponse builds a minimal single-turn stream that ends in the
+// given stop reason, exercising the run loop's `switch stopReason` default
+// branch for non-standard reasons.
+func customStopResponse(stopReason string) []types.LlmStreamEvent {
+	return []types.LlmStreamEvent{
+		{
+			Type: "message_start",
+			MessageInfo: &types.LlmStreamMessageInfo{
+				ID:    fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+				Model: "test-model",
+				Usage: types.LlmUsage{InputTokens: 10},
+			},
+		},
+		{
+			Type: "message_delta",
+			Delta: &types.LlmStreamDelta{
+				Type:       "message_delta",
+				StopReason: &stopReason,
+			},
+			DeltaUsage: &types.LlmUsage{OutputTokens: 5},
+		},
+		{Type: "message_stop"},
 	}
 }
 
-// A normal stop reason must not be intercepted: handleErrorStopReason returns
-// false and emits nothing, leaving the existing switch behavior intact.
-func TestHandleErrorStopReasonIgnoresNonError(t *testing.T) {
+// TestRunLoopErrorStopReasonEmitsErrorAndNonZeroExit pins Defect 2's
+// belt-and-suspenders: a stop reason of "error" reaching the run loop default
+// case must emit an ErrorEvent and exit non-zero, NOT a silent exit 0.
+func TestRunLoopErrorStopReasonEmitsErrorAndNonZeroExit(t *testing.T) {
+	setupTestProvider([][]types.LlmStreamEvent{
+		customStopResponse("error"),
+	})
+
 	b := NewApiBackend()
+	c := collectEvents(b, "req-error-stop")
+	b.StartRun("req-error-stop", types.RunOptions{
+		Prompt:           "trigger error stop",
+		ProjectPath:      "/tmp",
+		Model:            testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
+	})
 
-	emitted := false
-	b.OnNormalized(func(_ string, _ types.NormalizedEvent) { emitted = true })
-	exited := false
-	b.OnExit(func(_ string, _ *int, _ *string, _ string) { exited = true })
+	if !waitForExit(c, 5*time.Second) {
+		t.Fatal("timed out waiting for exit")
+	}
 
-	run := &activeRun{requestID: "t-run"}
-	if b.handleErrorStopReason(run, "conv-1", "end_turn", 0) {
-		t.Fatal("end_turn must not be handled as an error")
+	if c.exitCode == nil {
+		t.Fatal("expected a non-nil exit code")
 	}
-	if emitted {
-		t.Error("no event should be emitted for a non-error stop reason")
+	if *c.exitCode == 0 {
+		t.Errorf("exit code = 0, want non-zero for an 'error' stop reason (the silent-exit-0 bug)")
 	}
-	if exited {
-		t.Error("no exit should be emitted for a non-error stop reason")
+
+	foundError := false
+	for _, ev := range c.normalized {
+		if ee, ok := ev.Data.(*types.ErrorEvent); ok && ee.IsError {
+			foundError = true
+		}
+	}
+	if !foundError {
+		t.Error("expected an ErrorEvent for an 'error' stop reason; none emitted")
+	}
+}
+
+// TestRunLoopUnknownStopReasonExitsZero confirms the OTHER half of the default
+// branch is preserved: a genuinely-unknown stop reason still completes with a
+// clean exit 0 and emits no ErrorEvent. This pins the distinction so a future
+// refactor cannot silently collapse the two branches.
+func TestRunLoopUnknownStopReasonExitsZero(t *testing.T) {
+	setupTestProvider([][]types.LlmStreamEvent{
+		customStopResponse("weird_reason"),
+	})
+
+	b := NewApiBackend()
+	c := collectEvents(b, "req-unknown-stop")
+	b.StartRun("req-unknown-stop", types.RunOptions{
+		Prompt:           "trigger unknown stop",
+		ProjectPath:      "/tmp",
+		Model:            testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
+	})
+
+	if !waitForExit(c, 5*time.Second) {
+		t.Fatal("timed out waiting for exit")
+	}
+
+	if c.exitCode == nil || *c.exitCode != 0 {
+		t.Errorf("exit code = %v, want 0 for a genuinely-unknown stop reason", c.exitCode)
+	}
+
+	for _, ev := range c.normalized {
+		if ee, ok := ev.Data.(*types.ErrorEvent); ok && ee.IsError {
+			t.Error("unknown (non-error) stop reason should NOT emit an ErrorEvent")
+		}
 	}
 }

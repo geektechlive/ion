@@ -209,6 +209,15 @@ func (p *anthropicProvider) buildRequestBody(opts types.LlmStreamOptions) map[st
 		"stream":     true,
 	}
 
+	// Temperature: forward when the caller set it (pointer non-nil),
+	// including a deliberate 0.0. Anthropic supports a temperature
+	// parameter. (Anthropic has NO request-level JSON-mode switch, so
+	// opts.ResponseFormat is intentionally not mapped here — jsonMode stays
+	// advisory on Anthropic; see LLMCallOpts.JSONMode docs.)
+	if opts.Temperature != nil {
+		body["temperature"] = *opts.Temperature
+	}
+
 	// System prompt with cache_control for prompt caching
 	if opts.System != "" {
 		body["system"] = []map[string]any{
@@ -289,9 +298,13 @@ func (p *anthropicProvider) formatMessages(messages []types.LlmMessage) []map[st
 			continue
 		}
 		last := content[len(content)-1]
-		// Guard: Anthropic rejects cache_control on a text block with empty text.
-		if blockType, _ := last["type"].(string); blockType == "text" {
-			if text, _ := last["text"].(string); text == "" {
+		// Anthropic rejects cache_control on empty text blocks with
+		// "cache_control cannot be set for empty text blocks". Skip this
+		// message's cache slot rather than poisoning the whole request.
+		if t, isText := last["type"].(string); isText && t == "text" {
+			if s, _ := last["text"].(string); s == "" {
+				utils.Debug("anthropic", fmt.Sprintf(
+					"cache_control: skipping empty text block at message %d", i))
 				continue
 			}
 		}

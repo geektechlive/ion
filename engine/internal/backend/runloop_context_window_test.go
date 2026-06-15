@@ -8,25 +8,40 @@ import (
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
-// resolveContextWindow must never return 0 from a registry entry that lacks a
-// usable window. A 0 window drove compaction's targetTokens to 0, truncating
-// the conversation to nothing every turn (the gpt-4o-mini-via-OpenRouter
-// failure). It must fall back to conversation.DefaultContext instead.
+// TestResolveContextWindow pins Defect 3: a registry entry with
+// ContextWindow == 0 must NOT overwrite the engine default with 0 (which would
+// collapse compaction to a 0-token budget every turn). The > 0 guard lives at
+// the resolution site so the clamped value flows into the compaction math, not
+// only into GetContextUsage's internal clamp.
 func TestResolveContextWindow(t *testing.T) {
-	// Registry entry with a real window -> use it verbatim.
-	providers.RegisterModel("test-windowed-model", types.ModelInfo{ProviderID: "openrouter", ContextWindow: 128000})
-	if got := resolveContextWindow("test-windowed-model"); got != 128000 {
-		t.Errorf("windowed model: want 128000, got %d", got)
+	// Registry entry with a zero context window (a catalog gap).
+	providers.RegisterModel("ctxwin-zero-model", types.ModelInfo{
+		ProviderID:    "openai",
+		ContextWindow: 0,
+	})
+	// Registry entry with a usable positive window.
+	providers.RegisterModel("ctxwin-positive-model", types.ModelInfo{
+		ProviderID:    "openai",
+		ContextWindow: 128000,
+	})
+	// "ctxwin-unknown-model" is deliberately NOT registered.
+
+	tests := []struct {
+		name  string
+		model string
+		want  int
+	}{
+		{"zero-window registry entry falls back to default", "ctxwin-zero-model", conversation.DefaultContext},
+		{"positive-window registry entry is used", "ctxwin-positive-model", 128000},
+		{"unknown model falls back to default", "ctxwin-unknown-model", conversation.DefaultContext},
 	}
 
-	// Registry entry with ContextWindow==0 (catalog gap) -> DefaultContext, not 0.
-	providers.RegisterModel("test-zero-window-model", types.ModelInfo{ProviderID: "openrouter", ContextWindow: 0})
-	if got := resolveContextWindow("test-zero-window-model"); got != conversation.DefaultContext {
-		t.Errorf("zero-window model: want DefaultContext=%d, got %d", conversation.DefaultContext, got)
-	}
-
-	// Model absent from the registry -> DefaultContext.
-	if got := resolveContextWindow("totally-unknown-model-xyz"); got != conversation.DefaultContext {
-		t.Errorf("unknown model: want DefaultContext=%d, got %d", conversation.DefaultContext, got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveContextWindow(tt.model)
+			if got != tt.want {
+				t.Errorf("resolveContextWindow(%q) = %d, want %d", tt.model, got, tt.want)
+			}
+		})
 	}
 }
