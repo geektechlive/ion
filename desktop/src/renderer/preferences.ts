@@ -83,6 +83,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   implementModeModel: saved.implementModeModel,
   planModeAllowedBashCommands: saved.planModeAllowedBashCommands,
   showImplementClearContext: saved.showImplementClearContext,
+  gitWatcherIgnoredDirectories: saved.gitWatcherIgnoredDirectories,
   _systemIsDark: true,
   setDefaultTallConversation: (enabled) => {
     set({ defaultTallConversation: enabled })
@@ -472,6 +473,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   setPlanModeAllowedBashCommands: (cmds) => {
     set({ planModeAllowedBashCommands: cmds })
+    saveSettings(getAllSettings(get))
+  },
+  setGitWatcherIgnoredDirectories: (dirs) => {
+    set({ gitWatcherIgnoredDirectories: dirs })
     saveSettings(getAllSettings(get))
   },
   setShowImplementClearContext: (enabled) => {
