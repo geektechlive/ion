@@ -59,8 +59,13 @@ export class EngineControlPlane extends EventEmitter {
     this.bridge.on('reconnected', () => {
       for (const tab of this.tabs.values()) {
         if (tab.engineSessionStarted) {
-          log(`resetSessionFlag after reconnect: tabId=${tab.tabId}`)
+          log(`resetSessionFlag after reconnect: tabId=${tab.tabId} conversationId=${tab.conversationId ?? 'none'} (preserved)`)
           tab.engineSessionStarted = false
+          // conversationId is intentionally preserved here. The bridge's
+          // _reRegisterSessions will re-send start_session with this id so
+          // the engine resumes the original conversation, not a fresh one.
+          // The B1 guard in handleStatusEvent ensures the post-restart
+          // pre-mint idle event does not clobber it.
         }
       }
     })
