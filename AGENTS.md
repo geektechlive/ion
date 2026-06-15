@@ -194,13 +194,13 @@ Desktop and iOS are co-equal clients. When a desktop change touches a feature th
 | Desktop | iOS counterpart | Sync path |
 |---------|----------------|-----------|
 | Tab status dot (TabStripTabPill, StatusDot) | Tab list dot (TabRowView.statusInfo) | `snapshot.ts` → `RemoteTabState.status` |
-| Engine instance bar (EngineTabStrip) | Engine instance bar (EngineInstanceBar) | `snapshot.ts` → `RemoteTabState.engineInstances` |
-| Permission denials / waiting state | Permission queue / waiting state | `snapshot.ts` promotes denials into `permissionQueue`; per-instance `waitingState` on `engineInstances` |
+| Engine instance bar (EngineTabStrip) | Engine instance bar (EngineInstanceBar) | `snapshot.ts` → `RemoteTabState.conversationInstances` |
+| Permission denials / waiting state | Permission queue / waiting state | `snapshot.ts` promotes denials into `permissionQueue`; per-instance `waitingState` on `conversationInstances` |
 | Tab group pills | Tab group sections | `snapshot.ts` → group fields on `RemoteTabState` |
 | Thinking indicator / interrupt button | Activity indicator / interrupt button | Real-time events (`engineTextDelta`, `tabStatus`) |
-| Tab context menu (TabStripTabContextMenu) | Tab context menu (TabRowContextMenu) | Actions operate on `RemoteTabState` fields; session identity via `snapshot.ts` → `RemoteTabState.conversationId` (CLI) and `StatusFields.sessionId` (engine) |
+| Tab context menu (TabStripTabContextMenu) | Tab context menu (TabRowContextMenu) | Actions operate on `RemoteTabState` fields; session identity via `snapshot.ts` → `RemoteTabState.conversationId` (plain conversation) and `StatusFields.sessionId` (extension-hosted conversation) |
 | Desktop Settings dialog (SettingsDialog categories) | Desktop Settings detail (DesktopSettingsView sections) | `projectable-settings.ts` allowlist → `desktop_settings_snapshot` event (settings + schema + groups) → `DesktopSettingsView` auto-renders sections. iOS group IDs **must** match the desktop's `CATEGORIES` array; renaming a desktop category requires updating `PROJECTABLE_GROUP_LABELS` and the test in `projectable-settings.test.ts`. Adding a new user-editable desktop preference requires a parallel entry in `PROJECTABLE_SETTINGS_DATA` unless the setting is local-machine-only (font, path, secret). |
-| Model fallback indicator (EngineStatusBar per-instance ⚠) | Model fallback indicator (EngineInstanceBar per-instance ⚠) | `snapshot.ts` → `RemoteTabState.engineInstances[i].modelFallback`. Desktop populates `engineModelFallbacks` from the `engine_model_fallback` event; the snapshot poller projects each entry onto the corresponding `engineInstances[i]` and iOS reads it from the snapshot. Cleared on the next idle transition (per-instance). |
+| Model fallback indicator (EngineStatusBar per-instance ⚠) | Model fallback indicator (EngineInstanceBar per-instance ⚠) | `snapshot.ts` → `RemoteTabState.conversationInstances[i].modelFallback`. Desktop populates `engineModelFallbacks` from the `engine_model_fallback` event; the snapshot poller projects each entry onto the corresponding `conversationInstances[i]` and iOS reads it from the snapshot. Cleared on the next idle transition (per-instance). |
 
 ### When to skip iOS
 
@@ -339,6 +339,38 @@ Specifically forbidden as plan resolutions for *any* finding you can fix in the 
 A valid plan resolution is one of: change code, change a contract, delete code, add a test that pins behavior, or explicitly decide to do nothing with a stated rationale. "Document the problem" is not a resolution.
 
 The `ion--review-changes.md` and `ion--align.md` commands enforce this rule at plan-generation time. Reviewers should reject any plan that violates it.
+
+## Volatile counts — keep them out of docs and code
+
+**Never hand-encode a count that the code already determines.** Hook count, hook-category count, provider count, command-type count, tool count, event-variant count — any "N of X" where X is enumerable in source — goes stale the moment it is written. Every commit that adds a hook, a provider, a tool, or a command silently invalidates every prose statement that pinned the old number, and nothing fails to catch it. The result is documentation that lies about the code.
+
+This is the same defect family as the "Aspirational comments" rule above: a number that no longer matches the code is a comment that lies. The next agent or contributor reads "55 hooks" as ground truth, builds on it, and is wrong.
+
+### The one exception
+
+The **top-level `README.md` header badge** (the single tagline + badge line at the very top of the file) may carry a curated set of these numbers as marketing/bragging-rights figures. That surface is deliberately refreshed when the product is showcased. Nowhere else — not the README body, not a leaf doc, not a component `README.md`, not a `docs/` page, and not a code comment — may restate them.
+
+### What to write instead
+
+- Use qualitative phrasing: "a comprehensive set of hooks across the agent lifecycle", "a broad set of LLM providers", "the built-in core tool set".
+- Link to the authoritative by-name reference: `docs/hooks/reference.md`, `docs/tools/reference.md`, or the source file (`engine/internal/extension/sdk.go`, `engine/internal/providers/provider.go`, etc.).
+- **By-name lists are fine** — listing the tools or providers by name is self-maintaining and is the source of truth. A bare count is not. If you list them by name, do not also assert how many there are.
+
+When you touch a doc or comment that pins such a count, remove the count as part of the change (good-citizen rule below). Do not "correct" it to the new number — the new number is stale on the next PR.
+
+## Good citizen — fix what you find
+
+If, during any feature or fix, you **stumble across something that is wrong** — a stale or incorrect comment, documentation that no longer matches the code, a failing or stale-assertion test, a lie-to-the-future of any kind — it is **always in scope**. Fix it.
+
+You are not breaking functionality by correcting a comment, a doc, or a test; you are **restoring** it. An incorrect comment is worse than no comment: whoever comes after you will not have the context that let you silently work around the discrepancy. They will read the stale statement as ground truth and build on a falsehood, breaking a future implementation. The only safe state is: the artifact tells the truth.
+
+### The boundary (so this never becomes a tangent)
+
+- **Do not go hunting.** This rule fires on what you *encounter in the path of the work*, not on a codebase-wide audit you launch to find problems. No speculative sweeps.
+- **Roll it into the current plan.** When you find it, add it to the plan you are executing. Do not defer it to a "future PR", an issue, or a `TODO` — deferral is the forbidden anti-pattern (see "## Aspirational comments" and the "## Scope" rule in the user's global rules).
+- **Commit separately when unrelated.** The fix does not have to address the same issue you are working on. A stale comment found while implementing feature X is committed as its own `fix` / `chore` / `docs` commit at a clean scope seam, before or after the main work — it does not have to be entangled with feature X's commit.
+
+This generalizes "## Aspirational comments" (incomplete or lying comments are bugs), "## Volatile counts" (stale counts are lies), and the global "## Scope" rule (never defer ordered work).
 
 ## Operator premises — verify before acting
 
