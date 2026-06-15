@@ -39,6 +39,7 @@ export function ConversationView() {
   const prevTabIdRef = useRef(activeTabId)
   const colors = useColors()
   const unifiedTurnView = usePreferencesStore((s) => s.unifiedTurnView)
+  const conversationFontSize = usePreferencesStore((s) => s.conversationFontSize)
   const scrollToBottomCounter = useSessionStore((s) => s.scrollToBottomCounter)
 
   const tab = tabs.find((t) => t.id === activeTabId)
@@ -202,7 +203,7 @@ export function ConversationView() {
         <div
           ref={scrollRef}
           className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pt-2 conversation-selectable"
-          style={{ paddingBottom: 28 }}
+          style={{ paddingBottom: 28, ['--ion-conv-font-size' as string]: `${conversationFontSize}px` } as React.CSSProperties}
           onScroll={handleScroll}
         >
         {/* Load older button */}
