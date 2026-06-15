@@ -72,6 +72,16 @@ export interface EngineConfig {
    * `.ion/` paths are active.
    */
   claudeCompat?: boolean
+  /**
+   * Request a brand-new conversation for this session key even when the engine's
+   * durable binding store holds a prior conversationId for it. Without this flag,
+   * a start_session with an empty sessionId resumes the bound conversation
+   * (restart resilience, issue #230). Set true to start fresh on a reused key
+   * (e.g. "new conversation" on an existing tab): the engine mints a new id and
+   * replaces the stored binding. An explicit non-empty sessionId still takes
+   * precedence over both this flag and the binding store. (#231)
+   */
+  forceNewConversation?: boolean
 }
 
 export interface ConversationRef {
