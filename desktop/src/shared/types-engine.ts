@@ -370,7 +370,7 @@ export type EngineEvent =
   // ModelFallbackEvent NormalizedEvent variant. The desktop renders a
   // small ⚠ glyph on the affected engine instance pill via the
   // engineModelFallbacks store map; iOS receives the fact through the
-  // snapshot path (RemoteTabState.engineInstances[i].modelFallback)
+  // snapshot path (RemoteTabState.conversationInstances[i].modelFallback)
   // rather than as a live RemoteEvent. See CLAUDE.md §
   // "The typed-event corollary" for the broader rule.
   | { type: 'engine_model_fallback'; fallbackRequestedModel: string; fallbackModel: string; fallbackReason: string }
