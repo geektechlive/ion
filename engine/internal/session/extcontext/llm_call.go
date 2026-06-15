@@ -158,7 +158,16 @@ func BuildLLMCallFunc(sa SessionAccessor) func(extension.LLMCallOpts) (*extensio
 		// keep token counts from message_start (input tokens) and
 		// message_delta usage (output tokens) so the result mirrors
 		// what the agent loop reports via UsageData.
-		ctx, cancel := context.WithCancel(context.Background())
+		//
+		// Derive the call's context from the session cancellation root
+		// (sa.RootContext()) rather than context.Background(). This is
+		// what makes a session abort cancel an in-flight one-shot: when
+		// the user hits Stop, SendAbort cancels the session root, which
+		// cancels this ctx, which aborts the provider stream. Before this
+		// the llmCall context was orphaned (Background) and a one-shot ran
+		// to completion after abort, burning budget and emitting a
+		// success engine_llm_call event for work the user cancelled.
+		ctx, cancel := context.WithCancel(sa.RootContext())
 		defer cancel()
 
 		events, errc := provider.Stream(ctx, streamOpts)
@@ -189,6 +198,25 @@ func BuildLLMCallFunc(sa SessionAccessor) func(extension.LLMCallOpts) (*extensio
 				))
 				return nil, fmt.Errorf("LLMCall: provider error: %w", err)
 			}
+		}
+
+		// Context-cancellation check. A session abort (or per-call cancel)
+		// cancels ctx, which ends the provider stream — but the provider may
+		// close its channels cleanly without surfacing an error on errc. We
+		// must NOT treat that as a successful completion: returning the
+		// partial content and emitting a success engine_llm_call event would
+		// report work the user cancelled as if it finished. Checking
+		// ctx.Err() here is the precise signal — it is non-nil exactly when
+		// the context was cancelled or its deadline passed. On cancellation
+		// we return an error and emit no engine_llm_call event (the emit is
+		// below this guard), matching the documented contract that no
+		// observability event fires on failure.
+		if cerr := ctx.Err(); cerr != nil {
+			utils.Log("LLMCall", fmt.Sprintf(
+				"cancelled (sessionKey=%s model=%s provider=%s reason=%v contentLen=%d)",
+				sa.SessionKey(), opts.Model, providerID, cerr, len(content),
+			))
+			return nil, fmt.Errorf("LLMCall: cancelled: %w", cerr)
 		}
 
 		elapsed := time.Since(start)

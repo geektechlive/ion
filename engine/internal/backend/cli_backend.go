@@ -168,7 +168,19 @@ func (b *CliBackend) Cancel(requestID string) bool {
 // StartRun spawns a Claude CLI process and streams its output through
 // the normalizer pipeline.
 func (b *CliBackend) StartRun(requestID string, options types.RunOptions) {
-	ctx, cancel := context.WithCancel(context.Background())
+	// Derive the run's cancellation context from the session root when the
+	// caller threaded one (RunOptions.ParentCtx), so a session-level abort
+	// cascades to this CLI process's context (which the run loop honors via
+	// ctx.Done() and Cancel() escalates to SIGINT/SIGKILL). Falls back to
+	// context.Background() for callers that don't supply a parent.
+	parent := options.ParentCtx
+	if parent == nil {
+		parent = context.Background()
+		utils.Debug("CliBackend", "StartRun: no ParentCtx; using Background requestID="+requestID)
+	} else {
+		utils.Debug("CliBackend", "StartRun: deriving run ctx from session ParentCtx requestID="+requestID)
+	}
+	ctx, cancel := context.WithCancel(parent)
 
 	run := &cliRun{
 		requestID: requestID,

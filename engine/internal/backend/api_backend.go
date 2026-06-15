@@ -232,7 +232,20 @@ func (b *ApiBackend) StartRun(requestID string, options types.RunOptions) {
 // state. Existing call sites that don't need session integration (tests,
 // the Agent tool's child runs) keep using StartRun.
 func (b *ApiBackend) StartRunWithConfig(requestID string, options types.RunOptions, cfg *RunConfig) {
-	ctx, cancel := context.WithCancel(context.Background())
+	// Derive the run's cancellation context from the session root when the
+	// caller threaded one (RunOptions.ParentCtx). This is what makes a
+	// session-level abort cascade to this run: cancelling the session root
+	// cancels parent, which cancels ctx here. Falls back to
+	// context.Background() for callers that don't supply a parent (tests,
+	// the Agent tool's child runs) — identical to the prior behavior.
+	parent := options.ParentCtx
+	if parent == nil {
+		parent = context.Background()
+		utils.Debug("ApiBackend", fmt.Sprintf("StartRunWithConfig: no ParentCtx; using Background runID=%s", requestID))
+	} else {
+		utils.Debug("ApiBackend", fmt.Sprintf("StartRunWithConfig: deriving run ctx from session ParentCtx runID=%s", requestID))
+	}
+	ctx, cancel := context.WithCancel(parent)
 
 	run := &activeRun{
 		requestID:    requestID,

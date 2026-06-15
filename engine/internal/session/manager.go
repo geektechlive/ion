@@ -313,6 +313,14 @@ func (m *Manager) StopSession(key string) error {
 		return fmt.Errorf("session %q not found", key)
 	}
 
+	// Cancel the session's cancellation root so every descendant
+	// operation (backend run, dispatched agents, in-flight llmCall) is
+	// torn down with the session. Done before the explicit backend.Cancel
+	// below; the two are complementary (root cascade for in-process work,
+	// backend.Cancel for the per-run watchdog / terminal-status contract).
+	// See session_root_context.go.
+	s.cancelSessionRoot("stop session")
+
 	// Cancel active run
 	if s.requestID != "" {
 		m.backend.Cancel(s.requestID)

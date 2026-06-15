@@ -5,6 +5,8 @@
 // session/agent types reduces churn on shared files.
 package types
 
+import "context"
+
 // --- Run Options ---
 
 // RunOptions configures a Claude run.
@@ -221,4 +223,18 @@ type RunOptions struct {
 	// text prompt. When non-empty the backend appends one image content block
 	// per attachment to the user message, in addition to the text block.
 	Attachments []ImageAttachment `json:"attachments,omitempty"`
+
+	// ParentCtx is the session's cancellation root. When non-nil, the
+	// backend derives the run's cancellation context from it
+	// (context.WithCancel(ParentCtx)) instead of context.Background(), so
+	// a session-level abort (which cancels the root) cascades to this run.
+	// When nil, the backend falls back to context.Background() —
+	// preserving the behavior of every existing caller (tests, the Agent
+	// tool's child runs) that does not thread a session root.
+	//
+	// json:"-" because a context.Context is inherently non-serializable
+	// and never crosses the wire. This mirrors the CapabilityTools /
+	// CapabilityPrompt precedent above (in-process-only run fields). Not a
+	// contract surface; not in the cross-language manifest.
+	ParentCtx context.Context `json:"-"`
 }

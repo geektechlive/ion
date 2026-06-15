@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,6 +46,13 @@ func (a *sessionAccessor) WorkingDirectory() string  { return a.s.config.Working
 func (a *sessionAccessor) Emit(ev types.EngineEvent) { a.m.emit(a.key, ev) }
 
 func (a *sessionAccessor) SendAbort() { a.m.SendAbort(a.key) }
+
+// RootContext returns the session's cancellation root so extcontext-built
+// operations (ctx.llmCall, agent dispatch) derive from it and are cancelled
+// by a session-level abort. Never nil — rootContext() falls back to
+// context.Background() for test-constructed sessions. See
+// session_root_context.go.
+func (a *sessionAccessor) RootContext() context.Context { return a.s.rootContext() }
 
 func (a *sessionAccessor) SendPrompt(text string, model string) error {
 	var overrides *PromptOverrides
@@ -426,6 +434,13 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		dispatchRegistry: extcontext.NewDispatchRegistry(),
 		resourceBroker:   resource.NewBroker(),
 	}
+
+	// Initialize the session's cancellation root before any run or
+	// dispatch can be launched. Every cancellable operation spawned for
+	// this session derives from this root, so SendAbort / StopSession can
+	// cancel the whole in-flight tree in one call. See
+	// session_root_context.go.
+	s.newSessionRootContext()
 
 	// Initialize process registry for extension-spawned subprocesses.
 	// If the PID-file directory cannot be created, log and continue with a
