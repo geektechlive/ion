@@ -225,6 +225,36 @@ func (m *Manager) handleNormalizedEvent(runID string, event types.NormalizedEven
 			// outstanding denials to re-emit.
 			s2.lastPermissionDenials = tc.PermissionDenials
 			utils.Log("Session", fmt.Sprintf("task_complete: key=%s retained %d permission_denials for reconcile", key, len(tc.PermissionDenials)))
+
+			// Emit a run-level telemetry event. The collector is shared with the
+			// backends: ApiBackend additionally emits per-call llm.call/tool.execute
+			// spans, but CliBackend (the Claude Code subprocess) surfaces no per-call
+			// spans, so this run.complete event is its ONLY telemetry. Emitting here —
+			// at the session layer where every backend's TaskCompleteEvent flows and the
+			// collector is in scope — gives uniform cost/turn/token coverage across all
+			// backends without threading the collector into each one.
+			if s2.telemetry != nil {
+				payload := map[string]any{
+					"model":      s2.lastModel,
+					"costUsd":    tc.CostUsd,
+					"durationMs": tc.DurationMs,
+					"numTurns":   tc.NumTurns,
+					"sessionId":  tc.SessionID,
+				}
+				if tc.Usage.InputTokens != nil {
+					payload["inputTokens"] = *tc.Usage.InputTokens
+				}
+				if tc.Usage.OutputTokens != nil {
+					payload["outputTokens"] = *tc.Usage.OutputTokens
+				}
+				if tc.Usage.CacheReadInputTokens != nil {
+					payload["cacheReadTokens"] = *tc.Usage.CacheReadInputTokens
+				}
+				if tc.Usage.CacheCreationInputTokens != nil {
+					payload["cacheCreationTokens"] = *tc.Usage.CacheCreationInputTokens
+				}
+				s2.telemetry.Event("run.complete", payload, nil)
+			}
 		}
 		m.mu.Unlock()
 		m.emit(key, types.EngineEvent{
