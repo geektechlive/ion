@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/dsswift/ion/engine/internal/conversation"
+	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
@@ -84,4 +86,42 @@ func saveBinding(path, key, conversationID string) {
 func lookupBinding(path, key string) string {
 	bindings := loadBindings(path)
 	return bindings[key]
+}
+
+// resolveConversationID decides which conversation a StartSession should use,
+// given the session key, the caller's config, and the durable binding store at
+// `path`. The decision tree (first match wins):
+//
+//  1. Explicit config.SessionID — the caller named a conversation; use it
+//     verbatim. Highest precedence; bypasses the binding store entirely. The
+//     caller (re-register / resume path) is asserting the exact id.
+//  2. config.ForceNewConversation — the caller wants a brand-new conversation
+//     on this key even if a binding exists (e.g. the user clicked "new
+//     conversation" on an existing tab). Mint a fresh id; the post-creation
+//     saveBinding in StartSession REPLACES the stored binding, so the prior
+//     conversation is no longer auto-resumed for this key. (#231)
+//  3. A stored binding for this key — resume it rather than minting. This is
+//     what makes the engine resilient to restarts even when the client does not
+//     carry the conversationId forward. (B2 fix for issue #230)
+//  4. Nothing stored — pre-mint a fresh id (first-ever start for this key).
+//
+// Every branch logs which path was taken and why, so the session-identity
+// decision is reconstructable from ~/.ion/engine.log without a debugger.
+func resolveConversationID(path, key string, config types.EngineConfig) string {
+	if config.SessionID != "" {
+		return config.SessionID
+	}
+	if config.ForceNewConversation {
+		old := lookupBinding(path, key)
+		convID := conversation.NewConversationID()
+		utils.Log("Session", fmt.Sprintf("StartSession: key=%s forced new conversation, replaced binding old=%s new=%s", key, old, convID))
+		return convID
+	}
+	if bound := lookupBinding(path, key); bound != "" {
+		utils.Log("Session", fmt.Sprintf("StartSession: key=%s resuming bound conversationID=%s from binding store", key, bound))
+		return bound
+	}
+	convID := conversation.NewConversationID()
+	utils.Log("Session", fmt.Sprintf("StartSession: key=%s pre-minted conversationID=%s (no binding found)", key, convID))
+	return convID
 }

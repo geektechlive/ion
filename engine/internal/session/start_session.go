@@ -406,29 +406,14 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		return &StartSessionResult{Existed: true, ConversationID: convID}, nil
 	}
 
-	// Pre-mint a conversation ID when the caller doesn't supply one (fresh
-	// tab). This ensures the engine_status {state: "idle"} event at the end
-	// of StartSession carries a sessionId immediately — before any prompt is
-	// sent. Clients need this so users can copy the session ID for tabs where
-	// extensions execute and fail at startup, before a message is ever sent.
-	// The backend's loadOrCreateConversation handles pre-set SessionIDs: it
-	// tries Load, gets ErrNotFound (no file yet), and calls CreateConversation
-	// with this ID — so the conversation file will use this same ID.
-	convID := config.SessionID
-	if convID == "" {
-		// Check the durable binding store: if this key was previously bound
-		// to a conversation, resume it rather than minting a new id.
-		// This makes the engine resilient to restarts even when the client
-		// does not carry the conversationId forward (B2 fix for issue #230).
-		bPath := bindingsPath()
-		if bound := lookupBinding(bPath, key); bound != "" {
-			convID = bound
-			utils.Log("Session", fmt.Sprintf("StartSession: key=%s resuming bound conversationID=%s from binding store", key, convID))
-		} else {
-			convID = conversation.NewConversationID()
-			utils.Log("Session", fmt.Sprintf("StartSession: key=%s pre-minted conversationID=%s (no binding found)", key, convID))
-		}
-	}
+	// Resolve the conversation ID for this session. When the caller supplies an
+	// explicit SessionID it wins; otherwise the binding store and the
+	// ForceNewConversation flag decide between resume and fresh-mint. See
+	// resolveConversationID in session_bindings.go for the full decision tree
+	// and logging. The backend's loadOrCreateConversation handles a pre-set id:
+	// it tries Load, gets ErrNotFound (no file yet), and calls CreateConversation
+	// with this ID — so the conversation file will use this same ID. (#230/#231)
+	convID := resolveConversationID(bindingsPath(), key, config)
 
 	s := &engineSession{
 		key:              key,

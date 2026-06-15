@@ -61,6 +61,17 @@ type EngineConfig struct {
 	// ClaudeCompat enables Claude Code compatibility features such as loading
 	// skills from ~/.claude/skills/.
 	ClaudeCompat bool `json:"claudeCompat,omitempty"`
+
+	// ForceNewConversation requests a brand-new conversation for this session
+	// key even when the durable binding store holds a prior conversationId for
+	// it. Without this flag, a StartSession with an empty SessionID resumes the
+	// bound conversation (restart resilience, issue #230). A client that wants
+	// to start fresh on a reused key (e.g. the user clicking "new conversation"
+	// on an existing tab) sets this to true: the engine mints a new id and
+	// replaces the stored binding, so the old conversation is no longer
+	// auto-resumed for this key. An explicit non-empty SessionID still takes
+	// precedence over both this flag and the binding store. (#231)
+	ForceNewConversation bool `json:"forceNewConversation,omitempty"`
 }
 
 // ThinkingConfig controls extended thinking for API-backend runs.

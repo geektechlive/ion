@@ -256,6 +256,7 @@
     "EngineConfig": [
       "claudeCompat",
       "extensions",
+      "forceNewConversation",
       "maxTokens",
       "model",
       "profileId",

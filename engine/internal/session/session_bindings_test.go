@@ -137,3 +137,46 @@ func TestStartSession_ExplicitSessionIDBypassesBinding(t *testing.T) {
 		t.Errorf("explicit sessionId should win: got %q want %q", result.ConversationID, "explicit-conv-id")
 	}
 }
+
+// Acceptance test (c) for issue #231: the explicit fresh-conversation path must
+// allocate a NEW conversationId even when a persisted binding exists, and the
+// binding store must be updated so the old conversation is no longer
+// auto-resumed for this key.
+func TestStartSession_ForceNewConversationBypassesBinding(t *testing.T) {
+	bindPath := filepath.Join(t.TempDir(), "session-bindings.json")
+	t.Setenv("ION_SESSION_BINDINGS_PATH", bindPath)
+
+	m := NewManager(newMockBackend())
+	defer m.Shutdown()
+
+	const key = "tab-force-new"
+	const originalConvID = "1700000000000-cafebabe0001"
+	// Pre-seed the binding as if a prior conversation had been established.
+	saveBinding(bindPath, key, originalConvID)
+
+	// StartSession with empty SessionID but ForceNewConversation=true must NOT
+	// resume the bound conversation; it must mint a fresh id.
+	cfg := types.EngineConfig{
+		WorkingDirectory:     t.TempDir(),
+		ForceNewConversation: true,
+	}
+	result, err := m.StartSession(key, cfg)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if result.ConversationID == originalConvID {
+		t.Fatalf("force-new should NOT resume the bound conversation: got original %q", originalConvID)
+	}
+	if result.ConversationID == "" {
+		t.Fatal("force-new should produce a non-empty conversationId")
+	}
+
+	// The binding store must now hold the NEW id, so the old conversation is no
+	// longer reachable via this key on a subsequent restart-style resume.
+	if bound := lookupBinding(bindPath, key); bound != result.ConversationID {
+		t.Errorf("binding not replaced with new id: got %q want %q", bound, result.ConversationID)
+	}
+	if bound := lookupBinding(bindPath, key); bound == originalConvID {
+		t.Errorf("old conversation still bound after force-new: %q", originalConvID)
+	}
+}
