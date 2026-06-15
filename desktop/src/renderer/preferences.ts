@@ -84,6 +84,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   planModeAllowedBashCommands: saved.planModeAllowedBashCommands,
   showImplementClearContext: saved.showImplementClearContext,
   gitWatcherIgnoredDirectories: saved.gitWatcherIgnoredDirectories,
+  excludedResourceKinds: saved.excludedResourceKinds,
   _systemIsDark: true,
   setDefaultTallConversation: (enabled) => {
     set({ defaultTallConversation: enabled })
@@ -477,6 +478,10 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   setGitWatcherIgnoredDirectories: (dirs) => {
     set({ gitWatcherIgnoredDirectories: dirs })
+    saveSettings(getAllSettings(get))
+  },
+  setExcludedResourceKinds: (kinds) => {
+    set({ excludedResourceKinds: kinds })
     saveSettings(getAllSettings(get))
   },
   setShowImplementClearContext: (enabled) => {
