@@ -143,7 +143,7 @@ extension RemoteEvent {
 
         case .engineInstanceAdded:
             let tabId = try container.decode(String.self, forKey: .tabId)
-            let instance = try container.decode(EngineInstancePayload.self, forKey: .instance)
+            let instance = try container.decode(ConversationInstancePayload.self, forKey: .instance)
             return .engineInstanceAdded(tabId: tabId, instanceId: instance.id, label: instance.label)
 
         case .engineInstanceRemoved:

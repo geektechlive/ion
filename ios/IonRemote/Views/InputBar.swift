@@ -88,7 +88,7 @@ struct InputBar: View {
         let tab = viewModel.tab(for: tabId)
         let extKey: String? = {
             guard let t = tab else { return nil }
-            return (t.isEngine == true) ? viewModel.engineCompoundKey(tabId: t.id) : t.id
+            return (t.hasEngineExtension == true) ? viewModel.engineCompoundKey(tabId: t.id) : t.id
         }()
         if let key = extKey, let extCmds = viewModel.extensionCommands[key] {
             for ec in extCmds where !cmds.contains(where: { $0.name == ec.name }) {

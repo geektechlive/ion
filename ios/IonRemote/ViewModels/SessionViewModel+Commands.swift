@@ -262,14 +262,14 @@ extension SessionViewModel {
 
     func moveEngineInstance(sourceTabId: String, instanceId: String, targetTabId: String) {
         ionLog.info("moveEngineInstance: \(sourceTabId):\(instanceId) -> \(targetTabId)")
-        // Optimistic local update: move instance between engineInstances dictionaries
-        if var srcInstances = engineInstances[sourceTabId],
+        // Optimistic local update: move instance between conversationInstances dictionaries
+        if var srcInstances = conversationInstances[sourceTabId],
            let idx = srcInstances.firstIndex(where: { $0.id == instanceId }) {
             let inst = srcInstances.remove(at: idx)
-            engineInstances[sourceTabId] = srcInstances.isEmpty ? nil : srcInstances
-            var tgtInstances = engineInstances[targetTabId] ?? []
+            conversationInstances[sourceTabId] = srcInstances.isEmpty ? nil : srcInstances
+            var tgtInstances = conversationInstances[targetTabId] ?? []
             tgtInstances.append(inst)
-            engineInstances[targetTabId] = tgtInstances
+            conversationInstances[targetTabId] = tgtInstances
             // Update active instance on target
             activeEngineInstance[targetTabId] = instanceId
             // Update active instance on source (last remaining or nil)
@@ -291,10 +291,10 @@ extension SessionViewModel {
 
     func renameEngineInstance(tabId: String, instanceId: String, label: String) {
         // Update local state immediately
-        if var instances = engineInstances[tabId] {
+        if var instances = conversationInstances[tabId] {
             if let idx = instances.firstIndex(where: { $0.id == instanceId }) {
                 instances[idx].label = label
-                engineInstances[tabId] = instances
+                conversationInstances[tabId] = instances
             }
         }
         send(.engineRenameInstance(tabId: tabId, instanceId: instanceId, label: label))
@@ -302,7 +302,7 @@ extension SessionViewModel {
 
     func loadEngineConversation(tabId: String) {
         let instanceId = activeEngineInstance[tabId]
-        let instList = engineInstances[tabId]?.map(\.id) ?? []
+        let instList = conversationInstances[tabId]?.map(\.id) ?? []
         DiagnosticLog.log("LOAD-CONV: loadEngineConversation tabId=\(tabId.prefix(8)) instanceId=\(instanceId?.prefix(8) ?? "nil") allInstances=\(instList.map { $0.prefix(8) })")
         send(.loadEngineConversation(tabId: tabId, instanceId: instanceId))
     }

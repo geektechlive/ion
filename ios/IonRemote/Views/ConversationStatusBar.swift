@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Single-line status bar for conversation tabs showing model picker,
 /// permission mode toggle, and context usage.
-/// Also used for engine tabs when `isEngine` is true.
+/// Also used for engine tabs when `hasEngineExtension` is true.
 struct ConversationStatusBar: View {
     @Environment(\.appTheme) private var theme
     let modelOverride: String?
@@ -27,7 +27,7 @@ struct ConversationStatusBar: View {
     let onTapAttachments: () -> Void
 
     // Engine-specific optional parameters
-    var isEngine: Bool = false
+    var hasEngineExtension: Bool = false
     var extensionName: String? = nil
     var statusState: String? = nil
     /// Number of dispatched background agents currently running.
@@ -165,7 +165,7 @@ struct ConversationStatusBar: View {
 
             // Permission mode toggle
             if let mode = permissionMode {
-                if isEngine {
+                if hasEngineExtension {
                     // Engine tabs: tapping shows a confirmation dialog before overriding
                     Button {
                         showModeConfirm = true

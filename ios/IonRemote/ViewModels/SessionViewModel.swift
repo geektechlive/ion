@@ -119,7 +119,7 @@ final class SessionViewModel {
     var agentConversationMessages: [String: [Message]] = [:]     // conversationId -> messages
     var agentConversationLoading: Set<String> = []               // conversationIds currently loading
     // Engine instance state (per engine tab)
-    var engineInstances: [String: [EngineInstanceInfo]] = [:]   // tabId -> instances
+    var conversationInstances: [String: [ConversationInstanceInfo]] = [:]   // tabId -> instances
     var activeEngineInstance: [String: String] = [:]              // tabId -> active instanceId
     /// Engine profiles synced from the desktop settings.
     var engineProfiles: [EngineProfile] = []
@@ -367,7 +367,7 @@ final class SessionViewModel {
     /// Compute the compound key for the active engine instance.
     /// Returns `"tabId:instanceId"` when an instance is active, or just `tabId` as fallback.
     func engineCompoundKey(tabId: String) -> String {
-        let instanceId = activeEngineInstance[tabId] ?? engineInstances[tabId]?.first?.id ?? ""
+        let instanceId = activeEngineInstance[tabId] ?? conversationInstances[tabId]?.first?.id ?? ""
         return instanceId.isEmpty ? tabId : "\(tabId):\(instanceId)"
     }
 

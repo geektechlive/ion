@@ -13,8 +13,8 @@ extension SessionViewModel {
     func handlePermissionRequest(tabId: String, instanceId: String? = nil, questionId: String, toolName: String, toolInput: [String: AnyCodable]?, options: [PermissionOption]) {
         let inputKeys = toolInput?.keys.sorted() ?? []
         let inputSummary = toolInput?.map { "\($0.key): \(type(of: $0.value.value))" }.joined(separator: ", ") ?? "nil"
-        let isEngine = tabs.first(where: { $0.id == tabId })?.isEngine == true
-        DiagnosticLog.log("PERM: handlePermissionRequest: tabId=\(tabId.prefix(8)) instanceId=\(instanceId?.prefix(8) ?? "nil") questionId=\(questionId.prefix(16)) toolName=\(toolName) inputKeys=\(inputKeys) inputTypes=[\(inputSummary)] options=\(options.map(\.label)) isEngine=\(isEngine)")
+        let hasEngineExtension = tabs.first(where: { $0.id == tabId })?.hasEngineExtension == true
+        DiagnosticLog.log("PERM: handlePermissionRequest: tabId=\(tabId.prefix(8)) instanceId=\(instanceId?.prefix(8) ?? "nil") questionId=\(questionId.prefix(16)) toolName=\(toolName) inputKeys=\(inputKeys) inputTypes=[\(inputSummary)] options=\(options.map(\.label)) isEngine=\(hasEngineExtension)")
 
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             // Normalize AnyCodable toolInput to Foundation types so the

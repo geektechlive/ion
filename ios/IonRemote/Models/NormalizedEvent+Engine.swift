@@ -168,7 +168,7 @@ extension RemoteEvent {
         case .engineInstanceAdded(let tabId, let instanceId, let label):
             try container.encode(TypeKey.engineInstanceAdded, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
-            try container.encode(EngineInstancePayload(id: instanceId, label: label), forKey: .instance)
+            try container.encode(ConversationInstancePayload(id: instanceId, label: label), forKey: .instance)
             return true
 
         case .engineInstanceRemoved(let tabId, let instanceId):

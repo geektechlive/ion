@@ -33,8 +33,8 @@ struct EngineView: View {
     /// Slash command autocomplete: nil = menu hidden; non-nil = the current "/" prefix text.
     @State private var slashFilter: String?
 
-    private var instances: [EngineInstanceInfo] {
-        viewModel.engineInstances[tabId] ?? []
+    private var instances: [ConversationInstanceInfo] {
+        viewModel.conversationInstances[tabId] ?? []
     }
     private var activeInstanceId: String {
         viewModel.activeEngineInstance[tabId] ?? instances.first?.id ?? ""
@@ -579,7 +579,7 @@ struct EngineView: View {
                     onTapAttachments: {
                         showAttachments = true
                     },
-                    isEngine: true,
+                    hasEngineExtension: true,
                     extensionName: fields.extensionName,
                     statusState: fields.state,
                     runningAgentCount: runningAgentCount
