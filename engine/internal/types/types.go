@@ -69,18 +69,6 @@ type ThinkingConfig struct {
 	BudgetTokens int  `json:"budgetTokens,omitempty"`
 }
 
-// EngineInstance identifies a running engine instance.
-type EngineInstance struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-}
-
-// EnginePaneState tracks the set of engine instances and which is active.
-type EnginePaneState struct {
-	Instances        []EngineInstance `json:"instances"`
-	ActiveInstanceID *string          `json:"activeInstanceId"`
-}
-
 // AgentStateUpdate describes the current state of an agent.
 type AgentStateUpdate struct {
 	Name     string                 `json:"name"`
