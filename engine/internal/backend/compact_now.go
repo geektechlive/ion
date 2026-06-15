@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/conversation"
-	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -33,9 +32,10 @@ type CompactRequest struct {
 	ConversationID string
 
 	// Model identifies the model the session is currently using so the
-	// engine can size the context window. Passed through providers.GetModelInfo
-	// for window lookup; unknown models fall back to conversation.DefaultContext
-	// with a warning log, matching the agent-loop's resolution path.
+	// engine can size the context window. Passed through resolveContextWindow
+	// for window lookup; unknown models (and zero-window registry entries)
+	// fall back to conversation.DefaultContext with a warning log, matching
+	// the agent-loop's resolution path.
 	Model string
 
 	// RequestID is the synthetic run ID under which emitted events fire.
@@ -62,8 +62,8 @@ type CompactRequest struct {
 //   - Load conversation from disk via conversation.Load. If not found,
 //     return a typed error so the session layer can surface a friendly
 //     "nothing to compact" message rather than a stack trace.
-//   - Resolve the model's context window via providers.GetModelInfo.
-//     Unknown models fall back to conversation.DefaultContext (logged).
+//   - Resolve the model's context window via resolveContextWindow.
+//     Unknown and zero-window models fall back to conversation.DefaultContext (logged).
 //   - Resolve RunConfig (req.RunConfig → b.lastRunConfig → empty).
 //   - Build compactParams from RunConfig's defaults and session-memory
 //     accessors — mirroring buildCompactParams's role in the agent loop
@@ -104,17 +104,11 @@ func (b *ApiBackend) CompactNow(ctx context.Context, req CompactRequest) error {
 		return fmt.Errorf("CompactNow: load conversation %s: %w", req.ConversationID, err)
 	}
 
-	// Resolve the model's context window. Unknown models fall back to the
-	// engine default with a warning — matching the agent-loop's resolution
-	// in runloop.go so /compact's window math agrees with the proactive
-	// trigger's measurement.
-	contextWindow := conversation.DefaultContext
-	if info := providers.GetModelInfo(req.Model); info != nil {
-		contextWindow = info.ContextWindow
-		utils.Log("ApiBackend", fmt.Sprintf("CompactNow: context window: model=%s window=%d (from registry)", req.Model, contextWindow))
-	} else {
-		utils.Warn("ApiBackend", fmt.Sprintf("CompactNow: context window: model=%s window=%d (fallback, model not in registry)", req.Model, contextWindow))
-	}
+	// Resolve the model's context window. Unknown models (and registry
+	// entries with a zero window) fall back to the engine default —
+	// matching the agent-loop's resolution in runloop.go so /compact's
+	// window math agrees with the proactive trigger's measurement.
+	contextWindow := resolveContextWindow(req.Model)
 
 	// Resolve effective RunConfig: explicit request value > cached >
 	// empty. The cached value is populated by StartRunWithConfig so a

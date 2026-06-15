@@ -369,10 +369,7 @@ func (b *ApiBackend) GetContextUsage(requestID string) *conversation.ContextUsag
 		return nil
 	}
 	model := run.conv.Model
-	contextWindow := conversation.DefaultContext
-	if info := providers.GetModelInfo(model); info != nil {
-		contextWindow = info.ContextWindow
-	}
+	contextWindow := resolveContextWindow(model)
 	usage := conversation.GetContextUsage(run.conv, contextWindow)
 	return &usage
 }
