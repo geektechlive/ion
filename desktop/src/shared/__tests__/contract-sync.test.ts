@@ -96,6 +96,7 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   steer_injected: ['messageLength'],
   model_fallback: ['fallbackModel', 'reason', 'requestedModel'],
   run_stalled: ['lastActivity', 'stalledDuration'],
+  engine_plan_content: ['content', 'hasMore', 'offset', 'planFilePath', 'totalBytes'],
 }
 
 // ─── TS SharedTypes field map ───

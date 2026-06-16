@@ -290,7 +290,7 @@ export class EngineBridge extends EventEmitter {
       // problem the poller addresses is specifically "we never saw a
       // fresh status event" — text deltas, tool calls, agent state
       // updates do not refresh the running/idle determination.
-      if (msg.event.type === 'engine_status') {
+      if (msg.event.type === 'desktop_status') {
         this.lastEngineStatusAt.set(routedKey, Date.now())
       }
       debug(`event: key=${msg.key}${routedKey !== msg.key ? ` (aliased->${routedKey})` : ''} type=${msg.event.type}`)
