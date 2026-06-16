@@ -1,9 +1,10 @@
 import { join } from 'path'
-import { tmpdir } from 'os'
-import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'fs'
+import { homedir } from 'os'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'fs'
 import { log as _log } from '../../logger'
 import { state } from '../../state'
 import { isValidProjectPath } from '../../ipc-validation'
+import { expandHome } from '../../utils/expandHome'
 import type { RemoteCommand } from '../protocol'
 
 function log(msg: string): void {
@@ -51,22 +52,23 @@ function imageMimeForExt(filePath: string): string | null {
 
 export async function handleFsReadImage(cmd: Extract<RemoteCommand, { type: 'fs_read_image' }>): Promise<void> {
   const { filePath } = cmd
+  const expandedPath = expandHome(filePath)
   try {
     const mime = imageMimeForExt(filePath)
     if (!mime) {
       state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: null, error: 'Unsupported image extension' })
       return
     }
-    if (!filePath || !existsSync(filePath)) {
+    if (!filePath || !existsSync(expandedPath)) {
       state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: null, error: 'File not found' })
       return
     }
-    const st = statSync(filePath)
+    const st = statSync(expandedPath)
     if (st.size > 10 * 1024 * 1024) {
       state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: null, error: 'Image too large (>10MB)' })
       return
     }
-    const buf = readFileSync(filePath)
+    const buf = readFileSync(expandedPath)
     state.remoteTransport?.send({ type: 'fs_image_content', filePath, dataUrl: `data:${mime};base64,${buf.toString('base64')}` })
   } catch (err) {
     log(`fs_read_image error: ${(err as Error).message}`)
@@ -76,17 +78,18 @@ export async function handleFsReadImage(cmd: Extract<RemoteCommand, { type: 'fs_
 
 export async function handleFsReadFile(cmd: Extract<RemoteCommand, { type: 'fs_read_file' }>, deviceId: string): Promise<void> {
   const { filePath } = cmd
+  const expandedPath = expandHome(filePath)
   try {
-    if (!isValidProjectPath(filePath)) {
+    if (!isValidProjectPath(expandedPath)) {
       state.remoteTransport?.sendToDevice(deviceId, { type: 'fs_file_content', filePath, content: null, error: 'Invalid path' })
       return
     }
-    const st = statSync(filePath)
+    const st = statSync(expandedPath)
     if (st.size > 2 * 1024 * 1024) {
       state.remoteTransport?.sendToDevice(deviceId, { type: 'fs_file_content', filePath, content: null, error: 'File too large (>2MB)' })
       return
     }
-    const buf = readFileSync(filePath)
+    const buf = readFileSync(expandedPath)
     const check = buf.subarray(0, Math.min(8192, buf.length))
     if (check.includes(0)) {
       state.remoteTransport?.sendToDevice(deviceId, { type: 'fs_file_content', filePath, content: null, error: 'Binary file' })
@@ -161,11 +164,17 @@ export async function handleUploadAttachment(cmd: Extract<RemoteCommand, { type:
     const timestamp = Date.now()
     // Derive extension from the original filename
     const nameExt = cmd.name.includes('.') ? cmd.name.substring(cmd.name.lastIndexOf('.')) : '.bin'
-    const filePath = join(tmpdir(), `ion-remote-${timestamp}${nameExt}`)
+    // Stage in the shared iCloud folder so the remote engine host (Mac Mini) can reach it.
+    const uploadsDir = join(homedir(), 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'Jarvis', 'uploads')
+    mkdirSync(uploadsDir, { recursive: true })
+    const filePath = join(uploadsDir, `ion-remote-${timestamp}${nameExt}`)
     writeFileSync(filePath, buf)
     const id = crypto.randomUUID()
     log(`upload_attachment: saved ${buf.length} bytes to ${filePath}`)
-    state.remoteTransport?.sendToDevice(deviceId, { type: 'upload_attachment_result', id, name: cmd.name, path: filePath, correlationId: cmd.correlationId })
+    // Return a home-relative path so the remote engine host can resolve it from its own home.
+    const home = homedir()
+    const relPath = filePath.startsWith(home + '/') ? '~' + filePath.slice(home.length) : filePath
+    state.remoteTransport?.sendToDevice(deviceId, { type: 'upload_attachment_result', id, name: cmd.name, path: relPath, correlationId: cmd.correlationId })
   } catch (err) {
     log(`upload_attachment error: ${(err as Error).message}`)
     state.remoteTransport?.sendToDevice(deviceId, { type: 'upload_attachment_result', id: '', name: cmd.name, path: '', correlationId: cmd.correlationId, error: (err as Error).message })

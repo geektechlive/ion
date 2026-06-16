@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'fs'
 import { basename, extname } from 'path'
 import { nativeImage } from 'electron'
 import { log as _log, warn as _warn } from '../logger'
+import { expandHome } from '../utils/expandHome'
 import type { ImageAttachmentPayload } from '../../shared/types'
 
 const TAG = 'attachments'
@@ -132,12 +133,13 @@ export function encodeImageAttachments(
 
     let buf: Buffer
     try {
-      const st = statSync(a.path)
+      const srcPath = expandHome(a.path)
+      const st = statSync(srcPath)
       if (st.size > RAW_MAX_BYTES) {
         fail(`image too large to load: ${(st.size / (1024 * 1024)).toFixed(1)}MB > ${RAW_MAX_BYTES / (1024 * 1024)}MB`)
         continue
       }
-      buf = readFileSync(a.path)
+      buf = readFileSync(srcPath)
     } catch (err) {
       fail(`read failed: ${(err as Error).message}`)
       continue
