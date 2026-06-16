@@ -59,6 +59,13 @@ type Server struct {
 	// HybridBackend). list_models uses this to mark the anthropic provider
 	// as authed via CLI when no API key is configured.
 	cliCapable bool
+
+	// ownership binds live session keys to the client connections that
+	// claimed them, reaping a session a grace window after its last owning
+	// connection disconnects. Prevents the orphaned-session FD leak (a
+	// disconnected client's sessions previously lived forever, holding their
+	// pooled workspace-watcher descriptors). See session_ownership.go.
+	ownership *sessionOwnership
 }
 
 // SetConfig stores the engine runtime config for use by sessions.
@@ -67,6 +74,11 @@ func (s *Server) SetConfig(cfg *types.EngineRuntimeConfig) {
 	s.manager.SetConfig(cfg)
 	if cfg != nil && cfg.Timeouts != nil {
 		broadcastWriteDeadline = cfg.Timeouts.BroadcastWrite()
+	}
+	// Apply the configurable orphaned-session reap grace window. Nil-safe:
+	// SessionReapGrace returns the compiled default for a nil Workspace block.
+	if s.ownership != nil {
+		s.ownership.setGraceWindow(cfg.GetWorkspace().SessionReapGrace())
 	}
 }
 
@@ -101,6 +113,14 @@ func NewServer(socketPath string, b backend.RunBackend) *Server {
 		startedAt:  time.Now(),
 		cliCapable: cliCapable,
 	}
+	// Reap orphaned sessions a grace window after their last owning
+	// connection disconnects. Wired to StopSession so the full teardown
+	// (watcher release, extension close, MCP/telemetry cleanup) runs.
+	s.ownership = newSessionOwnership(func(key string) {
+		if err := s.manager.StopSession(key); err != nil {
+			utils.Debug("Server", fmt.Sprintf("reap: StopSession key=%s err=%v (already gone?)", key, err))
+		}
+	})
 
 	// Wire manager events to broadcast
 	mgr.OnEvent(func(key string, event types.EngineEvent) {
@@ -116,17 +136,7 @@ func NewServer(socketPath string, b backend.RunBackend) *Server {
 	return s
 }
 
-// looksLikeHostPort returns true when path looks like "host:port" rather
-// than a Unix domain socket path. Used to enable TCP listen/dial on any
-// platform via ION_SOCKET_PATH=host:port.
-func looksLikeHostPort(path string) bool {
-	// Must contain a colon and must not start with "/" (absolute path)
-	// or "." (relative path).
-	if len(path) == 0 || path[0] == '/' || path[0] == '.' {
-		return false
-	}
-	return strings.Contains(path, ":")
-}
+// looksLikeHostPort is defined in socket_addr.go.
 
 // Start begins listening on the socket. When the socket path looks like
 // "host:port" (set via ION_SOCKET_PATH), uses TCP so the engine can serve
@@ -185,6 +195,10 @@ func (s *Server) Start() error {
 func (s *Server) Stop() error {
 	s.stopOnce.Do(func() {
 		close(s.done)
+
+		if s.ownership != nil {
+			s.ownership.stopAll()
+		}
 
 		_ = s.manager.StopAll()
 
@@ -272,26 +286,9 @@ func (s *Server) acceptLoop() {
 	}
 }
 
-// evictClient removes a client from the broadcast set and closes its conn.
-// Safe to call multiple times.
-func (s *Server) evictClient(conn net.Conn) {
-	s.mu.Lock()
-	cw, ok := s.clients[conn]
-	if ok {
-		delete(s.clients, conn)
-	}
-	s.mu.Unlock()
-	if ok {
-		select {
-		case <-cw.done:
-		default:
-			close(cw.done)
-		}
-		if err := conn.Close(); err != nil {
-			utils.Log("Server", fmt.Sprintf("removeClient: conn close failed: %v", err))
-		}
-	}
-}
+// evictClient is defined in session_ownership.go: it removes a client from the
+// broadcast set, releases the connection's session ownership (triggering the
+// orphaned-session reap path), and closes the conn.
 
 func (s *Server) handleClient(conn net.Conn) {
 	defer s.evictClient(conn)
@@ -349,6 +346,9 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 	switch cmd.Cmd {
 	case "start_session":
 		result, err := s.manager.StartSession(cmd.Key, *cmd.Config)
+		if err == nil {
+			s.ownership.claim(conn, cmd.Key)
+		}
 		s.sendResult(conn, cmd, err, result)
 
 	case "send_prompt":
@@ -382,6 +382,13 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 			}
 		}
 		err := s.manager.SendPrompt(cmd.Key, cmd.Text, overrides)
+		if err == nil {
+			// A prompt is an active-use claim: re-bind ownership so a client
+			// that resumed a session by prompting (without a fresh
+			// start_session) is recorded as an owner and cancels any pending
+			// reap.
+			s.ownership.claim(conn, cmd.Key)
+		}
 		s.sendResult(conn, cmd, err, nil)
 
 	case "abort":

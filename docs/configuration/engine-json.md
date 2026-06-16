@@ -460,6 +460,26 @@ These follow the same merge semantics as other config fields: higher-priority la
 }
 ```
 
+## workspace
+
+Engine-wide limits for the filesystem-watch and session-lifecycle subsystems. Omit the block (or set a field to `0`) to use the compiled default. These protect the engine's process file-descriptor table: each watched directory consumes one descriptor, and a leaked session keeps its watcher's descriptors open.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `sessionReapGraceMs` | int64 | `300000` (5 min) | How long a session whose last owning client connection has disconnected is kept alive before the engine reaps it (full teardown, releasing its workspace watcher). A client that reconnects and re-addresses the same session key within this window cancels the reap, so a transient socket flap or a desktop relaunch never tears down a live session. Raise it if your clients reconnect slowly; lower it to bound file-descriptor growth more aggressively. |
+| `maxWatchedDirs` | int | `50000` | Cap on the number of directories a single workspace watcher attaches a descriptor to. When reached, the watcher keeps working for the directories it did attach and stops descending. Raise it for genuinely huge monorepos; lower it to keep a tighter bound on per-watcher descriptors. |
+
+Same merge semantics as other config fields: higher-priority layers override lower ones. Zero means "use the compiled default."
+
+```json
+{
+  "workspace": {
+    "sessionReapGraceMs": 120000,
+    "maxWatchedDirs": 100000
+  }
+}
+```
+
 ## featureFlags
 
 Feature flag source configuration.

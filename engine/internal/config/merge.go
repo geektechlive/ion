@@ -276,6 +276,11 @@ func mergeInto(dst, src *types.EngineRuntimeConfig) {
 	if src.Timeouts != nil {
 		dst.Timeouts = types.MergeTimeouts(dst.Timeouts, src.Timeouts)
 	}
+
+	// Workspace: merge non-zero fields (reap grace window, watcher dir cap)
+	if src.Workspace != nil {
+		dst.Workspace = types.MergeWorkspace(dst.Workspace, src.Workspace)
+	}
 }
 
 func contains(slice []string, item string) bool {

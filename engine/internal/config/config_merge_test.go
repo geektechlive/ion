@@ -133,6 +133,28 @@ func TestMergeConfigs_DeepMergeLimits(t *testing.T) {
 	}
 }
 
+func TestMergeConfigs_WorkspaceDeepMerge(t *testing.T) {
+	base := DefaultConfig()
+	// Layer 1 sets only the reap grace; layer 2 sets only the dir cap. A deep
+	// field-level merge must preserve both.
+	layer1 := &types.EngineRuntimeConfig{
+		Workspace: &types.WorkspaceConfig{SessionReapGraceMs: 90000},
+	}
+	layer2 := &types.EngineRuntimeConfig{
+		Workspace: &types.WorkspaceConfig{MaxWatchedDirs: 1234},
+	}
+	result := MergeConfigs(nil, base, layer1, layer2)
+	if result.Workspace == nil {
+		t.Fatal("expected merged Workspace block, got nil")
+	}
+	if result.Workspace.SessionReapGraceMs != 90000 {
+		t.Errorf("sessionReapGraceMs = %d, want 90000 (from layer1)", result.Workspace.SessionReapGraceMs)
+	}
+	if result.Workspace.MaxWatchedDirs != 1234 {
+		t.Errorf("maxWatchedDirs = %d, want 1234 (from layer2)", result.Workspace.MaxWatchedDirs)
+	}
+}
+
 func TestMergeConfigs_ProfilesReplace(t *testing.T) {
 	base := DefaultConfig()
 	base.Profiles = []types.EngineProfileConfig{
