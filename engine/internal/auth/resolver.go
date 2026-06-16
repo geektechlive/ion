@@ -196,7 +196,14 @@ func (r *Resolver) ResolveKey(provider string) (string, error) {
 		}
 	}
 
-	utils.Error("AuthResolver", fmt.Sprintf("ResolveKey: provider=%s failed - no key found at any level", provider))
+	// A key miss is an EXPECTED outcome of ResolveKey, reported via the returned
+	// error — severity is the caller's decision, not the resolver's. Every caller
+	// uses the tolerant `err == nil && key != ""` pattern (model discovery probes
+	// every configured provider, titling/compaction skip on miss); a genuinely
+	// required key surfaces as a 401 at the provider layer with full context.
+	// Logging at Error here turns normal "provider not configured" probing into
+	// error-log spam (model discovery alone fires this once per keyless provider).
+	utils.Debug("AuthResolver", fmt.Sprintf("ResolveKey: provider=%s - no key found at any level", provider))
 	return "", fmt.Errorf("no API key found for provider %q", provider)
 }
 

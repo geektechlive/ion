@@ -206,14 +206,18 @@ func (m *Manager) emitStatusSnapshot(key, reason string) {
 // command; callers that only need status freshness use this.
 //
 // Returns silently when no session exists for the key, matching the
-// behavior of ReconcileState. A Warn log fires so an out-of-sync
-// caller is visible in the engine log.
+// behavior of ReconcileState. "Not found" is a valid answer to this
+// client-driven (query_session_status RPC) status query — a client with a
+// stale tab polls an ended session and gets the not-found result via the
+// event bus. That is expected churn, not an engine fault, so it logs at
+// Debug; logging it at Warn turned routine stale-tab polling into hundreds
+// of warning lines per dead session key.
 func (m *Manager) QuerySessionStatus(key string) {
 	m.mu.RLock()
 	_, ok := m.sessions[key]
 	m.mu.RUnlock()
 	if !ok {
-		utils.Warn("Session", fmt.Sprintf("QuerySessionStatus: session not found key=%s", key))
+		utils.Debug("Session", fmt.Sprintf("QuerySessionStatus: session not found key=%s", key))
 		return
 	}
 	m.emitStatusSnapshot(key, "query")
