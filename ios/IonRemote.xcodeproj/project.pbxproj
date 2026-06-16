@@ -194,6 +194,7 @@
 		A1B2C3D4E5F60001FF0023AA /* SessionViewModel+ConversationHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001FF0022AA /* SessionViewModel+ConversationHelpers.swift */; };
 		A1B2C3D4E5F60001FF0025AA /* NormalizedEvent+EngineDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001FF0024AA /* NormalizedEvent+EngineDecoder.swift */; };
 		A1B2C3D4E5F60003000201AA /* ModelFallbackSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60003000202AA /* ModelFallbackSnapshotTests.swift */; };
+		A1B2C3D4E5F60003000301AA /* FileEditorReopenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60003000302AA /* FileEditorReopenTests.swift */; };
 		B2C3D4E5F600BB991009B01AA /* SessionViewModel+ImplementPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F600BB991009B00AA /* SessionViewModel+ImplementPlan.swift */; };
 		B2C3D4E5F600BB991009BA1AA /* SessionViewModel+EngineRunStalled.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F600BB991009BA0AA /* SessionViewModel+EngineRunStalled.swift */; };
 		B2C3D4E5F600BB991010E001AA /* SessionViewModel+EngineCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F600BB991010E000AA /* SessionViewModel+EngineCommands.swift */; };
@@ -401,6 +402,7 @@
 		A1B2C3D4E5F60001FF0022AA /* SessionViewModel+ConversationHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+ConversationHelpers.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001FF0024AA /* NormalizedEvent+EngineDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NormalizedEvent+EngineDecoder.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60003000202AA /* ModelFallbackSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelFallbackSnapshotTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60003000302AA /* FileEditorReopenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileEditorReopenTests.swift; sourceTree = "<group>"; };
 		B2C3D4E5F600BB991009B00AA /* SessionViewModel+ImplementPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+ImplementPlan.swift"; sourceTree = "<group>"; };
 		B2C3D4E5F600BB991009BA0AA /* SessionViewModel+EngineRunStalled.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+EngineRunStalled.swift"; sourceTree = "<group>"; };
 		B2C3D4E5F600BB991010E000AA /* SessionViewModel+EngineCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+EngineCommands.swift"; sourceTree = "<group>"; };
@@ -650,6 +652,7 @@
 				A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */,
 				A1B2C3D4E5F60001000A01AA /* SessionStatusSynthesisTests.swift */,
 				A1B2C3D4E5F60003000202AA /* ModelFallbackSnapshotTests.swift */,
+				A1B2C3D4E5F60003000302AA /* FileEditorReopenTests.swift */,
 				A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */,
 				A1B2C3D4E5F60001F00007AA /* ContractSyncEngineEventsTests.swift */,
 				A1B2C3D4E5F60001F00015AA /* NormalizedEventNewEngineTypesTests.swift */,
@@ -1026,6 +1029,7 @@
 				A1B2C3D4E5F60001000244AA /* NormalizedEventLifecycleTests.swift in Sources */,
 				A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */,
 				A1B2C3D4E5F60003000201AA /* ModelFallbackSnapshotTests.swift in Sources */,
+				A1B2C3D4E5F60003000301AA /* FileEditorReopenTests.swift in Sources */,
 				A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */,
 				A1B2C3D4E5F60001000A00AA /* SessionStatusSynthesisTests.swift in Sources */,
 				A1B2C3D4E5F60001E80006AA /* DesktopSettingsContractTests.swift in Sources */,
