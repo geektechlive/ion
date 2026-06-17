@@ -58,6 +58,10 @@
 		A1B2C3D4E5F60001000204AA /* SessionViewModel+Commands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000205AA /* SessionViewModel+Commands.swift */; };
 		A1B2C3D4E5F60001000206AA /* SessionViewModel+EventHandlers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000207AA /* SessionViewModel+EventHandlers.swift */; };
 		A1B2C3D4E5F60001000208AA /* SessionViewModel+EngineEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000209AA /* SessionViewModel+EngineEvents.swift */; };
+		THINK00000000000000000001 /* NormalizedEvent+Thinking.swift in Sources */ = {isa = PBXBuildFile; fileRef = THINK00000000000000000002 /* NormalizedEvent+Thinking.swift */; };
+		THINK00000000000000000003 /* SessionViewModel+ThinkingEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = THINK00000000000000000004 /* SessionViewModel+ThinkingEvents.swift */; };
+		THINK00000000000000000005 /* ThinkingRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = THINK00000000000000000006 /* ThinkingRowView.swift */; };
+		THINK00000000000000000007 /* ThinkingAccumulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = THINK00000000000000000008 /* ThinkingAccumulatorTests.swift */; };
 		A1B2C3D4E5F60001000220AA /* TransportManager+Send.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000221AA /* TransportManager+Send.swift */; };
 		A1B2C3D4E5F60001000222AA /* TransportManager+Receive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000223AA /* TransportManager+Receive.swift */; };
 		A1B2C3D4E5F60001000224AA /* PayloadCompression.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000225AA /* PayloadCompression.swift */; };
@@ -267,6 +271,10 @@
 		A1B2C3D4E5F60001000205AA /* SessionViewModel+Commands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+Commands.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000207AA /* SessionViewModel+EventHandlers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+EventHandlers.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000209AA /* SessionViewModel+EngineEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+EngineEvents.swift"; sourceTree = "<group>"; };
+		THINK00000000000000000002 /* NormalizedEvent+Thinking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NormalizedEvent+Thinking.swift"; sourceTree = "<group>"; };
+		THINK00000000000000000004 /* SessionViewModel+ThinkingEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+ThinkingEvents.swift"; sourceTree = "<group>"; };
+		THINK00000000000000000006 /* ThinkingRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingRowView.swift; sourceTree = "<group>"; };
+		THINK00000000000000000008 /* ThinkingAccumulatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingAccumulatorTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000221AA /* TransportManager+Send.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TransportManager+Send.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000223AA /* TransportManager+Receive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TransportManager+Receive.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000225AA /* PayloadCompression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PayloadCompression.swift; sourceTree = "<group>"; };
@@ -485,6 +493,7 @@
 				A1B2C3D4E5F60001000402AA /* NormalizedEvent+Files.swift */,
 				A1B2C3D4E5F60001009F00AA /* NormalizedEvent+Resource.swift */,
 				A1B2C3D4E5F6000100A100AA /* NormalizedEvent+PlanModeAutoExit.swift */,
+				THINK00000000000000000002 /* NormalizedEvent+Thinking.swift */,
 				A1B2C3D4E5F60001000006AA /* RemoteTabState.swift */,
 				B1B2C3D4E5F60001CC000008 /* TabStatus.swift */,
 				A1B2C3D4E5F60001000008AA /* RemoteCommand.swift */,
@@ -599,6 +608,7 @@
 				A1B2C3D4E5F60001004007AA /* EngineMessageRow.swift */,
 				A1B2C3D4E5F60001F00021AA /* EngineMessageRow+SlashBubble.swift */,
 				B1B2C3D4E5F60001CC000004 /* ConversationView+Rows.swift */,
+				THINK00000000000000000006 /* ThinkingRowView.swift */,
 				B1B2C3D4E5F60001CC000006 /* ExportShareSheet.swift */,
 				A1B2C3D4E5F60001004008AA /* CompactionRowView.swift */,
 				A1B2C3D4E5F60001006001AA /* ToastView.swift */,
@@ -631,6 +641,7 @@
 				A1B2C3D4E5F60001005309AA /* SessionViewModel+TabEventHandlers.swift */,
 				A1B2C3D4E5F60001008101AA /* SessionViewModel+EngineKeys.swift */,
 				A1B2C3D4E5F60001000209AA /* SessionViewModel+EngineEvents.swift */,
+				THINK00000000000000000004 /* SessionViewModel+ThinkingEvents.swift */,
 				A1B2C3D4E5F60001000903AA /* SessionViewModel+Snapshot.swift */,
 				A1B2C3D4E5F60001000981AA /* SessionViewModel+SessionStatus.swift */,
 				A1B2C3D4E5F60001000991AA /* SessionViewModel+PermissionMessageEvents.swift */,
@@ -653,6 +664,7 @@
 				A1B2C3D4E5F60001000A01AA /* SessionStatusSynthesisTests.swift */,
 				A1B2C3D4E5F60003000202AA /* ModelFallbackSnapshotTests.swift */,
 				A1B2C3D4E5F60003000302AA /* FileEditorReopenTests.swift */,
+				THINK00000000000000000008 /* ThinkingAccumulatorTests.swift */,
 				A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */,
 				A1B2C3D4E5F60001F00007AA /* ContractSyncEngineEventsTests.swift */,
 				A1B2C3D4E5F60001F00015AA /* NormalizedEventNewEngineTypesTests.swift */,
@@ -906,6 +918,9 @@
 				A1B2C3D4E5F60001005308AA /* SessionViewModel+TabEventHandlers.swift in Sources */,
 				A1B2C3D4E5F60001008100AA /* SessionViewModel+EngineKeys.swift in Sources */,
 				A1B2C3D4E5F60001000208AA /* SessionViewModel+EngineEvents.swift in Sources */,
+				THINK00000000000000000001 /* NormalizedEvent+Thinking.swift in Sources */,
+				THINK00000000000000000003 /* SessionViewModel+ThinkingEvents.swift in Sources */,
+				THINK00000000000000000005 /* ThinkingRowView.swift in Sources */,
 				A1B2C3D4E5F60001000902AA /* SessionViewModel+Snapshot.swift in Sources */,
 				A1B2C3D4E5F60001000980AA /* SessionViewModel+SessionStatus.swift in Sources */,
 				A1B2C3D4E5F60001000990AA /* SessionViewModel+PermissionMessageEvents.swift in Sources */,
@@ -1030,6 +1045,7 @@
 				A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */,
 				A1B2C3D4E5F60003000201AA /* ModelFallbackSnapshotTests.swift in Sources */,
 				A1B2C3D4E5F60003000301AA /* FileEditorReopenTests.swift in Sources */,
+				THINK00000000000000000007 /* ThinkingAccumulatorTests.swift in Sources */,
 				A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */,
 				A1B2C3D4E5F60001000A00AA /* SessionStatusSynthesisTests.swift in Sources */,
 				A1B2C3D4E5F60001E80006AA /* DesktopSettingsContractTests.swift in Sources */,

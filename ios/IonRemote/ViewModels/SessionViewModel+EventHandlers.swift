@@ -240,6 +240,19 @@ extension SessionViewModel {
         case .engineSteerInjected(let tabId, let instanceId, let messageLength):
             handleEngineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
 
+        // Extended-thinking events (issue #158). A thinking block is OPTIONAL
+        // per turn; the delta may be gated off for low-bandwidth. The
+        // accumulator in SessionViewModel+ThinkingEvents.swift binds
+        // block_start → deltas → block_end into a single `.thinking` row.
+        case .engineThinkingBlockStart(let tabId, let instanceId):
+            handleEngineThinkingBlockStart(tabId: tabId, instanceId: instanceId)
+
+        case .engineThinkingDelta(let tabId, let instanceId, let thinkingText):
+            handleEngineThinkingDelta(tabId: tabId, instanceId: instanceId, thinkingText: thinkingText)
+
+        case .engineThinkingBlockEnd(let tabId, let instanceId, let totalTokens, let elapsedSeconds, let redacted):
+            handleEngineThinkingBlockEnd(tabId: tabId, instanceId: instanceId, totalTokens: totalTokens, elapsedSeconds: elapsedSeconds, redacted: redacted)
+
         // No-op: iOS does not render these events yet. Decoding them
         // prevents the 123 decode-errors/session diagnostic finding.
         case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall, .engineDispatchStart:
@@ -277,6 +290,11 @@ extension SessionViewModel {
             DiagnosticLog.log("LOAD-CONV: engineConversationHistory key=\(key.prefix(16)) total=\(messages.count) filtered=\(filtered.count) alreadyLoaded=\(engineConversationLoaded.contains(key))")
             mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.messages = filtered }
             engineConversationLoaded.insert(key)
+            // History reload replaces the message array wholesale — any
+            // in-progress thinking block id now points at a message that no
+            // longer exists. Clear the accumulator so a late delta/block_end
+            // can't mutate the reloaded history. (Stream-reset semantics.)
+            clearThinkingAccumulator(forKey: key)
 
         case .agentConversationHistory(let agentName, let conversationId, let messages):
             handleAgentConversationHistory(agentName: agentName, conversationId: conversationId, messages: messages)

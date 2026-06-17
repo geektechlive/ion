@@ -114,6 +114,17 @@ enum RemoteEvent: Sendable {
     /// that gates approval. See
     /// docs/architecture/adr/003-state-events-vs-workflow-events.md.
     case enginePlanProposal(tabId: String, instanceId: String?, kind: String, planFilePath: String?, planSlug: String?)
+    /// Extended-thinking events (issue #158). Surface the model's reasoning
+    /// activity so iOS can distinguish "actively reasoning" from "stalled" and
+    /// render a collapsed-by-default thinking row. A thinking block is OPTIONAL
+    /// per turn; thinkingDelta may be gated off by the per-pairing
+    /// streamThinkingToRemote desktop setting (boundaries-only summary then).
+    /// Full contract + decode/encode rationale live with the codec in
+    /// NormalizedEvent+Thinking.swift; engine side is engine/internal/types/
+    /// normalized_event.go (Thinking*Event).
+    case engineThinkingBlockStart(tabId: String, instanceId: String?)
+    case engineThinkingDelta(tabId: String, instanceId: String?, thinkingText: String)
+    case engineThinkingBlockEnd(tabId: String, instanceId: String?, thinkingTotalTokens: Int?, thinkingElapsedSeconds: Double?, thinkingRedacted: Bool?)
     /// engine_plan_mode_auto_exit fires when the engine deterministically
     /// synthesizes an ExitPlanMode call at end-of-turn because the model
     /// ended a plan-mode run without invoking ExitPlanMode or
@@ -373,6 +384,12 @@ enum RemoteEvent: Sendable {
         case engineToolStalled = "desktop_tool_stalled"
         case engineRunStalled = "desktop_run_stalled"
         case engineSteerInjected = "desktop_steer_injected"
+        // Extended-thinking events (issue #158). The desktop forwards the
+        // engine's thinking_block_start / thinking_delta / thinking_block_end
+        // events uniformly, stripping the engine_ prefix and adding desktop_.
+        case engineThinkingBlockStart = "desktop_thinking_block_start"
+        case engineThinkingDelta = "desktop_thinking_delta"
+        case engineThinkingBlockEnd = "desktop_thinking_block_end"
         case engineScheduleFired = "desktop_schedule_fired"
         case engineLlmCall = "desktop_llm_call"
         case engineDispatchStart = "desktop_dispatch_start"
@@ -472,6 +489,17 @@ enum RemoteEvent: Sendable {
         // engine_steer_injected — mid-turn steer drain confirmation.
         // Mirrors EngineEvent.SteerMessageLength's JSON tag.
         case steerMessageLength
+        // Extended-thinking events (issue #158). The desktop projects the
+        // engine's bare thinking field names (text / totalTokens /
+        // elapsedSeconds / redacted) onto these prefixed wire keys when it
+        // forwards the events to iOS (see desktop types-engine.ts
+        // engine_thinking_* RemoteEvent variants). thinking_block_start
+        // carries no payload beyond tabId / instanceId. thinking_delta
+        // carries thinkingText. thinking_block_end carries the three
+        // optional summary fields. The prefix avoids colliding with the
+        // generic `text` key already used by engine_text_delta.
+        case thinkingText
+        case thinkingTotalTokens, thinkingElapsedSeconds, thinkingRedacted
         // engine_run_stalled — engine progress watchdog tripped. Mirrors
         // EngineEvent.RunStalledDuration / RunStalledLastActivity JSON tags.
         // See the Go-side RunStalledEvent doc for the watchdog contract;
