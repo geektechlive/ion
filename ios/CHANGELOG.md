@@ -10,6 +10,18 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.42.0](https://github.com/dsswift/ion/compare/ios-v1.41.0...ios-v1.42.0) (2026-06-18)
+
+### Features
+
+* **ios:** desktop_ wire prefix + paged plan-content fetch (#240) ([e351845](https://github.com/dsswift/ion/commit/e351845d8895bca575bdc44fbfe295135277e949))
+* **ios:** render extended-thinking row + toggle (#158) ([5f86aaa](https://github.com/dsswift/ion/commit/5f86aaa34dba282d331a5ee3d1c8676851bb3813))
+* **ios:** per-conversation thinking picker in conversation status bar ([51537d7](https://github.com/dsswift/ion/commit/51537d77d28eadac4b531c8b5b3b4d43204845c0))
+
+### Bug Fixes
+
+* **ios:** seed file editor from cached content on reopen ([618220b](https://github.com/dsswift/ion/commit/618220b6bbcaf77be81f57c1fb88992a55c7d7c7))
+
 ## [1.41.0](https://github.com/dsswift/ion/compare/ios-v1.40.0...ios-v1.41.0) (2026-06-16)
 
 ### Features

@@ -10,6 +10,21 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.55.0](https://github.com/dsswift/ion/compare/desktop-v1.54.0...desktop-v1.55.0) (2026-06-18)
+
+### Features
+
+* **desktop:** desktop_ wire prefix + plan-content (#240) ([6e6dac4](https://github.com/dsswift/ion/commit/6e6dac49a5276a06023b6cff4c2b653e32279344))
+* **desktop:** extended-thinking UI + projection toggle (#158) ([e43979f](https://github.com/dsswift/ion/commit/e43979fb24e444cd588a914ca0c99a8a283d8125))
+* **desktop:** global thinking toggle + per-conversation effort picker ([4b653c6](https://github.com/dsswift/ion/commit/4b653c6fa41f2f01477a15b5f8f0e1fe05ee82a4))
+
+### Bug Fixes
+
+* **desktop:** self-heal missing electron dist in postinstall ([267d32f](https://github.com/dsswift/ion/commit/267d32f335785dec1328ece99b29dc7a05e7ea48))
+* **desktop:** spawn engine with login-shell PATH env ([04c912d](https://github.com/dsswift/ion/commit/04c912dd02b1824ec094b8f734ccc82221edcb6e))
+* **desktop:** persist streamThinkingToRemote round-trip (#158) ([867c577](https://github.com/dsswift/ion/commit/867c5773d2b9088227190825a06a86019fb3aaf7))
+* **desktop:** update sendPrompt arg count in control-plane test ([61923ef](https://github.com/dsswift/ion/commit/61923ef8ca5dcd30b1fe6831cbd1deb71e6ff828))
+
 ## [1.54.0](https://github.com/dsswift/ion/compare/desktop-v1.53.2...desktop-v1.54.0) (2026-06-16)
 
 ### Features

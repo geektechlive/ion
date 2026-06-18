@@ -13,6 +13,20 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.41.0](https://github.com/dsswift/ion/compare/engine-v1.40.0...engine-v1.41.0) (2026-06-18)
+
+### Features
+
+* **engine:** add get_plan_content command + event (#240) ([502d1a2](https://github.com/dsswift/ion/commit/502d1a20032ba25866705ffb8685096c46329f89))
+* **engine:** reap orphaned sessions; configurable limits ([b11fda5](https://github.com/dsswift/ion/commit/b11fda54459194d00a3b6d3cdb41898b9e5f884a))
+* **engine:** login-shell Bash + sendPrompt config carry (#242) ([40600d3](https://github.com/dsswift/ion/commit/40600d38eeaffa99dcc7d3b982d6a1c03cabf958))
+* **engine:** extended-thinking events + telemetry (#158) ([f057a60](https://github.com/dsswift/ion/commit/f057a600c1a2f0876485fa91f35b340d18885c9e))
+* **engine:** effort-based thinking across anthropic, openai, google ([653c738](https://github.com/dsswift/ion/commit/653c73875fb8bd53b404cfd28959d38958292ba6))
+
+### Bug Fixes
+
+* **engine:** plan-content symlink guard + thinking-strip pin ([8cf11ff](https://github.com/dsswift/ion/commit/8cf11ffef3a3db4749b2d6414780f5e39a0fec15))
+
 ## [1.40.0](https://github.com/dsswift/ion/compare/engine-v1.39.1...engine-v1.40.0) (2026-06-16)
 
 ### Features
