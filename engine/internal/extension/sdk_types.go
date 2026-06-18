@@ -386,16 +386,23 @@ type DispatchAgentOpts struct {
 
 // DispatchAgentResult holds the outcome of a dispatched agent.
 type DispatchAgentResult struct {
-	Name                     string  `json:"name"`
-	Output                   string  `json:"output"`
-	ExitCode                 int     `json:"exitCode"`
-	Elapsed                  float64 `json:"elapsed"`
-	Cost                     float64 `json:"cost"`
-	InputTokens              int     `json:"inputTokens"`
-	OutputTokens             int     `json:"outputTokens"`
-	CacheReadInputTokens     int     `json:"cacheReadInputTokens,omitempty"`
-	CacheCreationInputTokens int     `json:"cacheCreationInputTokens,omitempty"`
-	SessionID                string  `json:"sessionId,omitempty"`
+	Name         string  `json:"name"`
+	Output       string  `json:"output"`
+	ExitCode     int     `json:"exitCode"`
+	Elapsed      float64 `json:"elapsed"`
+	Cost         float64 `json:"cost"`
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	// ThinkingTokens is the estimated reasoning-token count for the dispatch
+	// (issue #158), a subset of OutputTokens that providers fold into the
+	// output usage. Estimated from accumulated reasoning text — see
+	// ThinkingBlockEndEvent.TotalTokens for the estimate caveat. Lets
+	// cost/audit consumers separate reasoning spend from user-facing output.
+	// Zero when the model produced no extended thinking.
+	ThinkingTokens           int    `json:"thinkingTokens,omitempty"`
+	CacheReadInputTokens     int    `json:"cacheReadInputTokens,omitempty"`
+	CacheCreationInputTokens int    `json:"cacheCreationInputTokens,omitempty"`
+	SessionID                string `json:"sessionId,omitempty"`
 
 	// PlanFilePath is the absolute path of the plan file written by the
 	// child session. Non-empty only when the child was in plan mode and
@@ -493,9 +500,10 @@ type DispatchPlanProposalInfo struct {
 // later entries override earlier entries with the same agent name (stem).
 //
 // Named sources:
-//   "extension" -- {extensionDir}/agents/ (agents packaged with the extension)
-//   "user"      -- ~/.ion/agents/ (user-level agents)
-//   "project"   -- {workingDir}/.ion/agents/ (project-scoped agents)
+//
+//	"extension" -- {extensionDir}/agents/ (agents packaged with the extension)
+//	"user"      -- ~/.ion/agents/ (user-level agents)
+//	"project"   -- {workingDir}/.ion/agents/ (project-scoped agents)
 //
 // Example: ["extension", "user", "project"] means extension agents are defaults,
 // user agents override them, project agents override both.

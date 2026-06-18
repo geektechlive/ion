@@ -96,6 +96,15 @@
     "text_chunk": [
       "text"
     ],
+    "thinking_block_end": [
+      "elapsedSeconds",
+      "redacted",
+      "totalTokens"
+    ],
+    "thinking_block_start": null,
+    "thinking_delta": [
+      "text"
+    ],
     "tool_call": [
       "index",
       "toolId",
@@ -153,6 +162,7 @@
     "dispatchOutputTokens",
     "dispatchSessionId",
     "dispatchTask",
+    "dispatchThinkingTokens",
     "dispatchToolCount",
     "earlyStopBudget",
     "earlyStopContinuationCount",
@@ -244,6 +254,10 @@
     "strategy",
     "summary",
     "text",
+    "thinkingElapsedSeconds",
+    "thinkingRedacted",
+    "thinkingText",
+    "thinkingTotalTokens",
     "title",
     "toolElapsed",
     "toolId",

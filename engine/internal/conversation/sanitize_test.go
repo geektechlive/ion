@@ -818,3 +818,54 @@ func TestReplacePlanFile_EntriesFromMapAny(t *testing.T) {
 		t.Fatalf("entry content not replaced: %v", md.Content)
 	}
 }
+
+// TestSanitizeStripsThinkingEvenWhenPersisted pins the never-resubmit
+// invariant (issue #158): SanitizeMessages — the provider-submission
+// sanitizer — must strip thinking blocks (readable AND redacted) even when
+// the block carries persisted reasoning text. Persistence may retain the text
+// for display, but it must never reach the model (Anthropic rejects
+// re-submitted thinking). Reverting the "thinking || redacted_thinking" strip
+// turns this test red.
+func TestSanitizeStripsThinkingEvenWhenPersisted(t *testing.T) {
+	msgs := []types.LlmMessage{
+		{Role: "user", Content: []types.LlmContentBlock{{Type: "text", Text: "hi"}}},
+		{
+			Role: "assistant",
+			Content: []types.LlmContentBlock{
+				// Persisted thinking block WITH reasoning text (the post-#158
+				// persistThinking=on shape).
+				{Type: "thinking", Thinking: "Let me reason about this carefully."},
+				// Redacted thinking must also be stripped.
+				{Type: "redacted_thinking", Thinking: ""},
+				{Type: "text", Text: "Here is the answer."},
+			},
+		},
+	}
+
+	out := SanitizeMessages(msgs)
+
+	for _, m := range out {
+		blocks, ok := m.Content.([]types.LlmContentBlock)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type == "thinking" || b.Type == "redacted_thinking" {
+				t.Fatalf("SanitizeMessages must strip thinking blocks before submission, found %q with text %q", b.Type, b.Thinking)
+			}
+		}
+	}
+
+	// The non-thinking text block must survive.
+	last := out[len(out)-1]
+	blocks, _ := last.Content.([]types.LlmContentBlock)
+	foundText := false
+	for _, b := range blocks {
+		if b.Type == "text" && b.Text == "Here is the answer." {
+			foundText = true
+		}
+	}
+	if !foundText {
+		t.Fatalf("non-thinking text block was incorrectly removed: %+v", out)
+	}
+}

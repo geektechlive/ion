@@ -713,6 +713,29 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 			FallbackReason:         e.Reason,
 		}
 
+	case *types.ThinkingBlockStartEvent:
+		// Reasoning block began. No payload — arrival is the signal.
+		// Consumers create a "thinking" affordance and start a pulse/elapsed
+		// timer. See normalized_event.go for the per-block emission contract.
+		return types.EngineEvent{Type: "engine_thinking_block_start"}
+
+	case *types.ThinkingDeltaEvent:
+		// Incremental reasoning text — peer of engine_text_delta for the
+		// thinking channel. Only reaches here when ThinkingConfig.StreamDeltas
+		// is on (the runloop gates emission); boundaries always flow.
+		return types.EngineEvent{Type: "engine_thinking_delta", ThinkingText: e.Text}
+
+	case *types.ThinkingBlockEndEvent:
+		// Reasoning block finished. Carries a summary so consumers can render
+		// "💭 Thought for Ns" without having accumulated deltas (and so
+		// delta-disabled / history-loaded consumers still get a summary).
+		return types.EngineEvent{
+			Type:                   "engine_thinking_block_end",
+			ThinkingTotalTokens:    e.TotalTokens,
+			ThinkingElapsedSeconds: e.ElapsedSeconds,
+			ThinkingRedacted:       e.Redacted,
+		}
+
 	default:
 		return types.EngineEvent{}
 	}
