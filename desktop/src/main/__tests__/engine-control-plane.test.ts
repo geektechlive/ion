@@ -204,8 +204,12 @@ describe('EngineControlPlane', () => {
       )
       expect(mockBridge.sendPrompt).toHaveBeenCalledOnce()
       // sendPrompt accepts optional model and appendSystemPrompt; the test
-      // only cares about the first two positional args.
-      expect(mockBridge.sendPrompt).toHaveBeenCalledWith(tabId, 'hi', undefined, undefined, undefined, undefined, undefined, undefined, undefined)
+      // only cares about the first two positional args. The remaining nine
+      // trailing optionals (model, appendSystemPrompt, imageAttachments,
+      // implementationPhase, enterPlanModeDescription, planModeSparseReminder,
+      // planFilePath, bashAllowlistAdditionsForThisPrompt, thinkingEffort) are
+      // all undefined for a plain prompt.
+      expect(mockBridge.sendPrompt).toHaveBeenCalledWith(tabId, 'hi', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined)
     })
 
     it('passes sessionId through EngineConfig', async () => {
@@ -232,7 +236,7 @@ describe('EngineControlPlane', () => {
       // startSession should still have been called only once
       expect(mockBridge.startSession).toHaveBeenCalledOnce()
       expect(mockBridge.sendPrompt).toHaveBeenCalledTimes(2)
-      expect(mockBridge.sendPrompt).toHaveBeenLastCalledWith(tabId, 'second', undefined, undefined, undefined, undefined, undefined, undefined, undefined)
+      expect(mockBridge.sendPrompt).toHaveBeenLastCalledWith(tabId, 'second', undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined)
     })
 
     it('emits error when startSession fails', async () => {
@@ -266,6 +270,8 @@ describe('EngineControlPlane', () => {
         '/spec-issue expanded args',
         undefined,
         'Analyze the GitHub issue and create a spec.',
+        undefined,
+        undefined,
         undefined,
         undefined,
         undefined,
