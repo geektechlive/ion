@@ -15,6 +15,15 @@ struct Message: Codable, Identifiable, Sendable {
     var source: MessageSource?
     /// Engine-only: marks bootstrap/internal messages.
     var isInternal: Bool?
+    /// Slash-command provenance. When this user turn originated from a slash
+    /// command the engine resolved and expanded, `content` holds the RAW
+    /// invocation (the engine persists the raw invocation as the display turn;
+    /// the expanded body is only in the LLM history). The row prefers these
+    /// fields over re-parsing `content` to render the command pill. Empty for
+    /// ordinary messages. Carried from the engine `SessionMessage` fields.
+    var slashCommand: String?
+    var slashArgs: String?
+    var slashSource: String?
     /// View-only hint: number of consecutive bootstrap messages collapsed into
     /// this one. NOT encoded/decoded (excluded from CodingKeys).
     var bootstrapCollapsedCount: Int?
@@ -66,6 +75,7 @@ struct Message: Codable, Identifiable, Sendable {
         case id, role, content, toolName, toolInput, toolId, toolStatus
         case attachments, timestamp, source
         case isInternal = "internal"
+        case slashCommand, slashArgs, slashSource
         // bootstrapCollapsedCount, interceptLevel, and the thinking* summary
         // fields are deliberately excluded — all are client-only render hints.
     }
@@ -124,6 +134,12 @@ extension Message {
         timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
         isInternal = try container.decodeIfPresent(Bool.self, forKey: .isInternal)
 
+        // Slash-command provenance (engine SessionMessage fields). Present only
+        // on user turns that originated from a resolved slash command.
+        slashCommand = try container.decodeIfPresent(String.self, forKey: .slashCommand)
+        slashArgs = try container.decodeIfPresent(String.self, forKey: .slashArgs)
+        slashSource = try container.decodeIfPresent(String.self, forKey: .slashSource)
+
         // Engine messages don't carry these fields
         toolInput = nil
         attachments = nil
@@ -134,6 +150,7 @@ extension Message {
     private enum EngineCodingKeys: String, CodingKey {
         case id, role, content, toolName, toolId, toolStatus, timestamp
         case isInternal = "internal"
+        case slashCommand, slashArgs, slashSource
     }
 
     /// Decode an array of Message from engine wire-format JSON.

@@ -51,6 +51,23 @@ func parseSlashCommand(_ text: String) -> SlashCommandSegments? {
     return SlashCommandSegments(command: cmd, args: args)
 }
 
+extension Message {
+    /// Resolve the slash-command pill segments for this message, preferring the
+    /// engine-provided provenance (`slashCommand`/`slashArgs`) over re-parsing
+    /// the display text. The engine persists the raw invocation as the display
+    /// content AND the typed provenance fields; preferring the fields means the
+    /// pill is correct even if the display text were ever reformatted. Falls back
+    /// to parsing `fallbackText` for extension commands / optimistic bubbles that
+    /// arrive before metadata. Returns nil when the message is not a slash
+    /// invocation.
+    func slashSegments(fallbackText: String) -> SlashCommandSegments? {
+        if let cmd = slashCommand, !cmd.isEmpty {
+            return SlashCommandSegments(command: cmd, args: slashArgs ?? "")
+        }
+        return parseSlashCommand(fallbackText)
+    }
+}
+
 // MARK: - EngineMessageRow slash bubble
 
 extension EngineMessageRow {
