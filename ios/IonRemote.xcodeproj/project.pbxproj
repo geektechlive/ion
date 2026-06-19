@@ -177,6 +177,7 @@
 		B1B2C3D4E5F60001CC000015 /* EngineRewindCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60001CC000016 /* EngineRewindCodecTests.swift */; };
 		B1B2C3D4E5F60001CC000017 /* EngineMoveCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60001CC000018 /* EngineMoveCodecTests.swift */; };
 		PENDINGCARD0000000000003 /* PendingCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PENDINGCARD0000000000004 /* PendingCardTests.swift */; };
+		RSRCMARKALL0000000000003 /* ResourceStoreMarkAllReadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSRCMARKALL0000000000004 /* ResourceStoreMarkAllReadTests.swift */; };
 		A1B2C3D4E5F60001F00020AA /* EngineMessageRow+SlashBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001F00021AA /* EngineMessageRow+SlashBubble.swift */; };
 		B1B2C3D4E5F60001CC000003 /* ConversationView+Rows.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60001CC000004 /* ConversationView+Rows.swift */; };
 		B1B2C3D4E5F60001CC000005 /* ExportShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60001CC000006 /* ExportShareSheet.swift */; };
@@ -391,6 +392,7 @@
 		B1B2C3D4E5F60001CC000016 /* EngineRewindCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineRewindCodecTests.swift; sourceTree = "<group>"; };
 		B1B2C3D4E5F60001CC000018 /* EngineMoveCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineMoveCodecTests.swift; sourceTree = "<group>"; };
 		PENDINGCARD0000000000004 /* PendingCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCardTests.swift; sourceTree = "<group>"; };
+		RSRCMARKALL0000000000004 /* ResourceStoreMarkAllReadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceStoreMarkAllReadTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001F00021AA /* EngineMessageRow+SlashBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineMessageRow+SlashBubble.swift"; sourceTree = "<group>"; };
 		B1B2C3D4E5F60001CC000004 /* ConversationView+Rows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConversationView+Rows.swift"; sourceTree = "<group>"; };
 		B1B2C3D4E5F60001CC000006 /* ExportShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportShareSheet.swift; sourceTree = "<group>"; };
@@ -673,6 +675,7 @@
 				B1B2C3D4E5F60001CC000016 /* EngineRewindCodecTests.swift */,
 				B1B2C3D4E5F60001CC000018 /* EngineMoveCodecTests.swift */,
 				PENDINGCARD0000000000004 /* PendingCardTests.swift */,
+				RSRCMARKALL0000000000004 /* ResourceStoreMarkAllReadTests.swift */,
 				A1B2C3D4E5F60001F00013AA /* RemoteCommandPillTests.swift */,
 				A1B2C3D4E5F60001F00013AB /* ThinkingEffortCodecTests.swift */,
 				B1B2C3D4E5F60001CC000002 /* ConversationStatusBarContextTests.swift */,
@@ -1057,6 +1060,7 @@
 				B1B2C3D4E5F60001CC000015 /* EngineRewindCodecTests.swift in Sources */,
 				B1B2C3D4E5F60001CC000017 /* EngineMoveCodecTests.swift in Sources */,
 				PENDINGCARD0000000000003 /* PendingCardTests.swift in Sources */,
+				RSRCMARKALL0000000000003 /* ResourceStoreMarkAllReadTests.swift in Sources */,
 				A1B2C3D4E5F60001F00012AA /* RemoteCommandPillTests.swift in Sources */,
 				A1B2C3D4E5F60001F00012AB /* ThinkingEffortCodecTests.swift in Sources */,
 				B1B2C3D4E5F60001CC000001 /* ConversationStatusBarContextTests.swift in Sources */,

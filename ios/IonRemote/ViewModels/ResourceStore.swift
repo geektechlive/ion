@@ -163,6 +163,18 @@ final class ResourceStore {
         saveReadIds()
     }
 
+    /// Mark multiple resources as read in one batched mutation. Used by the
+    /// notifications panel's "Clear All" action. Unions every id into readIds
+    /// and persists once (not once per id). Engine fan-out — the per-item
+    /// mark_read command that informs the desktop and other subscribers — is
+    /// the caller's responsibility; this method only owns the local read set.
+    func markAllRead(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        readIds.formUnion(ids)
+        saveReadIds()
+        DiagnosticLog.log("RESOURCE-STORE: markAllRead count=\(ids.count)")
+    }
+
     /// Permanently remove a single resource item from the local store.
     /// Called when the user deletes a notification in the iOS UI. The caller
     /// is responsible for also sending a `deleteResource` command to the
