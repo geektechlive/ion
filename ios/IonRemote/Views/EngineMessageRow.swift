@@ -166,7 +166,7 @@ struct EngineMessageRow: View {
                 if !segments.text.isEmpty {
                     let cap = UIScreen.main.bounds.width * 0.8
                     let isBash = message.content.hasPrefix("! ")
-                    let slash = parseSlashCommand(segments.text)
+                    let slash = message.slashSegments(fallbackText: segments.text)
                     ViewThatFits(in: .horizontal) {
                         Group {
                             if let slash {
@@ -245,7 +245,7 @@ struct EngineMessageRow: View {
 
                 if !segments.text.isEmpty {
                     let cap = UIScreen.main.bounds.width * 0.8
-                    let slash = parseSlashCommand(segments.text)
+                    let slash = message.slashSegments(fallbackText: segments.text)
                     ViewThatFits(in: .horizontal) {
                         Group {
                             if let slash {

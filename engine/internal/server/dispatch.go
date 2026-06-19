@@ -47,7 +47,7 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 	case "send_prompt":
 		var overrides *session.PromptOverrides
 		resolvedExts := cmd.ResolveExtensions()
-		if cmd.Model != "" || cmd.MaxTurns > 0 || cmd.MaxBudgetUsd > 0 || len(resolvedExts) > 0 || cmd.NoExtensions || cmd.AppendSystemPrompt != "" || len(cmd.Attachments) > 0 || cmd.ImplementationPhase || cmd.ThinkingEffort != "" || cmd.EnterPlanModeDescription != "" || cmd.PlanModeSparseReminder != "" || cmd.PlanFilePath != "" || len(cmd.BashAllowlistAdditionsForThisPrompt) > 0 || cmd.CompactTargetPercent > 0 || cmd.CompactMicroKeepTurns > 0 || cmd.CompactEnabled != nil || cmd.CompactSummaryEnabled != nil || cmd.CompactMemoryEnabled != nil {
+		if cmd.Model != "" || cmd.MaxTurns > 0 || cmd.MaxBudgetUsd > 0 || len(resolvedExts) > 0 || cmd.NoExtensions || cmd.AppendSystemPrompt != "" || len(cmd.Attachments) > 0 || cmd.ImplementationPhase || cmd.ThinkingEffort != "" || cmd.EnterPlanModeDescription != "" || cmd.PlanModeSparseReminder != "" || cmd.PlanFilePath != "" || len(cmd.BashAllowlistAdditionsForThisPrompt) > 0 || cmd.CompactTargetPercent > 0 || cmd.CompactMicroKeepTurns > 0 || cmd.CompactEnabled != nil || cmd.CompactSummaryEnabled != nil || cmd.CompactMemoryEnabled != nil || cmd.ResolveSlash {
 			overrides = &session.PromptOverrides{
 				Model:                    cmd.Model,
 				MaxTurns:                 cmd.MaxTurns,
@@ -73,6 +73,7 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 				CompactEnabled:                      cmd.CompactEnabled,
 				CompactSummaryEnabled:               cmd.CompactSummaryEnabled,
 				CompactMemoryEnabled:                cmd.CompactMemoryEnabled,
+				ResolveSlash:                        cmd.ResolveSlash,
 			}
 		}
 		err := s.manager.SendPrompt(cmd.Key, cmd.Text, overrides)
@@ -267,6 +268,20 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 	case "list_directory":
 		data, err := listDirectory(cmd.Path, cmd.ShowHidden)
 		s.sendResult(conn, cmd, err, data)
+
+	case "discover_slash_commands":
+		// Stateless filesystem discovery of .md/skill templates. cmd.Path carries
+		// the working directory (optional); user-level roots always apply. The
+		// optional cmd.Config carries claudeCompat — when set false (or absent),
+		// the engine skips the .claude / ~/.claude roots, matching the
+		// resolution + skill-loading gates. The engine holds no opinion on the
+		// flag; it honors what the consumer hands it.
+		claudeCompat := false
+		if cmd.Config != nil {
+			claudeCompat = cmd.Config.ClaudeCompat
+		}
+		listings := s.manager.DiscoverSlashCommands(cmd.Path, claudeCompat)
+		s.sendResult(conn, cmd, nil, listings)
 
 	case "store_credential":
 		if s.authResolver == nil {

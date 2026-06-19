@@ -161,7 +161,7 @@ export interface State {
   startBashCommand: (command: string, execId: string) => { toolMsgId: string; tabId: string }
   completeBashCommand: (tabId: string, toolMsgId: string, command: string, stdout: string, stderr: string, exitCode: number | null) => void
   sendMessage: (prompt: string, projectPath?: string, extraAttachments?: Attachment[], appendSystemPrompt?: string, implementationPhase?: boolean) => void
-  submitRemotePrompt: (tabId: string, prompt: string, imageAttachments?: ImageAttachmentPayload[]) => void
+  submitRemotePrompt: (tabId: string, prompt: string, imageAttachments?: ImageAttachmentPayload[], resolveSlash?: boolean) => void
   submitRemoteBash: (tabId: string, command: string) => void
   respondPermission: (tabId: string, questionId: string, optionId: string) => void
   addDirectory: (dir: string) => void
@@ -217,6 +217,7 @@ export interface State {
   addEngineSystemMessage: (key: string, content: string) => void
   setEngineDraftInput: (key: string, text: string) => void
   markResourceRead: (resourceId: string) => void
+  markAllResourcesRead: (items: ResourceItem[]) => void
   deleteResource: (kind: string, resourceId: string) => void
 }
 

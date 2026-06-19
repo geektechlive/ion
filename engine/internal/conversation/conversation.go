@@ -36,6 +36,37 @@ type MessageData struct {
 	Usage      *types.LlmUsage `json:"usage,omitempty"`
 	Model      string          `json:"model,omitempty"`
 	StopReason string          `json:"stopReason,omitempty"`
+
+	// SlashCommand carries the raw slash-command invocation (including the
+	// leading slash, e.g. "/diagram") when this user turn originated from a
+	// slash command that the engine resolved and expanded. It is a display /
+	// provenance field only: the engine attaches no behavior to it. When set,
+	// the LLM-visible content (in conv.Messages) is the EXPANDED template body,
+	// while this entry's Content holds the raw invocation the user typed, so
+	// consumers render the command pill instead of the expanded text. Empty for
+	// ordinary prompts.
+	SlashCommand string `json:"slashCommand,omitempty"`
+	// SlashArgs carries the raw argument string the user typed after the command
+	// name (the text that was substituted into $ARGUMENTS / appended). Display
+	// provenance only. Empty when the command was invoked with no args.
+	SlashArgs string `json:"slashArgs,omitempty"`
+	// SlashSource records where the command template was resolved from:
+	// "extension" | "ion" | "claude" | "skill" | "project". Display provenance
+	// only; lets a consumer label the pill by origin. Empty for ordinary prompts.
+	SlashSource string `json:"slashSource,omitempty"`
+
+	// DisplayOnly marks an entry that belongs in the tree/scrollback (so the
+	// user sees it and it survives reload) but must NOT be reconstructed into
+	// the LLM context by BuildContextPath. The canonical use is the `context:
+	// fork` slash path: the parent conversation records the raw invocation as a
+	// display turn so the user sees what they ran, but the parent's model never
+	// consumed it (the expansion ran in a forked child). Without this flag,
+	// saveSplit → BuildContextPath would resurrect the raw invocation as a user
+	// message in the parent's .llm.jsonl on the next save, poisoning the parent's
+	// context with a turn the model never saw. Default false: an ordinary entry
+	// is part of the LLM context. Additive (omitempty) — absent on every legacy
+	// entry, which correctly reconstructs as before.
+	DisplayOnly bool `json:"displayOnly,omitempty"`
 }
 
 // CompactionData holds metadata about a compaction event.
@@ -164,22 +195,85 @@ func CreateConversation(id, system, model string) *Conversation {
 	}
 }
 
-// AddUserMessage appends a user message to the conversation.
+// AddUserMessage appends a user message to the conversation. The same content
+// becomes both the LLM-visible message (conv.Messages) and the persisted
+// display entry (conv.Entries) — the right behavior for an ordinary prompt
+// where what the user typed and what the model sees are identical.
 func AddUserMessage(conv *Conversation, content any) {
-	var blocks []types.LlmContentBlock
-	switch c := content.(type) {
-	case string:
-		blocks = []types.LlmContentBlock{textBlock(c)}
-	case []types.LlmContentBlock:
-		blocks = c
-	default:
-		blocks = []types.LlmContentBlock{textBlock(fmt.Sprint(c))}
-	}
+	blocks := toContentBlocks(content)
 
 	conv.Messages = append(conv.Messages, types.LlmMessage{Role: "user", Content: blocks})
 
 	if conv.Entries != nil {
 		AppendEntry(conv, EntryMessage, MessageData{Role: "user", Content: blocks})
+	}
+}
+
+// SlashInvocation captures the raw slash-command invocation that produced a
+// user turn. The engine resolves and expands a slash command into the prompt
+// the model sees, but the user must see the invocation they typed — so the
+// LLM-visible content and the persisted/displayed content diverge. This struct
+// is the display side of that split. All fields are provenance only; the engine
+// attaches no behavior to them.
+type SlashInvocation struct {
+	// Command is the raw invocation including the leading slash, e.g. "/diagram".
+	Command string
+	// Args is the raw argument string the user typed after the command name.
+	Args string
+	// Source records where the template resolved from: "extension" | "ion" |
+	// "claude" | "skill" | "project".
+	Source string
+}
+
+// AddUserMessageWithInvocation appends a user turn whose LLM-visible content
+// (expanded) differs from its persisted display content (the raw invocation).
+//
+// expandedContent is what the model consumes: the resolved template body with
+// $ARGUMENTS substituted. It is written to conv.Messages so the provider request
+// and token accounting see the full instructions. inv carries the raw
+// invocation the user typed; it is written onto the display entry in
+// conv.Entries (the .tree.jsonl) as the entry Content plus the SlashCommand /
+// SlashArgs / SlashSource provenance fields, so consumers render the command
+// pill — not the expanded body — and so the invocation survives a reload from
+// disk (the entry tree is the source of truth for plain-conversation scrollback).
+//
+// This mirrors the Messages-vs-Entries divergence that AddTransientUserMessage
+// and the SuppressSystemMessages path already rely on; the difference is that
+// here BOTH stores receive an entry (the LLM gets the expansion, the tree gets
+// the invocation), rather than one store being skipped.
+func AddUserMessageWithInvocation(conv *Conversation, expandedContent any, inv SlashInvocation) {
+	expandedBlocks := toContentBlocks(expandedContent)
+
+	// LLM sees the expanded template body.
+	conv.Messages = append(conv.Messages, types.LlmMessage{Role: "user", Content: expandedBlocks})
+
+	// The display/tree entry shows the raw invocation, with provenance.
+	if conv.Entries != nil {
+		display := inv.Command
+		if inv.Args != "" {
+			display = inv.Command + " " + inv.Args
+		}
+		AppendEntry(conv, EntryMessage, MessageData{
+			Role:         "user",
+			Content:      []types.LlmContentBlock{textBlock(display)},
+			SlashCommand: inv.Command,
+			SlashArgs:    inv.Args,
+			SlashSource:  inv.Source,
+		})
+	}
+}
+
+// toContentBlocks normalizes the loosely-typed content argument (string or
+// []LlmContentBlock) into a content-block slice. Shared by AddUserMessage and
+// AddUserMessageWithInvocation so the coercion rule stays in one place.
+func toContentBlocks(content any) []types.LlmContentBlock {
+	switch c := content.(type) {
+	case string:
+		return []types.LlmContentBlock{textBlock(c)}
+	case []types.LlmContentBlock:
+		return c
+	default:
+		return []types.LlmContentBlock{textBlock(fmt.Sprint(c))}
 	}
 }
 

@@ -160,3 +160,38 @@ func buildUserContentBlocks(prompt string, attachments []types.ImageAttachment) 
 	}
 	return blocks
 }
+
+// appendInboundUserMessage appends the inbound user turn to the conversation,
+// handling the three shapes the prompt can take:
+//
+//   - Resolved slash command (opts.ResolvedSlashCommand set): opts.Prompt is the
+//     EXPANDED template body — the LLM sees that — but the persisted/displayed
+//     user turn must be the RAW invocation the user typed, so consumers render
+//     the command pill and the invocation survives reload.
+//     AddUserMessageWithInvocation writes the expansion to conv.Messages and the
+//     raw invocation to the tree entry.
+//   - Image attachments (opts.Attachments non-empty): build a structured content
+//     block list so the provider sends them as native multimodal content
+//     (Anthropic image blocks, OpenAI image_url, Gemini inlineData, Bedrock image
+//     content). The engine has no opinion on any client-side marker syntax inside
+//     opts.Prompt — bytes ride in opts.Attachments.
+//   - Plain text: opts.Prompt verbatim.
+//
+// Slash expansion and image attachments are mutually exclusive: a resolved slash
+// command carries no client image attachments.
+//
+// Extracted from RunAgentLoop to keep runloop.go under the file-size cap.
+func appendInboundUserMessage(conv *conversation.Conversation, opts *types.RunOptions) {
+	switch {
+	case opts.ResolvedSlashCommand != "":
+		conversation.AddUserMessageWithInvocation(conv, opts.Prompt, conversation.SlashInvocation{
+			Command: opts.ResolvedSlashCommand,
+			Args:    opts.ResolvedSlashArgs,
+			Source:  opts.ResolvedSlashSource,
+		})
+	case len(opts.Attachments) > 0:
+		conversation.AddUserMessage(conv, buildUserContentBlocks(opts.Prompt, opts.Attachments))
+	default:
+		conversation.AddUserMessage(conv, opts.Prompt)
+	}
+}

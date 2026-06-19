@@ -281,6 +281,19 @@ type ModelSelectInfo struct {
 	AvailableModels []string `json:"availableModels,omitempty"`
 }
 
+// SlashResolvedInfo describes a resolved slash-command invocation passed to the
+// slash_command_resolved hook. Carries the raw invocation, the resolved source,
+// the full frontmatter map (known AND unknown keys, so an extension can read
+// keys the engine ignores), and the expanded body the engine will feed the
+// model unless a handler overrides it.
+type SlashResolvedInfo struct {
+	Command      string         `json:"command"`      // "/diagram"
+	Args         string         `json:"args"`         // raw args after the name
+	Source       string         `json:"source"`       // extension|ion|claude|skill|project
+	Frontmatter  map[string]any `json:"frontmatter"`  // full open map
+	ExpandedBody string         `json:"expandedBody"` // engine's expansion (overridable)
+}
+
 // TurnInfo describes a turn lifecycle event.
 type TurnInfo struct {
 	TurnNumber int `json:"turnNumber"`

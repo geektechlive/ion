@@ -100,6 +100,7 @@ export function NotificationsPanel() {
   const allResources = useSessionStore((s) => s.resources)
   const readResourceIds = useSessionStore((s) => s.readResourceIds)
   const markResourceRead = useSessionStore((s) => s.markResourceRead)
+  const markAllResourcesRead = useSessionStore((s) => s.markAllResourcesRead)
   const deleteResource = useSessionStore((s) => s.deleteResource)
   const isExpanded = useSessionStore((s) => s.isExpanded)
   const excludedResourceKinds = usePreferencesStore((s) => s.excludedResourceKinds)
@@ -158,6 +159,16 @@ export function NotificationsPanel() {
     setOpen((o) => !o)
   }
 
+  // "Clear all" = mark every currently-unread global notification as read.
+  // It does NOT delete items — they remain in the tray with read state, and the
+  // unread badge drops to 0. Distinct from the per-item delete (the X button).
+  const handleClearAll = () => {
+    const unread = sorted.filter((item) => !readResourceIds.has(item.id))
+    if (unread.length === 0) return
+    if (!window.confirm('Mark all notifications as read?')) return
+    markAllResourcesRead(unread)
+  }
+
   return (
     <>
       <button
@@ -207,11 +218,24 @@ export function NotificationsPanel() {
               <span className="text-[12px] font-semibold" style={{ color: colors.textPrimary }}>
                 Notifications
               </span>
-              {unreadCount > 0 && (
-                <span className="text-[11px]" style={{ color: colors.textTertiary }}>
-                  {unreadCount} unread
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {unreadCount > 0 && (
+                  <span className="text-[11px]" style={{ color: colors.textTertiary }}>
+                    {unreadCount} unread
+                  </span>
+                )}
+                {unreadCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAll}
+                    className="text-[11px] font-medium rounded px-1.5 py-0.5 transition-colors"
+                    style={{ color: colors.accent, background: 'none', border: 'none', cursor: 'pointer' }}
+                    title="Mark all notifications as read"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
             </div>
 
             {sorted.length === 0 && (

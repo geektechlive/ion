@@ -9,6 +9,7 @@ struct NotificationsView: View {
     let viewModel: SessionViewModel
 
     @State private var selectedResource: ResourceItem? = nil
+    @State private var showClearAllConfirm = false
 
     /// The user's per-kind global-tray blocklist, projected from the desktop
     /// `excludedResourceKinds` preference. Empty by default → show every kind.
@@ -36,6 +37,12 @@ struct NotificationsView: View {
         return all.sorted { $0.createdAt > $1.createdAt }
     }
 
+    /// The unread subset of the global notifications, used to gate the
+    /// "Clear All" button and to drive the mark-all-read action.
+    private var unreadNotifications: [ResourceItem] {
+        notifications.filter { !resourceStore.readIds.contains($0.id) }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -48,15 +55,42 @@ struct NotificationsView: View {
             .navigationTitle("Notifications")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if !unreadNotifications.isEmpty {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Clear All") { showClearAllConfirm = true }
+                            .tint(theme.accent)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                         .fontWeight(.semibold)
                         .tint(theme.accent)
                 }
             }
+            .confirmationDialog(
+                "Mark all as read?",
+                isPresented: $showClearAllConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Mark All as Read", role: .destructive) { clearAll() }
+                Button("Cancel", role: .cancel) {}
+            }
             .sheet(item: $selectedResource) { item in
                 ResourceDetailView(item: item, resourceStore: resourceStore, viewModel: viewModel)
             }
+        }
+    }
+
+    /// Mark every currently-unread global notification as read. Updates the
+    /// local store in one batch, then fans each read out per item through the
+    /// engine's resource broker so the desktop and other subscribers converge.
+    /// Reuses the exact per-item mark_read command the rows already send.
+    private func clearAll() {
+        let unread = unreadNotifications
+        guard !unread.isEmpty else { return }
+        resourceStore.markAllRead(unread.map(\.id))
+        for item in unread {
+            viewModel.send(.markResourceRead(kind: item.kind, resourceId: item.id))
         }
     }
 

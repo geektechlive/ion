@@ -136,6 +136,8 @@ func defaultConfig() types.EngineConfig {
 
 func intPtr(v int) *int { return &v }
 
+func strPtr(v string) *string { return &v }
+
 // eventCollector captures events emitted by the manager.
 type eventCollector struct {
 	mu     sync.Mutex
