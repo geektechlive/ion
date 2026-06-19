@@ -447,7 +447,10 @@ final class SessionViewModel {
 
     // MARK: - Voice
 
-    let voiceService = VoiceService()
+    // `var` (not `let`) so tests can inject a VoiceService spy to observe
+    // turn-end voice readback. Concrete type is preserved so SwiftUI views
+    // keep their @Observable observation of voiceService.
+    var voiceService = VoiceService()
     let speechService = SpeechRecognitionService()
 
     // MARK: - Toast

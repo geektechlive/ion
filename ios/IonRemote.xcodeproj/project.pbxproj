@@ -73,6 +73,7 @@
 		A1B2C3D4E5F60001000240AA /* NormalizedEventStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000241AA /* NormalizedEventStreamTests.swift */; };
 		A1B2C3D4E5F60001000242AA /* NormalizedEventPermissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000243AA /* NormalizedEventPermissionTests.swift */; };
 		A1B2C3D4E5F60001000244AA /* NormalizedEventLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */; };
+		A1B2C3D4E5F60001009400AA /* EngineTabVoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001009401AA /* EngineTabVoiceTests.swift */; };
 		A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */; };
 		A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */; };
 		A1B2C3D4E5F60001000301AA /* GitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000300AA /* GitTypes.swift */; };
@@ -284,6 +285,7 @@
 		A1B2C3D4E5F60001000241AA /* NormalizedEventStreamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventStreamTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000243AA /* NormalizedEventPermissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventPermissionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventLifecycleTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60001009401AA /* EngineTabVoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineTabVoiceTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizedEventTerminalTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractSyncTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000300AA /* GitTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypes.swift; sourceTree = "<group>"; };
@@ -654,6 +656,7 @@
 				A1B2C3D4E5F60001000241AA /* NormalizedEventStreamTests.swift */,
 				A1B2C3D4E5F60001000243AA /* NormalizedEventPermissionTests.swift */,
 				A1B2C3D4E5F60001000245AA /* NormalizedEventLifecycleTests.swift */,
+				A1B2C3D4E5F60001009401AA /* EngineTabVoiceTests.swift */,
 				A1B2C3D4E5F60001000247AA /* NormalizedEventTerminalTests.swift */,
 				A1B2C3D4E5F60001000249AA /* ContractSyncTests.swift */,
 				A1B2C3D4E5F60001000A01AA /* SessionStatusSynthesisTests.swift */,
@@ -1048,6 +1051,7 @@
 				A1B2C3D4E5F60001000240AA /* NormalizedEventStreamTests.swift in Sources */,
 				A1B2C3D4E5F60001000242AA /* NormalizedEventPermissionTests.swift in Sources */,
 				A1B2C3D4E5F60001000244AA /* NormalizedEventLifecycleTests.swift in Sources */,
+				A1B2C3D4E5F60001009400AA /* EngineTabVoiceTests.swift in Sources */,
 				A1B2C3D4E5F60001000246AA /* NormalizedEventTerminalTests.swift in Sources */,
 				A1B2C3D4E5F60003000201AA /* ModelFallbackSnapshotTests.swift in Sources */,
 				A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */,
