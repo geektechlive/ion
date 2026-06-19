@@ -10,6 +10,13 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.56.0](https://github.com/dsswift/ion/compare/desktop-v1.55.0...desktop-v1.56.0) (2026-06-19)
+
+### Features
+
+* **desktop:** add clear-all to global notifications panel ([b7c69c6](https://github.com/dsswift/ion/commit/b7c69c6df0182c7f407940035ff1ec5f0f1a3bfe))
+* **desktop:** delegate slash resolution to engine and render pill ([9f7e14d](https://github.com/dsswift/ion/commit/9f7e14ddc28475cbf968766876ab5479d4d02da3))
+
 ## [1.55.0](https://github.com/dsswift/ion/compare/desktop-v1.54.0...desktop-v1.55.0) (2026-06-18)
 
 ### Features

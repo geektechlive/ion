@@ -13,6 +13,16 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.42.0](https://github.com/dsswift/ion/compare/engine-v1.41.0...engine-v1.42.0) (2026-06-19)
+
+### Features
+
+* **engine:** add filesystem slash-command resolution and fork execution ([cb70d88](https://github.com/dsswift/ion/commit/cb70d882d9c5bd12988f400582a378f468fc612f))
+
+### Bug Fixes
+
+* **engine:** drop queued prompts on abort so post-stop prompt runs ([0ff14bc](https://github.com/dsswift/ion/commit/0ff14bc0192c2f8d4c7a17be388506681865da97))
+
 ## [1.41.0](https://github.com/dsswift/ion/compare/engine-v1.40.0...engine-v1.41.0) (2026-06-18)
 
 ### Features

@@ -10,6 +10,13 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.43.0](https://github.com/dsswift/ion/compare/ios-v1.42.0...ios-v1.43.0) (2026-06-19)
+
+### Features
+
+* **ios:** add clear-all to global notifications panel ([4ff105b](https://github.com/dsswift/ion/commit/4ff105b97e4390ec6d17ecb52369c07e6edfc9b7))
+* **ios:** render slash pill from engine metadata ([708369d](https://github.com/dsswift/ion/commit/708369db1aa9aa8c22778cb04cbfef00b4f6c380))
+
 ## [1.42.0](https://github.com/dsswift/ion/compare/ios-v1.41.0...ios-v1.42.0) (2026-06-18)
 
 ### Features
