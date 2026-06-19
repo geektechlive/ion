@@ -2,6 +2,7 @@ package session
 
 import (
 	"testing"
+	"time"
 
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -89,6 +90,127 @@ func TestSendAbort_UnknownSessionNoPanic(t *testing.T) {
 
 	// Should not panic
 	mgr.SendAbort("nonexistent")
+}
+
+// TestSendAbort_DropsQueuedPrompts pins the discard semantic: a prompt queued
+// behind the in-flight run (because the session was busy) must be dropped when
+// the user presses Stop. Without this, SendAbort would leave the queue intact
+// and handleRunExit would later resurrect work the user explicitly abandoned.
+func TestSendAbort_DropsQueuedPrompts(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	_, _ = mgr.StartSession("abort-queue", defaultConfig())
+
+	// First prompt starts a run and sets requestID (session now busy).
+	_ = mgr.SendPrompt("abort-queue", "first", nil)
+	// Second prompt lands in promptQueue because requestID is non-empty.
+	_ = mgr.SendPrompt("abort-queue", "queued", nil)
+
+	mgr.mu.RLock()
+	queuedBefore := len(mgr.sessions["abort-queue"].promptQueue)
+	mgr.mu.RUnlock()
+	if queuedBefore != 1 {
+		t.Fatalf("precondition: expected 1 queued prompt before abort, got %d", queuedBefore)
+	}
+
+	mgr.SendAbort("abort-queue")
+
+	mgr.mu.RLock()
+	queuedAfter := len(mgr.sessions["abort-queue"].promptQueue)
+	mgr.mu.RUnlock()
+	if queuedAfter != 0 {
+		t.Errorf("expected empty promptQueue after SendAbort, got %d", queuedAfter)
+	}
+}
+
+// TestSendAbort_PostAbortPromptDispatchedOnRunExit is the direct regression
+// test for the reported bug: a prompt typed right after Stop (while the
+// cancelled run is still unwinding, so requestID is still set) must be held and
+// dispatched once the cancelled run exits — not silently ignored. The discard
+// in SendAbort empties the queue first, so the only entry present at run-exit
+// time is the post-abort prompt, which the existing handleRunExit drain
+// dispatches as a fresh run.
+func TestSendAbort_PostAbortPromptDispatchedOnRunExit(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	_, _ = mgr.StartSession("abort-hold", defaultConfig())
+
+	// First prompt starts the run that the user will Stop.
+	_ = mgr.SendPrompt("abort-hold", "first", nil)
+	mgr.mu.RLock()
+	runID := mgr.sessions["abort-hold"].requestID
+	mgr.mu.RUnlock()
+	if runID == "" {
+		t.Fatal("precondition: expected an active requestID after first prompt")
+	}
+
+	// User presses Stop. requestID is intentionally left for handleRunExit;
+	// the cancelled run has not unwound yet.
+	mgr.SendAbort("abort-hold")
+
+	// User types a new prompt during the abort window. requestID is still
+	// set, so this queues onto the (now-empty) queue.
+	_ = mgr.SendPrompt("abort-hold", "post-stop text", nil)
+	mgr.mu.RLock()
+	queued := len(mgr.sessions["abort-hold"].promptQueue)
+	mgr.mu.RUnlock()
+	if queued != 1 {
+		t.Fatalf("expected post-abort prompt to be queued (1), got %d", queued)
+	}
+
+	// The cancelled run finally exits (signal "cancelled"). handleRunExit
+	// clears requestID and drains the queue, dispatching the held prompt on
+	// a goroutine.
+	mb.emitExit(runID, intPtr(0), strPtr("cancelled"), "")
+
+	// Poll for the second StartRun (no fixed sleep — bounded wait).
+	deadline := time.Now().Add(2 * time.Second)
+	var ordered []string
+	for time.Now().Before(deadline) {
+		ordered = mb.startedInOrder()
+		if len(ordered) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(ordered) < 2 {
+		t.Fatalf("expected post-abort prompt to be dispatched as a second run, got %d run(s)", len(ordered))
+	}
+	opts, _ := mb.getStarted(ordered[1])
+	if opts.Prompt != "post-stop text" {
+		t.Errorf("expected dispatched prompt %q, got %q", "post-stop text", opts.Prompt)
+	}
+}
+
+// TestSendAbort_NoQueuedPrompt_RunExitDispatchesNothing pins the "stop means
+// stop" path: when the user aborts with nothing queued and types no follow-up,
+// the cancelled run's exit must dispatch nothing. This guards against a
+// regression where discarded or phantom queue entries get auto-dispatched.
+func TestSendAbort_NoQueuedPrompt_RunExitDispatchesNothing(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	_, _ = mgr.StartSession("abort-nothing", defaultConfig())
+
+	_ = mgr.SendPrompt("abort-nothing", "first", nil)
+	mgr.mu.RLock()
+	runID := mgr.sessions["abort-nothing"].requestID
+	mgr.mu.RUnlock()
+
+	mgr.SendAbort("abort-nothing")
+	mb.emitExit(runID, intPtr(0), strPtr("cancelled"), "")
+
+	// Bounded settle window: if a spurious dispatch were going to happen it
+	// would happen on the drain goroutine shortly after emitExit.
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(mb.startedInOrder()) > 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(mb.startedInOrder()); got != 1 {
+		t.Errorf("expected exactly 1 run (no resurrection after abort), got %d", got)
+	}
 }
 
 // ---------------------------------------------------------------------------
