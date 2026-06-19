@@ -49,7 +49,7 @@ func (h *Host) registerHookForwarders() {
 		HookInput, HookModelSelect, HookContext,
 		HookPlanModePrompt, HookSystemInject, HookContextInject,
 		HookCapabilityDiscover, HookCapabilityMatch, HookCapabilityInvoke,
-		HookPermissionClassify,
+		HookPermissionClassify, HookSlashCommandResolved,
 	}
 	for _, hook := range stringHooks {
 		h.registerStringForwarder(hook)

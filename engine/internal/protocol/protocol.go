@@ -162,6 +162,23 @@ type ClientCommand struct {
 	// invariant is the entire point of the field's existence.
 	BashAllowlistAdditionsForThisPrompt []string `json:"bashAllowlistAdditionsForThisPrompt,omitempty"`
 
+	// send_prompt: signals that Text is a slash-command invocation
+	// (`/name args`) the engine should resolve and expand, rather than a plain
+	// user message. When true the engine resolves the command across the
+	// conventional roots (extension registry, .ion/commands, .claude/commands,
+	// skills, project), expands the template ($ARGUMENTS substitution +
+	// frontmatter handling), feeds the EXPANDED body to the model, and persists
+	// the RAW invocation as the displayed user turn (so the user sees the
+	// command, the model sees the expansion).
+	//
+	// Default false: Text is treated as a plain message verbatim — byte-for-byte
+	// the engine's prior behavior. Additive: a client that sends `/`-leading
+	// content as an ordinary message (a path, a diff, a regex) is unaffected
+	// because it does not set the flag. The engine never sniffs Text for a
+	// leading slash on its own; the client classifies the invocation (the same
+	// trivial check it already does to drive slash-command autocomplete).
+	ResolveSlash bool `json:"resolveSlash,omitempty"`
+
 	// Compaction overrides — per-prompt tuning of context compaction behavior.
 	CompactTargetPercent  float64 `json:"compactTargetPercent,omitempty"`
 	CompactMicroKeepTurns int     `json:"compactMicroKeepTurns,omitempty"`
@@ -258,6 +275,16 @@ var validCommands = map[string]bool{
 	// Offset + Limit select the window (Limit 0 = server default 64 KB).
 	// The engine replies with a plan_content event on the same connection.
 	"get_plan_content": true,
+	// discover_slash_commands: lists the filesystem slash-command templates and
+	// skills available across the conventional roots for a working directory.
+	// Path carries the working directory (optional; user-level roots are always
+	// included). The optional Config carries claudeCompat; when false (or the
+	// Config is absent), the engine skips the .claude / ~/.claude roots, matching
+	// the slash-resolution and skill-loading gates. Replaces per-consumer
+	// filesystem walks so every consumer's autocomplete menu is fed by one owner.
+	// Stateless; no session required. The engine replies with the listing in the
+	// result data.
+	"discover_slash_commands": true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -436,6 +463,9 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return true
 	case "list_directory":
 		// path is optional ("" or "~" → engine home); no required fields
+		return true
+	case "discover_slash_commands":
+		// path (working directory) is optional; user-level roots always apply
 		return true
 	case "clear_conversation_file":
 		// key carries the sessionId (conversationId) to wipe. Required and non-empty.

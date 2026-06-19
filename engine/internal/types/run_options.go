@@ -224,6 +224,41 @@ type RunOptions struct {
 	// per attachment to the user message, in addition to the text block.
 	Attachments []ImageAttachment `json:"attachments,omitempty"`
 
+	// ResolveSlash signals that Prompt is a slash-command invocation
+	// (`/name args`) that the engine should resolve and expand, rather than a
+	// plain user message. When true the engine looks the command up across the
+	// conventional roots (extension command registry, .ion/commands,
+	// .claude/commands, skills, project), expands the template ($ARGUMENTS
+	// substitution + frontmatter handling), feeds the EXPANDED body to the model,
+	// and persists the RAW invocation as the displayed user turn.
+	//
+	// Default false: Prompt is treated as a plain message verbatim — byte-for-
+	// byte the engine's prior behavior. This keeps the field additive: an
+	// existing consumer that sends a `/`-leading message as ordinary content
+	// (a path, a diff, a regex) is unaffected because it does not set the flag.
+	// The engine never sniffs Prompt for a leading slash on its own; the
+	// consumer classifies the invocation (the same trivial check a client
+	// already does to drive its slash-command autocomplete) and sets this flag.
+	ResolveSlash bool `json:"resolveSlash,omitempty"`
+
+	// ResolvedSlashCommand / ResolvedSlashArgs / ResolvedSlashSource carry the
+	// raw slash invocation after the session layer has resolved+expanded it.
+	// When ResolvedSlashCommand is non-empty, the runloop persists the raw
+	// invocation as the displayed user turn (via
+	// conversation.AddUserMessageWithInvocation) while Prompt — already rewritten
+	// to the expanded body by the session layer — is what the model sees. These
+	// are in-process run fields (json:"-"): they never cross the wire (the
+	// consumer sent the raw Text + ResolveSlash; the engine produced these),
+	// mirroring the CapabilityTools / ParentCtx precedent.
+	ResolvedSlashCommand string `json:"-"`
+	ResolvedSlashArgs    string `json:"-"`
+	ResolvedSlashSource  string `json:"-"`
+	// ResolvedSlashContext is the resolved command's `context` frontmatter:
+	// "inline" (default — expand into the current conversation) or "fork" (run
+	// the expanded body as a forked sub-agent with its own context/token budget).
+	// In-process run field. Empty for non-slash prompts.
+	ResolvedSlashContext string `json:"-"`
+
 	// ParentCtx is the session's cancellation root. When non-nil, the
 	// backend derives the run's cancellation context from it
 	// (context.WithCancel(ParentCtx)) instead of context.Background(), so

@@ -154,6 +154,20 @@ type EngineCommandListing struct {
 	Description string `json:"description,omitempty"`
 }
 
+// SlashCommandListing is one entry in the engine's filesystem slash-command
+// discovery feed (the .md/skill templates across the conventional roots).
+// Distinct from EngineCommandListing (extension-registered commands published
+// via engine_command_registry): this surface covers the template/skill side so
+// a consumer's autocomplete menu unions the two without re-walking the
+// filesystem itself.
+type SlashCommandListing struct {
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	ArgumentHint string `json:"argumentHint,omitempty"`
+	// Source is one of "ion" | "claude" | "skill" — where the template lives.
+	Source string `json:"source,omitempty"`
+}
+
 // StatusFields are the fields emitted by engine_status events.
 type StatusFields struct {
 	Label             string             `json:"label"`
@@ -334,6 +348,14 @@ type SessionMessage struct {
 	ToolInput string `json:"toolInput,omitempty"`
 	Timestamp int64  `json:"timestamp"`
 	Internal  bool   `json:"internal,omitempty"`
+	// SlashCommand / SlashArgs / SlashSource carry the raw slash-command
+	// invocation when this user turn originated from a slash command the engine
+	// resolved and expanded. Content holds the raw invocation for display; the
+	// LLM-visible expanded body lives in the .llm.jsonl, not here. Consumers
+	// render a command pill from these fields. Empty for ordinary messages.
+	SlashCommand string `json:"slashCommand,omitempty"`
+	SlashArgs    string `json:"slashArgs,omitempty"`
+	SlashSource  string `json:"slashSource,omitempty"`
 }
 
 // PermissionDenialEntry is the wire format for permission denials in ResultEvent.

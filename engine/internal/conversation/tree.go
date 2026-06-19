@@ -72,6 +72,13 @@ func BuildContextPath(conv *Conversation) []types.LlmMessage {
 		case EntryMessage:
 			md := asMessageData(entry.Data)
 			if md != nil {
+				// DisplayOnly entries (e.g. the `context: fork` raw invocation
+				// recorded for scrollback) are in the tree for the user but were
+				// never part of the LLM context — skip them so a rebuilt
+				// .llm.jsonl does not resurrect a turn the model never saw.
+				if md.DisplayOnly {
+					continue
+				}
 				messages = append(messages, types.LlmMessage{Role: md.Role, Content: md.Content})
 			}
 		case EntryCompaction:

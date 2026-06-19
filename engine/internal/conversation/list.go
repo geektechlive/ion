@@ -454,6 +454,14 @@ func flattenEntries(conv *Conversation) []types.SessionMessage {
 					Content:   content,
 					Timestamp: entry.Timestamp,
 					Internal:  isInternalMessage(content),
+					// Slash-command provenance: when this user turn was a
+					// resolved slash invocation, Content already holds the raw
+					// invocation (the engine stored it as the entry display
+					// content; the expanded body lives only in the .llm.jsonl).
+					// Forward the provenance so consumers render a command pill.
+					SlashCommand: md.SlashCommand,
+					SlashArgs:    md.SlashArgs,
+					SlashSource:  md.SlashSource,
 				})
 			}
 

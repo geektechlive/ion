@@ -91,6 +91,13 @@ type PromptOverrides struct {
 	// CompactMemoryEnabled overrides whether the background session memory
 	// summarizer is active. nil means "use engine default".
 	CompactMemoryEnabled *bool
+
+	// ResolveSlash signals that the prompt Text is a slash-command invocation
+	// the engine should resolve and expand (see protocol.ClientCommand.ResolveSlash
+	// and types.RunOptions.ResolveSlash). When true, SendPrompt resolves the
+	// invocation against the conventional roots, rewrites the LLM-visible prompt
+	// to the expanded body, and persists the raw invocation as the display turn.
+	ResolveSlash bool
 }
 
 // SendPrompt dispatches a prompt to the session's backend run.
@@ -175,6 +182,22 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 		opts.PlanModeReentry = true
 		utils.Info("PlanMode", fmt.Sprintf("key=%s reentry detected, planFile=%s", key, s.planFilePath))
 	}
+
+	// Slash-command resolution + expansion. When the client flagged this prompt
+	// as a slash invocation, resolve the template across the conventional roots
+	// and rewrite opts.Prompt to the EXPANDED body; the runloop persists the raw
+	// invocation as the display turn. An unresolved invocation aborts the prompt
+	// with an unknown_command result (no run starts) so the consumer can surface
+	// it, matching the command-dispatch contract. Extension commands are NOT
+	// handled here — those route through SendCommand; this path owns the
+	// .md/skill/template resolution that was formerly a per-consumer fallback.
+	if overrides != nil && overrides.ResolveSlash {
+		if !m.resolveSlashIntoOpts(s, key, &opts) {
+			m.mu.Unlock()
+			s.requestID = ""
+			return nil
+		}
+	}
 	m.applyConfigDefaults(&opts)
 	resolveModelTier(&opts)
 
@@ -223,6 +246,18 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	mcpConns := s.mcpConns
 	m.mu.Unlock()
 	utils.Log("Session", fmt.Sprintf("SendPrompt[%s]: lock released", key))
+
+	// context: fork — run the resolved command's expanded body as a forked
+	// sub-agent instead of inlining it into this conversation. The parent
+	// conversation still records the raw invocation as the display turn (so the
+	// user sees what they ran), then the child runs with its own context/token
+	// budget and streams its events on the parent's stream. Returns without
+	// starting an inline run on the parent.
+	if opts.ResolvedSlashContext == "fork" {
+		m.forkResolvedSlash(s, key, &opts)
+		s.requestID = ""
+		return nil
+	}
 
 	m.fireBeforeAgentStart(s, key, extGroup, skipExtensions, &opts)
 
