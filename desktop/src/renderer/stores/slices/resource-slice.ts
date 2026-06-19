@@ -29,6 +29,22 @@ export function markResourceRead(state: ResourceState, resourceId: string): Reso
   return { ...state, readResourceIds: updated }
 }
 
+/**
+ * Mark multiple resources as read in a single state transition. Batched
+ * analogue of markResourceRead used by the notifications panel's "Clear all"
+ * action — unions every id into readResourceIds at once rather than producing
+ * N intermediate states. An empty list is a no-op (returns a new set with the
+ * same membership). Engine fan-out (the per-item mark_read delta that informs
+ * other subscribers like iOS) is handled by the caller, not here; this helper
+ * only owns the local read-state set.
+ */
+export function markResourcesRead(state: ResourceState, ids: string[]): ResourceState {
+  if (ids.length === 0) return state
+  const updated = new Set(state.readResourceIds)
+  for (const id of ids) updated.add(id)
+  return { ...state, readResourceIds: updated }
+}
+
 /** Apply a snapshot: replace the entire collection for this kind.
  *
  * Merges read state from the incoming items into readResourceIds. Items

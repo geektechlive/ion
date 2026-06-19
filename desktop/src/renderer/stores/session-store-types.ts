@@ -217,6 +217,7 @@ export interface State {
   addEngineSystemMessage: (key: string, content: string) => void
   setEngineDraftInput: (key: string, text: string) => void
   markResourceRead: (resourceId: string) => void
+  markAllResourcesRead: (items: ResourceItem[]) => void
   deleteResource: (kind: string, resourceId: string) => void
 }
 
