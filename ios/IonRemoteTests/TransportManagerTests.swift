@@ -37,7 +37,8 @@ final class TransportManagerTests: XCTestCase {
             relayURL: URL(string: "wss://relay.example.com")!,
             apiKey: "test-key",
             channelId: channelId,
-            sharedKey: key
+            sharedKey: key,
+            deviceId: "test-device"
         )
         XCTAssertEqual(manager.state, .disconnected)
     }
@@ -49,7 +50,8 @@ final class TransportManagerTests: XCTestCase {
             relayURL: URL(string: "wss://relay.example.com")!,
             apiKey: "test-api-key",
             channelId: channelId,
-            sharedKey: key
+            sharedKey: key,
+            deviceId: "test-device"
         )
         // The relay client should exist and be disconnected initially.
         XCTAssertFalse(manager.relay?.isConnected ?? true)
@@ -61,7 +63,8 @@ final class TransportManagerTests: XCTestCase {
             relayURL: URL(string: "wss://relay.example.com")!,
             apiKey: "key",
             channelId: "ch",
-            sharedKey: key
+            sharedKey: key,
+            deviceId: "test-device"
         )
         XCTAssertFalse(manager.lan.isConnected)
     }
@@ -153,7 +156,8 @@ final class TransportManagerTests: XCTestCase {
             relayURL: URL(string: "wss://relay.example.com")!,
             apiKey: "key",
             channelId: "ch",
-            sharedKey: key
+            sharedKey: key,
+            deviceId: "test-device"
         )
         // Call stop on a fresh manager; should remain disconnected without crashing.
         manager.stop()
