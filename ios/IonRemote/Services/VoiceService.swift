@@ -6,7 +6,7 @@ import Observation
 
 @Observable
 @MainActor
-final class VoiceService {
+class VoiceService {
 
     var isEnabled: Bool = UserDefaults.standard.bool(forKey: "voiceEnabled") {
         didSet { UserDefaults.standard.set(isEnabled, forKey: "voiceEnabled") }

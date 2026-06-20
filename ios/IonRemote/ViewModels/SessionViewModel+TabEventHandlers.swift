@@ -66,9 +66,27 @@ extension SessionViewModel {
                     activeTools.removeValue(forKey: key)
                 }
 
-                // JARVIS-SPECIFIC: Voice readback fires in handleTaskComplete via liveText
-                // (relay sends assistant output as text_chunk → liveText, not engine_text_delta
-                // → engineMessages which does not exist in this fork). No action needed here.
+                // Engine tab TTS: speak the last assistant response once per turn.
+                // Engine tabs emit tab_status:idle at turn end but do NOT emit
+                // task_complete, so handleTaskComplete never runs for them — this
+                // is the only voice-readback trigger for engine conversations.
+                // tab_status:idle fires exactly once per turn; engine_message_end
+                // fires once per sub-message (multiple times with tool calls), so
+                // triggering there would cause repeated speech. De-duplicate with
+                // lastSpokenEngineMessageCount so repeated idle events (reconnects,
+                // upstream re-delivery) don't re-speak the same response.
+                if status == .idle {
+                    let key = engineCompoundKey(tabId: tabId)
+                    let msgs = engineInstance(tabId: tabId, instanceId: activeEngineInstance[tabId])?.messages ?? []
+                    let prevCount = lastSpokenEngineMessageCount[key] ?? 0
+                    if let last = msgs.last(where: { $0.role == .assistant }),
+                       msgs.count > prevCount,
+                       !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        lastSpokenEngineMessageCount[key] = msgs.count
+                        DiagnosticLog.log("VOICE-TTS: tabIdle speaking \(last.content.count) chars tabId=\(tabId.prefix(8))")
+                        voiceService.speak(text: last.content, messageId: last.id, tabId: tabId)
+                    }
+                }
             }
         }
         // Track idle-since timestamp for sidebar display

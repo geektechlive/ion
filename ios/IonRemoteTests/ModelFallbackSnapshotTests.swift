@@ -17,7 +17,7 @@ import XCTest
 ///
 /// This test pins:
 ///   1. Decoding a snapshot with `modelFallback` populates the
-///      `EngineInstanceInfo.modelFallback` Swift field.
+///      `ConversationInstanceInfo.modelFallback` Swift field.
 ///   2. Decoding a snapshot without `modelFallback` leaves the field nil
 ///      — so when the desktop omits it on a subsequent snapshot (which
 ///      it does on the idle transition), iOS clears the indicator.
@@ -33,7 +33,7 @@ final class ModelFallbackSnapshotTests: XCTestCase {
     /// run currently associated with this instance.
     private func sampleTabWithFallback(requestedModel: String, fallbackModel: String) -> String {
         """
-        {"id":"t1","title":"Tab","customTitle":null,"status":"running","workingDirectory":"/tmp","permissionMode":"auto","permissionQueue":[],"lastMessage":null,"contextTokens":null,"isEngine":true,"engineInstances":[{"id":"inst1","label":"Main","modelFallback":{"requestedModel":"\(requestedModel)","fallbackModel":"\(fallbackModel)"}}],"activeEngineInstanceId":"inst1"}
+        {"id":"t1","title":"Tab","customTitle":null,"status":"running","workingDirectory":"/tmp","permissionMode":"auto","permissionQueue":[],"lastMessage":null,"contextTokens":null,"hasEngineExtension":true,"conversationInstances":[{"id":"inst1","label":"Main","modelFallback":{"requestedModel":"\(requestedModel)","fallbackModel":"\(fallbackModel)"}}],"activeConversationInstanceId":"inst1"}
         """
     }
 
@@ -47,7 +47,7 @@ final class ModelFallbackSnapshotTests: XCTestCase {
             return
         }
         XCTAssertEqual(tabs.count, 1)
-        let instances = tabs[0].engineInstances ?? []
+        let instances = tabs[0].conversationInstances ?? []
         XCTAssertEqual(instances.count, 1, "expected one engine instance")
         let inst = instances[0]
         XCTAssertNotNil(inst.modelFallback, "modelFallback should decode from the snapshot payload")
@@ -56,19 +56,19 @@ final class ModelFallbackSnapshotTests: XCTestCase {
     }
 
     func testDecodeSnapshotWithoutModelFallback() throws {
-        // No modelFallback field on the engineInstances entry — the
+        // No modelFallback field on the conversationInstances entry — the
         // desktop omits it on snapshots after the run goes idle (the
         // engine-event-status idle branch clears the source map). iOS
         // must decode that as nil so the ⚠ glyph disappears.
         let json = """
-        {"type":"snapshot","tabs":[{"id":"t1","title":"Tab","customTitle":null,"status":"idle","workingDirectory":"/tmp","permissionMode":"auto","permissionQueue":[],"lastMessage":null,"contextTokens":null,"isEngine":true,"engineInstances":[{"id":"inst1","label":"Main"}],"activeEngineInstanceId":"inst1"}]}
+        {"type":"snapshot","tabs":[{"id":"t1","title":"Tab","customTitle":null,"status":"idle","workingDirectory":"/tmp","permissionMode":"auto","permissionQueue":[],"lastMessage":null,"contextTokens":null,"hasEngineExtension":true,"conversationInstances":[{"id":"inst1","label":"Main"}],"activeConversationInstanceId":"inst1"}]}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         guard case .snapshot(let tabs, _, _, _, _, _, _, _, _, _, _) = event else {
             XCTFail("Expected snapshot, got \(event)")
             return
         }
-        let instances = tabs[0].engineInstances ?? []
+        let instances = tabs[0].conversationInstances ?? []
         XCTAssertEqual(instances.count, 1)
         XCTAssertNil(instances[0].modelFallback, "modelFallback should be nil when the field is absent from the wire payload")
     }
