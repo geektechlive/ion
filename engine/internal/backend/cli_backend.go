@@ -437,14 +437,14 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 
 	utils.Log("CliBackend", fmt.Sprintf("process started: pid=%d requestID=%s", cmd.Process.Pid, run.requestID))
 
-	// Write initial prompt as NDJSON user message over stdin
+	// Write initial prompt as NDJSON user message over stdin. PDFs/images
+	// referenced by the prompt are inlined as native document/image content
+	// blocks rather than left for the Read tool to expand (#789).
 	initMsg := map[string]interface{}{
 		"type": "user",
 		"message": map[string]interface{}{
-			"role": "user",
-			"content": []map[string]interface{}{
-				{"type": "text", "text": opts.Prompt},
-			},
+			"role":    "user",
+			"content": buildCliUserContent(opts.Prompt, opts.Attachments),
 		},
 	}
 	if data, err := json.Marshal(initMsg); err == nil {
