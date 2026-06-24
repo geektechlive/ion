@@ -64,7 +64,7 @@
     "react-syntax-highlighter": "^16.1.1",
     "remark-gfm": "^4.0.0",
     "shiki": "^4.1.0",
-    "ws": "^8.20.1",
+    "ws": "^8.21.0",
     "yauzl": "^3.4.0",
     "zustand": "^5.0.13"
   },
