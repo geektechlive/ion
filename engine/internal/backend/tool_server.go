@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/dsswift/ion/engine/internal/types"
@@ -37,6 +38,20 @@ type toolEntry struct {
 // ToolHandler executes a tool call and returns the result.
 type ToolHandler func(input map[string]interface{}) (*types.ToolResult, error)
 
+// sanitizeForSocketPath makes a sessionID safe to embed in the MCP Unix-socket
+// path. socat parses ':' (and ',') as address/option delimiters, so a sessionID
+// containing a colon -- e.g. desktop-client compound keys "<uuid>:<tab>" -- would
+// turn "UNIX-CONNECT:/.../sock-<uuid>:<tab>" into a multi-parameter address and
+// socat would refuse to connect ("wrong number of parameters"). When that happens
+// the ion-extensions MCP server never attaches and the backend model loses every
+// extension tool. Replace the socat delimiters with '_' so the socket path is a
+// single, parseable parameter. Both the listener bind and McpConfigPath read
+// ts.sockPath, so sanitizing here keeps them consistent.
+func sanitizeForSocketPath(sessionID string) string {
+	r := strings.NewReplacer(":", "_", ",", "_")
+	return r.Replace(sessionID)
+}
+
 // NewToolServer creates a tool server for the given session.
 func NewToolServer(sessionID string) *ToolServer {
 	home, _ := os.UserHomeDir()
@@ -45,7 +60,7 @@ func NewToolServer(sessionID string) *ToolServer {
 
 	return &ToolServer{
 		tools:    make(map[string]toolEntry),
-		sockPath: filepath.Join(sockDir, fmt.Sprintf("sock-%s", sessionID)),
+		sockPath: filepath.Join(sockDir, fmt.Sprintf("sock-%s", sanitizeForSocketPath(sessionID))),
 	}
 }
 

@@ -20,6 +20,45 @@ func TestNewToolServer_CreatesWithSessionID(t *testing.T) {
 	}
 }
 
+// A desktop-client compound session key contains a colon. socat treats ':' as
+// its address-option delimiter, so the colon must not survive into the socket
+// path or the ion-extensions MCP server fails to attach and the backend model
+// loses every extension tool. Regression guard for that bug.
+func TestNewToolServer_SanitizesColonInSessionID(t *testing.T) {
+	ts := NewToolServer("6d35faaa-8475-4b4b-98cc-c55826bc4fe9:8b488aaa")
+
+	if strings.Contains(ts.SocketPath(), ":") {
+		t.Errorf("socket path must not contain ':' (socat delimiter), got: %s", ts.SocketPath())
+	}
+	if !strings.Contains(ts.SocketPath(), "sock-6d35faaa-8475-4b4b-98cc-c55826bc4fe9_8b488aaa") {
+		t.Errorf("colon should be replaced with '_', got: %s", ts.SocketPath())
+	}
+
+	// The generated socat address must be a single UNIX-CONNECT parameter:
+	// exactly one ':' (the one after UNIX-CONNECT), none inside the path.
+	cfgPath, err := ts.McpConfigPath("6d35faaa-8475-4b4b-98cc-c55826bc4fe9:8b488aaa")
+	if err != nil {
+		t.Fatalf("McpConfigPath failed: %v", err)
+	}
+	defer os.Remove(cfgPath)
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg struct {
+		McpServers map[string]struct {
+			Args []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	addr := cfg.McpServers[McpServerName].Args[0]
+	if strings.Count(addr, ":") != 1 {
+		t.Errorf("socat address must have exactly one ':' (after UNIX-CONNECT), got: %s", addr)
+	}
+}
+
 func TestRegisterTool_AddsTool(t *testing.T) {
 	ts := NewToolServer("reg-test")
 	ts.RegisterTool("my_tool", func(input map[string]interface{}) (*types.ToolResult, error) {
