@@ -72,6 +72,16 @@ type EngineConfig struct {
 	// auto-resumed for this key. An explicit non-empty SessionID still takes
 	// precedence over both this flag and the binding store. (#231)
 	ForceNewConversation bool `json:"forceNewConversation,omitempty"`
+
+	// ParentConversationID records that a freshly-minted conversation for this
+	// session descends from a prior one. It is written as the new conversation
+	// file's `parentId` when the run creates a fresh file (used with
+	// ForceNewConversation, or an explicit unsaved SessionID, for a client-driven
+	// checkpoint cut such as a desktop "clear context" that starts a new
+	// conversation for an existing tab). Ignored when resuming an existing
+	// conversation. Additive and non-breaking — an absent value leaves parentId
+	// empty as before.
+	ParentConversationID string `json:"parentConversationId,omitempty"`
 }
 
 // ThinkingConfig controls extended thinking for API-backend runs.

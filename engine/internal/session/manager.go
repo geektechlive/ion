@@ -31,6 +31,20 @@ type Manager struct {
 	backend  backend.RunBackend
 	config   *types.EngineRuntimeConfig
 
+	// runKeyBindings maps an active run's requestID -> its session key,
+	// independent of engineSession.requestID. It exists because event routing
+	// (keyForRun) must not be coupled to the transient requestID field, which
+	// currentSessionStatus clears mid-run when the backend momentarily
+	// "disclaims" a still-live run (manager.go currentSessionStatus). When that
+	// clear races an in-flight emit, the requestID-scan lookup returns "" and the
+	// event — including the one-shot PlanModeChangedEvent{Enabled:true} — is
+	// silently dropped before reaching consumers. This binding is the stable
+	// runID->key link: set at dispatch (prompt_dispatch.go), consulted first by
+	// keyForRun, and cleared only at the authoritative terminal points
+	// (handleRunExit and the early-abort paths that never start a run). Guarded
+	// by m.mu, exactly like sessions. See run_key_binding.go for the accessors.
+	runKeyBindings map[string]string
+
 	onEvent func(string, types.EngineEvent)
 
 	// childBackendOverride is a test-only seam: when non-nil, newChildBackend
@@ -127,6 +141,7 @@ const DefaultSessionStatusHeartbeatInterval = 30 * time.Second
 func NewManager(b backend.RunBackend) *Manager {
 	m := &Manager{
 		sessions:          make(map[string]*engineSession),
+		runKeyBindings:    make(map[string]string),
 		backend:           b,
 		watchers:          newWatcherPool(),
 		globalBroker:      resource.NewBroker(),
@@ -324,6 +339,9 @@ func (m *Manager) StopSession(key string) error {
 	// Cancel active run
 	if s.requestID != "" {
 		m.backend.Cancel(s.requestID)
+		// Terminal point: clear the runID -> key routing binding alongside
+		// requestID, under the lock StopSession already holds.
+		m.unbindRunLocked(s.requestID)
 		s.requestID = ""
 	}
 

@@ -42,6 +42,57 @@ const (
 	EventThinkingBlockStart = "thinking_block_start"
 	EventThinkingDelta      = "thinking_delta"
 	EventThinkingBlockEnd   = "thinking_block_end"
+
+	// Extension-surface events — decode targets that consumers map to from the
+	// corresponding engine_* wire events, so every conversation (plain and
+	// extension-hosted) can flow through a single normalized-event reducer
+	// rather than a per-event-type switch. The engine emits the underlying
+	// engine_* events; these bare-named variants are the normalized shapes a
+	// consumer's normalize step produces. See
+	// engine/internal/types/normalized_event_extensions.go for the structs.
+
+	// EventMessageEnd reports the end of one LLM message within a run.
+	// Carries that message's token usage and a seal flag marking it complete.
+	EventMessageEnd = "message_end"
+
+	// EventAgentState is a complete snapshot of every agent the engine
+	// considers live at this moment. Consumers replace their local view —
+	// do not merge incrementally.
+	EventAgentState = "agent_state"
+
+	// EventHarnessMessage is a display message injected by the extension
+	// harness (e.g. a banner or inline status). Carries an optional dedupKey
+	// so consumers can suppress repeated emissions within the same session.
+	EventHarnessMessage = "harness_message"
+
+	// EventWorkingMessage is a transient activity string produced by the
+	// extension harness (e.g. "Compacting..."). It replaces the prior
+	// working-message value; an empty string clears it.
+	EventWorkingMessage = "working_message"
+
+	// EventNotify is an ephemeral notification from the extension harness. It
+	// is not part of the conversation history.
+	EventNotify = "notify"
+
+	// EventDialog is a request from the extension harness for a user response
+	// (text input or option selection).
+	EventDialog = "dialog"
+
+	// EventExtensionDied signals that an extension subprocess exited
+	// unexpectedly and the engine is attempting a respawn.
+	EventExtensionDied = "extension_died"
+
+	// EventExtensionRespawned signals that an extension subprocess was
+	// successfully restarted after a previous crash.
+	EventExtensionRespawned = "extension_respawned"
+
+	// EventExtensionDeadPermanent signals that an extension subprocess has
+	// exceeded the crash budget and will not be restarted automatically.
+	EventExtensionDeadPermanent = "extension_dead_permanent"
+
+	// EventEventsDropped signals that the event delivery buffer overflowed
+	// and some events were discarded. State may be stale.
+	EventEventsDropped = "events_dropped"
 )
 
 // NormalizedEventData is the interface satisfied by all canonical event variants.
@@ -138,6 +189,27 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &ThinkingDeltaEvent{}
 	case EventThinkingBlockEnd:
 		target = &ThinkingBlockEndEvent{}
+	// Extension-surface events (WI-001: single-path collapse)
+	case EventMessageEnd:
+		target = &MessageEndEvent{}
+	case EventAgentState:
+		target = &AgentStateEvent{}
+	case EventHarnessMessage:
+		target = &HarnessMessageEvent{}
+	case EventWorkingMessage:
+		target = &WorkingMessageEvent{}
+	case EventNotify:
+		target = &NotifyEvent{}
+	case EventDialog:
+		target = &DialogEvent{}
+	case EventExtensionDied:
+		target = &ExtensionDiedEvent{}
+	case EventExtensionRespawned:
+		target = &ExtensionRespawnedEvent{}
+	case EventExtensionDeadPermanent:
+		target = &ExtensionDeadPermanentEvent{}
+	case EventEventsDropped:
+		target = &EventsDroppedEvent{}
 	default:
 		return fmt.Errorf("unknown normalized event type: %q", peek.Type)
 	}
@@ -652,3 +724,5 @@ type ThinkingBlockEndEvent struct {
 }
 
 func (ThinkingBlockEndEvent) eventType() string { return EventThinkingBlockEnd }
+
+// Extension-surface NormalizedEvent types are in normalized_event_extensions.go.

@@ -499,15 +499,19 @@ func (m *Manager) wireExternalTools(s *engineSession, key string, extGroup *exte
 	}
 	capturedExtGroup := extGroup
 	runCfg.ExternalTools = combinedToolDefs
-	runCfg.McpToolRouter = func(name string, input map[string]interface{}) (string, bool, error) {
+	runCfg.McpToolRouter = func(ctx context.Context, name string, input map[string]interface{}) (string, bool, error) {
 		if mcpRouter != nil && strings.HasPrefix(name, "mcp__") {
 			return mcpRouter(name, input)
 		}
 		if capturedExtGroup != nil {
 			for _, tool := range capturedExtGroup.Tools() {
 				if tool.Name == name {
-					ctx := m.newExtContext(s, key)
-					result, err := tool.Execute(input, ctx)
+					// Build the per-tool-call extension context carrying the
+					// tool's DeadlineSuspender (from ctx), so a synchronous
+					// ctx.elicit() inside this tool can suspend the finite
+					// tool deadline while blocked on the human.
+					extCtx := m.newExtContextWithSuspender(s, key, types.DeadlineSuspenderFrom(ctx))
+					result, err := tool.Execute(input, extCtx)
 					if err != nil {
 						return err.Error(), true, nil
 					}

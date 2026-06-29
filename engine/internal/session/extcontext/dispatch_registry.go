@@ -9,31 +9,36 @@ import (
 )
 
 // DispatchRegistry is a thread-safe registry of active background dispatches,
-// keyed by agent name. It serves two primary consumers:
+// keyed by dispatch ID (the collision-safe agentID). Multiple concurrent
+// dispatches of the same agent name each get their own entry with distinct
+// IDs, so they are independently recallable.
 //
-//   - Recall (Phase 4): when the parent session needs to cancel a running
-//     background agent (e.g. the user types /recall or the session is torn
-//     down), Recall and RecallAll look up the active dispatch and invoke its
-//     cancel function.
+// Two primary consumers:
 //
-//   - Background completion callbacks (Phase 1): when a background agent
-//     finishes, the callback uses Get to locate the dispatch entry so it can
-//     route the result back to the correct parent session and clean up via
-//     Deregister.
+//   - Recall: when the parent session needs to cancel a running background
+//     agent, RecallByID targets a specific dispatch instance, RecallByName
+//     cancels all dispatches matching a name, and RecallAll cancels everything
+//     (session teardown).
+//
+//   - Background completion callbacks: when a background agent finishes, the
+//     callback uses Deregister to clean up the entry.
 //
 // All exported methods are safe for concurrent use.
 type DispatchRegistry struct {
-	mu        sync.Mutex
+	mu         sync.Mutex
 	dispatches map[string]*activeDispatch
 }
 
 // activeDispatch holds the bookkeeping state for a single in-flight
-// background agent dispatch. The Name field matches the map key in
-// DispatchRegistry.dispatches and is stored redundantly so callers of Get
-// receive a self-describing value without needing to carry the key.
+// background agent dispatch.
 type activeDispatch struct {
-	// Name is the agent name that identifies this dispatch (e.g.
-	// "code-reviewer", "test-runner"). Unique within a registry.
+	// ID is the dispatch-specific unique identifier (the collision-safe
+	// agentID, e.g. "dispatch-code-reviewer-1719500000000-a1b2c3d4e5f6").
+	// This is the map key in DispatchRegistry.dispatches.
+	ID string
+
+	// Name is the agent name (e.g. "code-reviewer"). Multiple dispatches
+	// of the same agent share this name but have distinct IDs.
 	Name string
 
 	// Cancel stops the background dispatch. Calling Cancel on an already-
@@ -58,101 +63,143 @@ func NewDispatchRegistry() *DispatchRegistry {
 	}
 }
 
-// Register records an active background dispatch. If a dispatch with the
-// same name already exists it is silently overwritten — the caller is
-// expected to Deregister or Recall the previous dispatch before reusing
-// the name. A warning is logged when an overwrite occurs so operators can
-// spot double-dispatch bugs in extension code.
+// Register records an active background dispatch using the agent name as
+// both ID and key. This is the backward-compatible path for callers that
+// do not produce dispatch-specific IDs.
 func (r *DispatchRegistry) Register(name string, cancel func(), child backend.RunBackend, sessionID string) {
+	r.RegisterWithID(name, name, cancel, child, sessionID)
+}
+
+// RegisterWithID records an active background dispatch with an explicit
+// dispatch ID. This is the primary registration path for parallel-safe
+// dispatches where each instance has a collision-safe agentID.
+func (r *DispatchRegistry) RegisterWithID(id, name string, cancel func(), child backend.RunBackend, sessionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.dispatches[name]; exists {
+	if _, exists := r.dispatches[id]; exists {
 		utils.Warn("DispatchRegistry", fmt.Sprintf(
-			"Register: overwriting existing dispatch name=%q session=%s", name, sessionID,
+			"Register: overwriting existing dispatch id=%q name=%q session=%s", id, name, sessionID,
 		))
 	}
 
-	r.dispatches[name] = &activeDispatch{
+	r.dispatches[id] = &activeDispatch{
+		ID:        id,
 		Name:      name,
 		Cancel:    cancel,
 		Child:     child,
 		SessionID: sessionID,
 	}
 	utils.Log("DispatchRegistry", fmt.Sprintf(
-		"Register: name=%q session=%s active=%d", name, sessionID, len(r.dispatches),
+		"Register: id=%q name=%q session=%s active=%d", id, name, sessionID, len(r.dispatches),
 	))
 }
 
-// Deregister removes a dispatch entry by name. It is safe to call with a
-// name that does not exist (the call is a no-op). Deregister does NOT
-// invoke the dispatch's Cancel function — use Recall if cancellation is
+// Deregister removes a dispatch entry by ID. It is safe to call with an
+// ID that does not exist (the call is a no-op). Deregister does NOT
+// invoke the dispatch's Cancel function, use Recall if cancellation is
 // desired.
-func (r *DispatchRegistry) Deregister(name string) {
+func (r *DispatchRegistry) Deregister(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.dispatches[name]; !exists {
+	if _, exists := r.dispatches[id]; !exists {
 		utils.Debug("DispatchRegistry", fmt.Sprintf(
-			"Deregister: name=%q not found (no-op)", name,
+			"Deregister: id=%q not found (no-op)", id,
 		))
 		return
 	}
 
-	delete(r.dispatches, name)
+	delete(r.dispatches, id)
 	utils.Log("DispatchRegistry", fmt.Sprintf(
-		"Deregister: name=%q removed active=%d", name, len(r.dispatches),
+		"Deregister: id=%q removed active=%d", id, len(r.dispatches),
 	))
 }
 
-// Get retrieves the active dispatch for the given agent name. The second
-// return value is false when no dispatch with that name exists. The
-// returned pointer is the live registry entry — callers must not mutate
-// it without holding their own synchronization.
-func (r *DispatchRegistry) Get(name string) (*activeDispatch, bool) {
+// Get retrieves the active dispatch for the given ID. The second return
+// value is false when no dispatch with that ID exists. The returned
+// pointer is the live registry entry.
+func (r *DispatchRegistry) Get(id string) (*activeDispatch, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	d, ok := r.dispatches[name]
+	d, ok := r.dispatches[id]
 	if !ok {
-		utils.Debug("DispatchRegistry", fmt.Sprintf("Get: name=%q not found", name))
+		utils.Debug("DispatchRegistry", fmt.Sprintf("Get: id=%q not found", id))
 		return nil, false
 	}
 	utils.Debug("DispatchRegistry", fmt.Sprintf(
-		"Get: name=%q session=%s", name, d.SessionID,
+		"Get: id=%q name=%q session=%s", id, d.Name, d.SessionID,
 	))
 	return d, true
 }
 
 // Recall cancels an active background dispatch by name and removes it
-// from the registry. The reason string is included in log output for
-// observability (e.g. "user_recall", "session_teardown"). Returns true
-// if a dispatch was found and cancelled, false otherwise.
+// from the registry. When multiple dispatches share the same name, this
+// cancels the FIRST one found (non-deterministic). For targeted recall,
+// use RecallByID. Returns true if a dispatch was found and cancelled.
 func (r *DispatchRegistry) Recall(name string, reason string) bool {
 	r.mu.Lock()
-	d, exists := r.dispatches[name]
-	if !exists {
+	var found *activeDispatch
+	var foundID string
+	for id, d := range r.dispatches {
+		if d.Name == name {
+			found = d
+			foundID = id
+			break
+		}
+	}
+	if found == nil {
 		r.mu.Unlock()
 		utils.Log("DispatchRegistry", fmt.Sprintf(
 			"Recall: name=%q not found reason=%q", name, reason,
 		))
 		return false
 	}
-	// Remove from registry before cancelling so concurrent Get calls
-	// see a consistent state once Cancel starts tearing down the child.
-	delete(r.dispatches, name)
+	delete(r.dispatches, foundID)
 	r.mu.Unlock()
 
 	utils.Log("DispatchRegistry", fmt.Sprintf(
-		"Recall: cancelling name=%q session=%s reason=%q active=%d",
-		name, d.SessionID, reason, r.Count(),
+		"Recall: cancelling id=%q name=%q session=%s reason=%q active=%d",
+		foundID, name, found.SessionID, reason, r.Count(),
+	))
+
+	if found.Cancel != nil {
+		found.Cancel()
+	} else {
+		utils.Error("DispatchRegistry", fmt.Sprintf(
+			"Recall: id=%q name=%q has nil Cancel func, dispatch leaked", foundID, name,
+		))
+	}
+
+	return true
+}
+
+// RecallByID cancels a specific dispatch by its unique ID and removes it
+// from the registry. Returns true if the dispatch was found and cancelled.
+func (r *DispatchRegistry) RecallByID(id string, reason string) bool {
+	r.mu.Lock()
+	d, exists := r.dispatches[id]
+	if !exists {
+		r.mu.Unlock()
+		utils.Log("DispatchRegistry", fmt.Sprintf(
+			"RecallByID: id=%q not found reason=%q", id, reason,
+		))
+		return false
+	}
+	delete(r.dispatches, id)
+	r.mu.Unlock()
+
+	utils.Log("DispatchRegistry", fmt.Sprintf(
+		"RecallByID: cancelling id=%q name=%q session=%s reason=%q active=%d",
+		id, d.Name, d.SessionID, reason, r.Count(),
 	))
 
 	if d.Cancel != nil {
 		d.Cancel()
 	} else {
 		utils.Error("DispatchRegistry", fmt.Sprintf(
-			"Recall: name=%q has nil Cancel func — dispatch leaked", name,
+			"RecallByID: id=%q name=%q has nil Cancel func, dispatch leaked", id, d.Name,
 		))
 	}
 
@@ -161,13 +208,11 @@ func (r *DispatchRegistry) Recall(name string, reason string) bool {
 
 // RecallAll cancels every active dispatch in the registry and clears it.
 // The reason string is logged alongside each cancellation. Returns the
-// number of dispatches that were recalled. This is the shutdown path —
+// number of dispatches that were recalled. This is the shutdown path,
 // called when a session is torn down to ensure no orphaned background
 // agents survive.
 func (r *DispatchRegistry) RecallAll(reason string) int {
 	r.mu.Lock()
-	// Snapshot and clear under the lock so new registrations that arrive
-	// during the cancel sweep are not affected.
 	snapshot := make([]*activeDispatch, 0, len(r.dispatches))
 	for _, d := range r.dispatches {
 		snapshot = append(snapshot, d)
@@ -188,13 +233,13 @@ func (r *DispatchRegistry) RecallAll(reason string) int {
 
 	for _, d := range snapshot {
 		utils.Log("DispatchRegistry", fmt.Sprintf(
-			"RecallAll: cancelling name=%q session=%s reason=%q", d.Name, d.SessionID, reason,
+			"RecallAll: cancelling id=%q name=%q session=%s reason=%q", d.ID, d.Name, d.SessionID, reason,
 		))
 		if d.Cancel != nil {
 			d.Cancel()
 		} else {
 			utils.Error("DispatchRegistry", fmt.Sprintf(
-				"RecallAll: name=%q has nil Cancel func — dispatch leaked", d.Name,
+				"RecallAll: id=%q name=%q has nil Cancel func, dispatch leaked", d.ID, d.Name,
 			))
 		}
 	}
@@ -212,13 +257,14 @@ func (r *DispatchRegistry) Count() int {
 
 // ActiveNames returns the set of currently-active dispatch agent names.
 // Used by handleRunExit to decide which running agent states to preserve
-// (background agents still running) vs. clear (stale orphans).
+// (background agents still running) vs. clear (stale orphans). When
+// multiple dispatches share a name, the name appears once in the result.
 func (r *DispatchRegistry) ActiveNames() map[string]bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	names := make(map[string]bool, len(r.dispatches))
-	for name := range r.dispatches {
-		names[name] = true
+	for _, d := range r.dispatches {
+		names[d.Name] = true
 	}
 	return names
 }

@@ -1,10 +1,77 @@
 package session
 
 import (
+	"fmt"
+
+	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
+
+// SteerOutcome reports how a SteerAgent call was resolved. It is an internal
+// Go signal (NOT a wire/SDK contract — SteerAgent is called only from the
+// server dispatch switch and tests, never exposed over the protocol or SDK),
+// so it is free to evolve. Its purpose is to eliminate the historical
+// silent-drop: every SteerAgent call now returns a non-void, loggable verdict
+// so a steer can never disappear without a trace. See docs/engine-grounding.md
+// §7 (logging is part of the contract).
+type SteerOutcome int
+
+const (
+	// SteerOutcomeUnknown is the zero value; it should never be returned by a
+	// completed SteerAgent call and exists only so an uninitialized variable
+	// reads as obviously-wrong rather than as a real outcome.
+	SteerOutcomeUnknown SteerOutcome = iota
+	// SteerDelivered: the steer was accepted by the backend's in-process steer
+	// path (buffered on the run's steer channel) and will be injected at the
+	// next drainSteer checkpoint in the run loop.
+	SteerDelivered
+	// SteerDeliveredViaStdin: the steer was written to the backend's stdin
+	// pipe (CliBackend / hybrid CLI-routed runs).
+	SteerDeliveredViaStdin
+	// SteerDeliveredToAgent: a named (non-main-loop) agent received the steer
+	// over its stdin-write handle.
+	SteerDeliveredToAgent
+	// SteerRejectedNoRun: there is no active run to steer (no session, no
+	// in-flight requestID, no live backend run, or the named agent does not
+	// exist). The steer was NOT delivered.
+	SteerRejectedNoRun
+	// SteerRejectedChannelFull: the backend's steer channel was full after a
+	// reasonable buffer, so the steer could not be queued. The steer was NOT
+	// delivered.
+	SteerRejectedChannelFull
+)
+
+// String renders a SteerOutcome for logs.
+func (o SteerOutcome) String() string {
+	switch o {
+	case SteerDelivered:
+		return "delivered"
+	case SteerDeliveredViaStdin:
+		return "delivered_via_stdin"
+	case SteerDeliveredToAgent:
+		return "delivered_to_agent"
+	case SteerRejectedNoRun:
+		return "rejected_no_run"
+	case SteerRejectedChannelFull:
+		return "rejected_channel_full"
+	default:
+		return "unknown"
+	}
+}
+
+// Delivered reports whether the outcome represents a steer that reached a
+// run (channel, stdin, or named agent). Callers use it to decide whether to
+// surface a rejection to the user.
+func (o SteerOutcome) Delivered() bool {
+	switch o {
+	case SteerDelivered, SteerDeliveredViaStdin, SteerDeliveredToAgent:
+		return true
+	default:
+		return false
+	}
+}
 
 // AbortAgent sends SIGTERM to the named agent process. If subtree is true,
 // it walks the parentAgent chain to find all descendant agents and aborts them.
@@ -52,25 +119,40 @@ func (m *Manager) AbortAgent(key, agentName string, subtree bool) {
 // CliBackend does not — its runs are steered via WriteToStdin (the
 // stream-json stdin pipe of the Claude Code subprocess).
 //
-// Steer returns true if the steer was accepted (and will reach the run
-// loop), false otherwise (caller falls back to stdin). For HybridBackend
-// this returns false for CLI-routed runs so the fallback covers them.
+// SteerWithReason returns a typed backend.SteerResult so the session layer can
+// tell apart "no active run / not API-routed" (fall back to stdin) from
+// "channel full" (a genuine rejection that must surface to the caller). The
+// older Steer(...) bool method is still defined on the backends for any
+// boolean-only caller; the session layer uses the richer method so no steer
+// outcome is ever collapsed into an unexplained false.
 //
-// This local interface is the mechanism that keeps Steer off the public
-// RunBackend interface — adding it there would be a contract change.
+// This local interface is the mechanism that keeps the steer methods off the
+// public RunBackend interface — adding them there would be a contract change.
 // See docs/engine-grounding.md §3.
 type steerable interface {
-	Steer(requestID, message string) bool
+	SteerWithReason(requestID, message string) backend.SteerResult
 }
 
 // SteerAgent sends a message to a running agent's stdin, or steers the main
-// session loop if agentName is empty.
-func (m *Manager) SteerAgent(key, agentName, message string) {
+// session loop if agentName is empty. It returns a SteerOutcome describing how
+// the steer was resolved so the caller (and the logs) can never lose track of
+// a steer: previously this method was void and a steer that could not be
+// delivered vanished without a trace. Every branch logs the attempt and its
+// outcome (engine-grounding §7).
+func (m *Manager) SteerAgent(key, agentName, message string) SteerOutcome {
+	utils.Info("Session", fmt.Sprintf(
+		"SteerAgent: attempt key=%s agent=%q msgLen=%d", key, agentName, len(message),
+	))
+
 	m.mu.RLock()
 	s, ok := m.sessions[key]
 	if !ok {
 		m.mu.RUnlock()
-		return
+		utils.Warn("Session", fmt.Sprintf(
+			"SteerAgent: rejected, no such session key=%s agent=%q msgLen=%d outcome=%s",
+			key, agentName, len(message), SteerRejectedNoRun,
+		))
+		return SteerRejectedNoRun
 	}
 
 	// If agentName is empty, steer the main session loop
@@ -78,16 +160,47 @@ func (m *Manager) SteerAgent(key, agentName, message string) {
 		rid := s.requestID
 		m.mu.RUnlock()
 		if rid == "" {
-			return
+			utils.Warn("Session", fmt.Sprintf(
+				"SteerAgent: rejected, no active run for main loop key=%s msgLen=%d outcome=%s",
+				key, len(message), SteerRejectedNoRun,
+			))
+			return SteerRejectedNoRun
 		}
 		// Try the in-process steer path first (ApiBackend / HybridBackend's
-		// API-routed runs). If the backend doesn't implement steerable, or
-		// Steer returns false (HybridBackend with a CLI-routed run), fall
-		// back to the stdin-pipe path used by Claude Code subprocesses.
+		// API-routed runs). The typed result distinguishes a genuine
+		// rejection (channel full) from "this backend/run is not
+		// API-steerable" (no run), the latter falling through to the stdin
+		// pipe path used by Claude Code subprocesses.
 		if steer, ok := m.backend.(steerable); ok {
-			if steer.Steer(rid, message) {
-				return
+			switch res := steer.SteerWithReason(rid, message); res {
+			case backend.SteerResultDelivered:
+				utils.Info("Session", fmt.Sprintf(
+					"SteerAgent: delivered to main loop via channel key=%s runID=%s msgLen=%d outcome=%s",
+					key, rid, len(message), SteerDelivered,
+				))
+				return SteerDelivered
+			case backend.SteerResultChannelFull:
+				// A live API-backed run whose steer buffer is full after a
+				// reasonable buffer. This is a genuine, loud rejection — do
+				// NOT fall through to stdin (a no-op for ApiBackend) and
+				// silently drop it.
+				utils.Warn("Session", fmt.Sprintf(
+					"SteerAgent: rejected, steer channel full key=%s runID=%s msgLen=%d outcome=%s",
+					key, rid, len(message), SteerRejectedChannelFull,
+				))
+				return SteerRejectedChannelFull
+			default:
+				// SteerResultNoRun: not API-routed (CLI/hybrid-CLI) or the
+				// backend's run map disclaims the id. Fall through to stdin.
+				utils.Info("Session", fmt.Sprintf(
+					"SteerAgent: backend not API-steerable (result=%s), falling back to stdin key=%s runID=%s",
+					res, key, rid,
+				))
 			}
+		} else {
+			utils.Info("Session", fmt.Sprintf(
+				"SteerAgent: backend does not implement steerable, using stdin path key=%s runID=%s", key, rid,
+			))
 		}
 		// CliBackend (or hybrid CLI-routed): write follow-up message over
 		// stdin pipe of the Claude Code subprocess.
@@ -101,19 +214,41 @@ func (m *Manager) SteerAgent(key, agentName, message string) {
 			},
 		}
 		if err := m.backend.WriteToStdin(rid, stdinMsg); err != nil {
-			utils.Log("Session", "steer via stdin failed: "+err.Error())
+			utils.Warn("Session", fmt.Sprintf(
+				"SteerAgent: stdin write failed key=%s runID=%s msgLen=%d err=%s outcome=%s",
+				key, rid, len(message), err.Error(), SteerRejectedNoRun,
+			))
+			return SteerRejectedNoRun
 		}
-		return
+		utils.Info("Session", fmt.Sprintf(
+			"SteerAgent: delivered to main loop via stdin key=%s runID=%s msgLen=%d outcome=%s",
+			key, rid, len(message), SteerDeliveredViaStdin,
+		))
+		return SteerDeliveredViaStdin
 	}
 	m.mu.RUnlock()
 
 	handle, exists := s.agents.LookupHandle(agentName)
 	if !exists {
-		return
+		utils.Warn("Session", fmt.Sprintf(
+			"SteerAgent: rejected, no such agent key=%s agent=%q msgLen=%d outcome=%s",
+			key, agentName, len(message), SteerRejectedNoRun,
+		))
+		return SteerRejectedNoRun
 	}
-	if handle.StdinWrite != nil {
-		handle.StdinWrite(message)
+	if handle.StdinWrite == nil {
+		utils.Warn("Session", fmt.Sprintf(
+			"SteerAgent: rejected, agent has no stdin-write handle key=%s agent=%q msgLen=%d outcome=%s",
+			key, agentName, len(message), SteerRejectedNoRun,
+		))
+		return SteerRejectedNoRun
 	}
+	handle.StdinWrite(message)
+	utils.Info("Session", fmt.Sprintf(
+		"SteerAgent: delivered to agent stdin key=%s agent=%q msgLen=%d outcome=%s",
+		key, agentName, len(message), SteerDeliveredToAgent,
+	))
+	return SteerDeliveredToAgent
 }
 
 // resolveAgentSpec resolves an agent name to a registered spec. If the name

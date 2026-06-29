@@ -47,6 +47,16 @@ func TestCompactIfNeeded_CircuitBreaker(t *testing.T) {
 	run := &activeRun{requestID: "circuit-test", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
+	// Skip the LLM-summary tier: this test asserts only the circuit-breaker
+	// control flow (compactionsWithoutProgress + compact_loop_aborted), not
+	// summarization. Leaving it enabled makes compaction fall through to a
+	// live provider.Stream against the default unconfigured Anthropic
+	// provider (https://api.anthropic.com, empty key → 401) on every loop
+	// iteration, which is non-hermetic, slow, and pollutes engine.log with
+	// spurious auth-failure lines. The regex/truncation tail still shrinks
+	// the working set, so the circuit-breaker behavior under test is
+	// unchanged. (Same skip pattern as runloop_compact_boundary_test.go.)
+	cp.summaryEnabled = false
 
 	// Each iteration simulates a runloop pass where the reported token count
 	// is stuck above the limit (e.g. the model keeps returning a huge prompt
@@ -171,6 +181,13 @@ func TestCompactReactive_HookReceivesFacts(t *testing.T) {
 	run := &activeRun{requestID: "reactive-facts", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
+	// Skip the LLM-summary tier: this test asserts on regex-extracted facts in
+	// the hook payload, not on LLM summarization. Leaving it enabled makes
+	// compactReactive fall through to a live provider.Stream against the
+	// default unconfigured Anthropic provider (https://api.anthropic.com,
+	// empty key → 401), which is non-hermetic and pollutes engine.log. The
+	// fact-extraction tier under test is unaffected.
+	cp.summaryEnabled = false
 
 	var capturedInfo interface{}
 	var hookFired bool
@@ -269,6 +286,13 @@ func TestCompactReactive_HookEmptyFactsWhenNoPatterns(t *testing.T) {
 	run := &activeRun{requestID: "reactive-no-facts", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
+	// Skip the LLM-summary tier: this test asserts the facts slice is empty on
+	// filler text, not on LLM summarization. Leaving it enabled makes
+	// compactReactive fall through to a live provider.Stream against the
+	// default unconfigured Anthropic provider (https://api.anthropic.com,
+	// empty key → 401), which is non-hermetic and pollutes engine.log. The
+	// fact-extraction tier under test is unaffected.
+	cp.summaryEnabled = false
 
 	var capturedInfo interface{}
 	var hookFired bool
@@ -385,8 +409,9 @@ func TestIsMemoryCurrent_BoundaryJustBeforeMidpoint(t *testing.T) {
 }
 
 func TestCompactIfNeeded_SessionMemoryCoverageCheck(t *testing.T) {
-	// When session memory has a stale boundary, compaction should fall
-	// through to LLM summary (or regex facts) instead of using stale memory.
+	// When session memory has a stale boundary, compaction should reject the
+	// stale memory and fall through to a fresher tier (regex facts /
+	// truncation) instead of using it.
 	b := NewApiBackend()
 	_ = captureEvents(b, "stale-mem")
 
@@ -406,8 +431,15 @@ func TestCompactIfNeeded_SessionMemoryCoverageCheck(t *testing.T) {
 	run := &activeRun{requestID: "stale-mem", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
-
-	// Set up session memory with a stale boundary (entry index 2 out of 40 entries).
+	// Skip the LLM-summary tier: this test asserts that stale session memory
+	// is rejected and compaction falls through to a fresher tier, not that the
+	// LLM tier specifically produced the result. Leaving it enabled makes
+	// compactIfNeeded fall through to a live provider.Stream against the
+	// default unconfigured Anthropic provider (https://api.anthropic.com,
+	// empty key → 401), which is non-hermetic and pollutes engine.log. The
+	// fall-through to the regex/truncation tier still proves stale memory was
+	// not used.
+	cp.summaryEnabled = false
 	staleBoundaryID := conv.Entries[2].ID
 	cp.getSessionMemory = func() string { return "stale iOS theme summary" }
 	cp.getLastSummarizedEntryID = func() string { return staleBoundaryID }

@@ -374,6 +374,44 @@ type EngineEvent struct {
 	DispatchToolCount      int     `json:"dispatchToolCount,omitempty"`
 	DispatchThinkingTokens int     `json:"dispatchThinkingTokens,omitempty"`
 
+	// --- engine_dispatch_activity ---
+	//
+	// Emitted on the parent session's event stream for each intra-turn
+	// activity of a running dispatched (sub-)agent: a tool call starting, a
+	// tool result returning, or a chunk of streamed assistant text. The child
+	// produces these events as it works; the engine forwards them here so any
+	// consumer can render or audit the live sub-agent transcript WITHOUT
+	// waiting for the dispatch to complete.
+	//
+	// Semantics: INCREMENTAL, append-by-key. NOT a snapshot, NOT retained, NOT
+	// replayed on reconnect (distinct from engine_agent_state, which IS a
+	// snapshot — see docs/architecture/agent-state.md). The file-backed
+	// conversation transcript is the snapshot authority that heals gaps; a
+	// consumer that needs complete/sticky state reconciles from there and
+	// never from retained activity events. Sibling to model_fallback /
+	// run_stalled in being a fire-and-forget signal.
+	//
+	// Key/identity for client-side dedup against the reconcile snapshot:
+	//   - DispatchAgentID:        parent-side agent id (routes the delta to the
+	//                             right agent/dispatch row; never to the parent
+	//                             conversation's own message stream).
+	//   - DispatchConversationID: the child conversation id (reconcile keying).
+	//   - DispatchActivityKind:   "tool_start" | "tool_end" | "text".
+	//   - DispatchSeq:            monotonic per-dispatch sequence; orders deltas
+	//                             and keys a streaming-text run.
+	//   - ToolID / ToolName:      tool_start / tool_end (ToolID is durable and
+	//                             also persisted, so it survives reconcile).
+	//   - DispatchTextDelta:      text (the streamed chunk, possibly coalesced).
+	//   - DispatchToolIsError:    tool_end (true when the tool failed).
+	//   - DispatchActivityTs:     emit timestamp (unix millis).
+	DispatchAgentID        string `json:"dispatchAgentId,omitempty"`
+	DispatchConversationID string `json:"dispatchConversationId,omitempty"`
+	DispatchActivityKind   string `json:"dispatchActivityKind,omitempty"`
+	DispatchSeq            int    `json:"dispatchSeq,omitempty"`
+	DispatchTextDelta      string `json:"dispatchTextDelta,omitempty"`
+	DispatchToolIsError    bool   `json:"dispatchToolIsError,omitempty"`
+	DispatchActivityTs     int64  `json:"dispatchActivityTs,omitempty"`
+
 	// --- Resource subsystem events (D-007) ---
 	//
 	// engine_resource_snapshot: emitted when a client subscribes to a

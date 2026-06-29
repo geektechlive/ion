@@ -1,5 +1,8 @@
 {
   "normalizedEvents": {
+    "agent_state": [
+      "agents"
+    ],
     "compacting": [
       "active",
       "clearedBlocks",
@@ -7,6 +10,13 @@
       "messagesBefore",
       "strategy",
       "summary"
+    ],
+    "dialog": [
+      "defaultValue",
+      "dialogId",
+      "method",
+      "options",
+      "title"
     ],
     "engine_plan_content": [
       "content",
@@ -24,10 +34,39 @@
       "retryable",
       "sessionId"
     ],
+    "events_dropped": [
+      "count"
+    ],
+    "extension_dead_permanent": [
+      "attemptNumber",
+      "extensionName"
+    ],
+    "extension_died": [
+      "extensionName"
+    ],
+    "extension_respawned": [
+      "attemptNumber",
+      "extensionName"
+    ],
+    "harness_message": [
+      "dedupKey",
+      "message",
+      "source"
+    ],
+    "message_end": [
+      "contextPercent",
+      "cost",
+      "inputTokens",
+      "outputTokens"
+    ],
     "model_fallback": [
       "fallbackModel",
       "reason",
       "requestedModel"
+    ],
+    "notify": [
+      "level",
+      "message"
     ],
     "permission_request": [
       "options",
@@ -129,6 +168,9 @@
     ],
     "usage": [
       "usage"
+    ],
+    "working_message": [
+      "message"
     ]
   },
   "engineEvent": [
@@ -153,17 +195,24 @@
     "content",
     "defaultValue",
     "dialogId",
+    "dispatchActivityKind",
+    "dispatchActivityTs",
     "dispatchAgent",
+    "dispatchAgentId",
+    "dispatchConversationId",
     "dispatchCost",
     "dispatchElapsed",
     "dispatchExitCode",
     "dispatchInputTokens",
     "dispatchModel",
     "dispatchOutputTokens",
+    "dispatchSeq",
     "dispatchSessionId",
     "dispatchTask",
+    "dispatchTextDelta",
     "dispatchThinkingTokens",
     "dispatchToolCount",
+    "dispatchToolIsError",
     "earlyStopBudget",
     "earlyStopContinuationCount",
     "earlyStopCumulativeOutput",
@@ -284,6 +333,7 @@
       "forceNewConversation",
       "maxTokens",
       "model",
+      "parentConversationId",
       "profileId",
       "sessionId",
       "systemHint",

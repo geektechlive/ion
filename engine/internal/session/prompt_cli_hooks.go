@@ -39,6 +39,14 @@ func (m *Manager) wirePermissionHookServer(s *engineSession, key string, opts *t
 	token := fmt.Sprintf("run-%d", time.Now().UnixMilli())
 	hookServer.RegisterToken(token)
 
+	// Install the human-wait configuration so an unanswered permission dialog
+	// waits indefinitely by default (and applies the configured fail-action
+	// only when an operator sets a finite human-wait). A nil config yields the
+	// indefinite default (the server-side accessors are nil-safe).
+	if m.config != nil {
+		hookServer.SetTimeouts(m.config.Timeouts)
+	}
+
 	// When the hook server gets an "ask" decision, emit
 	// engine_permission_request and block until the user responds with an
 	// option ID.

@@ -199,14 +199,20 @@ func CreateConversation(id, system, model string) *Conversation {
 // becomes both the LLM-visible message (conv.Messages) and the persisted
 // display entry (conv.Entries) — the right behavior for an ordinary prompt
 // where what the user typed and what the model sees are identical.
-func AddUserMessage(conv *Conversation, content any) {
+//
+// Returns the *SessionEntry that AppendEntry produced (the display/tree entry)
+// so callers that need the entry id can thread it out. Returns nil when
+// conv.Entries is nil (the LLM-only path that skips the tree write).
+// Additive: existing callers that ignore the return value are unaffected.
+func AddUserMessage(conv *Conversation, content any) *SessionEntry {
 	blocks := toContentBlocks(content)
 
 	conv.Messages = append(conv.Messages, types.LlmMessage{Role: "user", Content: blocks})
 
 	if conv.Entries != nil {
-		AppendEntry(conv, EntryMessage, MessageData{Role: "user", Content: blocks})
+		return AppendEntry(conv, EntryMessage, MessageData{Role: "user", Content: blocks})
 	}
+	return nil
 }
 
 // SlashInvocation captures the raw slash-command invocation that produced a
@@ -241,7 +247,12 @@ type SlashInvocation struct {
 // and the SuppressSystemMessages path already rely on; the difference is that
 // here BOTH stores receive an entry (the LLM gets the expansion, the tree gets
 // the invocation), rather than one store being skipped.
-func AddUserMessageWithInvocation(conv *Conversation, expandedContent any, inv SlashInvocation) {
+//
+// Returns the *SessionEntry that AppendEntry produced (the display/tree entry
+// carrying the raw invocation) so callers that need the entry id can thread it
+// out. Returns nil when conv.Entries is nil. Additive: existing callers that
+// ignore the return value are unaffected.
+func AddUserMessageWithInvocation(conv *Conversation, expandedContent any, inv SlashInvocation) *SessionEntry {
 	expandedBlocks := toContentBlocks(expandedContent)
 
 	// LLM sees the expanded template body.
@@ -253,7 +264,7 @@ func AddUserMessageWithInvocation(conv *Conversation, expandedContent any, inv S
 		if inv.Args != "" {
 			display = inv.Command + " " + inv.Args
 		}
-		AppendEntry(conv, EntryMessage, MessageData{
+		return AppendEntry(conv, EntryMessage, MessageData{
 			Role:         "user",
 			Content:      []types.LlmContentBlock{textBlock(display)},
 			SlashCommand: inv.Command,
@@ -261,6 +272,7 @@ func AddUserMessageWithInvocation(conv *Conversation, expandedContent any, inv S
 			SlashSource:  inv.Source,
 		})
 	}
+	return nil
 }
 
 // toContentBlocks normalizes the loosely-typed content argument (string or

@@ -168,19 +168,22 @@ func resolveSlashCommand(name, args, workingDir string, claudeCompat bool) (*Res
 //
 // Called with m.mu held (SendPrompt holds the lock across buildRunOptions).
 // resolveSlashCommand only touches the filesystem and is safe under the lock.
-func (m *Manager) resolveSlashIntoOpts(s *engineSession, key string, opts *types.RunOptions) bool {
+// resolveSlashIntoOpts resolves a slash invocation and rewrites opts in place.
+// Returns (true, "") on success. On failure returns (false, failedCommand) where
+// failedCommand is the string to pass to emitUnknownCommand. The caller is
+// responsible for emitting the unknown-command event AFTER releasing m.mu,
+// because emit acquires m.mu.RLock which deadlocks under a held write lock.
+func (m *Manager) resolveSlashIntoOpts(s *engineSession, key string, opts *types.RunOptions) (bool, string) {
 	name, args, ok := parseSlashInvocation(opts.Prompt)
 	if !ok {
 		utils.Log("SlashResolve", fmt.Sprintf("ResolveSlash set but prompt is not a slash invocation key=%s", key))
-		m.emitUnknownCommand(key, opts.Prompt)
-		return false
+		return false, opts.Prompt
 	}
 
 	res, found := resolveSlashCommand(name, args, s.config.WorkingDirectory, s.config.ClaudeCompat)
 	if !found {
 		utils.Log("SlashResolve", fmt.Sprintf("unknown command key=%s name=/%s", key, name))
-		m.emitUnknownCommand(key, "/"+name)
-		return false
+		return false, "/" + name
 	}
 
 	// Fire the resolution hook so an extension can observe/override before the
@@ -213,7 +216,7 @@ func (m *Manager) resolveSlashIntoOpts(s *engineSession, key string, opts *types
 	utils.Log("SlashResolve", fmt.Sprintf(
 		"resolved-into-opts key=%s command=%s source=%s expandedLen=%d",
 		key, res.Command, res.Source, len(res.ExpandedBody)))
-	return true
+	return true, ""
 }
 
 // fireSlashResolved fires the slash_command_resolved hook so an extension can
@@ -222,8 +225,7 @@ func (m *Manager) resolveSlashIntoOpts(s *engineSession, key string, opts *types
 // No-op (returns "", false) when the session has no extensions — a plain
 // conversation resolves slash commands with the engine's generic behavior.
 //
-// Called with m.mu held (from resolveSlashIntoOpts → SendPrompt). newExtContext
-// does not re-acquire m.mu, so this is safe under the lock.
+// Called with m.mu held (from resolveSlashIntoOpts → SendPrompt).
 func (m *Manager) fireSlashResolved(s *engineSession, key string, res *ResolvedSlash) (string, bool) {
 	if s.extGroup == nil || s.extGroup.IsEmpty() {
 		return "", false

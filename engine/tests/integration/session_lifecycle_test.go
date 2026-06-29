@@ -128,7 +128,7 @@ func TestSessionPlanMode(t *testing.T) {
 	t.Cleanup(func() { mgr.StopSession("plan-test") })
 
 	// Enable plan mode with allowed tools
-	mgr.SetPlanMode("plan-test", true, []string{"Read", "Grep", "Glob"}, "test")
+	mgr.SetPlanMode("plan-test", true, []string{"Read", "Grep", "Glob"}, "test", "")
 
 	// Send prompt
 	if err := mgr.SendPrompt("plan-test", "Plan the changes", nil); err != nil {

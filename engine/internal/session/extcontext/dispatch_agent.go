@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/session/agents"
 	"github.com/dsswift/ion/engine/internal/types"
@@ -57,7 +58,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 		// Create or update an agent state entry in the parent session's
 		// registry so the agent panel shows the dispatch. This mirrors
 		// what prompt_agent_spawner does for LLM-initiated Agent tool calls.
-		agentID := fmt.Sprintf("dispatch-%s-%d", opts.Name, start.UnixMilli())
+		agentID := fmt.Sprintf("dispatch-%s-%d-%s", opts.Name, start.UnixMilli(), conversation.NewConvSuffix())
 		agentName := opts.Name
 		key := sa.SessionKey()
 
@@ -130,6 +131,13 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 			})
 			sa.EmitAgentSnapshot("dispatch_progress")
 		}
+
+		// Live intra-turn transcript forwarding. The emitter pushes the child's
+		// tool calls, tool results, and streamed text to the parent session's
+		// client stream as engine_dispatch_activity events so consumers can
+		// present the live sub-agent transcript without waiting for completion.
+		// Closed in runChild once the dispatch finishes (flushes trailing text).
+		activity := NewDispatchActivityEmitter(sa.Emit, agentID, agentName)
 
 		// Create child backend matching the parent session's backend type.
 		child := sa.NewChildBackend()
@@ -217,6 +225,14 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 		var recallReason string
 
 		child.OnNormalized(func(_ string, ev types.NormalizedEvent) {
+			// Report child liveness to the parent run's progress watchdog.
+			// A genuine child event proves the dispatch is alive; the parent
+			// run is parked in the deadline-exempt Agent tool call and emits
+			// no progress of its own, so without this it could be flagged as
+			// stalled once the self-emitted ToolStalledEvent advisory stopped
+			// counting as progress. See sessionAccessor.BumpParentProgress.
+			sa.BumpParentProgress()
+
 			ee := sa.TranslateEvent(ev, 0)
 			if ee.Type != "" {
 				if opts.OnEvent != nil {
@@ -230,7 +246,53 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 
 			// Live progress forwarding for the agent panel.
 			switch e := ev.Data.(type) {
+			case *types.SessionInitEvent:
+				// Capture the child's conversation ID the moment the child run
+				// initializes — well before TaskCompleteEvent fires at the end.
+				// The child emits SessionInitEvent early (runloop.go) and then
+				// persists its conversation incrementally, so surfacing the id
+				// now lets clients read and stream the live transcript while the
+				// dispatch is still running instead of only after it completes.
+				//
+				// Fire exactly once: SessionInitEvent is emitted per child run,
+				// and the terminal runChild update (below) overwrites the same
+				// id idempotently with the final status/elapsed.
+				if e.SessionID != "" && childSessionID == "" {
+					childSessionID = e.SessionID
+					// Tell the activity emitter the child conversation id so its
+					// pushed deltas carry the reconcile key.
+					activity.SetConversationID(childSessionID)
+					elapsedSoFar := time.Since(start).Seconds()
+					sa.UpdateAgentStateByID(agentID, func(state *types.AgentStateUpdate) {
+						if state.Metadata == nil {
+							state.Metadata = map[string]interface{}{}
+						}
+						existing, _ := state.Metadata["conversationIds"].([]interface{})
+						alreadyPresent := false
+						for _, v := range existing {
+							if s, ok := v.(string); ok && s == childSessionID {
+								alreadyPresent = true
+								break
+							}
+						}
+						if !alreadyPresent {
+							state.Metadata["conversationIds"] = append(existing, childSessionID)
+						}
+						state.Metadata["conversationId"] = childSessionID
+						// Write the id into the structured dispatches[] entry while
+						// the dispatch is still running so consumers can load the
+						// live conversation by ID.
+						agents.UpdateDispatchEntry(state.Metadata, agentID, "running", elapsedSoFar, childSessionID)
+					})
+					sa.EmitAgentSnapshot("dispatch_conversation_id")
+					utils.Log("Dispatch", fmt.Sprintf(
+						"captured child conversation id early agent=%q convId=%s session=%s",
+						opts.Name, childSessionID, sa.SessionKey(),
+					))
+				}
 			case *types.TextChunkEvent:
+				// Push the streamed text to the live transcript (coalesced).
+				activity.AccumulateText(e.Text)
 				progressMu.Lock()
 				textAccum += e.Text
 				now := time.Now()
@@ -247,11 +309,17 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 					emitProgress(snippet)
 				}
 			case *types.ToolCallEvent:
+				// Push the tool-call start to the live transcript.
+				activity.HandleToolStart(e.ToolName, e.ToolID)
 				progressMu.Lock()
 				lastEmitTime = time.Now()
 				textAccum = ""
 				progressMu.Unlock()
 				emitProgress(fmt.Sprintf("Using %s...", e.ToolName))
+			case *types.ToolResultEvent:
+				// Push the tool-result completion to the live transcript
+				// (status-only; reconcile carries the full result body).
+				activity.HandleToolEnd(e.ToolID, e.IsError)
 			}
 
 			// Track plan mode state from child events.
@@ -340,7 +408,15 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 		}
 
 		key = sa.SessionKey()
-		childReqID := fmt.Sprintf("%s-dispatch-%s", key, opts.Name)
+		// The child run id must be unique per dispatch INSTANCE. Derive it from
+		// agentID, which already carries a per-dispatch uniqueness suffix
+		// (dispatch-<name>-<millis>-<NewConvSuffix()>, built above). Deriving it
+		// from name + UnixMilli() alone is NOT unique: two dispatches of the same
+		// agent name that start in the same millisecond collide on the run id,
+		// the child backend reuses one conversation for both, and one dispatch
+		// entry is left without its own conversationId. agentID's NewConvSuffix()
+		// guarantees distinctness even for same-millisecond concurrent dispatches.
+		childReqID := fmt.Sprintf("%s-%s", key, agentID)
 
 		// Phase 3: Emit dispatch_start telemetry on the parent session.
 		sa.Emit(types.EngineEvent{
@@ -381,6 +457,10 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 
 			elapsed := time.Since(start).Seconds()
 
+			// Flush any trailing buffered transcript text and stop the
+			// activity emitter's coalesce timer now that the child is done.
+			activity.Close()
+
 			// Cleanup child extension.
 			if childExtHost != nil {
 				childExtHost.Dispose()
@@ -388,7 +468,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 
 			// Deregister from the dispatch registry (background dispatches only).
 			if opts.Background && registry != nil {
-				registry.Deregister(opts.Name)
+				registry.Deregister(agentID)
 			}
 
 			// Build the result.
@@ -403,6 +483,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 			}
 
 			result := &extension.DispatchAgentResult{
+				DispatchID:               agentID,
 				Output:                   output,
 				ExitCode:                 exitCode,
 				Elapsed:                  elapsed,
@@ -438,8 +519,20 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 				}
 				state.Metadata["elapsed"] = elapsed
 				if childSessionID != "" {
+					// Append only if the early SessionInitEvent path (above) did
+					// not already record this id, so conversationIds carries no
+					// duplicate when the id was captured at dispatch start.
 					existing, _ := state.Metadata["conversationIds"].([]interface{})
-					state.Metadata["conversationIds"] = append(existing, childSessionID)
+					alreadyPresent := false
+					for _, v := range existing {
+						if s, ok := v.(string); ok && s == childSessionID {
+							alreadyPresent = true
+							break
+						}
+					}
+					if !alreadyPresent {
+						state.Metadata["conversationIds"] = append(existing, childSessionID)
+					}
 					state.Metadata["conversationId"] = childSessionID
 				}
 				// Update the current dispatch entry in the structured dispatches array.
@@ -481,7 +574,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 		if opts.Background {
 			// Register in the dispatch registry for recall support.
 			if registry != nil {
-				registry.Register(opts.Name, func() {
+				registry.RegisterWithID(agentID, opts.Name, func() {
 					recallReason = "recall_agent"
 					cancelFn()
 				}, child, key)
@@ -526,17 +619,19 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 				if recalled {
 					if opts.OnRecall != nil {
 						opts.OnRecall(extension.RecallInfo{
-							Reason:    recallReason,
-							Elapsed:   result.Elapsed,
-							ToolCount: toolCount,
+							DispatchID: agentID,
+							Reason:     recallReason,
+							Elapsed:    result.Elapsed,
+							ToolCount:  toolCount,
 						})
 					}
 				} else if childErr != nil || result.ExitCode != 0 {
 					if opts.OnError != nil {
 						opts.OnError(extension.DispatchError{
-							Message:  result.Output,
-							ExitCode: result.ExitCode,
-							Elapsed:  result.Elapsed,
+							DispatchID: agentID,
+							Message:    result.Output,
+							ExitCode:   result.ExitCode,
+							Elapsed:    result.Elapsed,
 						})
 					}
 				} else {
@@ -552,7 +647,8 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry) func
 
 			// Return a stub result immediately.
 			return &extension.DispatchAgentResult{
-				SessionID: childReqID,
+				DispatchID: agentID,
+				SessionID:  childReqID,
 			}, nil
 		}
 
@@ -631,110 +727,5 @@ func startChild(child backend.RunBackend, reqID string, runOpts types.RunOptions
 	}
 }
 
-// fireLifecycleCallbacks processes a NormalizedEvent and fires the
-// appropriate Phase 2 structured lifecycle callbacks on the opts. Mutates
-// the tracking state (toolNames, toolCount, accumulatedText, cumulative
-// counters) as a side effect.
-func fireLifecycleCallbacks(
-	opts *extension.DispatchAgentOpts,
-	ev types.NormalizedEvent,
-	agentID string,
-	toolNames map[string]string,
-	toolCount *int,
-	accumulatedText *string,
-	cumulativeInputTokens, cumulativeOutputTokens *int,
-	cumulativeCost *float64,
-) {
-	switch e := ev.Data.(type) {
-	case *types.ToolCallEvent:
-		*toolCount++
-		toolNames[e.ToolID] = e.ToolName
-		if opts.OnToolStart != nil {
-			opts.OnToolStart(extension.DispatchToolStartInfo{
-				ToolName: e.ToolName,
-				ToolID:   e.ToolID,
-			})
-		}
-
-	case *types.ToolResultEvent:
-		name := toolNames[e.ToolID]
-		delete(toolNames, e.ToolID)
-		if e.IsError {
-			if opts.OnToolError != nil {
-				opts.OnToolError(extension.DispatchToolErrorInfo{
-					ToolName: name,
-					ToolID:   e.ToolID,
-					Content:  e.Content,
-				})
-			}
-		} else {
-			if opts.OnToolEnd != nil {
-				opts.OnToolEnd(extension.DispatchToolEndInfo{
-					ToolName: name,
-					ToolID:   e.ToolID,
-					Content:  e.Content,
-				})
-			}
-		}
-
-	case *types.UsageEvent:
-		turnInput := 0
-		turnOutput := 0
-		if e.Usage.InputTokens != nil {
-			turnInput = *e.Usage.InputTokens
-		}
-		if e.Usage.OutputTokens != nil {
-			turnOutput = *e.Usage.OutputTokens
-		}
-		*cumulativeInputTokens += turnInput
-		*cumulativeOutputTokens += turnOutput
-		// Cost is not carried on UsageEvent, so cumulative cost tracks from
-		// TaskCompleteEvent only. For per-turn reporting we pass what we have.
-		if opts.OnUsage != nil {
-			opts.OnUsage(extension.DispatchUsageInfo{
-				InputTokens:            turnInput,
-				OutputTokens:           turnOutput,
-				CumulativeInputTokens:  *cumulativeInputTokens,
-				CumulativeOutputTokens: *cumulativeOutputTokens,
-				CumulativeCost:         *cumulativeCost,
-			})
-		}
-
-	case *types.TextChunkEvent:
-		*accumulatedText += e.Text
-		if opts.OnTextDelta != nil {
-			opts.OnTextDelta(extension.DispatchTextDeltaInfo{
-				Delta:       e.Text,
-				Accumulated: *accumulatedText,
-			})
-		}
-
-	case *types.TaskCompleteEvent:
-		// Update cumulative cost from the authoritative source.
-		*cumulativeCost = e.CostUsd
-
-	case *types.PlanProposalEvent:
-		if opts.OnPlanProposal != nil {
-			info := extension.DispatchPlanProposalInfo{
-				Name:          opts.Name,
-				AgentID:       agentID,
-				PlanFilePath:  e.PlanFilePath,
-				PlanSlug:      e.PlanSlug,
-				PlanRequested: opts.PlanMode,
-			}
-			opts.OnPlanProposal(info)
-			utils.Log("Dispatch", fmt.Sprintf(
-				"plan proposal callback fired agent=%q planSlug=%q requested=%v",
-				opts.Name, e.PlanSlug, opts.PlanMode,
-			))
-		}
-	}
-}
-
-// truncate shortens s to at most maxLen characters, appending "…" if truncated.
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "…"
-}
+// fireLifecycleCallbacks and truncate live in dispatch_lifecycle_callbacks.go
+// (same package) to keep this file under the 800-line cap.

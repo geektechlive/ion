@@ -244,40 +244,67 @@ function buildContext(ctxData: any): IonContext {
         ...rpcOpts
       } = opts
 
-      // Register notification handlers keyed by agent name so parallel
-      // background dispatches don't clobber each other's callbacks.
-      const agentKey = opts.name
-      const keyedHandlers: [string, ((p: any) => void) | undefined][] = [
-        [`dispatch_event:${agentKey}`, onEvent],
-        [`dispatch_tool_start:${agentKey}`, onToolStart],
-        [`dispatch_tool_end:${agentKey}`, onToolEnd],
-        [`dispatch_tool_error:${agentKey}`, onToolError],
-        [`dispatch_usage:${agentKey}`, onUsage],
-        [`dispatch_text_delta:${agentKey}`, onTextDelta],
+      // Build the list of lifecycle callback entries. Each entry pairs a
+      // notification method name with the handler function (if provided).
+      const lifecycleEntries: [string, ((p: any) => void) | undefined][] = [
+        ['dispatch_event', onEvent],
+        ['dispatch_tool_start', onToolStart],
+        ['dispatch_tool_end', onToolEnd],
+        ['dispatch_tool_error', onToolError],
+        ['dispatch_usage', onUsage],
+        ['dispatch_text_delta', onTextDelta],
       ]
-      for (const [name, fn] of keyedHandlers) if (fn) notificationHandlers.set(name, fn)
 
-      const cleanup = () => {
-        for (const [name] of keyedHandlers) notificationHandlers.delete(name)
-        for (const k of ['dispatch_complete', 'dispatch_error', 'dispatch_recall'])
-          notificationHandlers.delete(`${k}:${agentKey}`)
+      // Pre-register lifecycle handlers keyed by agent name so they're
+      // ready before the RPC returns. These are best-effort streaming
+      // callbacks that fire while the dispatch runs.
+      const agentKey = opts.name
+      for (const [method, fn] of lifecycleEntries) {
+        if (fn) notificationHandlers.set(`${method}:${agentKey}`, fn)
       }
 
       if (opts.background) {
-        // Background: wire terminal callbacks that auto-cleanup, return stub.
+        // Background: send the RPC to get the stub (which carries dispatchId),
+        // then register terminal callbacks keyed by dispatch ID so two
+        // concurrent same-name dispatches each receive their own terminal
+        // callback without clobbering.
+        const stub: DispatchAgentResult = await request('ext/dispatch_agent', rpcOpts)
+        const dispatchId = stub.dispatchId || agentKey
+
+        // Re-key lifecycle handlers by dispatch ID (additive, keeps name
+        // keys too so notifications arriving before the re-key still route).
+        for (const [method, fn] of lifecycleEntries) {
+          if (fn) notificationHandlers.set(`${method}:${dispatchId}`, fn)
+        }
+
+        const cleanup = () => {
+          for (const [method] of lifecycleEntries) {
+            notificationHandlers.delete(`${method}:${agentKey}`)
+            notificationHandlers.delete(`${method}:${dispatchId}`)
+          }
+          for (const k of ['dispatch_complete', 'dispatch_error', 'dispatch_recall']) {
+            notificationHandlers.delete(`${k}:${dispatchId}`)
+          }
+        }
+
         const wrapTerminal = (fn?: (p: any) => void) => (params: any) => {
           cleanup()
           if (fn) fn(params)
         }
-        notificationHandlers.set(`dispatch_complete:${agentKey}`, wrapTerminal(onComplete))
-        notificationHandlers.set(`dispatch_error:${agentKey}`, wrapTerminal(onError))
-        notificationHandlers.set(`dispatch_recall:${agentKey}`, wrapTerminal(onRecall))
-        return await request('ext/dispatch_agent', rpcOpts)
+        notificationHandlers.set(`dispatch_complete:${dispatchId}`, wrapTerminal(onComplete))
+        notificationHandlers.set(`dispatch_error:${dispatchId}`, wrapTerminal(onError))
+        notificationHandlers.set(`dispatch_recall:${dispatchId}`, wrapTerminal(onRecall))
+        return stub
       }
 
-      // Foreground: wait for RPC, then clean up.
+      // Foreground: wait for RPC, then clean up lifecycle handlers.
+      const cleanupForeground = () => {
+        for (const [method] of lifecycleEntries) {
+          notificationHandlers.delete(`${method}:${agentKey}`)
+        }
+      }
       try { return await request('ext/dispatch_agent', rpcOpts) }
-      finally { cleanup() }
+      finally { cleanupForeground() }
     },
     async recallAgent(name: string, opts?: RecallAgentOpts): Promise<boolean> {
       const result = await request('ext/recall_agent', { name, reason: opts?.reason || '' })
@@ -419,6 +446,7 @@ function buildContext(ctxData: any): IonContext {
         throw err
       }
     },
+    resources: buildResourcesAPI(),
   }
 }
 
@@ -606,12 +634,16 @@ function startListening(): void {
         // handler go through notify() directly rather than pushing to a hook
         // handler's event batch.
         //
-        // Dispatch callbacks include a `name` field identifying the agent.
-        // Try the per-agent keyed handler first, fall back to the global
-        // handler for backward compatibility.
+        // Dispatch notifications carry a `dispatchId` field (unique per
+        // dispatch instance) and a `name` field (agent name, shared by
+        // parallel same-name dispatches). Try dispatchId first for
+        // parallel-safe routing, fall back to name, then global handler.
         const params = msg.params
+        const dispatchId = params?.dispatchId
         const agentName = params?.name
-        const handler = (agentName && notificationHandlers.get(`${msg.method}:${agentName}`))
+        const handler =
+          (dispatchId && notificationHandlers.get(`${msg.method}:${dispatchId}`))
+          || (agentName && notificationHandlers.get(`${msg.method}:${agentName}`))
           || notificationHandlers.get(msg.method)
         if (handler) {
           const saved = activeEvents

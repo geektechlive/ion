@@ -33,6 +33,14 @@ type RunOptions struct {
 	// defect this field fixes — claude rejects non-UUID resume ids with exit
 	// code 1, killing every fresh manager-driven CLI run.
 	CliResumeSessionID string          `json:"cliResumeSessionId,omitempty"`
+	// ParentConversationID, when set, is written as the new conversation's
+	// `parentId` IF this run creates a fresh conversation file (SessionID names
+	// an id with no backing file yet). It records that the new session descends
+	// from a prior one — the on-disk linkage for a client-driven checkpoint cut
+	// (e.g. a desktop "clear context" that starts a new conversation for an
+	// existing tab). Ignored when resuming an existing conversation. Additive
+	// and non-breaking: an absent value leaves parentId empty as before.
+	ParentConversationID string         `json:"parentConversationId,omitempty"`
 	AllowedTools       []string        `json:"allowedTools,omitempty"`
 	SuppressTools      []string        `json:"suppressTools,omitempty"`
 	MaxTurns           int             `json:"maxTurns,omitempty"`

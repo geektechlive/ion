@@ -30,7 +30,7 @@ func (b *ApiBackend) executeTools(
 	var hooks RunHooks
 	var permEng *permissions.Engine
 	var sbCfg *sandbox.Config
-	var mcpRouter func(string, map[string]interface{}) (string, bool, error)
+	var mcpRouter func(context.Context, string, map[string]interface{}) (string, bool, error)
 	var telem TelemetryCollector
 	var spawnerFn tools.AgentSpawner
 	if run.cfg != nil {
@@ -162,7 +162,8 @@ func (b *ApiBackend) executeTools(
 
 			// Call onToolCall hook (extension hook). Race against gCtx so a
 			// hung extension subprocess can't wedge this goroutine; the run's
-			// per-tool 5min timeout is the outer backstop.
+			// per-tool timeout (TimeoutsConfig.ToolDefault, 60min default) is
+			// the outer backstop.
 			if hookFn != nil {
 				type hookRet struct {
 					result *ToolCallResult
@@ -279,6 +280,15 @@ func (b *ApiBackend) executeTools(
 			// tool completes. Consumers that run liveness watchdogs use these
 			// events to distinguish "still working" from "dead" for tabs that
 			// are legitimately running long tools.
+			//
+			// The stall advisory is emitted via emitWithoutProgress, NOT emit:
+			// it is the engine signalling the *absence* of progress, so it must
+			// not bump run.lastProgressAt. If it did, a wedged but deadline-
+			// exempt Agent/dispatch tool (see the AgentToolName branch below)
+			// would reset the run-progress watchdog clock every tick and never
+			// trip the run-stall backstop — the exact incident in conversation
+			// 1782012033034-37d617d3d9ab. See emitWithoutProgress in
+			// api_backend.go for the full rationale.
 			// Capture the threshold locally so the goroutine doesn't race
 			// with tests that reassign the package-level var.
 			stallThreshold := toolStallThreshold
@@ -294,7 +304,7 @@ func (b *ApiBackend) executeTools(
 					select {
 					case <-ticker.C:
 						ticks++
-						b.emit(run, types.NormalizedEvent{Data: &types.ToolStalledEvent{
+						b.emitWithoutProgress(run, types.NormalizedEvent{Data: &types.ToolStalledEvent{
 							ToolID:   block.ID,
 							ToolName: block.Name,
 							Elapsed:  float64(ticks) * stallThreshold.Seconds(),
@@ -318,16 +328,31 @@ func (b *ApiBackend) executeTools(
 			// The Agent tool is a long-running child session with cooperative
 			// cancellation (parent abort → gCtx cancelled → child cancelled).
 			// Wrapping it in the standard tool timeout would kill child agents
-			// at 5 minutes. Use gCtx directly so Agent runs are bounded only
+			// at the deadline. Use gCtx directly so Agent runs are bounded only
 			// by parent lifecycle, not by the tool deadline.
+			//
+			// All other tools get a finite deadline, but via a DeadlineSuspender
+			// rather than a bare context.WithTimeout: an extension tool's
+			// execute() may synchronously call ctx.elicit(), which is an
+			// indefinite human-wait. The suspender lets that path pause the
+			// finite deadline for exactly the span it is blocked on the human,
+			// then resume it for the remaining machine work — preserving the
+			// indefinite-human-wait guarantee without removing the finite
+			// ceiling from machine work. (Permission prompts do not flow through
+			// the suspender; they block elsewhere — see DeadlineSuspender's doc.)
 			var toolCtx context.Context
 			var toolCancel context.CancelFunc
+			var toolSuspender *types.DeadlineSuspenderHandle
 			if block.Name == tools.AgentToolName {
 				toolCtx, toolCancel = context.WithCancel(gCtx)
 			} else {
-				toolCtx, toolCancel = context.WithTimeout(gCtx, toolTimeout)
+				toolCtx, toolCancel = context.WithCancel(gCtx)
+				ds := types.NewDeadlineSuspender(toolTimeout, toolCancel)
+				toolSuspender = ds
+				toolCtx = types.WithDeadlineSuspender(toolCtx, ds)
 			}
 			defer toolCancel()
+			defer toolSuspender.Stop()
 
 			// Inject timeouts config into context for individual tools to read.
 			if run.cfg != nil && run.cfg.Timeouts != nil {
@@ -365,7 +390,7 @@ func (b *ApiBackend) executeTools(
 				}
 				resCh := make(chan mcpRet, 1)
 				go func() {
-					content, isErr, routeErr := mcpRouter(block.Name, block.Input)
+					content, isErr, routeErr := mcpRouter(toolCtx, block.Name, block.Input)
 					resCh <- mcpRet{content, isErr, routeErr}
 				}()
 				select {
@@ -387,8 +412,15 @@ func (b *ApiBackend) executeTools(
 
 			// Surface per-tool deadline as a tool-result error rather than
 			// failing the whole run, so the LLM sees a clear "this tool timed
-			// out" message and can adapt.
-			if err != nil && toolCtx.Err() == context.DeadlineExceeded {
+			// out" message and can adapt. Two cases produce the deadline
+			// result: a classic WithTimeout ctx (built-in tools) reporting
+			// DeadlineExceeded, and the DeadlineSuspender (extension/MCP tools)
+			// having fired its own deadline — the suspender cancels via
+			// WithCancel, so its ctx.Err() is Canceled, not DeadlineExceeded,
+			// and we must consult Fired() to distinguish a deadline from a
+			// genuine lifecycle abort.
+			deadlineHit := toolCtx.Err() == context.DeadlineExceeded || toolSuspender.Fired()
+			if err != nil && deadlineHit {
 				err = nil
 				toolResult = &types.ToolResult{
 					Content: fmt.Sprintf("Error: tool %q exceeded %s deadline. Narrow the request or split it into smaller calls.", block.Name, toolTimeout),

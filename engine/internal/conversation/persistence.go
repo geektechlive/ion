@@ -474,6 +474,53 @@ func Load(id, dir string) (*Conversation, error) {
 	return conv, nil
 }
 
+// Exists reports whether a conversation with the given ID has a backing file
+// on disk, without parsing it. The probe order mirrors Load:
+//
+//  1. <id>.llm.jsonl AND <id>.tree.jsonl both present → new split format.
+//  2. <id>.jsonl present → legacy format.
+//  3. <id>.json present → v1 JSON format.
+//
+// This is the cheap existence check used by resolve-time guards that must
+// decide whether an id names a resumable conversation BEFORE committing the
+// session to it. A "phantom" id — one that was pre-minted and never saved —
+// returns false here, so callers can fall through to a fresh mint instead of
+// silently starting an empty session bound to a fileless id. (#230/#231)
+//
+// Like Load, an empty dir resolves to ~/.ion/conversations.
+func Exists(id, dir string) bool {
+	if id == "" {
+		return false
+	}
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		dir = filepath.Join(home, ".ion", "conversations")
+	}
+
+	// Probe 1: new split format — both files must exist (matches Load's
+	// requirement that an orphan .llm.jsonl alone is NOT a valid split).
+	_, llmErr := os.Stat(filepath.Join(dir, id+".llm.jsonl"))
+	_, treeErr := os.Stat(filepath.Join(dir, id+".tree.jsonl"))
+	if llmErr == nil && treeErr == nil {
+		return true
+	}
+
+	// Probe 2: legacy .jsonl
+	if _, err := os.Stat(filepath.Join(dir, id+".jsonl")); err == nil {
+		return true
+	}
+
+	// Probe 3: v1 .json
+	if _, err := os.Stat(filepath.Join(dir, id+".json")); err == nil {
+		return true
+	}
+
+	return false
+}
+
 // loadSplit reads both sidecar files and merges them into a single Conversation.
 //
 // Field sourcing:

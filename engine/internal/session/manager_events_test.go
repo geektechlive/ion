@@ -482,6 +482,68 @@ func TestHandleRunExit_NilCodeAndSignal_NoDeadEvent(t *testing.T) {
 	}
 }
 
+// TestHandleRunExit_CleanCancel_NoDeadEvent is the Defect-A regression test:
+// a cooperative cancel (code==0, signal="cancelled") is a CLEAN exit and must
+// NOT emit engine_dead. This is what a user/auto abort or a runloop hook
+// cancellation produces; emitting engine_dead for it made a deliberately
+// interrupted-but-recoverable run look crashed (the
+// 1782088921498-960b064fe896 incident).
+//
+// Revert the cleanCancel/abnormalExit narrowing in handleRunExit and this goes
+// red: the old `signal != nil` condition fires engine_dead for "cancelled".
+func TestHandleRunExit_CleanCancel_NoDeadEvent(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	ec := newEventCollector(mgr)
+
+	_, _ = mgr.StartSession("exit-clean", defaultConfig())
+	_ = mgr.SendPrompt("exit-clean", "go", nil)
+
+	keys := mb.startedKeys()
+	code := 0
+	signal := "cancelled"
+	mb.emitExit(keys[0], &code, &signal, "")
+
+	deadEvents := ec.byType("engine_dead")
+	if len(deadEvents) != 0 {
+		t.Errorf("clean cancel (code=0 signal=cancelled) must NOT emit engine_dead, got %d", len(deadEvents))
+	}
+	// It must still transition to idle so the tab is reusable.
+	idle := ec.byType("engine_status")
+	foundIdle := false
+	for _, e := range idle {
+		if e.event.Fields != nil && e.event.Fields.State == "idle" {
+			foundIdle = true
+		}
+	}
+	if !foundIdle {
+		t.Error("clean cancel must still emit an idle engine_status")
+	}
+}
+
+// TestHandleRunExit_ForcedCancel_EmitsDead asserts the watchdog's hard kill
+// (code=0, signal="cancelled-forced") is treated as abnormal death and STILL
+// emits engine_dead — a non-cooperative signal is a real termination the
+// consumer must surface, distinct from the cooperative "cancelled".
+func TestHandleRunExit_ForcedCancel_EmitsDead(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	ec := newEventCollector(mgr)
+
+	_, _ = mgr.StartSession("exit-forced", defaultConfig())
+	_ = mgr.SendPrompt("exit-forced", "go", nil)
+
+	keys := mb.startedKeys()
+	code := 0
+	signal := "cancelled-forced"
+	mb.emitExit(keys[0], &code, &signal, "")
+
+	deadEvents := ec.byType("engine_dead")
+	if len(deadEvents) == 0 {
+		t.Fatal("forced cancel (signal=cancelled-forced) must still emit engine_dead — it is a hard kill, not a cooperative cancel")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // handleRunError tests
 // ---------------------------------------------------------------------------

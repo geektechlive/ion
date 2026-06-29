@@ -28,9 +28,15 @@ func (m *Manager) SendDialogResponse(key, dialogID string, value interface{}) {
 // connected clients, fires the elicitation_request extension hook, and waits
 // for whichever responds first. Returns (response, cancelled, error).
 //
-// Defaults: a 5-minute timeout caps the wait so a forgotten elicitation
-// cannot wedge an extension forever. If both client and extension respond,
-// the first reply wins; the second is dropped (non-blocking send).
+// Human-wait semantics: by default the wait is INDEFINITE — a human (or an
+// extension answering on their behalf) is expected to respond, and a forgotten
+// elicitation must not be silently cancelled by a wall-clock deadline. The wait
+// is still bounded by session lifecycle: s.rootCtx is cancelled by SendAbort
+// (user abort) and StopSession (teardown), so an unanswered elicitation can
+// never wedge a torn-down session. An operator who configures a finite
+// human-wait (TimeoutsConfig.ElicitationMs > 0) opts into a deadline, after
+// which the elicitation returns cancelled=true. If both client and extension
+// respond, the first reply wins; the second is dropped (non-blocking send).
 func (m *Manager) elicit(s *engineSession, key string, info extension.ElicitationRequestInfo) (map[string]interface{}, bool, error) {
 	requestID := info.RequestID
 	if requestID == "" {
@@ -70,10 +76,43 @@ func (m *Manager) elicit(s *engineSession, key string, info extension.Elicitatio
 		}
 	}()
 
-	timeout := 5 * time.Minute
+	// Resolve the human-wait timeout. Default is indefinite (timerCh stays
+	// nil, which blocks forever in the select below). A configured finite
+	// human-wait installs a real timer; on expiry the elicitation is
+	// reported cancelled.
+	var timerCh <-chan time.Time
 	if m.config != nil && m.config.Timeouts != nil {
-		timeout = m.config.Timeouts.Elicitation()
+		if d, finite := m.config.Timeouts.HumanWait(); finite {
+			timer := time.NewTimer(d)
+			defer timer.Stop()
+			timerCh = timer.C
+			utils.Log("Session", fmt.Sprintf("elicit %s: finite human-wait %s", requestID, d))
+		} else {
+			utils.Log("Session", fmt.Sprintf("elicit %s: indefinite human-wait (waiting for user/extension)", requestID))
+		}
+	} else {
+		utils.Log("Session", fmt.Sprintf("elicit %s: indefinite human-wait (no timeouts config)", requestID))
 	}
+
+	// Session-lifecycle cancellation. rootCtx is cancelled by SendAbort and
+	// StopSession, so an indefinite wait can never wedge a torn-down session.
+	// nil-guarded for test-constructed sessions that never called
+	// newSessionRootContext (a nil channel blocks forever, which is the
+	// correct "no lifecycle cancellation wired" behavior).
+	var doneCh <-chan struct{}
+	if s.rootCtx != nil {
+		doneCh = s.rootCtx.Done()
+	}
+
+	// Mark the run as entering an intentional indefinite human-wait so the
+	// run-progress watchdog does not cancel it for idleness while the user
+	// decides. Paired End on every exit path via defer — the wait is indefinite
+	// by default (see TimeoutsConfig.HumanWait) and the watchdog must honor that
+	// (the 1782060832205-836960a71da9 / 3d580dc5 incidents cancelled an
+	// unanswered elicitation at 10m precisely because this bracket was missing).
+	m.beginHumanWait(s)
+	defer m.endHumanWait(s)
+
 	select {
 	case reply := <-ch:
 		// Mirror the response back through the elicitation_result hook so
@@ -88,7 +127,11 @@ func (m *Manager) elicit(s *engineSession, key string, info extension.Elicitatio
 		return reply.Response, reply.Cancelled, nil
 	case reply := <-hookCh:
 		return reply.Response, false, nil
-	case <-time.After(timeout):
+	case <-doneCh:
+		utils.Log("Session", fmt.Sprintf("elicit %s: cancelled by session teardown/abort", requestID))
+		return nil, true, fmt.Errorf("elicitation %s cancelled", requestID)
+	case <-timerCh:
+		utils.Log("Session", fmt.Sprintf("elicit %s: finite human-wait expired, returning cancelled", requestID))
 		return nil, true, fmt.Errorf("elicitation %s timed out", requestID)
 	}
 }

@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"context"
+
 	"github.com/dsswift/ion/engine/internal/permissions"
 	"github.com/dsswift/ion/engine/internal/sandbox"
 	"github.com/dsswift/ion/engine/internal/tools"
@@ -285,7 +287,14 @@ type RunConfig struct {
 	SandboxCfg    *sandbox.Config
 	SecurityCfg   *types.SecurityConfig
 	ExternalTools []types.LlmToolDef
-	McpToolRouter func(name string, input map[string]interface{}) (content string, isErr bool, err error)
+	// McpToolRouter routes MCP and extension-registered tool calls. The ctx is
+	// the per-tool-call context: it carries the DeadlineSuspender (see
+	// types.WithDeadlineSuspender) so a tool that synchronously blocks on a
+	// human via ctx.elicit() can suspend its finite deadline for the span of
+	// the wait. (Permission prompts block elsewhere and do not use the
+	// suspender — see DeadlineSuspender's doc.) ctx is also the cancellation
+	// signal for the routed call.
+	McpToolRouter func(ctx context.Context, name string, input map[string]interface{}) (content string, isErr bool, err error)
 	AgentSpawner  tools.AgentSpawner
 	Telemetry     TelemetryCollector
 	Timeouts      *types.TimeoutsConfig

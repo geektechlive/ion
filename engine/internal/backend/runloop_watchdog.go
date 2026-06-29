@@ -68,6 +68,30 @@ const defaultRunStallThreshold = 10 * time.Minute
 // a tool execution, or any other downstream subsystem stops bumping
 // the clock and will be cancelled within (threshold + tick) seconds.
 //
+// One deliberate exception: ToolStalledEvent is emitted via
+// emitWithoutProgress (not emit), so it does NOT reset the clock. That
+// event is the engine signalling the *absence* of progress; counting it
+// as progress would let a wedged but deadline-exempt Agent/dispatch tool
+// hold the watchdog off forever by emitting a stall advisory every tick
+// (the conversation 1782012033034-37d617d3d9ab incident). Conversely, a
+// healthy long dispatch keeps its parent run's clock fresh through
+// BumpRunProgress, which the dispatch layer calls on every genuine child
+// event. See emitWithoutProgress / BumpRunProgress in api_backend.go.
+//
+// A second deliberate exception: a run blocked inside an intentional,
+// indefinite human-wait (an elicitation awaiting a
+// user decision) is exempt while the wait is open. Such a run emits no
+// forward progress by design, and the human-wait is indefinite by default
+// (TimeoutsConfig.HumanWait). BeginHumanWait/EndHumanWait reference-count
+// the open waits on run.humanWaitDepth; while depth > 0 the watchdog skips
+// its idle-cancellation check for that run, then resumes with a fresh
+// window when the last wait ends. Without this exemption the watchdog
+// silently overrode the indefinite-human-wait guarantee and killed runs
+// parked on unanswered elicitations at the 10-minute threshold (the
+// 1782060832205-836960a71da9 / 3d580dc5 incidents). This exemption is
+// scoped to genuine human-waits only — a tool that wedges without a human
+// in the loop is still caught.
+//
 // The watchdog is a safety backstop, not a performance tuner. The
 // threshold should be high enough that legitimate long-running tool
 // calls (e.g. lengthy bash compilations, large file reads) do not
@@ -167,6 +191,32 @@ func (b *ApiBackend) runProgressWatchdog(run *activeRun) {
 		}
 		idle := time.Since(time.Unix(0, lastNanos))
 		if idle < threshold {
+			continue
+		}
+
+		// Human-wait exemption. A run blocked inside an intentional, indefinite
+		// human-wait (an elicitation awaiting a user decision) emits no forward
+		// progress by design — that is the expected state, not a stall, and the
+		// human-wait is indefinite by default (see TimeoutsConfig.HumanWait).
+		// BeginHumanWait/EndHumanWait reference-count these spans on
+		// run.humanWaitDepth. While depth > 0 the watchdog must not cancel:
+		// doing so would silently override the indefinite-human-wait guarantee
+		// (the 1782060832205-836960a71da9 / 3d580dc5 incidents, where a run
+		// parked on an unanswered elicitation was killed at 10m). The clock
+		// resumes with a fresh window when the last human-wait ends —
+		// EndHumanWait stamps lastProgressAt — so a tool that genuinely wedges
+		// after a human answers is still caught on the next threshold.
+		//
+		// Regression tests: TestRunStallExemptDuringHumanWait (depth > 0 must
+		// not cancel), TestHumanWaitDepthReferenceCounted (last-wait-wins),
+		// TestEndHumanWaitResetsClock (clock refresh on depth 0), all in
+		// runloop_watchdog_humanwait_test.go. Those tests go red if this branch
+		// is removed.
+		if run.humanWaitDepth.Load() > 0 {
+			utils.Debug("ApiBackend", fmt.Sprintf(
+				"runProgressWatchdog: idle %s but runID=%s is in a human-wait (depth=%d) — not cancelling",
+				idle.Round(time.Second), run.requestID, run.humanWaitDepth.Load(),
+			))
 			continue
 		}
 

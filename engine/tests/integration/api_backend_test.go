@@ -132,6 +132,55 @@ func TestApiBackendSimpleTextResponse(t *testing.T) {
 	}
 }
 
+// TestApiBackendTaskCompleteUsage verifies that a normal (non-dispatch) run
+// emits TaskCompleteEvent with Usage populated from the provider's scripted
+// token counts. MockProvider.TextResponse scripts InputTokens:10 on
+// message_start and OutputTokens:5 on message_delta. The runloop must
+// accumulate these and surface them on TaskCompleteEvent.Usage.
+func TestApiBackendTaskCompleteUsage(t *testing.T) {
+	mp := setupMockProvider(t)
+	mp.SetResponse(helpers.TextResponse("usage-test"))
+
+	b := backend.NewApiBackend()
+	be := newBackendCollector(b)
+
+	convDir := t.TempDir()
+	b.StartRun("run-usage", types.RunOptions{
+		Prompt:    "test usage",
+		Model:     "mock-model",
+		SessionID: filepath.Join(convDir, "conv-usage"),
+	})
+
+	be.waitForExit(t, 5*time.Second)
+
+	events := be.getNormalized()
+	var tc *types.TaskCompleteEvent
+	for _, ev := range events {
+		if e, ok := ev.Data.(*types.TaskCompleteEvent); ok {
+			tc = e
+		}
+	}
+
+	if tc == nil {
+		t.Fatal("no TaskCompleteEvent emitted")
+	}
+	if tc.Usage.InputTokens == nil {
+		t.Fatal("TaskCompleteEvent.Usage.InputTokens is nil")
+	}
+	if tc.Usage.OutputTokens == nil {
+		t.Fatal("TaskCompleteEvent.Usage.OutputTokens is nil")
+	}
+	if *tc.Usage.InputTokens != 10 {
+		t.Errorf("InputTokens = %d, want 10", *tc.Usage.InputTokens)
+	}
+	if *tc.Usage.OutputTokens != 5 {
+		t.Errorf("OutputTokens = %d, want 5", *tc.Usage.OutputTokens)
+	}
+	if tc.CostUsd <= 0 {
+		t.Errorf("CostUsd = %f, want > 0", tc.CostUsd)
+	}
+}
+
 func TestApiBackendToolCallLoop(t *testing.T) {
 	mp := setupMockProvider(t)
 

@@ -73,6 +73,17 @@ func normalizedEventVariants() map[string]NormalizedEventData {
 		EventThinkingBlockStart: &ThinkingBlockStartEvent{},
 		EventThinkingDelta:      &ThinkingDeltaEvent{},
 		EventThinkingBlockEnd:   &ThinkingBlockEndEvent{},
+		// Extension-surface events (WI-001: single-path collapse)
+		EventMessageEnd:             &MessageEndEvent{},
+		EventAgentState:             &AgentStateEvent{},
+		EventHarnessMessage:         &HarnessMessageEvent{},
+		EventWorkingMessage:         &WorkingMessageEvent{},
+		EventNotify:                 &NotifyEvent{},
+		EventDialog:                 &DialogEvent{},
+		EventExtensionDied:          &ExtensionDiedEvent{},
+		EventExtensionRespawned:     &ExtensionRespawnedEvent{},
+		EventExtensionDeadPermanent: &ExtensionDeadPermanentEvent{},
+		EventEventsDropped:          &EventsDroppedEvent{},
 	}
 }
 

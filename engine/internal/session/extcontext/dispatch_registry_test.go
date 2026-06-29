@@ -239,3 +239,148 @@ func TestDispatchRegistry_ActiveNames(t *testing.T) {
 		t.Error("ActiveNames should not contain deregistered agent-x")
 	}
 }
+
+// --- Parallel-safe dispatch registry tests ---
+
+// TestDispatchRegistry_ParallelSameNameKeepsBoth verifies that two
+// dispatches with the same agent name but different IDs both remain in
+// the registry simultaneously. This is the core parallel-safety property.
+//
+// Revert-red: reverting to bare-name keying (Register overwrites by name)
+// causes Count() to be 1 instead of 2.
+func TestDispatchRegistry_ParallelSameNameKeepsBoth(t *testing.T) {
+	r := NewDispatchRegistry()
+
+	var cancelledA, cancelledB atomic.Int32
+	r.RegisterWithID("dispatch-agent-1-aaa", "agent", func() { cancelledA.Add(1) }, nil, "sess-1")
+	r.RegisterWithID("dispatch-agent-1-bbb", "agent", func() { cancelledB.Add(1) }, nil, "sess-1")
+
+	if got := r.Count(); got != 2 {
+		t.Fatalf("Count after two same-name registers = %d, want 2", got)
+	}
+
+	// ActiveNames returns one entry (both share the name "agent").
+	names := r.ActiveNames()
+	if len(names) != 1 {
+		t.Errorf("ActiveNames = %d, want 1 (two dispatches share one name)", len(names))
+	}
+	if !names["agent"] {
+		t.Errorf("ActiveNames missing 'agent': %v", names)
+	}
+}
+
+// TestDispatchRegistry_RecallByID_TargetsSpecificInstance verifies that
+// RecallByID cancels exactly one dispatch, leaving other dispatches of
+// the same name alive.
+//
+// Revert-red: without id-based keying, RecallByID does not exist or
+// does not distinguish between same-name dispatches.
+func TestDispatchRegistry_RecallByID_TargetsSpecificInstance(t *testing.T) {
+	r := NewDispatchRegistry()
+
+	var cancelledA, cancelledB atomic.Int32
+	r.RegisterWithID("dispatch-agent-1-aaa", "agent", func() { cancelledA.Add(1) }, nil, "sess-1")
+	r.RegisterWithID("dispatch-agent-1-bbb", "agent", func() { cancelledB.Add(1) }, nil, "sess-1")
+
+	// Recall only the first instance by ID.
+	ok := r.RecallByID("dispatch-agent-1-aaa", "test_targeted_recall")
+	if !ok {
+		t.Fatal("RecallByID returned false, want true")
+	}
+
+	if cancelledA.Load() != 1 {
+		t.Errorf("cancelA called %d times, want 1", cancelledA.Load())
+	}
+	if cancelledB.Load() != 0 {
+		t.Errorf("cancelB called %d times, want 0 (should NOT be cancelled)", cancelledB.Load())
+	}
+
+	// Only one dispatch remains.
+	if got := r.Count(); got != 1 {
+		t.Fatalf("Count after targeted recall = %d, want 1", got)
+	}
+
+	// The surviving dispatch is retrievable.
+	d, ok := r.Get("dispatch-agent-1-bbb")
+	if !ok {
+		t.Fatal("Get(bbb) returned false after targeted recall of aaa")
+	}
+	if d.Name != "agent" {
+		t.Errorf("surviving dispatch Name = %q, want 'agent'", d.Name)
+	}
+
+	// RecallByID on the already-recalled dispatch returns false.
+	ok2 := r.RecallByID("dispatch-agent-1-aaa", "duplicate")
+	if ok2 {
+		t.Error("second RecallByID returned true, want false")
+	}
+}
+
+// TestDispatchRegistry_RecallByName_CancelsOneOfMany verifies that
+// Recall(name) cancels one dispatch matching the name when multiple
+// same-name dispatches exist.
+func TestDispatchRegistry_RecallByName_CancelsOneOfMany(t *testing.T) {
+	r := NewDispatchRegistry()
+
+	var cancelled atomic.Int32
+	r.RegisterWithID("id-1", "agent", func() { cancelled.Add(1) }, nil, "sess-1")
+	r.RegisterWithID("id-2", "agent", func() { cancelled.Add(1) }, nil, "sess-1")
+
+	ok := r.Recall("agent", "test_name_recall")
+	if !ok {
+		t.Fatal("Recall(name) returned false, want true")
+	}
+
+	if cancelled.Load() != 1 {
+		t.Errorf("cancel called %d times, want 1 (only one of two same-name)", cancelled.Load())
+	}
+	if got := r.Count(); got != 1 {
+		t.Fatalf("Count after name-based recall = %d, want 1", got)
+	}
+}
+
+// TestDispatchRegistry_DeregisterByID verifies Deregister uses the ID key,
+// not the agent name.
+func TestDispatchRegistry_DeregisterByID(t *testing.T) {
+	r := NewDispatchRegistry()
+
+	r.RegisterWithID("id-x", "agent", func() {}, nil, "sess-1")
+	r.RegisterWithID("id-y", "agent", func() {}, nil, "sess-1")
+
+	r.Deregister("id-x")
+	if got := r.Count(); got != 1 {
+		t.Fatalf("Count after Deregister(id-x) = %d, want 1", got)
+	}
+
+	// id-y is still present.
+	_, ok := r.Get("id-y")
+	if !ok {
+		t.Error("Get(id-y) returned false after Deregister(id-x)")
+	}
+
+	// Deregistering by name does nothing (key is id, not name).
+	r.Deregister("agent")
+	if got := r.Count(); got != 1 {
+		t.Fatalf("Count after Deregister(agent) = %d, want 1 (name is not the key)", got)
+	}
+}
+
+// TestDispatchRegistry_BackwardCompat_RegisterUsesNameAsID verifies that
+// the legacy Register(name, ...) uses the name as both ID and name, so
+// existing callers that do not produce dispatch IDs still work.
+func TestDispatchRegistry_BackwardCompat_RegisterUsesNameAsID(t *testing.T) {
+	r := NewDispatchRegistry()
+
+	r.Register("agent-old", func() {}, nil, "sess-1")
+
+	d, ok := r.Get("agent-old")
+	if !ok {
+		t.Fatal("Get(agent-old) returned false")
+	}
+	if d.Name != "agent-old" {
+		t.Errorf("Name = %q, want 'agent-old'", d.Name)
+	}
+	if d.ID != "agent-old" {
+		t.Errorf("ID = %q, want 'agent-old' (backward compat)", d.ID)
+	}
+}

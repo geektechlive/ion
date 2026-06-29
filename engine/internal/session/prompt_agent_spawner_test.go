@@ -46,6 +46,12 @@ type childStubBackend struct {
 	// tests to verify the parent's agent_state snapshot sequence isn't
 	// perturbed by intermediate workflow events from the child run.
 	emitModelFallback bool
+	// emitActivity, when true, causes the stub to emit a SessionInitEvent
+	// (carrying the child conv id) followed by a ToolCallEvent +
+	// ToolResultEvent pair and a TextChunkEvent BEFORE TaskCompleteEvent, so
+	// tests can assert the spawner emits engine_dispatch_activity deltas for
+	// the live transcript while the child is still running.
+	emitActivity bool
 	// childErr, when non-nil, is delivered via onError after StartRun
 	// returns control.
 	childErr error
@@ -74,6 +80,7 @@ func (c *childStubBackend) StartRun(requestID string, opts types.RunOptions) {
 	gate := c.releaseGate
 	result := c.resultText
 	emitFallback := c.emitModelFallback
+	emitActivity := c.emitActivity
 	errToEmit := c.childErr
 	c.mu.Unlock()
 
@@ -83,6 +90,14 @@ func (c *childStubBackend) StartRun(requestID string, opts types.RunOptions) {
 		// and child-error path).
 		if gate != nil {
 			<-gate
+		}
+		// Emit the live-transcript activity sequence (init → tool pair → text)
+		// before completion so the spawner produces engine_dispatch_activity.
+		if emitActivity && onNorm != nil {
+			onNorm(requestID, types.NormalizedEvent{Data: &types.SessionInitEvent{SessionID: "child-conv-id"}})
+			onNorm(requestID, types.NormalizedEvent{Data: &types.ToolCallEvent{ToolName: "Read", ToolID: "tool-1"}})
+			onNorm(requestID, types.NormalizedEvent{Data: &types.ToolResultEvent{ToolID: "tool-1", IsError: false}})
+			onNorm(requestID, types.NormalizedEvent{Data: &types.TextChunkEvent{Text: "looking at the file"}})
 		}
 		// Emit a synthetic ModelFallbackEvent before the task-complete so
 		// lifecycle tests can verify it doesn't perturb the parent's
@@ -149,18 +164,18 @@ func (c *childStubBackend) Cancel(_ string) bool {
 	return true
 }
 
-func (c *childStubBackend) IsRunning(_ string) bool                                    { return false }
-func (c *childStubBackend) WriteToStdin(_ string, _ interface{}) error                 { return nil }
-func (c *childStubBackend) FlushConversations()                                        {}
-func (c *childStubBackend) OnNormalized(fn func(string, types.NormalizedEvent))        { c.onNorm = fn }
-func (c *childStubBackend) OnExit(fn func(string, *int, *string, string))              { c.onExit = fn }
-func (c *childStubBackend) OnError(fn func(string, error))                             { c.onError = fn }
+func (c *childStubBackend) IsRunning(_ string) bool                             { return false }
+func (c *childStubBackend) WriteToStdin(_ string, _ interface{}) error          { return nil }
+func (c *childStubBackend) FlushConversations()                                 {}
+func (c *childStubBackend) OnNormalized(fn func(string, types.NormalizedEvent)) { c.onNorm = fn }
+func (c *childStubBackend) OnExit(fn func(string, *int, *string, string))       { c.onExit = fn }
+func (c *childStubBackend) OnError(fn func(string, error))                      { c.onError = fn }
 
 // installHookCapturingHost registers in-memory agent_start / agent_end
 // handlers on a fresh ExtensionGroup and returns the group together with
 // pointers the test can inspect after the spawner runs.
 type capturedAgentInfo struct {
-	mu        sync.Mutex
+	mu         sync.Mutex
 	startCalls []extension.AgentInfo
 	endCalls   []extension.AgentInfo
 }
@@ -243,6 +258,89 @@ func runSpawnerOnce(t *testing.T, stub *childStubBackend, parentCtx context.Cont
 
 	result, err := runCfg.AgentSpawner(parentCtx, "", prompt, "test-display", "/tmp", "")
 	return result, cap, err
+}
+
+// TestWireAgentSpawner_EmitsDispatchActivity pins the Agent-tool spawn path's
+// half of the live dispatched-agent transcript: a running sub-agent spawned via
+// the built-in Agent tool must emit engine_dispatch_activity deltas (tool_start,
+// tool_end, text) on the parent stream, mirroring the extension-dispatch path in
+// dispatch_agent.go. This is the regression for the shipped gap where ONLY the
+// extension-dispatch path was instrumented, so Agent-tool dispatches froze after
+// the first tool on clients.
+//
+// Reverting the activity wiring in prompt_agent_spawner.go turns this red: no
+// engine_dispatch_activity events are emitted.
+func TestWireAgentSpawner_EmitsDispatchActivity(t *testing.T) {
+	stub := &childStubBackend{resultText: "child output", emitActivity: true}
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	var mu sync.Mutex
+	var activity []types.EngineEvent
+	mgr.OnEvent(func(_ string, ev types.EngineEvent) {
+		if ev.Type == "engine_dispatch_activity" {
+			mu.Lock()
+			activity = append(activity, ev)
+			mu.Unlock()
+		}
+	})
+
+	if _, err := mgr.StartSession("activity-spawn", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["activity-spawn"]
+	mgr.mu.Unlock()
+
+	group, _ := installHookCapturingGroup(t)
+	mgr.mu.Lock()
+	s.extGroup = group
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "activity-spawn", "claude-sonnet", group, runCfg)
+	if _, err := runCfg.AgentSpawner(context.Background(), "", "do thing", "disp", "/tmp", ""); err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	// The text delta is coalesced (~500ms flush) and flushed on Close at child
+	// exit, so all three kinds are present by the time the spawner returns.
+	mu.Lock()
+	defer mu.Unlock()
+	var sawToolStart, sawToolEnd, sawText bool
+	lastSeq := 0
+	for _, ev := range activity {
+		if ev.DispatchConversationID != "child-conv-id" {
+			t.Errorf("activity kind=%s conversationId=%q, want child-conv-id", ev.DispatchActivityKind, ev.DispatchConversationID)
+		}
+		if ev.DispatchAgentID == "" {
+			t.Errorf("activity kind=%s missing DispatchAgentID", ev.DispatchActivityKind)
+		}
+		if ev.DispatchSeq <= lastSeq {
+			t.Errorf("activity seq not monotonic: %d after %d", ev.DispatchSeq, lastSeq)
+		}
+		lastSeq = ev.DispatchSeq
+		switch ev.DispatchActivityKind {
+		case "tool_start":
+			sawToolStart = true
+			if ev.ToolID != "tool-1" || ev.ToolName != "Read" {
+				t.Errorf("tool_start toolId=%q toolName=%q, want tool-1/Read", ev.ToolID, ev.ToolName)
+			}
+		case "tool_end":
+			sawToolEnd = true
+		case "text":
+			sawText = true
+			if ev.DispatchTextDelta != "looking at the file" {
+				t.Errorf("text delta=%q, want coalesced full text", ev.DispatchTextDelta)
+			}
+		}
+	}
+	if !sawToolStart || !sawToolEnd || !sawText {
+		t.Fatalf("missing activity kinds from Agent-tool spawn path: start=%v end=%v text=%v (got %d events)",
+			sawToolStart, sawToolEnd, sawText, len(activity))
+	}
 }
 
 func TestWireAgentSpawner_FiresAgentStartAndEnd_OnSuccess(t *testing.T) {
@@ -419,9 +517,9 @@ func TestWireAgentSpawner_ResolvesTierAlias(t *testing.T) {
 		context.Background(),
 		"test-specialist", // requestedName
 		"audit the extension",
-		"",    // description
+		"", // description
 		"/tmp",
-		"",    // model (empty — falls back to spec)
+		"", // model (empty — falls back to spec)
 	)
 	if spawnErr != nil {
 		t.Fatalf("spawner returned error: %v", spawnErr)
@@ -547,9 +645,9 @@ func TestWireAgentSpawner_ThreadsDefaultModelToChild(t *testing.T) {
 		context.Background(),
 		"test-specialist",
 		"audit the extension",
-		"",    // description
+		"", // description
 		"/tmp",
-		"",    // model (empty — falls back to spec → "standard")
+		"", // model (empty — falls back to spec → "standard")
 	)
 	if spawnErr != nil {
 		t.Fatalf("spawner returned error: %v", spawnErr)

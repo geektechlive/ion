@@ -303,3 +303,83 @@ func TestAgentLifecycle_ModelFallbackDoesNotPerturbSnapshots(t *testing.T) {
 		t.Errorf("final snapshot status = %q, want %q", finalStatus, "done")
 	}
 }
+
+// TestHandleRunExit_CleanCancel_TerminalAgentSnapshot pins the agent-state
+// snapshot + descendant-teardown contract for the clean-cancel termination
+// path through handleRunExit. A clean cancel (code==0, signal=="cancelled")
+// can arrive straight from the runloop — a turn/tool hook cancelling the run —
+// WITHOUT flowing through SendAbort, so handleRunExit reaps descendants itself
+// (event_translation.go). This is a distinct termination trigger from
+// abortAllDescendants-via-SendAbort.
+//
+// The contract has two halves on this path:
+//  1. No descendant is stranded "running" in the post-exit snapshot
+//     (handleRunExit's ClearRunningStates handles the status), and
+//  2. every descendant HANDLE is reaped, so no dispatched child process
+//     outlives the cancelled parent (the `cleanCancel || abnormalExit` guard's
+//     abortAllDescendants → ClearHandles).
+//
+// Remove the `cleanCancel || abnormalExit` descendant-teardown guard in
+// handleRunExit and half (2) goes red: HandleCount stays 1 because the
+// orphaned child handle is never cleared. (PID 0 keeps killProcess inert so
+// the test reaps a handle without signalling a real process.)
+func TestHandleRunExit_CleanCancel_TerminalAgentSnapshot(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	_, _ = mgr.StartSession("exit-clean-snap", defaultConfig())
+
+	captured := captureAgentStateEvents(mgr)
+
+	// Drive the run first; SendPrompt resets the agent registry, so the live
+	// descendant must be registered AFTER the run has started and BEFORE the
+	// exit fires (mirroring a mid-run dispatch).
+	_ = mgr.SendPrompt("exit-clean-snap", "go", nil)
+	keys := mb.startedKeys()
+	if len(keys) == 0 {
+		t.Fatal("expected a started run for exit-clean-snap")
+	}
+
+	mgr.mu.Lock()
+	s := mgr.sessions["exit-clean-snap"]
+	// Register a live, engine-managed descendant (handle + state). PID 0 keeps
+	// killProcess inert. No extension group → the engine owns the registry and
+	// emits a corrective snapshot on teardown (extension-owned registries skip
+	// the engine snapshot — see abort.go).
+	s.agents.RegisterHandle("child-1", types.AgentHandle{PID: 0, ParentAgent: ""})
+	s.agents.AppendState(types.AgentStateUpdate{
+		Name:   "child-1",
+		Status: "running",
+		Metadata: map[string]interface{}{
+			"displayName": "Child 1",
+			"visibility":  "sticky",
+			"invited":     true,
+		},
+	})
+	mgr.mu.Unlock()
+
+	// Deliver a cooperative cancel exit. The mock backend's exit callback routes
+	// into handleRunExit via keyForRun.
+	code := 0
+	signal := "cancelled"
+	mb.emitExit(keys[0], &code, &signal, "")
+
+	// Half (1): the descendant must not be stranded "running" in the last
+	// snapshot — it appears terminal or is absent.
+	assertNoRunningInLastSnapshot(t, *captured, "child-1")
+
+	// Half (2): the descendant handle must be reaped so no orphaned child
+	// outlives the cancelled parent. This is the assertion that goes red when
+	// the clean-cancel teardown guard is removed.
+	mgr.mu.RLock()
+	handleCount := mgr.sessions["exit-clean-snap"].agents.HandleCount()
+	snapshot := mgr.sessions["exit-clean-snap"].agents.MergedSnapshot()
+	mgr.mu.RUnlock()
+	if handleCount != 0 {
+		t.Errorf("descendant handle not reaped after clean cancel: HandleCount=%d, want 0 (orphaned child would outlive the cancelled parent)", handleCount)
+	}
+	for _, a := range snapshot {
+		if a.Name == "child-1" && a.Status == "running" {
+			t.Errorf("descendant %q still running in registry after clean cancel (snapshot contract violated): %+v", a.Name, a)
+		}
+	}
+}

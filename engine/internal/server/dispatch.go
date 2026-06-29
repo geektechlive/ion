@@ -98,8 +98,17 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		s.manager.AbortAgent(cmd.Key, cmd.AgentName, subtree)
 
 	case "steer_agent":
-		// Fire-and-forget: no response sent (matches TS behavior).
-		s.manager.SteerAgent(cmd.Key, cmd.AgentName, cmd.Message)
+		// Fire-and-forget: no response sent (matches TS behavior). SteerAgent
+		// returns a typed outcome so the steer can never be silently dropped;
+		// we log both the attempt and the resolved outcome (engine-grounding
+		// §7), at parity with the abort/abort_agent cases above.
+		utils.Info("Server", fmt.Sprintf("steer_agent: key=%s agent=%s msgLen=%d", cmd.Key, cmd.AgentName, len(cmd.Message)))
+		outcome := s.manager.SteerAgent(cmd.Key, cmd.AgentName, cmd.Message)
+		if outcome.Delivered() {
+			utils.Info("Server", fmt.Sprintf("steer_agent delivered: key=%s agent=%s outcome=%s", cmd.Key, cmd.AgentName, outcome))
+		} else {
+			utils.Warn("Server", fmt.Sprintf("steer_agent NOT delivered: key=%s agent=%s outcome=%s", cmd.Key, cmd.AgentName, outcome))
+		}
 
 	case "dialog_response":
 		// Fire-and-forget: no response sent (matches TS behavior).
@@ -146,7 +155,15 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 
 	case "set_plan_mode":
 		enabled := cmd.Enabled != nil && *cmd.Enabled
-		s.manager.SetPlanMode(cmd.Key, enabled, cmd.AllowedTools, cmd.Source)
+		// cmd.PlanFilePath is the client's persisted plan path. When enabling
+		// plan mode on a session that lost its path (e.g. after a session
+		// replacement), the manager restores it (if it exists on disk) so the
+		// next prompt reuses the conversation's existing plan instead of
+		// allocating a fresh slug. Empty for clients that do not track a path.
+		if cmd.PlanFilePath != "" {
+			utils.Log("Server", fmt.Sprintf("set_plan_mode: key=%s enabled=%v planFilePath supplied=%s", cmd.Key, enabled, cmd.PlanFilePath))
+		}
+		s.manager.SetPlanMode(cmd.Key, enabled, cmd.AllowedTools, cmd.Source, cmd.PlanFilePath)
 		// Tri-valued PlanModeAllowedBashCommands per the protocol doc:
 		//   - nil   (JSON omitted): no change to existing allowlist
 		//   - []    (JSON []):      clear allowlist
@@ -226,12 +243,24 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 
 	case "get_conversation":
 		limit := cmd.Limit
-		if limit <= 0 {
-			limit = 50
+		// limit == 0 (or negative) means unbounded: return all messages from
+		// offset onward. LoadMessagesPaginated already implements this
+		// semantics (limit <= 0 → no page cap), so we pass limit through
+		// unchanged. Previously this handler clamped limit <= 0 to 50, which
+		// silently truncated callers that passed 0 to mean "all" (e.g. the
+		// desktop relay handler for iOS dispatch history). Wire behavior
+		// change approved: 0-means-all is additive and consumer-friendly.
+		if limit < 0 {
+			limit = 0
 		}
 		offset := cmd.Offset
 		if offset < 0 {
 			offset = 0
+		}
+		if limit == 0 {
+			utils.Log("Server", fmt.Sprintf("get_conversation key=%s offset=%d limit=0 (unbounded)", cmd.Key, offset))
+		} else {
+			utils.Log("Server", fmt.Sprintf("get_conversation key=%s offset=%d limit=%d", cmd.Key, offset, limit))
 		}
 		result, err := conversation.LoadMessagesPaginated(cmd.Key, "", offset, limit)
 		s.sendResult(conn, cmd, err, result)
@@ -391,6 +420,19 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 
 	case "resource_publish":
 		s.dispatchResourcePublish(conn, cmd)
+
+	case "get_enterprise_policy":
+		// Return the NewConversationDefaults section of the enterprise config so
+		// clients can enforce the locked new-conversation policy without parsing
+		// MDM sources themselves. Returns null when no enterprise config is
+		// loaded or no NewConversationDefaults section is present.
+		var newConversationDefaults interface{}
+		if s.config != nil && s.config.Enterprise != nil && s.config.Enterprise.NewConversationDefaults != nil {
+			newConversationDefaults = s.config.Enterprise.NewConversationDefaults
+		}
+		s.sendResult(conn, cmd, nil, map[string]interface{}{
+			"newConversationDefaults": newConversationDefaults,
+		})
 
 	case "get_plan_content":
 		// Implementation in dispatch_plan_content.go.

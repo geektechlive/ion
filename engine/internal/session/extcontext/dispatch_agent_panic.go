@@ -113,7 +113,7 @@ func recoverBackgroundDispatchPanic(
 	//    attempts don't try to cancel a goroutine that has already
 	//    died. Idempotent against any later deregister attempt.
 	if registry != nil {
-		registry.Deregister(opts.Name)
+		registry.Deregister(agentID)
 	}
 
 	// 5. Final "dispatch complete" log line so log analysis sees a

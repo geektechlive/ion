@@ -285,6 +285,12 @@ var validCommands = map[string]bool{
 	// Stateless; no session required. The engine replies with the listing in the
 	// result data.
 	"discover_slash_commands": true,
+	// get_enterprise_policy: read the enterprise NewConversationDefaults policy
+	// so clients can decide whether the new-conversation flow is locked.
+	// Stateless (no session key); the engine replies with
+	// { newConversationDefaults } in the result data (null when no enterprise
+	// config / no section is present).
+	"get_enterprise_policy": true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -488,6 +494,10 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		// key scopes the plan directory; path is the target plan file.
 		// offset and limit are optional (both default to 0 = start/server-default).
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "path")
+	case "get_enterprise_policy":
+		// Stateless read; no required fields. requestId is optional but needed
+		// to receive the ServerResult (per the wire contract).
+		return true
 	}
 	return false
 }

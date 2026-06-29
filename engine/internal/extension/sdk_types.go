@@ -393,6 +393,16 @@ type DispatchAgentResult struct {
 	Cost         float64 `json:"cost"`
 	InputTokens  int     `json:"inputTokens"`
 	OutputTokens int     `json:"outputTokens"`
+
+	// DispatchID is the engine-assigned unique identifier for this dispatch
+	// instance. Collision-safe: two parallel dispatches of the same agent
+	// name in the same millisecond receive distinct IDs. Consumers use it
+	// to target a specific dispatch for recall, follow-up, or metrics
+	// correlation. Matches the "id" field in the agent state dispatches[]
+	// metadata array. Populated on both foreground results and background
+	// stubs (the stub carries the ID so callers can reference the dispatch
+	// before it completes).
+	DispatchID string `json:"dispatchId,omitempty"`
 	// ThinkingTokens is the estimated reasoning-token count for the dispatch
 	// (issue #158), a subset of OutputTokens that providers fold into the
 	// output usage. Estimated from accumulated reasoning text — see
@@ -418,18 +428,20 @@ type DispatchAgentResult struct {
 
 // DispatchError describes a failed background dispatch.
 type DispatchError struct {
-	Name     string  `json:"name"`
-	Message  string  `json:"message"`
-	ExitCode int     `json:"exitCode"`
-	Elapsed  float64 `json:"elapsed"`
+	Name       string  `json:"name"`
+	DispatchID string  `json:"dispatchId,omitempty"`
+	Message    string  `json:"message"`
+	ExitCode   int     `json:"exitCode"`
+	Elapsed    float64 `json:"elapsed"`
 }
 
 // RecallInfo describes a recalled (cancelled) background dispatch.
 type RecallInfo struct {
-	Name      string  `json:"name"`
-	Reason    string  `json:"reason"`
-	Elapsed   float64 `json:"elapsed"`
-	ToolCount int     `json:"toolCount"`
+	Name       string  `json:"name"`
+	DispatchID string  `json:"dispatchId,omitempty"`
+	Reason     string  `json:"reason"`
+	Elapsed    float64 `json:"elapsed"`
+	ToolCount  int     `json:"toolCount"`
 }
 
 // RecallAgentOpts configures a recall operation.
@@ -441,30 +453,34 @@ type RecallAgentOpts struct {
 
 // DispatchToolStartInfo carries data for the OnToolStart callback.
 type DispatchToolStartInfo struct {
-	Name     string `json:"name"`
-	ToolName string `json:"toolName"`
-	ToolID   string `json:"toolId"`
+	Name       string `json:"name"`
+	DispatchID string `json:"dispatchId,omitempty"`
+	ToolName   string `json:"toolName"`
+	ToolID     string `json:"toolId"`
 }
 
 // DispatchToolEndInfo carries data for the OnToolEnd callback.
 type DispatchToolEndInfo struct {
-	Name     string `json:"name"`
-	ToolName string `json:"toolName"`
-	ToolID   string `json:"toolId"`
-	Content  string `json:"content"`
+	Name       string `json:"name"`
+	DispatchID string `json:"dispatchId,omitempty"`
+	ToolName   string `json:"toolName"`
+	ToolID     string `json:"toolId"`
+	Content    string `json:"content"`
 }
 
 // DispatchToolErrorInfo carries data for the OnToolError callback.
 type DispatchToolErrorInfo struct {
-	Name     string `json:"name"`
-	ToolName string `json:"toolName"`
-	ToolID   string `json:"toolId"`
-	Content  string `json:"content"`
+	Name       string `json:"name"`
+	DispatchID string `json:"dispatchId,omitempty"`
+	ToolName   string `json:"toolName"`
+	ToolID     string `json:"toolId"`
+	Content    string `json:"content"`
 }
 
 // DispatchUsageInfo carries per-turn and cumulative usage data.
 type DispatchUsageInfo struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	DispatchID string `json:"dispatchId,omitempty"`
 
 	// Per-turn usage from the current UsageEvent.
 	InputTokens  int `json:"inputTokens"`
@@ -479,6 +495,7 @@ type DispatchUsageInfo struct {
 // DispatchTextDeltaInfo carries a text chunk and accumulated text.
 type DispatchTextDeltaInfo struct {
 	Name        string `json:"name"`
+	DispatchID  string `json:"dispatchId,omitempty"`
 	Delta       string `json:"delta"`
 	Accumulated string `json:"accumulated"`
 }

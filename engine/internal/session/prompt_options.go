@@ -75,6 +75,10 @@ func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) 
 		// SessionID is Ion's conversation-file identity. The API backend
 		// uses it to load/create ~/.ion/conversations/<id>.* and to resume.
 		SessionID: s.conversationID,
+		// ParentConversationID is forwarded so a fresh conversation created by
+		// this run records its descent from a prior session (client-driven
+		// checkpoint cut). Inert when resuming an existing conversation.
+		ParentConversationID: s.config.ParentConversationID,
 		// CliResumeSessionID is claude's own captured session UUID (empty on
 		// the first CLI run → no --resume). The API backend ignores it; only
 		// the CLI backend reads it. Distinct identity space from SessionID.

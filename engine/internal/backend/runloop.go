@@ -28,6 +28,10 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		hooks = run.cfg.Hooks
 	}
 
+	// Install the provider stream-idle deadline for this run from the resolved
+	// timeouts config. See installStreamIdleTimeout (runloop_stream_idle.go).
+	installStreamIdleTimeout(run)
+
 	// Resolve the effective early-stop continuation config for this run.
 	// Defaults < engine.json < RunOptions < sub-agent gate. Log the final
 	// snapshot once at INFO so a reader can reconstruct the decision path
@@ -108,6 +112,18 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	// Append the inbound user turn. See appendInboundUserMessage for the
 	// attachment / slash-command-split handling (extracted to keep this file
 	// under the size cap).
+	//
+	// The engine does NOT echo the appended user turn back to clients. A user
+	// turn is either (1) the local client's own input — which the client already
+	// rendered optimistically and does not need echoed back to remember — or
+	// (2) a turn originated on another client, whose live cross-device echo is
+	// owned by the desktop↔client wire (the desktop pipeline's
+	// desktop_message_added), not by the engine. The persisted turn is the
+	// snapshot authority: it lives in the conversation transcript and reaches
+	// every consumer via history load. Re-broadcasting it as a live event would
+	// duplicate the client's own input and force a dedup contract on every
+	// consumer; it also surfaced extension-injected turns (ctx.sendMessage) as
+	// phantom user bubbles. See the removal of engine_user_turn.
 	appendInboundUserMessage(conv, &opts)
 	// Persist immediately: if the engine dies mid-stream, the user prompt
 	// must survive so the user does not lose what they just typed.
@@ -448,6 +464,11 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			run.totalCost += costUsd
 			conversation.UpdateCost(conv, costUsd)
 
+			// Accumulate per-run token totals for TaskCompleteEvent.Usage.
+			run.cumulativeInputTokens += turnUsage.InputTokens
+			run.cumulativeCacheReadTokens += turnUsage.CacheReadInputTokens
+			run.cumulativeCacheCreateTokens += turnUsage.CacheCreationInputTokens
+
 			// Emit usage event with TOTAL input tokens (including cached) so
 			// consumers can compute accurate context percentage
 			totalIn := turnUsage.InputTokens + turnUsage.CacheReadInputTokens + turnUsage.CacheCreationInputTokens
@@ -567,6 +588,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					DurationMs:        elapsed,
 					NumTurns:          turn,
 					SessionID:         conv.ID,
+					Usage:             cumulativeUsage(run),
 					PermissionDenials: denials,
 				}})
 				b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
@@ -599,6 +621,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				DurationMs: elapsed,
 				NumTurns:   turn,
 				SessionID:  conv.ID,
+				Usage:      cumulativeUsage(run),
 			}})
 			b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
 			return
@@ -660,6 +683,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					DurationMs:        elapsed,
 					NumTurns:          turn,
 					SessionID:         conv.ID,
+					Usage:             cumulativeUsage(run),
 					PermissionDenials: denials,
 				}})
 				b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
@@ -752,6 +776,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		DurationMs: elapsed,
 		NumTurns:   turn,
 		SessionID:  conv.ID,
+		Usage:      cumulativeUsage(run),
 	}})
 	utils.Warn("ApiBackend", fmt.Sprintf("max turns exceeded: runID=%s turns=%d/%d cost=$%.4f", run.requestID, turn, maxTurns, run.totalCost))
 	b.emitExit(run.requestID, intPtr(0), nil, conv.ID)

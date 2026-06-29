@@ -157,7 +157,10 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 		totalOutputToks int
 	)
 
-	sseCh, sseErr := ParseSSEStream(resp.Body)
+	rawCh, rawErr := ParseSSEStream(resp.Body)
+	// Per-event idle deadline + heartbeat (see sse_idle.go): a stream that
+	// returns headers then goes silent is caught fast and retried.
+	sseCh, sseErr := streamWithIdle(rawCh, rawErr, "openai", opts.Model, "", nil)
 	for sse := range sseCh {
 		if sse.Data == "" {
 			continue

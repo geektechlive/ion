@@ -11,6 +11,7 @@ import (
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/modelconfig"
 	"github.com/dsswift/ion/engine/internal/session/agents"
+	"github.com/dsswift/ion/engine/internal/session/extcontext"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
@@ -123,7 +124,12 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			childFallbacks = fallbacks
 		}
 
-		utils.Debug("Session", fmt.Sprintf("child model resolved: requested=%q spec=%q parent=%q resolved=%q name=%s", model, func() string { if specMatched { return spec.Model }; return "" }(), capturedModel, childModel, agentName))
+		utils.Debug("Session", fmt.Sprintf("child model resolved: requested=%q spec=%q parent=%q resolved=%q name=%s", model, func() string {
+			if specMatched {
+				return spec.Model
+			}
+			return ""
+		}(), capturedModel, childModel, agentName))
 
 		start := time.Now()
 
@@ -220,13 +226,47 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snap})
 		}
 
+		// Live intra-turn transcript forwarding for the Agent-tool spawn path —
+		// the mirror of the extension-dispatch path in dispatch_agent.go. The
+		// emitter pushes the child's tool calls, tool results, and streamed text
+		// as engine_dispatch_activity events so consumers can stream the live
+		// sub-agent transcript without waiting for completion. Both spawn paths
+		// MUST emit these deltas; instrumenting only one leaves the other's
+		// dispatches frozen after the first tool. Closed below so a trailing
+		// partial text run is flushed.
+		activity := extcontext.NewDispatchActivityEmitter(
+			func(ev types.EngineEvent) { m.emit(capturedKey, ev) },
+			agentID, agentName,
+		)
+
 		child.OnNormalized(func(_ string, ev types.NormalizedEvent) {
+			// Report child liveness to the parent run's progress watchdog.
+			// The parent run is parked in the deadline-exempt Agent tool call
+			// and emits no progress of its own; a genuine child event proves
+			// the dispatch is alive. Mirrors the dispatch_agent.go wiring. See
+			// Manager.bumpParentProgress.
+			m.bumpParentProgress(s)
+
 			switch e := ev.Data.(type) {
+			case *types.SessionInitEvent:
+				// Capture the child conversation id the moment the child run
+				// initializes (well before TaskCompleteEvent) so the live
+				// activity deltas carry the reconcile key and clients can load
+				// the growing transcript while the agent is still running.
+				if e.SessionID != "" {
+					if childConvID == "" {
+						childConvID = e.SessionID
+					}
+					activity.SetConversationID(e.SessionID)
+				}
+
 			case *types.TaskCompleteEvent:
 				result = e.Result
 				childConvID = e.SessionID
 
 			case *types.TextChunkEvent:
+				// Push streamed text to the live transcript (coalesced).
+				activity.AccumulateText(e.Text)
 				progressMu.Lock()
 				textAccum += e.Text
 				now := time.Now()
@@ -245,11 +285,18 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 				}
 
 			case *types.ToolCallEvent:
+				// Push the tool-call start to the live transcript.
+				activity.HandleToolStart(e.ToolName, e.ToolID)
 				progressMu.Lock()
 				lastEmitTime = time.Now()
 				textAccum = "" // Reset text accumulator on new tool call
 				progressMu.Unlock()
 				emitProgress(fmt.Sprintf("Using %s...", e.ToolName))
+
+			case *types.ToolResultEvent:
+				// Push the tool-result completion to the live transcript
+				// (status-only; reconcile carries the full result body).
+				activity.HandleToolEnd(e.ToolID, e.IsError)
 
 			default:
 				utils.Debug("Session", fmt.Sprintf("child event not forwarded: agentID=%s type=%T", agentID, ev.Data))
@@ -319,6 +366,10 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			<-doneCh
 		}
 
+		// Flush any trailing buffered transcript text and stop the activity
+		// emitter's coalesce timer now that the child is done.
+		activity.Close()
+
 		elapsed := time.Since(start).Seconds()
 
 		var terminalStatus string
@@ -345,7 +396,16 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			// desktop can load the full history for this specialist.
 			if childConvID != "" {
 				existing, _ := state.Metadata["conversationIds"].([]interface{})
-				state.Metadata["conversationIds"] = append(existing, childConvID)
+				alreadyPresent := false
+				for _, v := range existing {
+					if s, ok := v.(string); ok && s == childConvID {
+						alreadyPresent = true
+						break
+					}
+				}
+				if !alreadyPresent {
+					state.Metadata["conversationIds"] = append(existing, childConvID)
+				}
 				// Keep single-value key for backward compatibility
 				state.Metadata["conversationId"] = childConvID
 			}

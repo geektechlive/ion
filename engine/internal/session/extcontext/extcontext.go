@@ -46,6 +46,16 @@ type SessionAccessor interface {
 	ExtConfig() *extension.ExtensionConfig
 	ProcRegistry() *extension.ProcessRegistry
 	NewChildBackend() backend.RunBackend
+
+	// BumpParentProgress refreshes the parent run's run-progress watchdog
+	// clock. The dispatch/spawn layer calls this on every genuine child
+	// event so a healthy long-running child keeps the parent run — which is
+	// parked in the deadline-exempt Agent tool call and emits no progress of
+	// its own — from being falsely flagged as stalled. No-op when there is no
+	// active parent run or the backend does not support progress bumps. See
+	// ApiBackend.BumpRunProgress and the run-progress watchdog for the full
+	// rationale (the 1782012033034-37d617d3d9ab incident).
+	BumpParentProgress()
 	EngineConfig() *types.EngineRuntimeConfig
 	ResolveTier(name string) string
 	PermissionCheck(toolName string, input map[string]interface{}) (decision string, reason string)

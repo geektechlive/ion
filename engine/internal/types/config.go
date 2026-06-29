@@ -19,6 +19,24 @@ type HookDef struct {
 	Handler string `json:"handler"`
 }
 
+// NewConversationDefaultsPolicy specifies default working directory and engine
+// profile for new conversations. Communicated via enterprise config so
+// administrators can set organisation-wide defaults that clients honour when the
+// user has not made their own choice (Locked=false) or cannot override
+// (Locked=true).
+//
+// BaseDirectory and EngineProfileId mirror the per-user defaultBaseDirectory
+// and defaultEngineProfileId preferences so the wire shape is consistent.
+// Empty EngineProfileId means "plain conversation" (no extension loaded).
+type NewConversationDefaultsPolicy struct {
+	BaseDirectory   string `json:"baseDirectory,omitempty"`
+	EngineProfileId string `json:"engineProfileId,omitempty"`
+	// Locked, when true, prevents the user from overriding these defaults
+	// in the client's settings UI. Clients enforce this; the engine itself is
+	// stateless with respect to user preferences.
+	Locked bool `json:"locked,omitempty"`
+}
+
 // EnterpriseConfig represents MDM/system-level sealed configuration.
 type EnterpriseConfig struct {
 	AllowedModels    []string                 `json:"allowedModels,omitempty"`
@@ -32,7 +50,13 @@ type EnterpriseConfig struct {
 	Telemetry        *TelemetryConfig         `json:"telemetry,omitempty"`
 	Network          *NetworkConfig           `json:"network,omitempty"`
 	Sandbox          *SandboxEnterpriseConfig `json:"sandbox,omitempty"`
-	CustomFields     map[string]any           `json:"customFields,omitempty"`
+	// NewConversationDefaults sets organisation-wide defaults for new-conversation
+	// working directory and engine profile. When nil, clients use the per-user
+	// defaultBaseDirectory and defaultEngineProfileId preferences. Overlay
+	// (drop-in) merges follow the additive pattern: a non-nil overlay pointer
+	// replaces the base pointer entirely.
+	NewConversationDefaults *NewConversationDefaultsPolicy `json:"newConversationDefaults,omitempty"`
+	CustomFields            map[string]any                 `json:"customFields,omitempty"`
 }
 
 // ToolRestrictions defines tool allow/deny lists.

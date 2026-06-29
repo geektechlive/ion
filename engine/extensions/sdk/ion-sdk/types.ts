@@ -104,12 +104,15 @@ export interface DispatchAgentResult {
   cost: number
   inputTokens: number
   outputTokens: number
+  /** Engine-assigned unique identifier for this dispatch instance. Collision-safe. */
+  dispatchId?: string
   sessionId?: string
 }
 
 /** Describes a failed background dispatch. Delivered via {@link DispatchAgentOpts.onError}. */
 export interface DispatchError {
   name: string
+  dispatchId?: string
   message: string
   exitCode: number
   elapsed: number
@@ -118,6 +121,7 @@ export interface DispatchError {
 /** Describes a recalled (cancelled) background dispatch. Delivered via {@link DispatchAgentOpts.onRecall}. */
 export interface RecallInfo {
   name: string
+  dispatchId?: string
   reason: string
   elapsed: number
   toolCount: number
