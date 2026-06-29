@@ -129,7 +129,7 @@ beforeEach(() => {
   mocks.executeJsMock.mockReset().mockResolvedValue(null)
   mocks.broadcastMock.mockReset()
   mocks.clearConversationFileMock.mockReset().mockResolvedValue(undefined)
-  mocks.getTabStatusMock.mockReset().mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, conversationId: null })
+  mocks.getTabStatusMock.mockReset().mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, resumedSavedConversation: false, conversationId: null })
   mocks.bridgeListeners.clear()
   _resetAwaitersForTests()
   // Default: engine returns unknown_command so the slash re-submit path runs.
@@ -154,30 +154,39 @@ describe('isFirstPromptForTab (freshness predicate)', () => {
   })
 
   it('is FRESH on a registered tab with no prompts since the last checkpoint', () => {
-    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, conversationId: null })
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, resumedSavedConversation: false, conversationId: null })
+    expect(isFirstPromptForTab('tab-1')).toBe(true)
+  })
+
+  it('is FRESH on a brand-new eagerly-started session whose engine-minted id the renderer now sends (scenario C)', () => {
+    // The engine pre-minted a conversationId for this fresh session and the
+    // renderer sends it as runOptions.sessionId — but resumedSavedConversation
+    // is FALSE because nothing was restored. This is the /align-in-plan-mode
+    // regression: a non-null sessionId must NOT mark a fresh mint as resumed.
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, resumedSavedConversation: false, conversationId: 'engine-minted-id' })
     expect(isFirstPromptForTab('tab-1')).toBe(true)
   })
 
   it('is NOT fresh when a prompt has been submitted since the last checkpoint', () => {
-    mocks.getTabStatusMock.mockReturnValue({ promptCount: 1, promptCountSinceCheckpoint: 1, clearedSinceLastPrompt: false, conversationId: 'conv-123' })
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 1, promptCountSinceCheckpoint: 1, clearedSinceLastPrompt: false, resumedSavedConversation: false, conversationId: 'conv-123' })
     expect(isFirstPromptForTab('tab-1')).toBe(false)
   })
 
-  it('is NOT fresh when resuming a saved conversation (runOptionsSessionId set)', () => {
-    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, conversationId: null })
-    expect(isFirstPromptForTab('tab-1', 'restored-conv-id')).toBe(false)
+  it('is NOT fresh when resuming a saved conversation (resumedSavedConversation flag set)', () => {
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, resumedSavedConversation: true, conversationId: 'restored-conv-id' })
+    expect(isFirstPromptForTab('tab-1')).toBe(false)
   })
 
   it('is FRESH right after /clear even when conversationId is still set', () => {
-    mocks.getTabStatusMock.mockReturnValue({ promptCount: 5, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: true, conversationId: 'conv-after-clear' })
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 5, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: true, resumedSavedConversation: false, conversationId: 'conv-after-clear' })
     expect(isFirstPromptForTab('tab-1')).toBe(true)
   })
 
-  it('is FRESH right after /clear even when the renderer sends a stale sessionId', () => {
-    // After /clear the renderer still sends tab.conversationId as
-    // runOptionsSessionId; clearedSinceLastPrompt overrides it.
-    mocks.getTabStatusMock.mockReturnValue({ promptCount: 5, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: true, conversationId: 'conv-after-clear' })
-    expect(isFirstPromptForTab('tab-1', 'conv-after-clear')).toBe(true)
+  it('is FRESH right after /clear even on a tab that was a resumed conversation', () => {
+    // clearedSinceLastPrompt takes precedence over resumedSavedConversation:
+    // after /clear the conversation is semantically blank again.
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 5, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: true, resumedSavedConversation: true, conversationId: 'conv-after-clear' })
+    expect(isFirstPromptForTab('tab-1')).toBe(true)
   })
 })
 
@@ -199,7 +208,7 @@ describe('processIncomingPrompt — slash re-submit flips plan→auto on first p
       text: '/ion--review 138',
       reqId: 'req-switch',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: opts,
     })
     expect(opts.resolveSlash).toBe(true)
@@ -213,21 +222,218 @@ describe('processIncomingPrompt — slash re-submit flips plan→auto on first p
       text: '/ion--review 138',
       reqId: 'req-switch-2',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/ion--review 138', sessionId: 'conv-after-clear' } as any,
     })
     expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
   })
 
   it('does NOT call setPermissionMode mid-conversation (not the first prompt)', async () => {
-    mocks.getTabStatusMock.mockReturnValue({ promptCount: 3, promptCountSinceCheckpoint: 3, clearedSinceLastPrompt: false, conversationId: 'conv-1' })
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 3, promptCountSinceCheckpoint: 3, clearedSinceLastPrompt: false, resumedSavedConversation: false, conversationId: 'conv-1' })
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: '/ion--review 138',
       reqId: 'req-no-switch-mid',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/ion--review 138' } as any,
+    })
+    expect(mocks.setPermissionModeMock).not.toHaveBeenCalled()
+  })
+
+  it('calls setPermissionMode(auto) on a fresh session whose engine-minted id is sent as sessionId (the /align regression, scenario C)', async () => {
+    // Brand-new eagerly-started session: count 0, resumedSavedConversation
+    // FALSE (engine minted the id, nothing was restored), yet the renderer
+    // sends the minted id as runOptions.sessionId. Pre-fix, isFirstPromptForTab
+    // treated any non-null sessionId as resumed and SUPPRESSED the flip, so a
+    // first-prompt /align ran in plan mode. The flip must fire.
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, resumedSavedConversation: false, conversationId: 'engine-minted-id' })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/align',
+      reqId: 'req-align-fresh',
+      source: 'desktop',
+      hasExtensions: false,
+      runOptions: { prompt: '/align', sessionId: 'engine-minted-id' } as any,
+    })
+    expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
+  })
+
+  it('does NOT flip on a genuinely resumed saved conversation (scenario B, resumedSavedConversation set)', async () => {
+    // Restored saved conversation: count 0 but resumedSavedConversation TRUE.
+    // The flip must NOT fire — the user is deliberately resuming an existing
+    // (possibly plan-mode) conversation.
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, resumedSavedConversation: true, conversationId: 'restored-conv-id' })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/align',
+      reqId: 'req-align-resumed',
+      source: 'desktop',
+      hasExtensions: false,
+      runOptions: { prompt: '/align', sessionId: 'restored-conv-id' } as any,
+    })
+    expect(mocks.setPermissionModeMock).not.toHaveBeenCalled()
+  })
+
+  // ─── Tab-type parity (Defect 0): the flip is TAB-TYPE-AGNOSTIC ─────────────
+  // The plan→auto flip is a desktop policy keyed on first-prompt freshness, not
+  // on tab type. An extension/harness tab in plan mode must flip on a
+  // first-prompt slash command exactly like a plain tab. Pre-fix a stale
+  // `!p.hasExtensions` guard suppressed the flip for every extension tab.
+
+  it('calls setPermissionMode(auto) on a fresh EXTENSION tab (Defect 0)', async () => {
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, conversationId: null })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/ion--review 138',
+      reqId: 'req-ext-fresh',
+      source: 'desktop',
+      hasExtensions: true,
+      instanceId: 'main',
+      runOptions: { prompt: '/ion--review 138' } as any,
+    })
+    expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
+  })
+
+  it('calls setPermissionMode(auto) on an EXTENSION tab right after /clear (Defect 0)', async () => {
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 5, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: true, conversationId: 'conv-after-clear' })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/ion--review 138',
+      reqId: 'req-ext-clear',
+      source: 'desktop',
+      hasExtensions: true,
+      instanceId: 'main',
+      runOptions: { prompt: '/ion--review 138', sessionId: 'conv-after-clear' } as any,
+    })
+    expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
+  })
+
+  it('does NOT call setPermissionMode mid-conversation on an EXTENSION tab (Defect 0 guard preserved)', async () => {
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 3, promptCountSinceCheckpoint: 3, clearedSinceLastPrompt: false, conversationId: 'conv-1' })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/ion--review 138',
+      reqId: 'req-ext-mid',
+      source: 'desktop',
+      hasExtensions: true,
+      instanceId: 'main',
+      runOptions: { prompt: '/ion--review 138' } as any,
+    })
+    expect(mocks.setPermissionModeMock).not.toHaveBeenCalled()
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// B2 regression: first-prompt slash on a RESUMED extension-hosted tab
+// (resumedSavedConversation=true) must NOT flip plan→auto.
+//
+// The logic at slash-classify.ts:90 (isFirstPromptForTab returns false when
+// resumedSavedConversation) is the guard. This test pins it for the
+// extension-hosted path so the combination can't regress silently.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('processIncomingPrompt — resumed extension-hosted tab preserves permission mode', () => {
+  it('does NOT flip plan→auto on the first slash prompt of a RESUMED extension tab (resumedSavedConversation=true)', async () => {
+    // An extension-hosted tab restored from saved state: resumedSavedConversation
+    // is true even though promptCountSinceCheckpoint is 0. The user is resuming
+    // an existing conversation that may intentionally be in plan mode. The
+    // plan→auto flip must NOT fire. isFirstPromptForTab returns false at
+    // slash-classify.ts:90 for this case — this test pins that the pipeline
+    // respects that answer even when hasExtensions=true.
+    mocks.getTabStatusMock.mockReturnValue({
+      promptCount: 0,
+      promptCountSinceCheckpoint: 0,
+      clearedSinceLastPrompt: false,
+      resumedSavedConversation: true,
+      conversationId: 'restored-ext-conv',
+    })
+    await processIncomingPrompt({
+      tabId: 'tab-resumed-ext',
+      text: '/align',
+      reqId: 'req-resumed-ext',
+      source: 'desktop',
+      hasExtensions: true,
+      instanceId: 'main',
+      runOptions: { prompt: '/align', sessionId: 'restored-ext-conv' } as any,
+    })
+    expect(mocks.setPermissionModeMock).not.toHaveBeenCalled()
+  })
+})
+//
+// A slash command that the engine's command registry resolves returns
+// commandError === '' and can START A RUN (an extension command, a built-in).
+// Before the fix the plan→auto flip lived only inside the unknown_command
+// re-submit branch, so a first-prompt slash command the engine resolved
+// directly executed under the still-active plan mode. These tests drive the
+// resolved-command branch by emitting commandError: '' and assert the flip
+// fires (and is correctly suppressed for /clear and mid-conversation).
+//
+// Each test would go RED if the flip were only on the unknown_command branch.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('processIncomingPrompt — engine-resolved slash command flips plan→auto (Defect 2)', () => {
+  /** Make the engine RESOLVE the command (commandError === '') instead of the
+   *  default unknown_command. */
+  function engineResolvesCommand(): void {
+    mocks.sendCommandMock.mockImplementation((key: string, command: string) => {
+      setTimeout(() => emitBridgeEvent(key, { type: 'engine_command_result', command, commandError: '' }), 0)
+    })
+  }
+
+  it('flips plan→auto on a fresh tab when the engine resolves the command', async () => {
+    engineResolvesCommand()
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, conversationId: null })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/compact',
+      reqId: 'req-resolved-fresh',
+      source: 'desktop',
+      hasExtensions: false,
+      runOptions: { prompt: '/compact' } as any,
+    })
+    expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
+  })
+
+  it('flips plan→auto on a fresh EXTENSION tab when the engine resolves the command', async () => {
+    engineResolvesCommand()
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, conversationId: null })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/standup',
+      reqId: 'req-resolved-ext',
+      source: 'desktop',
+      hasExtensions: true,
+      instanceId: 'main',
+      runOptions: { prompt: '/standup' } as any,
+    })
+    expect(mocks.setPermissionModeMock).toHaveBeenCalledWith('tab-1', 'auto', 'slash_command')
+  })
+
+  it('does NOT flip for /clear even when the engine resolves it (checkpoint, not a task)', async () => {
+    engineResolvesCommand()
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 0, promptCountSinceCheckpoint: 0, clearedSinceLastPrompt: false, conversationId: null })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/clear',
+      reqId: 'req-resolved-clear',
+      source: 'desktop',
+      hasExtensions: false,
+      runOptions: { prompt: '/clear' } as any,
+    })
+    expect(mocks.setPermissionModeMock).not.toHaveBeenCalled()
+  })
+
+  it('does NOT flip mid-conversation when the engine resolves the command', async () => {
+    engineResolvesCommand()
+    mocks.getTabStatusMock.mockReturnValue({ promptCount: 3, promptCountSinceCheckpoint: 3, clearedSinceLastPrompt: false, conversationId: 'conv-1' })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/standup',
+      reqId: 'req-resolved-mid',
+      source: 'desktop',
+      hasExtensions: false,
+      runOptions: { prompt: '/standup' } as any,
     })
     expect(mocks.setPermissionModeMock).not.toHaveBeenCalled()
   })

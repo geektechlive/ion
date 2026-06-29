@@ -1,0 +1,178 @@
+// Plan-mode event handlers extracted from event-slice.ts (Fix 1: keep the
+// reducer under the 600-line cap). These are the `engine_plan_mode_changed`
+// and `engine_plan_proposal` arms of the single normalized-event reducer,
+// lifted out verbatim. They mutate the shared reducer context (messages +
+// the per-instance patch) through a passed-by-reference context object,
+// exactly as the inline switch arms did. No behavior change.
+import type { Message } from '../../../shared/types'
+import type { ConversationInstance } from '../../../shared/types-engine'
+import { nextMsgId } from '../session-store-helpers'
+import { formatPlanCreatedDivider, formatPlanUpdatedDivider } from '../../../shared/clear-divider'
+
+/**
+ * Mutable context shared with the parent reducer for one plan-mode event.
+ * The parent seeds it from its locals; the handler mutates `messages`
+ * (reassigned on append), `instPatch`, and `instTouched` in place; the parent
+ * reads them back after the call.
+ */
+export interface PlanModeCtx {
+  tabId: string
+  /** The active instance snapshot at reducer entry (read-only here). */
+  inst0: { planFilePath?: string | null; permissionMode?: 'auto' | 'plan'; permissionDenied?: ConversationInstance['permissionDenied'] } | null
+  /** Working copy of the active instance's messages (reassigned on append). */
+  messages: Message[]
+  /** Per-conversation patch object the parent commits onto the instance. */
+  instPatch: Partial<ConversationInstance>
+  /** Set true when instPatch was mutated (parent reads this back). */
+  instTouched: boolean
+}
+
+/**
+ * Handle the plan-mode event arms. Returns true when the event type was one
+ * of these arms, false otherwise. Behavior is identical to the former inline
+ * cases.
+ */
+export function handlePlanModeEvent(ctx: PlanModeCtx, event: any): boolean {
+  switch (event.type) {
+    case 'engine_plan_mode_changed':
+      // Only Enabled:true is authoritative — model-initiated
+      // EnterPlanMode confirms the session has entered plan mode.
+      // Enabled:false from a model-initiated ExitPlanMode is a
+      // *proposal* awaiting user approval, so we do NOT flip the
+      // dropdown to auto here. The user-approval chokepoint in
+      // usePermissionDeniedHandlers.onImplement is responsible for
+      // the mode flip back to 'auto'. The engine no longer emits
+      // false for the ExitPlanMode case, but this branch still
+      // guards against any future emitter.
+      if (event.planModeEnabled) {
+        // WI-001: Write plan mode to the active INSTANCE for all
+        // conversation types (plain and extension-hosted). The parent
+        // tab.permissionMode is no longer written here — the instance
+        // is the authoritative location post-collapse. effectivePermissionMode()
+        // reads the instance first, falling back to the parent, so
+        // existing consumers continue to work. The sticky-parent bug
+        // (where tab.permissionMode stayed 'plan' and blocked the
+        // done-group move) is eliminated by never writing the parent.
+        ctx.instPatch.permissionMode = 'plan'
+        ctx.instTouched = true
+        // Created-vs-updated divider decision. The engine emits
+        // engine_plan_mode_changed{enabled:true} both when a plan is first
+        // created (model calls EnterPlanMode) AND when a run starts while the
+        // session is already in plan mode (a subsequent turn writing the SAME
+        // plan). Both carry the plan path/slug (engine fix: runloop_setup.go
+        // now populates them). The FIRST divider for a given planFilePath in
+        // this instance's scrollback is "Plan created"; any SUBSEQUENT divider
+        // for the same path is "Plan updated" — it's the same plan being
+        // written again. We scan the live message list (scoped to this
+        // instance) for an existing system divider carrying the same
+        // planFilePath. On a fresh post-restore message list with no prior
+        // divider this correctly yields "created"; a list that already has the
+        // created divider yields "updated". Both dividers carry planFilePath so
+        // the renderer can make the slug clickable (opens the plan preview).
+        const planFilePath = event.planFilePath
+        const alreadyHasDivider = planFilePath
+          ? ctx.messages.some((m) => m.role === 'system' && (m as any).planFilePath === planFilePath)
+          : false
+        const dividerContent = alreadyHasDivider
+          ? formatPlanUpdatedDivider(new Date(), event.planSlug)
+          : formatPlanCreatedDivider(new Date(), event.planSlug)
+        ctx.messages = [
+          ...ctx.messages,
+          {
+            id: nextMsgId(),
+            role: 'system' as const,
+            content: dividerContent,
+            timestamp: Date.now(),
+            planFilePath,
+          },
+        ]
+      }
+      // Only update planFilePath when entering plan mode.
+      // When planModeEnabled=false this is a proposal event (ExitPlanMode
+      // awaiting user approval); planFilePath stays unchanged.
+      if (event.planModeEnabled && event.planFilePath) {
+        ctx.instPatch.planFilePath = event.planFilePath
+        ctx.instTouched = true
+      }
+      return true
+
+    case 'engine_plan_proposal': {
+      // Workflow event from the engine: the model has proposed a
+      // plan-mode transition (currently only kind="exit"). This is
+      // NOT a state change — the engine has NOT flipped plan mode
+      // off. This event lets the renderer learn about the proposal
+      // *as soon as the model calls the tool*, before task_complete
+      // arrives. We record the proposed plan path on the instance so
+      // downstream UI (e.g. the implement button) has it without
+      // having to scrape it from permissionDenied entries. See
+      // docs/architecture/adr/003-state-events-vs-workflow-events.md.
+      //
+      // Bug #2 fix: this event is ALSO a sufficient, first-class card
+      // trigger. Previously the Plan Ready card depended solely on
+      // task_complete.permissionDenials, and a race in the control plane
+      // (the idle-skip guard dropping the proposal-bearing idle) could
+      // suppress that denial so the card never rendered. We now synthesize
+      // the ExitPlanMode permissionDenied directly from the proposal when
+      // none is already present. This is idempotent with the task_complete
+      // path: if task_complete later carries the same ExitPlanMode denial,
+      // it replaces this synthesized one (same tool, same plan path) → one
+      // card, not two. We only synthesize for kind="exit"; other kinds carry
+      // no approval card today.
+      const proposal = event
+      const kind = proposal.planProposalKind ?? proposal.kind
+      const path = proposal.planFilePath
+      console.log(`[plan_proposal] tab=${ctx.tabId.slice(0, 8)} instance=main kind=${kind} planFilePath=${path ?? ''} planSlug=${proposal.planSlug ?? ''}`)
+      if (path && ctx.inst0?.planFilePath !== path) {
+        ctx.instPatch.planFilePath = path
+        ctx.instTouched = true
+      }
+      // Synthesize the card trigger when the proposal is an exit and no
+      // permissionDenied is already set (task_complete may have lost the
+      // race, or not arrived yet). 'permissionDenied' in instPatch covers
+      // the case where an earlier arm in THIS reducer pass already set it.
+      const alreadyDenied =
+        ('permissionDenied' in ctx.instPatch
+          ? ctx.instPatch.permissionDenied
+          : ctx.inst0?.permissionDenied) != null
+      if (kind === 'exit' && !alreadyDenied) {
+        ctx.instPatch.permissionDenied = {
+          tools: [
+            {
+              toolName: 'ExitPlanMode',
+              // No engine toolUseId on the proposal event; synthesize a
+              // stable id so the card has a key. The Implement handler reads
+              // planFilePath from toolInput / the instance, not this id.
+              toolUseId: `plan-proposal-${ctx.tabId}`,
+              toolInput: path ? { planFilePath: path } : {},
+            },
+          ],
+        }
+        ctx.instTouched = true
+        console.log(`[plan_proposal] tab=${ctx.tabId.slice(0, 8)} synthesized ExitPlanMode permissionDenied from proposal (card trigger) planFilePath=${path ?? '<none>'}`)
+      }
+      // Layer 2 (Bug #1 defense-in-depth): a kind="exit" proposal is definitive
+      // proof the session was in plan mode awaiting approval. The entry event
+      // (engine_plan_mode_changed{enabled:true}) that normally establishes
+      // instance plan mode can be lost in the engine's session router when a
+      // status query transiently clears the run's requestID mid-flight (the
+      // dropped-event defect fixed engine-side in run_key_binding.go). If that
+      // happened, the instance is still at its 'auto' creation default and the
+      // pill/group/snapshot all read auto. Recover here: a proposal means the
+      // instance should read 'plan' until the user approves. This matches the
+      // entry-arm write exactly (instance, never the parent tab — WI-002) and
+      // does not conflict with the user-approval chokepoint: onImplement is the
+      // ONLY thing that flips back to 'auto' (usePermissionDeniedHandlers.ts),
+      // and a proposal never flips to auto. Skip when already 'plan' (the entry
+      // event was delivered normally) to avoid a redundant write.
+      const currentMode =
+        ('permissionMode' in ctx.instPatch ? ctx.instPatch.permissionMode : ctx.inst0?.permissionMode) ?? 'auto'
+      if (kind === 'exit' && currentMode !== 'plan') {
+        ctx.instPatch.permissionMode = 'plan'
+        ctx.instTouched = true
+        console.log(`[plan_proposal] tab=${ctx.tabId.slice(0, 8)} recovered instance permissionMode→plan from proposal (entry event may have been dropped)`)
+      }
+      return true
+    }
+  }
+  return false
+}

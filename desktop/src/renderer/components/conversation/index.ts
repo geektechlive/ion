@@ -12,7 +12,7 @@ export { AssistantMessage, TableScrollWrapper, ImageCard } from './AssistantMess
 export { SystemMessage } from './SystemMessage'
 export { HarnessMessage } from './HarnessMessage'
 export { InterceptBanner } from './InterceptBanner'
-export { UserMessage, QueuedMessage } from './UserMessage'
+export { QueuedMessage } from './QueuedMessage'
 export { MessageActions } from './MessageActions'
 export { MessageAttachments } from './MessageAttachments'
 export { EmptyState } from './EmptyState'

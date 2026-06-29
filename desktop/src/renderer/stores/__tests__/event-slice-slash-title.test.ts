@@ -62,7 +62,6 @@ function makeTab(overrides: Record<string, any> = {}) {
     // slash command it is the literal command text. The reducer must preserve
     // it unchanged when the first prompt is a slash command.
     title: '/clear arg',
-    hasEngineExtension: false,
     engineProfileId: null,
     workingDirectory: '/tmp',
     hasChosenDirectory: true,

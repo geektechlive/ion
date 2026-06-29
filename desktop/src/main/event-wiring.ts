@@ -1,7 +1,7 @@
 import { IPC } from '../shared/types'
 import type { NormalizedEvent, EnrichedError } from '../shared/types'
 import { log as _log } from './logger'
-import { state, sessionPlane, engineBridge, extensionCommandRegistry, forwardedEnginePermissionDenials, lastForwardedEngineTabStatus } from './state'
+import { state, sessionPlane, engineBridge, extensionCommandRegistry, forwardedEnginePermissionDenials, lastForwardedTabStatus } from './state'
 import { broadcast } from './broadcast'
 import { currentBackend, shouldStreamThinkingToRemote } from './settings-store'
 import { formatClearDivider } from '../shared/clear-divider'
@@ -14,6 +14,11 @@ export { wireRemoteSessionPlaneForwarding } from './event-wiring-remote'
 
 function log(msg: string): void {
   _log('main', msg)
+}
+
+/** Emit a NormalizedEvent to the renderer via the single normalized stream. */
+function broadcastNormalized(tabId: string, event: NormalizedEvent): void {
+  broadcast('ion:normalized-event', tabId, event)
 }
 
 export function wireSessionPlaneEvents(): void {
@@ -55,7 +60,10 @@ export function wireEngineBridgeEvents(): void {
   function flushTextDeltas(): void {
     if (pendingTextDeltas.size === 0) return
     for (const [deltaKey, text] of pendingTextDeltas) {
-      broadcast(IPC.ENGINE_EVENT, deltaKey, { type: 'engine_text_delta', text })
+      // WI-001: no longer broadcast to renderer via IPC.ENGINE_EVENT — text
+      // deltas reach the renderer through the normalized stream (text_chunk
+      // NormalizedEvent emitted by the engine control plane). The batch buffer
+      // is kept for iOS remote-transport forwarding only.
       if (state.remoteTransport) {
         // Wire-key (Key A) parsing for iOS forwarding — NOT renderer pane
         // addressing. The `|| null` is load-bearing: a plain conversation's
@@ -75,6 +83,21 @@ export function wireEngineBridgeEvents(): void {
     if (!deltaFlushTimer) {
       deltaFlushTimer = setInterval(flushTextDeltas, 16)
     }
+  }
+
+  // Flush any buffered text for `key` immediately and send it to the remote
+  // transport. Called synchronously before forwarding engine_message_end and
+  // engine_tool_start so the desktop_text_delta enters the FIFO transport
+  // queue BEFORE the seal/boundary event. Both are CRITICAL_TYPES and FIFO,
+  // so flushing first guarantees iOS applies text before it seals the row —
+  // the root cause of the post-#256 "streaming stalls after first turn" bug.
+  function flushKeyDeltas(key: string): void {
+    const text = pendingTextDeltas.get(key)
+    if (!text || !state.remoteTransport) return
+    pendingTextDeltas.delete(key)
+    const dtabId = key.split(':')[0]
+    const dinstanceId = key.split(':')[1] || null
+    state.remoteTransport.send({ type: 'desktop_text_delta', tabId: dtabId, instanceId: dinstanceId, text })
   }
 
   // Subscribe to global resources on every (re)connect. The engine_command_registry
@@ -166,10 +189,30 @@ export function wireEngineBridgeEvents(): void {
       return
     }
 
-    broadcast(IPC.ENGINE_EVENT, key, event)
+    // WI-001: The raw IPC.ENGINE_EVENT broadcast to the renderer is retired.
+    // All per-tab conversation events flow through the normalized stream
+    // (ion:normalized-event) via the engine control plane. Cross-cutting events
+    // (resources, command lifecycle, notifications) are emitted below as
+    // normalized events so the renderer has exactly one subscription. The iOS
+    // remoteTransport forwarding path below is unaffected — it was always
+    // independent of the IPC broadcast.
 
-    // Resource event observability
-    if (event.type === 'engine_resource_snapshot') {
+    // Cross-cutting events: emitted as normalized events keyed by the session
+    // tabId (bare). The renderer's handleCrossNormalizedEvent handles these
+    // without touching conversation state.
+    if (event.type === 'engine_command_registry') {
+      const listings = Array.isArray(event.commands) ? event.commands : []
+      const tabIdForCR = tabIdFromKey(key)
+      broadcastNormalized(tabIdForCR, { type: 'command_registry', commands: listings })
+    } else if (event.type === 'engine_command_result') {
+      const tabIdForCR = tabIdFromKey(key)
+      broadcastNormalized(tabIdForCR, {
+        type: 'command_result',
+        command: event.command,
+        commandError: event.commandError,
+      })
+    } else if (event.type === 'engine_resource_snapshot') {
+      // Resource snapshot observability
       const items = event.resourceItems ?? []
       log(`resource: snapshot key=${key} kind=${event.resourceKind} subId=${event.resourceSubId} items=${items.length} ids=[${items.slice(0, 3).map((i: any) => i.id?.slice(-8)).join(',')}${items.length > 3 ? '...' : ''}]`)
       // Cold-start disk seed: inject persisted items when the engine delivers
@@ -177,22 +220,59 @@ export function wireEngineBridgeEvents(): void {
       if (items.length === 0 && state.mainWindow) {
         injectDiskResourcesIfEmpty(event.resourceKind, event.resourceSubId, key)
       }
-    }
-    if (event.type === 'engine_resource_delta') {
+      const tabIdForRes = tabIdFromKey(key)
+      broadcastNormalized(tabIdForRes, {
+        type: 'resource_snapshot',
+        resourceKind: event.resourceKind,
+        resourceSubId: event.resourceSubId,
+        resourceItems: items,
+      })
+    } else if (event.type === 'engine_resource_delta') {
       const d = event.resourceDelta
       log(`resource: delta key=${key} kind=${event.resourceKind} op=${d?.op} id=${d?.item?.id?.slice(-8)} convId=${d?.item?.conversationId ?? 'global'}`)
-    }
-
-    // Persist mark_read deltas to disk so the desktop's read state survives
-    // restarts and stays consistent with cross-device reads from iOS.
-    // The renderer updates its in-memory readResourceIds on the same delta;
-    // the main process writes through to ~/.ion/resource-read-state.json.
-    if (
-      event.type === 'engine_resource_delta' &&
-      event.resourceDelta?.op === 'mark_read' &&
-      event.resourceDelta?.item?.id
-    ) {
-      markReadPersisted(event.resourceDelta.item.id)
+      // Persist mark_read deltas to disk so the desktop's read state survives
+      // restarts and stays consistent with cross-device reads from iOS.
+      if (d?.op === 'mark_read' && d?.item?.id) {
+        markReadPersisted(d.item.id)
+      }
+      const tabIdForDelta = tabIdFromKey(key)
+      broadcastNormalized(tabIdForDelta, {
+        type: 'resource_delta',
+        resourceKind: event.resourceKind,
+        resourceDelta: d,
+      })
+    } else if (event.type === 'engine_notification') {
+      // Log-only in main process; forward to renderer via normalized stream
+      // so the renderer can display a notification indicator.
+      log(`engine_notification: title=${event.notificationTitle} level=${event.notificationLevel}`)
+      const tabIdForNotif = tabIdFromKey(key)
+      broadcastNormalized(tabIdForNotif, {
+        type: 'engine_notification',
+        notificationTitle: event.notificationTitle,
+        notificationBody: event.notificationBody,
+        notificationLevel: event.notificationLevel,
+      })
+    } else if (event.type === 'engine_dispatch_activity') {
+      // Live dispatched-agent transcript delta. Bridge it to the renderer as a
+      // normalized event so the agent popup folds it into the per-dispatch
+      // transcript cache (keyed by dispatchAgentId/conversationId). This is a
+      // cross-cutting event — it must NOT touch the main conversation message
+      // stream (that surface is text_chunk / tool_call). iOS receives the same
+      // delta independently via the generic engineToWireType forwarder below.
+      const tabIdForAct = tabIdFromKey(key)
+      log(`engineBridge: dispatch_activity key=${key} agentId=${event.dispatchAgentId} convId=${event.dispatchConversationId} kind=${event.dispatchActivityKind} seq=${event.dispatchSeq} toolId=${event.toolId ?? ''}`)
+      broadcastNormalized(tabIdForAct, {
+        type: 'dispatch_activity',
+        dispatchAgentId: event.dispatchAgentId,
+        dispatchConversationId: event.dispatchConversationId,
+        dispatchActivityKind: event.dispatchActivityKind,
+        dispatchSeq: event.dispatchSeq,
+        toolName: event.toolName,
+        toolId: event.toolId,
+        dispatchTextDelta: event.dispatchTextDelta,
+        dispatchToolIsError: event.dispatchToolIsError,
+        dispatchActivityTs: event.dispatchActivityTs,
+      })
     }
 
     // Trace agent_state so we can correlate engine→desktop→iOS flow when
@@ -236,10 +316,9 @@ export function wireEngineBridgeEvents(): void {
       // engine_ segment in the output name so iOS decoders stay unambiguous.
       const engineToWireType = (engineType: string): string => {
         switch (engineType) {
-          case 'engine_error':                 return 'desktop_engine_error'
-          case 'engine_conversation_history':  return 'desktop_engine_conversation_history'
-          case 'engine_profiles':              return 'desktop_engine_profiles'
-          default:                             return `desktop_${engineType.replace('engine_', '')}`
+          case 'engine_error':    return 'desktop_engine_error'
+          case 'engine_profiles': return 'desktop_engine_profiles'
+          default:                return `desktop_${engineType.replace('engine_', '')}`
         }
       }
       // Low-bandwidth mode (issue #158): gate the per-token reasoning stream.
@@ -268,7 +347,28 @@ export function wireEngineBridgeEvents(): void {
         // "💭 Thought for Ns" summary and never looks stalled mid-turn.
         state.remoteTransport.send({ ...event, tabId, instanceId, type: engineToWireType(event.type) })
       } else {
-        state.remoteTransport.send({ type: engineToWireType(event.type), tabId, instanceId, ...event })
+        // Flush any buffered text for this key before forwarding turn-boundary
+        // events. engine_message_end seals the current assistant row on iOS and
+        // engine_tool_start starts a new tool row — if a pending text batch were
+        // flushed by the 16ms timer AFTER those events arrived, iOS would see the
+        // seal/tool-start first and append a spurious extra assistant message for
+        // the tail text. Flushing here puts desktop_text_delta in the FIFO queue
+        // BEFORE the boundary event, guaranteeing correct ordering. Both are
+        // CRITICAL_TYPES so neither can be dropped or reordered relative to each
+        // other by backpressure. All other event types are unaffected: the key has
+        // no pending text or the flush is a cheap no-op.
+        if (event.type === 'engine_message_end' || event.type === 'engine_tool_start') {
+          flushKeyDeltas(key)
+        }
+        // Spread order matters (same hazard documented above for the thinking
+        // path): `...event` carries the engine's own `type: 'engine_*'`, so it
+        // MUST come BEFORE the computed wire type or it clobbers it back to the
+        // raw `engine_*` name. iOS decoders key off `desktop_*` (see
+        // NormalizedEvent.swift TypeKey), so a clobbered `engine_*` type fails
+        // to decode and the event is silently dropped on the phone. tabId /
+        // instanceId likewise come last so an engine-supplied tabId on the
+        // payload can't override the wire-key-derived split.
+        state.remoteTransport.send({ ...event, tabId, instanceId, type: engineToWireType(event.type) })
       }
 
       // Synthesize a `permission_request` envelope for iOS when an
@@ -338,7 +438,7 @@ export function wireEngineBridgeEvents(): void {
       //   - idle (no denials) → 'idle'
       //   - running → 'running'
       //
-      // Deduped via lastForwardedEngineTabStatus to avoid flooding on
+      // Deduped via lastForwardedTabStatus to avoid flooding on
       // cost-only ticks (engine_status fires repeatedly with the same
       // state while the run is in progress or idling).
       if (event.type === 'engine_status' && event.fields?.state && instanceId) {
@@ -353,8 +453,8 @@ export function wireEngineBridgeEvents(): void {
         } else if (fieldState === 'running') {
           derivedStatus = 'running'
         }
-        if (derivedStatus && lastForwardedEngineTabStatus.get(tabId) !== derivedStatus) {
-          lastForwardedEngineTabStatus.set(tabId, derivedStatus)
+        if (derivedStatus && lastForwardedTabStatus.get(tabId) !== derivedStatus) {
+          lastForwardedTabStatus.set(tabId, derivedStatus)
           log(`engine_status: synthesizing tab_status for remote tabId=${tabId} instance=${instanceId} derivedStatus=${derivedStatus}`)
           state.remoteTransport.send({ type: 'desktop_tab_status', tabId, status: derivedStatus as any })
         }

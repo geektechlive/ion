@@ -129,6 +129,50 @@ export function readPlanPreviewCached(
   return { preview, totalBytes, truncated }
 }
 
+/**
+ * Resolve a bounded plan preview for an ExitPlanMode permission entry, from the
+ * strongest available source:
+ *   1. The plan file on disk at `planFilePath` (preferred — `readPlanPreviewCached`).
+ *   2. The inline `planContent` carried on the entry's toolInput, when the file
+ *      is absent/unreadable. Two card-source paths (snapshot-promoted denial
+ *      backfilled from history; restored-synthesis cards) deliver the body inline
+ *      and have no readable file; without this fallback the snapshot emitted no
+ *      `planContentPreview` and the iOS card rendered blank.
+ *
+ * Returns the same `{ preview, totalBytes, truncated }` shape as
+ * `readPlanPreviewCached`, or `null` when neither a readable file nor an inline
+ * body exists (the caller logs the omission — no silent blind spot).
+ *
+ * Pure except for the disk read inside `readPlanPreviewCached`; the inline
+ * branch is fully pure and is the unit-tested regression seam.
+ */
+export function resolvePlanPreview(
+  toolInput: { planFilePath?: unknown; planContent?: unknown } | undefined,
+  previewBytes: number,
+): { preview: string; totalBytes: number; truncated: boolean } | null {
+  // 1. Disk first (bounded, mtime-cached).
+  const planFilePath = typeof toolInput?.planFilePath === 'string' ? toolInput.planFilePath : ''
+  if (planFilePath) {
+    try {
+      return readPlanPreviewCached(planFilePath, previewBytes)
+    } catch {
+      // File missing/unreadable — fall through to the inline body.
+    }
+  }
+  // 2. Inline planContent fallback (mirrors readPlanPreviewCached's slice +
+  //    truncated semantics, on the byte length of the inline string).
+  const inline = typeof toolInput?.planContent === 'string' ? toolInput.planContent : ''
+  if (inline) {
+    const raw = Buffer.from(inline, 'utf-8')
+    const totalBytes = raw.length
+    const truncated = totalBytes > previewBytes
+    const preview = raw.subarray(0, Math.min(previewBytes, totalBytes)).toString('utf-8')
+    return { preview, totalBytes, truncated }
+  }
+  // 3. Nothing renderable.
+  return null
+}
+
 // ── Test-only surface ────────────────────────────────────────────────────────
 // Used exclusively by plan-content-cache.test.ts to assert cache bounds.
 // Do not call from production code.

@@ -61,6 +61,10 @@ const SEARCH_INDEX: SearchEntry[] = [
   // Quick Tools
   { categoryId: 'quicktools', label: 'Quick Tools', keywords: 'quick tools custom button shortcut action icon' },
 
+  // Keyboard Shortcuts
+  { categoryId: 'shortcuts', label: 'Keyboard Shortcuts', keywords: 'keyboard shortcut keybinding mapping hotkey rebind customize override' },
+  { categoryId: 'shortcuts', label: 'Shortcut Bindings', keywords: 'shortcut binding chord key combination tab navigation zoom' },
+
   // Remote
   { categoryId: 'remote', label: 'Enable Remote Control', keywords: 'remote control enable ios companion app' },
   { categoryId: 'remote', label: 'Paired Devices', keywords: 'paired devices pairing code ios phone' },

@@ -2,20 +2,20 @@
  * conversation-instance — the single accessor seam for "the conversation a
  * tab is currently showing."
  *
- * Background: every tab (normal OR engine) now stores its scrollback and
- * per-conversation state on a `ConversationInstance` inside `conversationPanes`.
- * Normal tabs are single-instance: they carry exactly one instance with the
- * stable sentinel id `MAIN_INSTANCE_ID` ('main'). Engine tabs carry one
- * instance per sub-conversation and track which is active via
+ * Background: every tab stores its scrollback and per-conversation state on a
+ * `ConversationInstance` inside `conversationPanes`. Plain conversations are
+ * single-instance: they carry exactly one instance with the stable sentinel id
+ * `MAIN_INSTANCE_ID` ('main'). Extension-hosted tabs carry one instance per
+ * sub-conversation and track which is active via
  * `ConversationPane.activeInstanceId`.
  *
  * This module is the ONE place that resolves "which instance is the active
  * conversation for this tab" so no consumer branches on tab type. Before this
- * unification, normal tabs stored `messages`/`permissionDenied`/`draftInput`/
- * `modelOverride`/`planFilePath`/`messageCount` directly on `TabState`, while
- * engine tabs stored them on the instance — forcing a `tab.hasEngineExtension` fork at
- * every data-source site. Those `TabState` fields are gone; this accessor
- * replaces every fork.
+ * unification, plain conversations stored `messages`/`permissionDenied`/
+ * `draftInput`/`modelOverride`/`planFilePath`/`messageCount`/`permissionMode`/
+ * `thinkingEffort` directly on `TabState`, while extension-hosted tabs stored
+ * them on the instance — forcing a tab-type fork at every data-source site.
+ * Those `TabState` fields are gone; this accessor replaces every fork.
  *
  * Strategy note (1B): the hot streaming path resolves the active instance ONCE
  * per event into a local working array, mutates it across all event cases, and
@@ -52,6 +52,7 @@ export function emptyConversationInstance(
     permissionMode: 'auto',
     permissionDenied: null,
     permissionQueue: [],
+    elicitationQueue: [],
     conversationIds: [],
     draftInput: '',
     agentStates: [],
@@ -94,6 +95,42 @@ export function activeInstance(
   const activeId = pane.activeInstanceId ?? pane.instances[0]?.id
   if (!activeId) return null
   return (pane.instances.find((i) => i.id === activeId) as Instance | undefined) ?? null
+}
+
+/**
+ * Resolve the AUTHORITATIVE permission mode for a tab.
+ *
+ * The permission mode lives on the active `ConversationInstance` for every tab
+ * type — plain and extension-hosted alike. `TabState.permissionMode` is gone
+ * (WI-002); this function is the single seam every behavior that gates on the
+ * mode (auto-group-movement, snapshot projection, etc.) must read.
+ *
+ * Falls back to 'auto' when the pane/instance is missing (a bug under the 2A
+ * invariant, but tolerated as a safe default rather than crashing).
+ */
+export function effectivePermissionMode(
+  tab: { id: string },
+  conversationPanes: Map<string, ConversationPane>,
+): 'auto' | 'plan' {
+  return activeInstance(conversationPanes, tab.id)?.permissionMode ?? 'auto'
+}
+
+/**
+ * Resolve the AUTHORITATIVE thinking effort for a tab.
+ *
+ * The effort lives on the active `ConversationInstance` for every tab type —
+ * plain and extension-hosted alike. `TabState.thinkingEffort` is gone (WI-002);
+ * this function is the single seam every behavior that reads effort (send-slice,
+ * snapshot projection) must use.
+ *
+ * Falls back to 'off' when the pane/instance is missing (safe default: no
+ * thinking rather than crashing).
+ */
+export function effectiveThinkingEffort(
+  tab: { id: string },
+  conversationPanes: Map<string, ConversationPane>,
+): string {
+  return activeInstance(conversationPanes, tab.id)?.thinkingEffort ?? 'off'
 }
 
 /**

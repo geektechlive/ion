@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/types'
 import type { RunOptions } from '../../shared/types'
 import { log as _log } from '../logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, lastForwardedEngineTabStatus, extensionCommandRegistry, DEBUG_MODE } from '../state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, lastMessagePreview, lastForwardedTabStatus, extensionCommandRegistry, DEBUG_MODE } from '../state'
 import { terminalManager } from '../terminal-manager-instance'
 import { getRemoteTabStates } from '../remote/snapshot'
 import { processIncomingPrompt } from '../prompt-pipeline'
@@ -55,6 +55,26 @@ export function registerSessionIpc(): void {
     return { tabId }
   })
 
+  // ADOPT_TAB registers a tab under a caller-supplied (persisted) id instead of
+  // minting one. The restore path uses this to reuse the durable tabId so the
+  // session key is invariant across restarts and the engine binding store hits.
+  // Idempotent in the control plane (adoptTab preserves an existing entry).
+  ipcMain.handle(IPC.ADOPT_TAB, (_event, tabId: string) => {
+    const adopted = sessionPlane.adoptTab(tabId)
+    log(`IPC ADOPT_TAB → ${adopted}`)
+
+    if (state.remoteTransport) {
+      getRemoteTabStates().then(({ tabs: tabStates }) => {
+        const newTab = tabStates.find(t => t.id === adopted)
+        if (newTab) {
+          state.remoteTransport?.send({ type: 'desktop_tab_created', tab: newTab })
+        }
+      })
+    }
+
+    return { tabId: adopted }
+  })
+
   ipcMain.on(IPC.INIT_SESSION, (_event, tabId: string) => {
     log(`IPC INIT_SESSION: ${tabId}`)
     sessionPlane.initSession(tabId)
@@ -75,6 +95,17 @@ export function registerSessionIpc(): void {
   ipcMain.on(IPC.RESET_TAB_SESSION, (_event, tabId: string) => {
     log(`IPC RESET_TAB_SESSION: ${tabId}`)
     sessionPlane.resetTabSession(tabId)
+  })
+
+  // RESTART_TAB_SESSION power-cycles the engine session WITHOUT cutting a new
+  // conversation (preserves conversationId). Used by stuck-tab recovery and
+  // directory-change reconnect — a recoverable tab is turned off and on again,
+  // not amputated. RESET_TAB_SESSION (above) is the destructive cut, reserved
+  // for the Implement-plan clear-context flow.
+  ipcMain.on(IPC.RESTART_TAB_SESSION, (_event, tabId: string) => {
+    log(`IPC RESTART_TAB_SESSION: ${tabId} — queuing stop_session to engine socket (FIFO; will arrive before resubmit's start_session)`)
+    sessionPlane.restartTabSession(tabId)
+    log(`IPC RESTART_TAB_SESSION: ${tabId} — stop_session enqueued; handler complete`)
   })
 
   ipcMain.handle(IPC.PROMPT, async (_event, { tabId, requestId, options }: { tabId: string; requestId: string; options: RunOptions }) => {
@@ -130,7 +161,11 @@ export function registerSessionIpc(): void {
         text: options.prompt,
         reqId: requestId,
         source: 'desktop',
-        isEngineTab: false,
+        // DATA-derived: an extension-backed conversation carries its resolved
+        // extension list in RunOptions (the unified renderer `submit` populates
+        // it from the tab's profile); a plain CLI tab does not. There is no
+        // separate engine prompt IPC any more — every tab funnels through PROMPT.
+        hasExtensions: (options.extensions?.length ?? 0) > 0,
         projectPath: options.projectPath,
         runOptions: options,
         // Forward the engine-resolve-slash flag from RunOptions onto the
@@ -154,8 +189,24 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.on(IPC.STEER, (_event, { tabId, message }: { tabId: string; message: string }) => {
-    log(`IPC STEER: tab=${tabId}`)
-    sessionPlane.steerSession(tabId, message)
+    // Unified steer for EVERY conversation tab — plain or extension-backed
+    // (the engine-vs-plain split was collapsed; there is no separate
+    // ENGINE_STEER any more). Dispatch straight to engineBridge.sendSteer,
+    // which emits the single `steer_agent` wire command with the bare tabId
+    // as the session key.
+    //
+    // C1 GUARD: route through the tab-registry check. registerAdoptedTab (via
+    // IPC.ADOPT_TAB) always completes before any tab is visible/interactive —
+    // the renderer awaits adoptTab() before the tab object enters the store, so
+    // no steer can arrive for an unregistered tab in normal flow. An unregistered
+    // steer is a bug in the caller; log and drop instead of silently dispatching
+    // a steer_agent command against an engine key with no backing session.
+    if (!sessionPlane.hasTab(tabId)) {
+      log(`IPC STEER: tab=${tabId} NOT registered in control plane — dropping steer (len=${message.length})`)
+      return
+    }
+    log(`IPC STEER: tab=${tabId} len=${message.length}`)
+    engineBridge.sendSteer(tabId, message)
   })
 
   ipcMain.handle(IPC.STOP_TAB, (_event, tabId: string) => {
@@ -176,6 +227,11 @@ export function registerSessionIpc(): void {
     log(`IPC CLOSE_TAB: ${tabId}`)
     sessionPlane.closeTab(tabId)
     terminalManager.destroyByPrefix(`${tabId}:`)
+    // Conversations key their engine session by the bare tabId (ADR-010),
+    // so stop that session directly. stopByPrefix(`${tabId}:`) only matches
+    // compound keys (terminals, legacy `${tabId}:main`) and would otherwise
+    // leave the bare-key conversation session orphaned.
+    void engineBridge.stopSession(tabId)
     engineBridge.stopByPrefix(`${tabId}:`)
 
     if (state.remoteTransport) {
@@ -184,9 +240,8 @@ export function registerSessionIpc(): void {
 
     // Clean up all per-tab main-process state to prevent memory leaks.
     activeAssistantMessages.delete(tabId)
-    activeToolInputs.delete(tabId)
     lastMessagePreview.delete(tabId)
-    lastForwardedEngineTabStatus.delete(tabId)
+    lastForwardedTabStatus.delete(tabId)
     for (const key of extensionCommandRegistry.keys()) {
       if (key === tabId || key.startsWith(`${tabId}:`)) extensionCommandRegistry.delete(key)
     }

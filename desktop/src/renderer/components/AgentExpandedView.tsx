@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { SpinnerGap, ArrowCircleRight } from '@phosphor-icons/react'
+import { SpinnerGap } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { groupMessages, ToolGroup, AssistantMessage, MessageBubble, AgentTurnGroup, ThinkingBlock } from './conversation'
@@ -38,9 +38,17 @@ export interface ExpandedViewProps {
   dispatches: DispatchInfo[]
   selectedDispatch: number
   onSelectDispatch: (index: number) => void
+  /**
+   * When provided, the header (infoBar + pager) is handed to this slot
+   * instead of rendered inline before the messages. The caller is responsible
+   * for placing the returned node in a non-scrolling region. When absent
+   * (inline-expand path in AgentPanel), behavior is unchanged — the header
+   * renders inline exactly as before.
+   */
+  headerSlot?: (header: React.ReactNode) => React.ReactNode
 }
 
-export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFullscreen, dispatches, selectedDispatch, onSelectDispatch }: ExpandedViewProps) {
+export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFullscreen, dispatches, selectedDispatch, onSelectDispatch, headerSlot }: ExpandedViewProps) {
   // In popup/fullscreen mode, use normal padding; inline mode indents past the agent label
   const leftPad = isFullscreen ? 12 : 148
   const unifiedTurnView = usePreferencesStore((s) => s.unifiedTurnView)
@@ -48,11 +56,45 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
   // When pager is active, show the selected dispatch's info instead of top-level
   const activeDispatch = hasMultipleDispatches ? dispatches[selectedDispatch] : undefined
   const agentModel = activeDispatch?.model || meta<string>(agent, 'model', '')
-  const startTime = activeDispatch?.startTime ?? (agent.metadata?.startTime as number | undefined)
-  const elapsed = activeDispatch?.elapsed ?? (agent.metadata?.elapsed as number | undefined)
-  const activeStatus = activeDispatch?.status || agent.status
+  // When a specific dispatch is selected, derive the duration STRICTLY from that
+  // dispatch's own startTime/elapsed/status. Do NOT fall back to the live agent's
+  // clock — a selected dispatch with no startTime and a non-running status must
+  // show no ticking timer rather than borrowing the agent's running duration.
+  // Only the single-dispatch (no activeDispatch) path uses the agent-level values.
+  const startTime = activeDispatch
+    ? activeDispatch.startTime
+    : (agent.metadata?.startTime as number | undefined)
+  const elapsed = activeDispatch
+    ? activeDispatch.elapsed
+    : (agent.metadata?.elapsed as number | undefined)
+  const activeStatus = activeDispatch ? activeDispatch.status : agent.status
+  // "Working..." is gated on the selected dispatch's own status when a specific
+  // dispatch is selected; otherwise it falls back to the agent's status.
+  const dispatchIsRunning = activeDispatch
+    ? activeDispatch.status === 'running'
+    : agent.status === 'running'
   const showInfoBar = !hasMultipleDispatches && (agentModel || startTime != null || elapsed != null)
-  const dispatchTask = activeDispatch?.task || meta<string>(agent, 'task', '')
+
+  // Derive the message list and group it unconditionally, above every early
+  // return below. This must run on every render regardless of loading state —
+  // a conditional hook (useMemo gated behind the `loading` / empty-messages
+  // branches) changes the hook count between renders and crashes the renderer
+  // with a rules-of-hooks violation (React #185 on open, #310 on dispatch
+  // switch). `groupMessages` is pure and returns [] for an empty input, so
+  // computing it here is safe and cheap even when no branch consumes `grouped`.
+  const messages = loadedMessages || meta(agent, 'messages', [] as any[])
+  const msgs: Message[] = loadedMessages
+    ? loadedMessages
+    : (messages as any[]).map((m: any, i: number) => ({
+        id: `${agent.name}-msg-${i}`,
+        role: m.role as any,
+        content: m.content,
+        toolName: m.toolName,
+        toolInput: '',
+        toolStatus: 'completed' as const,
+        timestamp: 0,
+      }))
+  const grouped = useMemo(() => groupMessages(msgs, { includeUser: true, unifiedTurnView }), [msgs, unifiedTurnView])
 
   const infoBar = showInfoBar ? (
     <div
@@ -77,38 +119,25 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
     </div>
   ) : null
 
-  // Dispatch task bubble — shows the orchestrator's instruction to this agent
-  const taskBubble = dispatchTask ? (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 6,
-        margin: `6px 12px 4px ${leftPad}px`,
-        padding: 8,
-        background: 'rgba(255, 165, 0, 0.06)',
-        borderRadius: 8,
-        border: '1px solid rgba(255, 165, 0, 0.12)',
-      }}
-    >
-      <ArrowCircleRight size={14} weight="fill" style={{ color: 'rgba(255, 165, 0, 0.7)', flexShrink: 0, marginTop: 1 }} />
-      <span style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 1.4, wordBreak: 'break-word' }}>
-        {dispatchTask}
-      </span>
-    </div>
-  ) : null
-
   // Dispatch pager — shown when multiple dispatches exist
   const pager = hasMultipleDispatches ? (
     <DispatchPager dispatches={dispatches} selectedIndex={selectedDispatch} onSelect={onSelectDispatch} compact={isFullscreen} />
   ) : null
 
+  // The header — infoBar (single-dispatch model/duration) and pager
+  // (multi-dispatch tab strip). When headerSlot is provided, the parent places
+  // this in a non-scrolling region and we render nothing here; when absent,
+  // it renders inline.
+  const header = <>{infoBar}{pager}</>
+
+  // Emit header to slot (parent places it) or render inline (no slot).
+  // In both cases the message body renders in the normal position below.
+  const renderedHeader = headerSlot ? headerSlot(header) : header
+
   if (loading) {
     return (
       <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-        {infoBar}
-        {pager}
-        {taskBubble}
+        {renderedHeader}
         <div
           style={{
             display: 'flex',
@@ -126,27 +155,12 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
     )
   }
 
-  // Use loaded messages from engine, or fall back to metadata
-  const messages = loadedMessages || meta(agent, 'messages', [] as any[])
+  // Use loaded messages from engine, or fall back to metadata. `messages`,
+  // `msgs`, and `grouped` are all derived unconditionally above.
   if (messages && messages.length > 0) {
-    const msgs: Message[] = loadedMessages
-      ? loadedMessages
-      : (messages as any[]).map((m: any, i: number) => ({
-          id: `${agent.name}-msg-${i}`,
-          role: m.role as any,
-          content: m.content,
-          toolName: m.toolName,
-          toolInput: '',
-          toolStatus: 'completed' as const,
-          timestamp: 0,
-        }))
-    const grouped = useMemo(() => groupMessages(msgs, { includeUser: true, unifiedTurnView }), [msgs, unifiedTurnView])
-
     return (
       <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-        {infoBar}
-        {pager}
-        {taskBubble}
+        {renderedHeader}
         <div
           style={{
             maxHeight: isFullscreen ? undefined : 200,
@@ -159,13 +173,28 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
               return <MessageBubble key={item.message.id} message={item.message} skipMotion />
             }
             if (item.kind === 'assistant') {
-              return <AssistantMessage key={`a-${idx}`} message={item.message} skipMotion />
+              // Stable ID from mapConversationMessages (role-timestamp) or push
+              // path (dispatch-text-{seq}) — no longer positional a-${idx}.
+              return <AssistantMessage key={item.message.id} message={item.message} skipMotion />
             }
             if (item.kind === 'tool-group') {
-              return <ToolGroup key={`tg-${idx}`} tools={item.messages} skipMotion />
+              // Key off the first tool's stable toolId when present, falling
+              // back to its message id. Never positional — insertion of a new
+              // tool group must not shift keys of existing ones.
+              const tgKey = item.messages[0]?.toolId
+                ? `tg-${item.messages[0].toolId}`
+                : `tg-${item.messages[0]?.id ?? idx}`
+              return <ToolGroup key={tgKey} tools={item.messages} skipMotion />
             }
             if (item.kind === 'agent-turn') {
-              return <AgentTurnGroup key={`at-${idx}`} tools={item.tools} assistantMessages={item.assistantMessages} isActive={item.isActive} thinking={item.thinking} skipMotion />
+              // Key off the first stable id within the turn: prefer toolId of
+              // the first tool entry, then fallback to its message id, then the
+              // first assistant message id. Never positional.
+              const firstToolId = item.tools[0]?.toolId
+              const atKey = firstToolId
+                ? `at-${firstToolId}`
+                : `at-${item.tools[0]?.id ?? item.assistantMessages[0]?.id ?? idx}`
+              return <AgentTurnGroup key={atKey} tools={item.tools} assistantMessages={item.assistantMessages} isActive={item.isActive} thinking={item.thinking} skipMotion />
             }
             if (item.kind === 'thinking') {
               return <ThinkingBlock key={item.message.id} message={item.message} skipMotion />
@@ -182,9 +211,7 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
   if (fullOutput) {
     return (
       <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-        {infoBar}
-        {pager}
-        {taskBubble}
+        {renderedHeader}
         <div
           style={{
             maxHeight: isFullscreen ? undefined : 120,
@@ -205,9 +232,7 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
 
   return (
     <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-      {infoBar}
-      {pager}
-      {taskBubble}
+      {renderedHeader}
       <div
         style={{
           padding: `8px 12px 8px ${leftPad}px`,
@@ -215,7 +240,11 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
           color: colors.textTertiary,
         }}
       >
-        {agent.status === 'running' ? 'Working...' : 'No conversation data available'}
+        {dispatchIsRunning
+          ? 'Working...'
+          : activeDispatch
+            ? 'No transcript recorded for this dispatch'
+            : 'No conversation data available'}
       </div>
     </div>
   )

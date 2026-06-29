@@ -1,4 +1,5 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useColors } from '../theme'
 import { useSessionStore } from '../stores/sessionStore'
 import { FloatingPanel } from './FloatingPanel'
@@ -36,6 +37,44 @@ export function AgentDetailPanel({
     [setGeometry],
   )
 
+  // headerHost: the DOM node that owns the pinned header trio.
+  // A ref-callback drives a state update so React re-renders once the node
+  // mounts and the portal target is available. On subsequent renders the
+  // ref-callback is stable (same element) so no extra renders occur.
+  const [headerHost, setHeaderHost] = useState<HTMLDivElement | null>(null)
+  const headerHostCallback = useCallback((node: HTMLDivElement | null) => {
+    setHeaderHost(node)
+  }, [])
+
+  // Scroll management — mirrors ConversationView.tsx pattern exactly.
+  // The panel opens at the bottom (newest content) and sticks there while
+  // messages stream in. The user can scroll up to read history; new content
+  // no longer yanks them back to the top on each push update.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const isNearBottomRef = useRef(true)
+
+  const handleScroll = useCallback(() => {
+    if (!scrollRef.current) return
+    const el = scrollRef.current
+    const threshold = 80
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+    isNearBottomRef.current = nearBottom
+  }, [])
+
+  // Auto-tail: scroll to bottom whenever messages change and the user is
+  // already near the bottom. isNearBottomRef starts true so the very first
+  // populate (and every subsequent append while pinned) scrolls automatically.
+  // The dependency array tracks both count and the last message id so a
+  // streaming text update to the final message (content change, same count)
+  // still triggers the tail when the user is pinned.
+  const msgCount = loadedMessages?.length ?? 0
+  const lastMsgId = loadedMessages?.[loadedMessages.length - 1]?.id ?? ''
+  useEffect(() => {
+    if (isNearBottomRef.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [msgCount, lastMsgId])
+
   return (
     <FloatingPanel
       title={title}
@@ -46,17 +85,33 @@ export function AgentDetailPanel({
       initialSize={{ w: geometry.w, h: geometry.h }}
       onGeometryChange={handleGeometryChange}
     >
-      <div style={{ overflow: 'auto', height: '100%' }}>
-        <AgentExpandedView
-          agent={agent}
-          colors={colors}
-          loadedMessages={loadedMessages}
-          loading={loading}
-          isFullscreen={true}
-          dispatches={dispatches}
-          selectedDispatch={selectedDispatch}
-          onSelectDispatch={onSelectDispatch}
-        />
+      {/* Flex column: pinned header zone above scrolling body zone. */}
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        {/* Pinned header host — AgentExpandedView portals its header trio
+            (infoBar + pager + taskBubble) here via the headerSlot prop.
+            Lives outside scrollRef so the header never scrolls away. */}
+        <div ref={headerHostCallback} style={{ flexShrink: 0 }} />
+
+        {/* Scrolling transcript body. */}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          style={{ flex: 1, overflow: 'auto', minHeight: 0 }}
+        >
+          <AgentExpandedView
+            agent={agent}
+            colors={colors}
+            loadedMessages={loadedMessages}
+            loading={loading}
+            isFullscreen={true}
+            dispatches={dispatches}
+            selectedDispatch={selectedDispatch}
+            onSelectDispatch={onSelectDispatch}
+            headerSlot={(header) =>
+              headerHost ? createPortal(header, headerHost) : null
+            }
+          />
+        </div>
       </div>
     </FloatingPanel>
   )

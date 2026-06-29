@@ -197,3 +197,51 @@ export type NormalizedEvent =
   | { type: 'thinking_block_start' }
   | { type: 'thinking_delta'; text: string }
   | { type: 'thinking_block_end'; totalTokens?: number; elapsedSeconds?: number; redacted?: boolean }
+  // Extension-surface events (WI-001: single-path collapse).
+  // Previously handled only by the raw engine_* stream; now first-class
+  // NormalizedEvent variants so every conversation flows through the
+  // single normalized reducer (handleNormalizedEvent in event-slice.ts).
+  | { type: 'message_end'; inputTokens?: number; outputTokens?: number; contextPercent?: number; cost?: number }
+  | { type: 'agent_state'; agents: import('./types-engine').AgentStateUpdate[] }
+  // status — desktop-internal per-session status snapshot. Emitted by the
+  // control plane (engine-control-plane-events.ts handleStatusEvent) from every
+  // inbound engine_status, carrying the engine's full StatusFields. The renderer
+  // REPLACES inst.statusFields wholesale (snapshot semantics, like agent_state).
+  // This is the forwarding hop that populates inst.statusFields — without it the
+  // field is null forever and every StatusBar slot that reads it (engine
+  // identity, cost, backend badge, model-picker actual-model parenthetical)
+  // renders nothing. Desktop-internal: no Go struct backing (StatusFields itself
+  // is the synced shared type), so no contract-sync manifest entry.
+  | { type: 'status'; fields: import('./types-engine').StatusFields }
+  | { type: 'harness_message'; message: string; dedupKey?: string; source?: string }
+  | { type: 'working_message'; message: string }
+  | { type: 'notify'; message: string; level: string }
+  | { type: 'dialog'; dialogId: string; method: string; title: string; options?: string[]; defaultValue?: string }
+  // Extension elicitation (ctx.elicit). Translated from the engine-wire
+  // `engine_elicitation_request` event by engine-control-plane-events.ts so
+  // the single normalized reducer (event-slice.ts) can push it onto the
+  // active instance's elicitationQueue.
+  | { type: 'elicitation_request'; requestId: string; mode: string; schema?: Record<string, unknown>; url?: string }
+  | { type: 'extension_died'; extensionName: string }
+  | { type: 'extension_respawned'; extensionName: string; attemptNumber: number }
+  | { type: 'extension_dead_permanent'; extensionName: string; attemptNumber: number }
+  | { type: 'events_dropped'; count: number }
+  // Cross-cutting events (WI-001): previously handled via raw IPC.ENGINE_EVENT,
+  // now routed through the normalized stream so the renderer has a single
+  // subscription. These are desktop-internal variants with no Go struct backing;
+  // they are emitted by wireEngineBridgeEvents (main process) and consumed by
+  // handleCrossNormalizedEvent (renderer) without touching conversation state.
+  // The `tabId` carried on the normalized-event envelope is the session key
+  // (bare tabId for session events, empty string for workspace-scoped events).
+  | { type: 'command_registry'; commands: Array<{ name: string; description?: string }> }
+  | { type: 'command_result'; command: string; commandError?: string }
+  | { type: 'resource_snapshot'; resourceKind: string; resourceSubId?: string; resourceItems: import('./types-engine').ResourceItem[] }
+  | { type: 'resource_delta'; resourceKind: string; resourceDelta: import('./types-engine').ResourceDelta }
+  | { type: 'engine_notification'; notificationTitle: string; notificationBody: string; notificationLevel: string }
+  // dispatch_activity — a running dispatched (sub-)agent's intra-turn transcript
+  // delta (tool start/end, streamed text), bridged from the engine's
+  // engine_dispatch_activity (event-wiring.ts). Cross-cutting: the agent popup
+  // folds it into the per-dispatch transcript cache keyed by
+  // dispatchAgentId/conversationId; it must never append to the main conversation
+  // message stream. INCREMENTAL/append-by-key — see agent-dispatch-activity.ts.
+  | { type: 'dispatch_activity'; dispatchAgentId: string; dispatchConversationId: string; dispatchActivityKind: 'text' | 'tool_start' | 'tool_end'; dispatchSeq: number; toolName?: string; toolId?: string; dispatchTextDelta?: string; dispatchToolIsError?: boolean; dispatchActivityTs?: number }

@@ -1,3 +1,6 @@
+// @file-size-exception: types-session.ts is a shared type barrel; enterprise
+// policy types were added in #256. Next split: extract enterprise types into
+// types-enterprise.ts when the file grows by another ~80 lines.
 import type { UsageData } from './types-events'
 
 // ─── Thinking ───
@@ -40,6 +43,26 @@ export interface PermissionRequest {
   instanceId?: string
 }
 
+/**
+ * A live extension elicitation awaiting a user decision for a conversation.
+ * Produced when an extension calls `ctx.elicit()`; the engine fans an
+ * `engine_elicitation_request` event to every client. The client renders a
+ * card from `mode` + `schema` and answers with an `elicitation_response`
+ * command carrying the `requestId`. Distinct from `PermissionRequest`
+ * (tool-call permission) and from `permissionDenied` (the plan-ready /
+ * AskUserQuestion fallback card).
+ */
+export interface ElicitationRequest {
+  /** Engine-assigned id echoed back in the elicitation_response command. */
+  requestId: string
+  /** Renderer selector ("approval", "select", ...). May be empty. */
+  mode: string
+  /** Harness-defined description of what is being requested. */
+  schema?: Record<string, unknown>
+  /** Optional deep-link URL for web flows. */
+  url?: string
+}
+
 export interface FileAttachment {
   id: string
   type: 'image' | 'file'
@@ -67,10 +90,30 @@ export interface TabState {
   historicalSessionIds: string[]
   /** Most recent non-null conversationId; never cleared. Recovery fallback when conversationId is null. */
   lastKnownSessionId: string | null
+  /**
+   * Transient: the conversationId a deliberate checkpoint cut (clear-context)
+   * just left behind, to be recorded as the next session's on-disk `parentId`.
+   * Set when clear-context nulls conversationId; consumed once by the next
+   * engine start (passed as EngineConfig.parentConversationId), then cleared.
+   * Never persisted — it only bridges the cut to the subsequent start.
+   */
+  pendingParentConversationId?: string | null
   status: TabStatus
   activeRequestId: string | null
   /** Wall-clock ms of last engine-originated event for this tab. Drives the stuck-tab watchdog. Not persisted. */
   lastEventAt: number | null
+  /**
+   * Auto-recovery bookkeeping for the stuck-tab watchdog. When a running tab
+   * goes silent past the recovery threshold, the watchdog automatically
+   * recreates the engine session and resubmits the last prompt (in-process, no
+   * engine restart). These two fields bound that automatic resume so a truly
+   * dead provider cannot drive an infinite stall→resume loop: attempts are
+   * counted within a rolling window, and once the cap is hit the watchdog stops
+   * auto-resuming and surfaces an honest, actionable message instead. Not
+   * persisted — recovery is a live-session concern that resets on restart.
+   */
+  autoRecoveryAttempts?: number
+  autoRecoveryWindowStartedAt?: number | null
   hasUnread: boolean
   currentActivity: string
   attachments: FileAttachment[]
@@ -97,10 +140,6 @@ export interface TabState {
   hasChosenDirectory: boolean
   /** Extra directories accessible via --add-dir (session-preserving) */
   additionalDirs: string[]
-  /** Per-tab permission mode: 'auto' auto-approves, 'plan' uses CLI plan mode */
-  permissionMode: 'auto' | 'plan'
-  /** Per-tab extended-thinking effort (bare conversation). Default 'off'. */
-  thinkingEffort?: ThinkingEffort
   /** Pending bash command results to send as context with next prompt */
   bashResults: Array<{ command: string; stdout: string; stderr: string }>
   /** Whether a bash command is currently executing in this tab */
@@ -151,14 +190,10 @@ export interface TabState {
   /** Terminal-focused tab with no conversation */
   isTerminalOnly: boolean
   /**
-   * True when this conversation hosts an engine extension (multi-instance UI,
-   * profiles, sub-conversations). This is NOT a backend flag — it does not
-   * imply a CLI vs API backend (those are orthogonal; ~99% of conversations
-   * run on the API backend). It names ONLY the presence of an engine extension
-   * running inside the conversation.
+   * Engine profile ID used for this tab (references EngineProfile.id).
+   * Non-null/non-empty means the tab has extensions loaded (derived via
+   * `tabHasExtensions()` from shared/tab-predicates.ts).
    */
-  hasEngineExtension: boolean
-  /** Engine profile ID used for this tab (references EngineProfile.id) */
   engineProfileId: string | null
   /** Short single-line preview of the last visible message (~80 chars), used
    *  as a tab-pill subtitle to help distinguish multiple Jarvis sessions. */
@@ -233,6 +268,26 @@ export interface Message {
    * opens a fresh assistant message instead of appending to this one.
    */
   sealed?: boolean
+  /**
+   * Local UI state only -- NOT a wire protocol field, NOT persisted.
+   * Set to true on the optimistic user bubble created by the mid-turn
+   * steer path (submit → window.ion.steer). Stays true while
+   * the steer is buffered in the engine runloop (e.g. during a tool
+   * stall). The renderer shows a "queued" indicator while this is set.
+   *
+   * Resolved in one of two ways:
+   *   - steer_injected arrives → the bubble becomes a normal user message
+   *     and a "Steer applied" divider is appended (steerPending cleared).
+   *   - engine_dead arrives before steer_injected → the bubble is marked
+   *     steerFailed so the renderer can show an error affordance.
+   */
+  steerPending?: boolean
+  /**
+   * Local UI state only -- NOT a wire protocol field, NOT persisted.
+   * Set to true when the engine died before the buffered steer was drained.
+   * The renderer shows an error affordance instead of the pending indicator.
+   */
+  steerFailed?: boolean
   // ─── Extended-thinking fields (issue #158) ───
   // Populated ONLY on `role: 'thinking'` messages, which the renderer
   // synthesizes from the engine's `engine_thinking_block_start` /
@@ -576,6 +631,27 @@ export interface EngineHostInfo {
   hostname: string
   os: string
   pathSep: string
+}
+
+/**
+ * Wire shape for the engine's get_enterprise_policy RPC response.
+ * Mirrors Go's NewConversationDefaultsPolicy in internal/types/config.go.
+ * null means no enterprise config or no NewConversationDefaults section.
+ */
+export interface NewConversationDefaultsPolicy {
+  /** Mandated working directory for new tabs. Empty string = no constraint. */
+  baseDirectory: string
+  /**
+   * Mandated engine profile id. Empty string = plain conversation (no
+   * extension). Must match an id in the user's engineProfiles list.
+   */
+  engineProfileId: string
+  /**
+   * When true, the user cannot change baseDirectory or engineProfileId.
+   * The desktop skips both the directory picker and the profile picker and
+   * opens the conversation directly with these values.
+   */
+  locked: boolean
 }
 
 // ─── Remote Control Types ───

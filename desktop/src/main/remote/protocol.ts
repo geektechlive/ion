@@ -11,7 +11,7 @@
  * carry the `engine_` prefix — the two namespaces are disjoint.
  */
 
-import type { NormalizedEvent, TabStatus, PermissionRequest, AgentStateUpdate, StatusFields } from '../../shared/types'
+import type { NormalizedEvent, TabStatus, PermissionRequest, ElicitationRequest, AgentStateUpdate, StatusFields } from '../../shared/types'
 
 /**
  * Wire shape for one entry in `desktop_settings_snapshot.schema`.
@@ -57,6 +57,13 @@ export interface RemoteTabState {
    */
   thinkingEffort?: 'low' | 'medium' | 'high'
   permissionQueue: PermissionRequest[]
+  /**
+   * Live extension elicitations (ctx.elicit) awaiting a user decision on the
+   * active instance. Mirrors ConversationInstance.elicitationQueue. iOS renders
+   * an approval card from the head entry and answers via
+   * `desktop_respond_elicitation`. Optional/additive — older snapshots omit it.
+   */
+  elicitationQueue?: ElicitationRequest[]
   lastMessage: string | null
   contextTokens: number | null
   /**
@@ -70,6 +77,18 @@ export interface RemoteTabState {
   contextWindow: number | null
   modelOverride?: string | null
   messageCount: number
+  /**
+   * Conversation tail fingerprint — the staleness signal for the iOS
+   * main-conversation heal. Computed over the active instance's last N messages
+   * (id + utf8 content length for non-tool rows; tool status for tool rows) +
+   * total message count. iOS computes the SAME fingerprint over its local tail
+   * and re-fetches history when they diverge (dropped live deltas, e.g. a
+   * LAN↔relay transport switch). Algorithm pinned in
+   * ../../shared/conversation-fingerprint.ts (and mirrored byte-identically in
+   * the snapshot.ts inline JS and the Swift conversationTailFingerprint).
+   * Empty string for cold-start tabs (no live messages to compare).
+   */
+  convFingerprint?: string
   queuedPrompts: string[]
   isTerminalOnly?: boolean
   /** True when the conversation hosts an engine extension. Wire field consumed
@@ -125,6 +144,10 @@ export interface RemoteMessage {
   attachments?: RemoteAttachment[]
   timestamp: number
   source?: 'desktop' | 'remote'
+  /** Slash-command provenance: when the turn came from a slash command, the echo carries command/args so iOS renders a pill immediately. */
+  slashCommand?: string
+  slashArgs?: string
+  slashSource?: string
 }
 
 export interface RemoteAttachment {
@@ -143,12 +166,22 @@ export type RemoteCommand =
   // inside that manual group with groupPinned=true so the first prompt's
   // auto-movement doesn't yank it back into the default group. Older
   // iOS builds that omit the field continue to get the legacy behavior.
-  | { type: 'desktop_create_tab'; workingDirectory?: string; pinToGroupId?: string }
+  //
+  // `profileId` and `extensions` are present when the iOS client wants an
+  // engine-hosted conversation. When absent, the desktop creates a plain
+  // CLI tab (legacy behavior). This merges the former desktop_create_engine_tab
+  // command into the unified create-tab shape.
+  | { type: 'desktop_create_tab'; workingDirectory?: string; pinToGroupId?: string; profileId?: string; extensions?: string[] }
   | { type: 'desktop_create_terminal_tab'; workingDirectory?: string }
   | { type: 'desktop_close_tab'; tabId: string }
-  | { type: 'desktop_prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean }
+  // `instanceId` scopes a prompt to a specific engine instance (absent means
+  // active instance or CLI tab). This merges the former desktop_engine_prompt
+  // instanceId field into the unified prompt shape so iOS sends one command
+  // type regardless of tab kind.
+  | { type: 'desktop_prompt'; tabId: string; text: string; origin?: 'desktop' | 'remote'; clientMsgId?: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean; instanceId?: string }
   | { type: 'desktop_cancel'; tabId: string }
   | { type: 'desktop_respond_permission'; tabId: string; questionId: string; optionId: string }
+  | { type: 'desktop_respond_elicitation'; tabId: string; requestId: string; response?: Record<string, unknown>; cancelled: boolean }
   | { type: 'desktop_set_permission_mode'; tabId: string; mode: 'auto' | 'plan' }
   // Per-conversation extended-thinking effort change from iOS. The desktop
   // applies it to the same per-conversation state used for its own prompts
@@ -166,6 +199,11 @@ export type RemoteCommand =
   // misses engine instances.
   | { type: 'desktop_reset_engine_session'; tabId: string; instanceId: string }
   | { type: 'desktop_load_conversation'; tabId: string; before?: string }
+  // desktop_request_resend: iOS detected a forward seq gap; asks the desktop to
+  // replay missing wire frames [fromSeq,toSeq] from its retransmit buffer (see
+  // retransmit-buffer.ts). Makes the fire-and-forget wire self-healing for the
+  // live stream without waiting for the snapshot reconcile.
+  | { type: 'desktop_request_resend'; fromSeq: number; toSeq: number }
   | { type: 'desktop_terminal_input'; tabId: string; instanceId: string; data: string }
   | { type: 'desktop_terminal_resize'; tabId: string; instanceId: string; cols: number; rows: number }
   | { type: 'desktop_terminal_add_instance'; tabId: string }
@@ -177,8 +215,6 @@ export type RemoteCommand =
   | { type: 'desktop_rewind'; tabId: string; messageId: string }
   | { type: 'desktop_fork_from_message'; tabId: string; messageId: string }
   | { type: 'desktop_engine_rewind'; tabId: string; instanceId: string; messageId: string; userTurnIndex?: number }
-  | { type: 'desktop_create_engine_tab'; workingDirectory?: string; profileId?: string }
-  | { type: 'desktop_engine_prompt'; tabId: string; instanceId?: string; text: string; attachments?: Array<{ type: 'image' | 'file'; name: string; path: string }>; implementationPhase?: boolean }
   | { type: 'desktop_engine_abort'; tabId: string; instanceId?: string }
   | { type: 'desktop_engine_dialog_response'; tabId: string; instanceId?: string; dialogId: string; value: any }
   | { type: 'desktop_engine_add_instance'; tabId: string }
@@ -186,7 +222,11 @@ export type RemoteCommand =
   | { type: 'desktop_engine_select_instance'; tabId: string; instanceId: string }
   | { type: 'desktop_engine_move_instance'; sourceTabId: string; instanceId: string; targetTabId: string }
   | { type: 'desktop_engine_set_model'; tabId: string; instanceId?: string; model: string }
-  | { type: 'desktop_load_engine_conversation'; tabId: string; instanceId?: string }
+  // desktop_load_engine_conversation is retired (WI-004 / #259). iOS now sends
+  // desktop_load_conversation for every tab. The type is kept here as a comment
+  // only; it is no longer a union member so the TypeScript type discriminator
+  // does not accept it. The command-handler retains a tolerance case for stale
+  // paired clients that still send the old string.
   | { type: 'desktop_load_agent_conversation'; conversationIds: string[] }
   | { type: 'desktop_set_tab_group_mode'; mode: 'auto' | 'manual' }
   | { type: 'desktop_move_tab_to_group'; tabId: string; groupId: string }
@@ -320,8 +360,19 @@ export type RemoteEvent =
   | { type: 'desktop_instance_added'; tabId: string; instance: { id: string; label: string } }
   | { type: 'desktop_instance_removed'; tabId: string; instanceId: string }
   | { type: 'desktop_instance_moved'; sourceTabId: string; instanceId: string; targetTabId: string }
-  | { type: 'desktop_engine_conversation_history'; tabId: string; instanceId?: string | null; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number; dedupKey?: string }> }
+  // desktop_engine_conversation_history is retired (WI-004 / #259).
+  // The unified response is desktop_conversation_history for every tab.
   | { type: 'desktop_agent_conversation_history'; agentName: string; conversationId?: string; messages: Array<{ id: string; role: string; content: string; toolName?: string; toolId?: string; toolStatus?: string; timestamp: number }> }
+  // desktop_dispatch_activity streams a running dispatched agent's intra-turn
+  // activity (tool start/end, streamed text) to iOS. Forwarded generically from
+  // the engine's engine_dispatch_activity via engineToWireType (event-wiring.ts);
+  // the engine field names are carried through verbatim by the `{...event}`
+  // spread. INCREMENTAL/append-by-key — the client folds it into the per-dispatch
+  // transcript cache keyed by dispatchAgentId/conversationId, deduping tools by
+  // toolId and streaming text by dispatchSeq. It must NOT be appended to the main
+  // conversation message stream (that surface is desktop_text_delta /
+  // desktop_tool_start). The file-backed reconcile is the snapshot authority.
+  | { type: 'desktop_dispatch_activity'; tabId: string; instanceId?: string | null; dispatchAgentId: string; dispatchConversationId: string; dispatchActivityKind: 'text' | 'tool_start' | 'tool_end'; dispatchSeq: number; toolName?: string; toolId?: string; dispatchTextDelta?: string; dispatchToolIsError?: boolean; dispatchActivityTs?: number }
   // input_prefill seeds a remote client's input box with text (e.g. the
   // rewound user message after a rewind). `instanceId` is set when the
   // prefill targets a specific engine instance's draft (desktop_engine_rewind);
@@ -361,8 +412,26 @@ export type RemoteEvent =
       settings: Record<string, unknown>
       schema: Array<DesktopSettingsSchemaEntry>
       groups: Array<{ id: string; label: string }>
+      /**
+       * Resolved enterprise new-conversation policy, or null/absent when no
+       * enterprise config is present. Populated from
+       * `getEnterprisePolicyNewConversationDefaults()` at snapshot-build time so
+       * remote clients (iOS) can enforce the same new-conversation lock as the
+       * desktop without an additional RPC.
+       *
+       * Wire-backward-compatible: old iOS clients that don't decode this field
+       * simply ignore it (the field is absent from their NormalizedEvent case).
+       */
+      newConversationPolicy?: {
+        baseDirectory: string
+        engineProfileId: string
+        locked: boolean
+      } | null
     }
   | { type: 'desktop_heartbeat'; seq: number; ts: number; buffered: number }
+  // desktop_resend_unavailable: the requested resend range was evicted from the
+  // retransmit buffer (too old); iOS falls back to the snapshot reconcile.
+  | { type: 'desktop_resend_unavailable'; fromSeq: number }
   | { type: 'desktop_unpair' }
   | { type: 'desktop_relay_config'; relayUrl: string; relayApiKey: string }
   | { type: 'desktop_remote_display'; customName: string | null; customIcon: string | null; updatedAt: number }
@@ -467,68 +536,5 @@ export interface PairedDevice {
 
 export type TransportState = 'disconnected' | 'relay_only' | 'lan_preferred'
 
-// ─── Helper: convert NormalizedEvent to RemoteEvent ───
-
-export function normalizedToRemote(tabId: string, event: NormalizedEvent): RemoteEvent | null {
-  switch (event.type) {
-    case 'text_chunk':
-      return { type: 'desktop_text_chunk', tabId, text: event.text }
-    case 'tool_call':
-      return { type: 'desktop_tool_call', tabId, toolName: event.toolName, toolId: event.toolId }
-    case 'tool_result':
-      return { type: 'desktop_tool_result', tabId, toolId: event.toolId, content: event.content, isError: event.isError }
-    case 'task_complete':
-      return { type: 'desktop_task_complete', tabId, result: event.result, costUsd: event.costUsd }
-    case 'permission_request':
-      return {
-        type: 'desktop_permission_request',
-        tabId,
-        questionId: event.questionId,
-        toolName: event.toolName,
-        toolInput: event.toolInput,
-        options: event.options,
-      }
-    case 'error':
-      return { type: 'desktop_error', tabId, message: event.message }
-    default:
-      return null
-  }
-}
-
-// ─── Helper: convert NormalizedEvent to structured message events ───
-
-export function normalizedToMessages(tabId: string, event: NormalizedEvent): RemoteEvent | null {
-  switch (event.type) {
-    case 'text_chunk':
-      // Text chunks update the last assistant message (handled by caller that tracks message state)
-      return null
-    case 'tool_call':
-      return {
-        type: 'desktop_message_added',
-        tabId,
-        message: {
-          id: event.toolId,
-          role: 'tool',
-          content: '',
-          toolName: event.toolName,
-          toolId: event.toolId,
-          toolStatus: 'running',
-          timestamp: Date.now(),
-        },
-      }
-    case 'tool_result': {
-      const content = event.content.length > 2048
-        ? event.content.substring(0, 2048) + '\n... [truncated]'
-        : event.content
-      return {
-        type: 'desktop_message_updated',
-        tabId,
-        messageId: event.toolId,
-        content,
-        toolStatus: event.isError ? 'error' : 'completed',
-      }
-    }
-    default:
-      return null
-  }
-}
+// Re-export NormalizedEvent transform helpers (extracted to protocol-helpers.ts for line-cap).
+export { normalizedToRemote, normalizedToMessages } from './protocol-helpers'

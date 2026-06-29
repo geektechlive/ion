@@ -42,10 +42,16 @@ vi.mock('../../../shared/tab-predicates', () => ({
   tabHasExtensions: () => false,
 }))
 
-// Mock serialize-conversation-pane.
-vi.mock('../serialize-conversation-pane', () => ({
-  serializeConversationPane: () => null,
-}))
+// Mock serialize-conversation-pane. resolvePersistedLastKnownSessionId is a
+// pure helper persistTabs now calls; use the real implementation (importOriginal)
+// so the lastKnownSessionId preservation runs as in production.
+vi.mock('../serialize-conversation-pane', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../serialize-conversation-pane')>()
+  return {
+    ...actual,
+    serializeConversationPane: () => null,
+  }
+})
 
 // Mock tab-migration-split.
 vi.mock('../../../main/tab-migration-split', () => ({

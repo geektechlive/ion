@@ -100,8 +100,8 @@ describe('StatusBarContextIndicator math', () => {
     // Defence-in-depth: if a stale contextTokens somehow points at a
     // smaller engine window during the cold-start race, the display cap
     // protects against showing 250%. The underlying state should never
-    // produce this in steady-state — the projection in
-    // engine-event-status.ts updates contextWindow on every status tick
+    // produce this in steady-state — the normalized engine_status handler in
+    // event-slice.ts updates contextWindow on every status tick
     // — but the cap pins the UI invariant.
     const out = resolvePercentAndTokens({
       contextTokens: 500_000,

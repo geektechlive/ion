@@ -260,6 +260,40 @@ function isInternalMessage(content: string): boolean {
   return content.startsWith('[SYSTEM] ') || content === 'Continue from where you left off.'
 }
 
+/**
+ * Returns true when a conversation id names a real, resumable conversation on
+ * disk — i.e. it has a backing file. Mirrors the engine's conversation.Exists
+ * probe order (engine/internal/conversation/persistence.go):
+ *
+ *   1. <id>.llm.jsonl AND <id>.tree.jsonl both present → split format.
+ *   2. <id>.jsonl present → legacy format.
+ *   3. <id>.json present → v1 JSON format.
+ *
+ * A "phantom" id (pre-minted by the engine on a restart and never saved)
+ * returns false here. The restore path uses this to skip phantom ids when
+ * resolving which conversation a tab should resume, so a fileless trailing id
+ * in conversationIds can never be selected and propagated into an empty
+ * session. (#230/#231)
+ */
+export function conversationExists(sessionId: string): boolean {
+  if (!sessionId) return false
+  const convDir = join(homedir(), '.ion', 'conversations')
+
+  // Probe 1: split format requires BOTH files (matches the engine, which
+  // treats an orphan .llm.jsonl alone as not-a-valid-split).
+  const llmPresent = existsSync(join(convDir, `${sessionId}.llm.jsonl`))
+  const treePresent = existsSync(join(convDir, `${sessionId}.tree.jsonl`))
+  if (llmPresent && treePresent) return true
+
+  // Probe 2: legacy .jsonl
+  if (existsSync(join(convDir, `${sessionId}.jsonl`))) return true
+
+  // Probe 3: v1 .json
+  if (existsSync(join(convDir, `${sessionId}.json`))) return true
+
+  return false
+}
+
 export function loadEngineConversationMessages(sessionId: string): any[] {
   const convDir = join(homedir(), '.ion', 'conversations')
   const filePath = join(convDir, `${sessionId}.jsonl`)

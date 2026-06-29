@@ -1,11 +1,10 @@
 /**
- * engine-event-slice — permission denial handling
+ * WI-001: permission denial handling via task_complete (normalized path)
  *
- * Pins the contract that `engine_status` with `permissionDenials` containing
- * AskUserQuestion or ExitPlanMode converges with the conversation-tab
- * `task_complete` behavior: status is set to 'completed' (not 'idle') and
- * `instance.permissionDenied` is populated so the card renders and the
- * snapshot carries the data to iOS.
+ * After the single-path collapse, permission denials from engine_status are
+ * promoted to task_complete.permissionDenials in the normalized stream.
+ * handleNormalizedEvent sets status='completed' and populates instance.permissionDenied
+ * on the active instance for all conversation types (plain and extension-hosted).
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -14,141 +13,140 @@ vi.mock('../session-store-helpers', () => ({
   makeLocalTab: vi.fn(),
   nextMsgId: vi.fn(() => 'mock-msg-id'),
   playNotificationIfHidden: vi.fn(async () => {}),
+  totalInputTokens: vi.fn(() => 0),
+  scheduleDoneGroupMove: vi.fn(),
+}))
+vi.mock('../slices/event-slice-titling', () => ({ maybeGenerateTabTitle: vi.fn() }))
+vi.mock('../../preferences', () => ({
+  usePreferencesStore: { getState: vi.fn(() => ({ expandToolResults: false, aiGeneratedTitles: false, autoGroupMovement: false })) },
+}))
+vi.mock('../slices/engine-event-slice-messages', () => ({
+  handleCrossNormalizedEvent: vi.fn(() => false),
 }))
 
-import { createEngineEventSlice } from '../slices/engine-event-slice'
+import { createEventSlice } from '../slices/event-slice'
+import { activeInstance } from '../conversation-instance'
 import type { State } from '../session-store-types'
 
 function makeInstance(id: string) {
-  return { id, label: id, messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null }
+  return {
+    id, label: id, messages: [], messageCount: 0, modelOverride: null, sessionModel: null,
+    permissionMode: 'auto', permissionDenied: null, permissionQueue: [], elicitationQueue: [],
+    conversationIds: [], draftInput: '', agentStates: [],
+    statusFields: null, planFilePath: null, thinkingEffort: 'off', sealed: false,
+  }
 }
 
 function buildHarness() {
   const state: any = {
-    tabs: [{ id: 'tab1', hasEngineExtension: true, status: 'running', lastEventAt: 0, permissionDenied: null }],
+    tabs: [{ id: 'tab1', engineProfileId: 'test-profile', status: 'running', lastEventAt: 0, permissionDenied: null, contextTokens: 0, contextPercent: 0, permissionMode: 'auto', hasUnread: false, queuedPrompts: [], historicalSessionIds: [], activeRequestId: null, currentActivity: null }],
+    activeTabId: 'tab1',
+    isExpanded: false,
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     engineModelFallbacks: new Map(),
-    conversationPanes: new Map([['tab1', { instances: [makeInstance('inst1')], activeInstanceId: 'inst1' }]]),
+    conversationPanes: new Map([['tab1', { instances: [makeInstance('main')], activeInstanceId: 'main' }]]),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
     Object.assign(state, patch)
   }
   const get = () => state as State
-  const slice = createEngineEventSlice(set, get) as State
+  const slice = createEventSlice(set, get) as State
   return { state, slice }
 }
 
-function getPermissionDenied(state: any, tabId: string, instanceId: string) {
-  const pane = state.conversationPanes.get(tabId)
-  return pane?.instances.find((i: any) => i.id === instanceId)?.permissionDenied
+function getPermissionDenied(state: any, tabId: string) {
+  return activeInstance(state.conversationPanes, tabId)?.permissionDenied
 }
 
-describe('engine_status with permissionDenials — pipeline convergence', () => {
+describe('task_complete with permissionDenials — pipeline convergence (WI-001)', () => {
   it('AskUserQuestion denial sets status=completed and populates instance.permissionDenied', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        permissionDenials: [
-          { toolName: 'AskUserQuestion', toolUseId: 'ask-1', toolInput: { question: 'Pick one', options: ['A', 'B'] } },
-        ],
-      },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'AskUserQuestion', toolUseId: 'ask-1', toolInput: { question: 'Pick one', options: ['A', 'B'] } },
+      ],
     } as any)
 
     expect(state.tabs[0].status).toBe('completed')
-    // Engine tabs use instance.permissionDenied (per-instance), not tab.permissionDenied
+    // The parent tab.permissionDenied is NOT written (per WI-001 sticky-parent invariant)
     expect(state.tabs[0].permissionDenied).toBeNull()
-    const entry = getPermissionDenied(state, 'tab1', 'inst1')
+    const entry = getPermissionDenied(state, 'tab1')
     expect(entry).not.toBeNull()
-    expect(entry.tools).toHaveLength(1)
-    expect(entry.tools[0].toolName).toBe('AskUserQuestion')
-    expect(entry.tools[0].toolInput).toEqual({ question: 'Pick one', options: ['A', 'B'] })
+    expect(entry!.tools).toHaveLength(1)
+    expect(entry!.tools[0].toolName).toBe('AskUserQuestion')
+    expect(entry!.tools[0].toolInput).toEqual({ question: 'Pick one', options: ['A', 'B'] })
   })
 
   it('ExitPlanMode denial sets status=completed and populates instance.permissionDenied', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        permissionDenials: [
-          { toolName: 'ExitPlanMode', toolUseId: 'exit-1', toolInput: { planFilePath: '/tmp/plan.md' } },
-        ],
-      },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'ExitPlanMode', toolUseId: 'exit-1', toolInput: { planFilePath: '/tmp/plan.md' } },
+      ],
     } as any)
 
     expect(state.tabs[0].status).toBe('completed')
     expect(state.tabs[0].permissionDenied).toBeNull()
-    expect(getPermissionDenied(state, 'tab1', 'inst1')?.tools[0].toolName).toBe('ExitPlanMode')
+    expect(getPermissionDenied(state, 'tab1')?.tools[0].toolName).toBe('ExitPlanMode')
   })
 
-  it('engine_status idle without denials sets status=idle (normal path)', () => {
+  it('task_complete without denials sets status=completed (normal path)', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: { state: 'idle' },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [],
     } as any)
 
-    expect(state.tabs[0].status).toBe('idle')
-    expect(state.tabs[0].permissionDenied).toBeNull()
-  })
-
-  it('non-special denials (generic tool) still set status=idle', () => {
-    const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
-
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        permissionDenials: [
-          { toolName: 'Write', toolUseId: 'w-1', toolInput: {} },
-        ],
-      },
-    } as any)
-
-    expect(state.tabs[0].status).toBe('idle')
-    expect(state.tabs[0].permissionDenied).toBeNull()
-  })
-
-  it('subsequent idle without denials sets status=idle after prior AskUserQuestion', () => {
-    const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
-
-    // First: AskUserQuestion denial
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        permissionDenials: [
-          { toolName: 'AskUserQuestion', toolUseId: 'ask-1', toolInput: { question: 'Yes?' } },
-        ],
-      },
-    } as any)
     expect(state.tabs[0].status).toBe('completed')
-    expect(getPermissionDenied(state, 'tab1', 'inst1')).not.toBeUndefined()
+    expect(state.tabs[0].permissionDenied).toBeNull()
+  })
 
-    // Simulate user answered → tab goes running → then idle again with no denials
-    state.tabs[0].status = 'running'
+  it('non-special denials (generic tool Write) ALSO set permissionDenied in the normalized path', () => {
+    // WI-001 change: the normalized task_complete path does NOT filter by tool name.
+    // Any denial in permissionDenials sets instance.permissionDenied. The old
+    // handleEngineStatusEvent filtered non-interactive tools (Read, Bash, etc.) before
+    // building the denial card; that filtering is not present in the normalized path
+    // since the engine only emits interactive tool denials anyway.
+    const { state, slice } = buildHarness()
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: { state: 'idle' },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'Write', toolUseId: 'w-1', toolInput: {} },
+      ],
     } as any)
 
-    expect(state.tabs[0].status).toBe('idle')
-    expect(state.tabs[0].permissionDenied).toBeNull()
+    expect(state.tabs[0].status).toBe('completed')
+    // The engine normally only puts interactive tool denials here, but the normalized
+    // path does NOT filter — the raw permission list is stored.
+    const entry = getPermissionDenied(state, 'tab1')
+    expect(entry).not.toBeNull()
+    expect(entry!.tools[0].toolName).toBe('Write')
   })
 })

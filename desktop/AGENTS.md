@@ -40,7 +40,7 @@ desktop/src/
   preload/                 contextBridge IPC surface
   renderer/                React app
     App.tsx                root
-    stores/sessionStore.ts thin orchestrator (109 lines); logic lives in stores/slices/
+    stores/sessionStore.ts thin orchestrator; logic lives in stores/slices/
     stores/slices/         feature slices (engine, tabs, permissions, attachments, etc.)
     components/            UI (flat)
     hooks/                 React hooks
@@ -57,7 +57,7 @@ desktop/src/
 
 - All `ipcMain.handle/on` channels validated via `main/ipc-validation.ts` patterns. No exceptions.
 - Channels namespaced by feature: `session:start`, `git:status`, `terminal:write`, etc.
-- Renderer reaches IPC only through `preload/`. Renderer must not import from `main/`.
+- Renderer reaches IPC only through `preload/`. Renderer must not import IPC/Electron-bound code from `main/`. The one allowed exception is a small set of *pure* helpers that happen to live under `main/` and are imported by value for shared logic (`main/slash-parse` `parseSlash`, `main/tab-migration-split` `SPLIT_SCHEMA_VERSION`, `main/tab-migration-unify` `migrateTabToUnified`). These should migrate to `shared/` when next touched; do not add new renderer→`main/` imports beyond pure helpers.
 - Avoid `executeJavaScript` with string interpolation. Use preload-bridge functions.
 
 ## State
@@ -112,12 +112,12 @@ When investigating a renderer bug in a packaged build, **add the instrumentation
 ## Secrets
 
 - Paired-device shared secrets and relay API key go through `safeStorage.encryptString` (OS keychain).
-- Settings files use temp+fsync+rename. Reference: `engine/internal/conversation/filestore.go`.
+- Settings files use temp+fsync+rename. Reference: `engine/internal/conversation/persistence.go` (`writeFileSynced`).
 
 ## Cross-process types
 
 - Live in `desktop/src/shared/types.ts`.
-- Renderer must not import from `main/` (one type-only violation in `InputBar.tsx` for `DiscoveredCommand` — fix by lifting to `shared/types.ts`).
+- Renderer must not import IPC/Electron-bound code from `main/` (see the IPC section for the pure-helper exception and its migration intent).
 
 ## Wire naming and contract rules (ADR 008)
 

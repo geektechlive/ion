@@ -5,6 +5,7 @@ import { log as _log } from '../logger'
 import { state, engineBridge } from '../state'
 import { atomicWriteFileSync } from '../utils/atomicWrite'
 import { runTabUnifyMigration } from '../tab-migration-unify-runner'
+import { runTabSplitMigration } from '../tab-migration-split-runner'
 import {
   SETTINGS_DEFAULTS,
   SETTINGS_DIR,
@@ -143,6 +144,21 @@ export function registerSettingsIpc(): void {
       if (existsSync(PREV_FILE)) runTabUnifyMigration(PREV_FILE)
     } catch (err) {
       log(`[tabs] unify migration unexpected error: ${(err as Error).message} — loading legacy`)
+    }
+    // Split migration: flatten multi-instance tabs into single-instance tabs.
+    // Runs AFTER unify (requires schemaVersion >= 2). Idempotent at >= 3.
+    // On verify failure the file is untouched; the renderer's defensive
+    // single-instance restore handles any surviving multi-instance tabs.
+    try {
+      const splitOutcome = runTabSplitMigration(TABS_FILE)
+      if (splitOutcome.reason === 'success') {
+        log(`[tabs] split migration applied to ${TABS_FILE} (${splitOutcome.tabsBefore} -> ${splitOutcome.tabsAfter} tabs, backup ${splitOutcome.backupPath})`)
+      } else if (splitOutcome.reason === 'verify-failed' || splitOutcome.reason === 'error') {
+        log(`[tabs] split migration NOT applied to ${TABS_FILE} (${splitOutcome.reason}: ${splitOutcome.errorMessage})`)
+      }
+      if (existsSync(PREV_FILE)) runTabSplitMigration(PREV_FILE)
+    } catch (err) {
+      log(`[tabs] split migration unexpected error: ${(err as Error).message}`)
     }
     try {
       let primary: any = null

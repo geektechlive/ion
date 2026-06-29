@@ -181,6 +181,40 @@ describe('EngineControlPlane — engine event handling', () => {
       expect(tab?.status).toBe('idle')
     })
 
+    it('engine_status forwards a status NormalizedEvent carrying the full StatusFields', async () => {
+      // Root-cause fix: handleStatusEvent must emit a `status` event carrying the
+      // engine's StatusFields so the renderer can populate inst.statusFields.
+      // Without this emit the renderer field is null forever and the StatusBar
+      // engine slots (identity, cost, backend badge) render nothing. The emit is
+      // unconditional (all states); here we assert it on a running tick, which
+      // does NOT produce a task_complete — proving the snapshot is forwarded on
+      // every engine_status, not only on idle.
+      const tabId = cp.createTab()
+      await cp.submitPrompt(tabId, 'req-1', makeRunOptions())
+
+      const events: any[] = []
+      cp.on('event', (tid: string, ev: any) => events.push({ tid, ev }))
+
+      const fields = {
+        state: 'running',
+        model: 'claude-opus-4-7',
+        backend: 'cli',
+        totalCostUsd: 0.5,
+        extensionName: 'Chief of Staff',
+        team: 'Platform',
+      }
+      capturedEventHandler!(tabId, { type: 'engine_status', fields })
+
+      const statusEvent = events.find((e) => e.ev.type === 'status')
+      expect(statusEvent).toBeDefined()
+      expect(statusEvent.tid).toBe(tabId)
+      // The forwarded payload is the engine's StatusFields verbatim.
+      expect(statusEvent.ev.fields).toEqual(fields)
+      // Running tick: no task_complete synthesized — proves status forwards on
+      // every engine_status, not only idle.
+      expect(events.find((e) => e.ev.type === 'task_complete')).toBeUndefined()
+    })
+
     it('engine_status idle with AskUserQuestion denial emits task_complete with permissionDenials and sets status completed', async () => {
       const tabId = cp.createTab()
       await cp.submitPrompt(tabId, 'req-1', makeRunOptions())

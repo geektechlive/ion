@@ -1,404 +1,312 @@
 /**
- * Phase 4 regression tests for `handleEngineStatusEvent`.
+ * WI-001 regression: status writes via normalized path
  *
- * Phase 4 of the state-management overhaul removes the renderer's
- * inferred-status writers (engine_text_delta no longer sets
- * `tab.status='running'`) and may delete the active-instance status
- * mutation block in engine-event-status.ts. These tests lock down the
- * surrounding behavior that MUST continue to work:
+ * After the single-path collapse (WI-001), handleEngineStatusEvent is retired.
+ * The normalized arm (handleNormalizedEvent in event-slice.ts) is the single
+ * authoritative source for session state. This file pins the behaviors that
+ * handleEngineStatusEvent previously provided for extension tabs:
  *
- *   - sessionId capture into instance.conversationIds (persistence)
- *   - model capture into instance.modelOverride
- *   - permissionDenied promotion (AskUserQuestion / ExitPlanMode)
- *   - cost/context merge into statusFields
- *   - context-percent backfill from engineUsage map
- *   - model-fallback indicator clear-on-idle
- *   - permissionDenied preservation on cost-only ticks
+ *   1. session_init captures sessionId into instance.conversationIds
+ *   2. session_init with model updates instance.sessionModel
+ *   3. task_complete transitions to status='completed'
+ *   4. Deferred to WI-003: statusFields, contextWindow, deriveEngineParentStatus
  *
- * If Phase 4 (or a future refactor) breaks any of these, the failure
- * will surface here and not by an iOS-side regression that's harder to
- * diagnose.
+ * Note: deriveEngineParentStatus is NOT removed in WI-001 (per the spec), and
+ * the parent tab's statusFields-derived logic continues to work via WI-003.
  */
 
-import { describe, it, expect, vi, beforeAll } from 'vitest'
-
-// The slice's didCaptureNewSessionId branch calls into `window` to
-// force-flush the persistence layer. Stub it so node-vitest does not
-// throw on the global lookup; the function itself does not need to do
-// anything for these tests (we observe state mutations directly).
-beforeAll(() => {
-  (globalThis as any).window = (globalThis as any).window || {}
-})
+import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../session-store-helpers', () => ({
   makeLocalTab: vi.fn(),
   nextMsgId: vi.fn(() => 'mock-msg-id'),
   playNotificationIfHidden: vi.fn(async () => {}),
+  totalInputTokens: vi.fn(() => 0),
+  scheduleDoneGroupMove: vi.fn(),
+}))
+vi.mock('../slices/event-slice-titling', () => ({ maybeGenerateTabTitle: vi.fn() }))
+vi.mock('../../preferences', () => ({
+  usePreferencesStore: { getState: vi.fn(() => ({ expandToolResults: false, aiGeneratedTitles: false, autoGroupMovement: false })) },
+}))
+vi.mock('../slices/engine-event-slice-messages', () => ({
+  handleCrossNormalizedEvent: vi.fn(() => false),
 }))
 
-import { createEngineEventSlice } from '../slices/engine-event-slice'
+import { createEventSlice } from '../slices/event-slice'
+import { activeInstance } from '../conversation-instance'
 import type { State } from '../session-store-types'
 
-function makeInstance(id: string, overrides: Record<string, unknown> = {}) {
+function makeInstance(id: string, conversationIds: string[] = []) {
   return {
-    id,
-    label: id,
-    messages: [],
-    modelOverride: null,
-    permissionMode: 'auto',
-    permissionDenied: null,
-    conversationIds: [],
-    draftInput: '',
-    agentStates: [],
-    statusFields: null,
-    planFilePath: null,
-    ...overrides,
+    id, label: id, messages: [], messageCount: 0, modelOverride: null, sessionModel: null,
+    permissionMode: 'auto', permissionDenied: null, permissionQueue: [], elicitationQueue: [],
+    conversationIds, draftInput: '', agentStates: [],
+    statusFields: null, planFilePath: null, thinkingEffort: 'off', sealed: false,
   }
 }
 
-function buildHarness(opts: { tabStatus?: string; activeInstanceId?: string; instances?: any[] } = {}) {
+function buildHarness(overrides: Partial<any> = {}) {
   const state: any = {
-    tabs: [
-      {
-        id: 'tab1',
-        hasEngineExtension: true,
-        status: opts.tabStatus ?? 'idle',
-        conversationId: undefined,
-        lastKnownSessionId: undefined,
-        lastEventAt: 0,
-        permissionDenied: null,
-      },
-    ],
+    tabs: [{
+      id: 'tab1',
+      engineProfileId: 'ext-profile',
+      status: 'running',
+      lastEventAt: 0,
+      conversationId: null,
+      lastKnownSessionId: null,
+      historicalSessionIds: [],
+      permissionMode: 'auto',
+      permissionDenied: null,
+      contextTokens: 0,
+      contextPercent: 0,
+      hasUnread: false,
+      queuedPrompts: [],
+      activeRequestId: null,
+      currentActivity: null,
+      sessionTools: [],
+      sessionMcpServers: [],
+      sessionSkills: [],
+      sessionVersion: '',
+    }],
+    activeTabId: 'tab1',
+    isExpanded: false,
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     engineModelFallbacks: new Map(),
-    conversationPanes: new Map([[
-      'tab1',
-      {
-        instances: opts.instances ?? [makeInstance('inst1')],
-        activeInstanceId: opts.activeInstanceId ?? 'inst1',
-      },
-    ]]),
+    conversationPanes: new Map([['tab1', {
+      instances: [makeInstance('main', overrides.conversationIds || [])],
+      activeInstanceId: 'main',
+    }]]),
+    ...overrides,
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
     Object.assign(state, patch)
   }
   const get = () => state as State
-  const slice = createEngineEventSlice(set, get) as State
+  const slice = createEventSlice(set, get) as State
   return { state, slice }
 }
 
-function getInstance(state: any, tabId: string, instanceId: string) {
-  return state.conversationPanes.get(tabId)?.instances.find((i: any) => i.id === instanceId)
-}
-
-describe('engine_status — Phase 4 regression: behaviors that survive the refactor', () => {
-  it('captures sessionId into instance.conversationIds (persistence-critical)', () => {
-    const { state, slice } = buildHarness()
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        sessionId: 'conv-abc-123',
-        label: 'inst1',
-        model: 'claude-4',
-        contextPercent: 10,
-        contextWindow: 200000,
-      },
-    } as any)
-
-    const inst = getInstance(state, 'tab1', 'inst1')
-    expect(inst?.conversationIds).toEqual(['conv-abc-123'])
-  })
-
-  it('appends additional sessionIds rather than replacing', () => {
-    const { state, slice } = buildHarness({
-      instances: [makeInstance('inst1', { conversationIds: ['conv-old'] })],
-    })
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', sessionId: 'conv-new', label: '', model: '', contextPercent: 0, contextWindow: 0 },
-    } as any)
-
-    const inst = getInstance(state, 'tab1', 'inst1')
-    expect(inst?.conversationIds).toEqual(['conv-old', 'conv-new'])
-  })
-
-  it('does not duplicate the most recent sessionId on repeated ticks', () => {
-    const { state, slice } = buildHarness({
-      instances: [makeInstance('inst1', { conversationIds: ['conv-x'] })],
-    })
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', sessionId: 'conv-x', label: '', model: '', contextPercent: 0, contextWindow: 0 },
-    } as any)
-
-    const inst = getInstance(state, 'tab1', 'inst1')
-    expect(inst?.conversationIds).toEqual(['conv-x'])
-  })
-
-  it('captures valid model into instance.modelOverride and rejects "unknown"', () => {
+describe('WI-001: session_init captures conversationId (normalized arm)', () => {
+  it('appends sessionId to instance.conversationIds on first session', () => {
     const { state, slice } = buildHarness()
 
-    // Valid model: captured
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: 'claude-4', contextPercent: 0, contextWindow: 0 },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init',
+      sessionId: 'conv-abc',
+      model: 'claude-sonnet-4-6',
+      tools: [],
+      mcpServers: [],
+      skills: [],
+      version: '1',
+      isWarmup: false,
     } as any)
-    expect(getInstance(state, 'tab1', 'inst1')?.modelOverride).toBe('claude-4')
 
-    // Bogus "unknown" model: rejected — modelOverride must not regress.
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: 'unknown', contextPercent: 0, contextWindow: 0 },
-    } as any)
-    expect(getInstance(state, 'tab1', 'inst1')?.modelOverride).toBe('claude-4')
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    expect(inst?.conversationIds).toContain('conv-abc')
+    // tab.conversationId updated
+    expect(state.tabs[0].conversationId).toBe('conv-abc')
   })
 
-  it('promotes AskUserQuestion denial into instance.permissionDenied', () => {
+  it('does not duplicate sessionId on repeated session_init', () => {
     const { state, slice } = buildHarness()
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        label: '',
-        model: '',
-        contextPercent: 0,
-        contextWindow: 0,
-        permissionDenials: [
-          { toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'pick?' } },
-        ],
-      },
+
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init',
+      sessionId: 'conv-abc',
+      model: 'claude-sonnet-4-6',
+      tools: [],
+      mcpServers: [],
+      skills: [],
+      version: '1',
+      isWarmup: false,
     } as any)
 
-    const pd = getInstance(state, 'tab1', 'inst1')?.permissionDenied
-    expect(pd?.tools).toHaveLength(1)
-    expect(pd?.tools[0].toolName).toBe('AskUserQuestion')
+    // Resume: same sessionId re-emitted
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init',
+      sessionId: 'conv-abc',
+      model: 'claude-sonnet-4-6',
+      tools: [],
+      mcpServers: [],
+      skills: [],
+      version: '1',
+      isWarmup: false,
+    } as any)
+
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    const count = (inst?.conversationIds || []).filter((id) => id === 'conv-abc').length
+    expect(count).toBe(1)
   })
 
-  it('promotes ExitPlanMode denial into instance.permissionDenied', () => {
+  it('appends a new sessionId on multi-turn — prior id moves to historicalSessionIds', () => {
     const { state, slice } = buildHarness()
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        label: '',
-        model: '',
-        contextPercent: 0,
-        contextWindow: 0,
-        permissionDenials: [
-          { toolName: 'ExitPlanMode', toolUseId: 'tu-2' },
-        ],
-      },
+
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init',
+      sessionId: 'conv-1',
+      model: 'claude',
+      tools: [],
+      mcpServers: [],
+      skills: [],
+      version: '1',
+      isWarmup: false,
     } as any)
 
-    const pd = getInstance(state, 'tab1', 'inst1')?.permissionDenied
-    expect(pd?.tools[0].toolName).toBe('ExitPlanMode')
-  })
-
-  it('preserves existing permissionDenied on a cost-only follow-up tick (idempotence)', () => {
-    const { state, slice } = buildHarness({
-      instances: [makeInstance('inst1', {
-        permissionDenied: { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1' }] },
-      })],
-    })
-
-    // Cost-only tick with no denials in the payload.
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: 'claude-4', contextPercent: 42, contextWindow: 200000, totalCostUsd: 0.15 },
+    // New turn — new session
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init',
+      sessionId: 'conv-2',
+      model: 'claude',
+      tools: [],
+      mcpServers: [],
+      skills: [],
+      version: '1',
+      isWarmup: false,
     } as any)
 
-    const pd = getInstance(state, 'tab1', 'inst1')?.permissionDenied
-    expect(pd?.tools).toHaveLength(1)
-    expect(pd?.tools[0].toolName).toBe('AskUserQuestion')
+    expect(state.tabs[0].conversationId).toBe('conv-2')
+    expect(state.tabs[0].historicalSessionIds).toContain('conv-1')
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    expect(inst?.conversationIds).toContain('conv-2')
   })
 
-  it('merges contextPercent backfill from engineUsage when fields omit it', () => {
+  it('session_init updates instance.sessionModel', () => {
     const { state, slice } = buildHarness()
-    state.engineUsage.set('tab1:inst1', { percent: 73, inputTokens: 1, outputTokens: 1 })
 
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: '', contextPercent: 0, contextWindow: 0 },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init',
+      sessionId: 'conv-abc',
+      model: 'claude-opus-4-6',
+      tools: [],
+      mcpServers: [],
+      skills: [],
+      version: '1',
+      isWarmup: false,
     } as any)
 
-    const sf = getInstance(state, 'tab1', 'inst1')?.statusFields
-    expect(sf?.contextPercent).toBe(73)
-  })
-
-  it('merges totalCostUsd from prior statusFields when payload omits it', () => {
-    const { state, slice } = buildHarness({
-      instances: [makeInstance('inst1', {
-        statusFields: { state: 'idle', label: '', model: '', contextPercent: 0, contextWindow: 0, totalCostUsd: 0.42 },
-      })],
-    })
-
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: '', contextPercent: 0, contextWindow: 0 },
-    } as any)
-
-    expect(getInstance(state, 'tab1', 'inst1')?.statusFields?.totalCostUsd).toBe(0.42)
-  })
-
-  it('clears engineModelFallbacks entry on the idle transition', () => {
-    const { state, slice } = buildHarness()
-    state.engineModelFallbacks.set('tab1:inst1', { requestedModel: 'opus-9', fallbackModel: 'claude-4' })
-
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: '', contextPercent: 0, contextWindow: 0 },
-    } as any)
-
-    expect(state.engineModelFallbacks.has('tab1:inst1')).toBe(false)
-  })
-
-  it('preserves engineModelFallbacks entry on a running emission (no clear)', () => {
-    const { state, slice } = buildHarness()
-    state.engineModelFallbacks.set('tab1:inst1', { requestedModel: 'opus-9', fallbackModel: 'claude-4' })
-
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'running', label: '', model: '', contextPercent: 0, contextWindow: 0 },
-    } as any)
-
-    expect(state.engineModelFallbacks.has('tab1:inst1')).toBe(true)
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    expect(inst?.sessionModel).toBe('claude-opus-4-6')
   })
 })
 
-describe('engine_status — Phase 4 contract: status mutation behavior', () => {
-  it('still sets tab.status=running when active instance reports running', () => {
-    const { state, slice } = buildHarness({ tabStatus: 'idle' })
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'running', label: '', model: '', contextPercent: 0, contextWindow: 0 },
+// ─── Session ledger growth on session_init (Commit 3) ─────────────────────────
+describe('session ledger: session_init appends reasoned entries', () => {
+  it('a plain new sessionId is appended to the ledger with reason "unknown"', () => {
+    const { state, slice } = buildHarness()
+
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init', sessionId: 'conv-1', model: 'claude',
+      tools: [], mcpServers: [], skills: [], version: '1', isWarmup: false,
     } as any)
-    expect(state.tabs[0].status).toBe('running')
+
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    expect(inst?.sessions).toEqual([
+      { id: 'conv-1', reason: 'unknown', createdAt: expect.any(Number) },
+    ])
   })
 
-  it('sets tab.status=completed when active instance reports idle + AskUserQuestion denial', () => {
-    const { state, slice } = buildHarness({ tabStatus: 'running' })
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        label: '',
-        model: '',
-        contextPercent: 0,
-        contextWindow: 0,
-        permissionDenials: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1' }],
-      },
+  it('a checkpoint cut (pendingCutReason=clear) tags the next id "clear" with parentId', () => {
+    const { state, slice } = buildHarness()
+
+    // First session establishes the prior id.
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init', sessionId: 'conv-1', model: 'claude',
+      tools: [], mcpServers: [], skills: [], version: '1', isWarmup: false,
     } as any)
+
+    // Implement clear-context stamps the cut reason on the instance.
+    const pane = state.conversationPanes.get('tab1')!
+    pane.instances[0].pendingCutReason = 'clear'
+
+    // The clear-context run mints a fresh id, arriving via session_init.
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init', sessionId: 'conv-2', model: 'claude',
+      tools: [], mcpServers: [], skills: [], version: '1', isWarmup: false,
+    } as any)
+
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    expect(inst?.sessions).toEqual([
+      { id: 'conv-1', reason: 'unknown', createdAt: expect.any(Number) },
+      { id: 'conv-2', reason: 'clear', createdAt: expect.any(Number), parentId: 'conv-1' },
+    ])
+    // The one-shot reason is consumed.
+    expect(inst?.pendingCutReason).toBeUndefined()
+  })
+
+  it('repeated session_init for the same id does not duplicate the ledger entry', () => {
+    const { state, slice } = buildHarness()
+    const ev = {
+      type: 'session_init', sessionId: 'conv-1', model: 'claude',
+      tools: [], mcpServers: [], skills: [], version: '1', isWarmup: false,
+    } as any
+    slice.handleNormalizedEvent('tab1', ev)
+    slice.handleNormalizedEvent('tab1', ev)
+
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    expect(inst?.sessions).toHaveLength(1)
+  })
+})
+
+describe('WI-001: task_complete transitions to completed (normalized arm)', () => {
+  it('task_complete without denials transitions status=completed', () => {
+    const { state, slice } = buildHarness()
+
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'conv-1',
+      costUsd: 0.01,
+      durationMs: 2000,
+      numTurns: 1,
+      permissionDenials: [],
+    } as any)
+
     expect(state.tabs[0].status).toBe('completed')
   })
 
-  it('sets tab.status=idle when active instance idle and no denials', () => {
-    const { state, slice } = buildHarness({ tabStatus: 'running' })
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: '', contextPercent: 0, contextWindow: 0 },
+  it('task_complete with AskUserQuestion denial sets instance.permissionDenied', () => {
+    const { state, slice } = buildHarness()
+
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'conv-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'AskUserQuestion', toolUseId: 'ask-1', toolInput: { question: 'Which?' } },
+      ],
     } as any)
-    expect(state.tabs[0].status).toBe('idle')
+
+    const inst = activeInstance(state.conversationPanes, 'tab1')
+    expect(inst?.permissionDenied).not.toBeNull()
+    expect(inst?.permissionDenied?.tools[0].toolName).toBe('AskUserQuestion')
+    // parent tab stays null (instance-level only)
+    expect(state.tabs[0].permissionDenied).toBeNull()
   })
 
-  it('keeps tab.status=running when idle but backgroundAgents > 0', () => {
-    const { state, slice } = buildHarness({ tabStatus: 'running' })
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: '', contextPercent: 0, contextWindow: 0, backgroundAgents: 2 },
-    } as any)
-    // Background dispatches: tab remains 'running' so the interrupt button stays visible.
-    expect(state.tabs[0].status).toBe('running')
-  })
-
-  it('does NOT mutate parent tab.status when the event arrives for an inactive sub-instance', () => {
-    // This is the Bug 1 case from the original plan. The active-instance
-    // gate intentionally drops status updates from inactive instances so
-    // a background sub-conversation can't overwrite the foreground pill.
-    // The snapshot derivation (Phase 1 commit 85647b95) corrects this on
-    // the iOS-facing surface. Phase 4 preserves the renderer-side gate.
-    const { state, slice } = buildHarness({
-      tabStatus: 'running',
-      activeInstanceId: 'inst-active',
-      instances: [makeInstance('inst-active'), makeInstance('inst-inactive')],
+  it('task_complete clears engineModelFallbacks entry for the active instance', () => {
+    const { state, slice } = buildHarness()
+    state.engineModelFallbacks.set('tab1', {
+      requestedModel: 'std',
+      fallbackModel: 'claude',
+      reason: 'no_provider',
+      at: Date.now(),
     })
 
-    // Inactive instance reports idle — should not bump parent tab.status.
-    slice.handleEngineEvent('tab1:inst-inactive', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: '', contextPercent: 0, contextWindow: 0 },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'conv-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [],
     } as any)
 
-    expect(state.tabs[0].status).toBe('running')
-  })
-
-  it('always writes statusFields on the targeted instance, regardless of active-instance gate', () => {
-    // Even when the active-instance gate blocks tab.status mutation, the
-    // per-instance statusFields must still update so the snapshot
-    // derivation sees fresh state for the inactive sub-tab.
-    const { state, slice } = buildHarness({
-      activeInstanceId: 'inst-active',
-      instances: [makeInstance('inst-active'), makeInstance('inst-inactive')],
-    })
-
-    slice.handleEngineEvent('tab1:inst-inactive', {
-      type: 'engine_status',
-      fields: { state: 'idle', label: '', model: 'claude-4', contextPercent: 5, contextWindow: 200000 },
-    } as any)
-
-    const inactive = getInstance(state, 'tab1', 'inst-inactive')
-    expect(inactive?.statusFields?.state).toBe('idle')
-    expect(inactive?.statusFields?.model).toBe('claude-4')
-  })
-
-  it('projects engine contextWindow onto the parent tab so the indicator divides by engine truth', () => {
-    // The StatusBarContextIndicator (renderer/components) reads
-    // tab.contextWindow as the denominator when recomputing percent
-    // locally. Without this projection the indicator falls back to the
-    // picker-selected model's nominal window — see the
-    // sturdy-wishing-tide.md / cosy-pacing-bee.md diagnosis for the
-    // 100% / 498k / 200k bug this fix prevents.
-    const { state, slice } = buildHarness()
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        label: '',
-        model: 'claude-opus-4-7',
-        contextPercent: 50,
-        contextWindow: 1_000_000,
-        sessionId: 'conv-window-test',
-      },
-    } as any)
-
-    expect(state.tabs[0].contextWindow).toBe(1_000_000)
-  })
-
-  it('does not overwrite tab.contextWindow when engine emits zero (no window resolved)', () => {
-    // Some engine_status ticks arrive before the model is resolved (e.g.
-    // the very first emit after StartRun). In that case contextWindow
-    // is 0. We must NOT overwrite a previously-known window with 0 — the
-    // indicator would silently revert to the picker fallback.
-    const { state, slice } = buildHarness()
-    state.tabs[0].contextWindow = 200_000
-
-    slice.handleEngineEvent('tab1:inst1', {
-      type: 'engine_status',
-      fields: {
-        state: 'idle',
-        label: '',
-        model: '',
-        contextPercent: 0,
-        contextWindow: 0,
-        sessionId: 'conv-zero-window',
-      },
-    } as any)
-
-    expect(state.tabs[0].contextWindow).toBe(200_000)
+    expect(state.engineModelFallbacks.has('tab1')).toBe(false)
   })
 })

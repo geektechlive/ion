@@ -68,7 +68,8 @@ function findBundledBinary(): string | null {
 function getVersion(binaryPath: string): string | null {
   try {
     return execFileSync(binaryPath, ['version'], { encoding: 'utf-8', timeout: 5000 }).trim()
-  } catch {
+  } catch (err) {
+    log(`getVersion: 'ion version' failed for ${binaryPath}: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }

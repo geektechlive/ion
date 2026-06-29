@@ -135,10 +135,19 @@ describe('projectable-settings allowlist', () => {
     expect(orphans, `keys with no defaults: ${orphans.join(', ')}`).toEqual([])
   })
 
-  it('every entry declares a group that exists in PROJECTABLE_GROUP_ORDER', () => {
-    const validGroups = new Set(PROJECTABLE_GROUP_ORDER)
+  it('every entry declares a known group (in PROJECTABLE_GROUP_LABELS)', () => {
+    // The group must be a RECOGNIZED group — one with a label — not
+    // necessarily a PROJECTED one. Some entries (e.g. keyboardShortcuts under
+    // 'advanced') are intentionally allowlisted for validation/enterprise
+    // deployment but deliberately kept OUT of PROJECTABLE_GROUP_ORDER because
+    // iOS has no editing surface for them. Such an entry has a valid group
+    // (with a label) but is never projected — that is by design, documented at
+    // the keyboardShortcuts entry in projectable-settings-data.ts. Validating
+    // against the label set (not the projected order) catches a genuinely bogus
+    // group while permitting the intentional non-projected case.
+    const knownGroups = new Set(Object.keys(PROJECTABLE_GROUP_LABELS))
     for (const entry of PROJECTABLE_SETTINGS) {
-      expect(validGroups.has(entry.group as any), `entry ${entry.key} group=${entry.group}`).toBe(true)
+      expect(knownGroups.has(entry.group as string), `entry ${entry.key} group=${entry.group}`).toBe(true)
     }
   })
 

@@ -20,7 +20,6 @@ import { createPermissionsSlice } from './slices/permissions-slice'
 import { createSendSlice } from './slices/send-slice'
 import { createEventSlice } from './slices/event-slice'
 import { createEngineSlice } from './slices/engine-slice'
-import { createEngineEventSlice } from './slices/engine-event-slice'
 import { setupPersistence } from './session-store-persistence'
 import { usePreferencesStore } from '../preferences'
 
@@ -72,10 +71,12 @@ const initialState = {
   resources: {} as Record<string, import('../../shared/types-engine').ResourceItem[]>,
   resourceSubscriptions: {} as Record<string, string>,
   readResourceIds: new Set<string>(),
+  dispatchActivity: {} as Record<string, import('../../shared/types').Message[]>,
   tallViewTabId: null,
   scrollToBottomCounter: 0,
   settingsOpen: false,
   settingsInitialTab: null,
+  openFloatingPanelCount: 0,
 }
 
 export const useSessionStore = create<State>((set, get) => {
@@ -96,7 +97,6 @@ export const useSessionStore = create<State>((set, get) => {
     ...createSendSlice(_set, _get),
     ...createEventSlice(_set, _get),
     ...createEngineSlice(_set, _get),
-    ...createEngineEventSlice(_set, _get),
     markResourceRead: (resourceId: string) => {
       set((state) => {
         const updated = new Set(state.readResourceIds)

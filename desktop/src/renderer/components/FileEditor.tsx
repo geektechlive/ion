@@ -54,14 +54,16 @@ export function FileEditor({ dir, tabId }: FileEditorProps) {
     if (editorViewRef.current) gotoLine(editorViewRef.current)
   }, [])
 
-  if (typeof document === 'undefined') return null
-
+  // These three selectors must stay above the early return below so that
+  // hook call count is stable across all renders (React rules of hooks).
   const tabTitle = useSessionStore((s) => {
     const tab = s.tabs.find((t) => t.id === tabId)
     return tab?.customTitle || tab?.title || ''
   })
   const isFocused = useSessionStore((s) => s.fileEditorFocused)
   const focusFileEditor = useSessionStore((s) => s.focusFileEditor)
+
+  if (typeof document === 'undefined') return null
 
   const baseDirName = dir.split('/').pop() || dir
   const headerTitle = [

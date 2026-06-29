@@ -89,16 +89,57 @@ describe('handleEngineRewind — userTurnIndex pass-through', () => {
 })
 
 describe('broadcastEngineHistory', () => {
-  it('broadcasts an engine_conversation_history to all devices', async () => {
-    // instanceId is supplied, so readEngineHistoryFromStore skips the
-    // compound-key resolution and calls executeJavaScript once (for messages).
-    mocks.executeJsMock.mockResolvedValueOnce([{ id: 'u-0', role: 'user', content: 'hi', timestamp: 1 }])
-    await broadcastEngineHistory('tab-1', 'inst-1')
+  it('broadcasts a unified desktop_conversation_history to all devices (WI-004)', async () => {
+    // WI-004 / #259: broadcastEngineHistory now uses the unified
+    // desktop_conversation_history response type — the same type
+    // handleLoadConversation sends. instanceId is no longer included
+    // (not part of the desktop_conversation_history shape).
+    mocks.executeJsMock.mockResolvedValueOnce({
+      resolvedId: 'main',
+      messages: [{ id: 'u-0', role: 'user', content: 'hi', timestamp: 1 }],
+    })
+    await broadcastEngineHistory('tab-1', 'main')
     expect(mocks.sendMock).toHaveBeenCalledTimes(1)
     const event = mocks.sendMock.mock.calls[0][0]
-    expect(event.type).toBe('desktop_engine_conversation_history')
+    expect(event.type).toBe('desktop_conversation_history')
     expect(event.tabId).toBe('tab-1')
-    expect(event.instanceId).toBe('inst-1')
+    expect(event.hasMore).toBe(false)
     expect(event.messages).toEqual([{ id: 'u-0', role: 'user', content: 'hi', timestamp: 1 }])
+    // desktop_engine_conversation_history must not be sent (retired string).
+    expect(event.type).not.toBe('desktop_engine_conversation_history')
+  })
+})
+
+import { readEngineHistoryFromStore } from '../engine-history'
+
+describe('readEngineHistoryFromStore — bare-key (post-#256)', () => {
+  it('returns main instance messages for a bare tabId (no instanceId suffix)', async () => {
+    // Simulate the renderer store: pane has activeInstanceId='main', one instance
+    // with two messages.
+    const fakeMessages = [
+      { id: 'u-1', role: 'user', content: 'hello', timestamp: 100 },
+      { id: 'a-1', role: 'assistant', content: 'world', timestamp: 101 },
+    ]
+    mocks.executeJsMock.mockResolvedValueOnce({
+      resolvedId: 'main',
+      messages: fakeMessages,
+    })
+
+    const result = await readEngineHistoryFromStore('tab-bare', null)
+
+    expect(result.instanceId).toBe('main')
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[0].id).toBe('u-1')
+    expect(result.messages[1].id).toBe('a-1')
+  })
+
+  it('returns empty messages and null instanceId when store has no pane', async () => {
+    // Renderer returns null/undefined when store or pane is absent.
+    mocks.executeJsMock.mockResolvedValueOnce(null)
+
+    const result = await readEngineHistoryFromStore('tab-missing', null)
+
+    expect(result.instanceId).toBeNull()
+    expect(result.messages).toEqual([])
   })
 })

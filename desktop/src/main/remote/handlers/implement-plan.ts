@@ -208,7 +208,7 @@ export async function handleImplementPlan(
   }
 
   // Step 7: Determine tab type for processIncomingPrompt routing.
-  let isEngineTab = false
+  let hasExtensions = false
   let resolvedInstanceId: string | null = instanceId || null
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
@@ -223,13 +223,13 @@ export async function handleImplementPlan(
           ? s.conversationPanes.get('${escapedTab}')
           : (s.conversationPanes ? s.conversationPanes['${escapedTab}'] : null);
         return {
-          hasEngineExtension: !!tab.hasEngineExtension,
+          hasExtensions: !!tab.engineProfileId,
           activeInstanceId: pane ? pane.activeInstanceId : null,
         };
       })()
     `)
     if (tabInfo) {
-      isEngineTab = !!tabInfo.hasEngineExtension
+      hasExtensions = !!tabInfo.hasExtensions
       if (!resolvedInstanceId) resolvedInstanceId = tabInfo.activeInstanceId || null
     }
   } catch {}
@@ -258,7 +258,7 @@ export async function handleImplementPlan(
     text: implementPrompt,
     reqId,
     source: 'remote',
-    isEngineTab,
+    hasExtensions,
     instanceId: resolvedInstanceId || undefined,
     implementationPhase: true,
     planFilePath: planFilePath || undefined,

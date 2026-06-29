@@ -2,6 +2,103 @@ import { useEffect } from 'react'
 import { useSessionStore, editorDirForTab } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { SETTINGS_DEFAULTS } from '../preferences-types'
+import { resolveNewConversationAction, executeNewConversationAction } from '../components/new-conversation-routing'
+import { tabHasExtensions } from '../../shared/tab-predicates'
+import { effectivePermissionMode } from '../stores/conversation-instance'
+import { resolveBindings } from '../shortcuts/shortcut-catalog'
+import { matchesChord } from '../shortcuts/chord'
+
+/**
+ * Returns true when the file editor panel owns the font-zoom shortcuts.
+ *
+ * "Editor owns zoom" when ALL of:
+ *   1. fileEditorFocused is true (the user last interacted with the editor panel)
+ *   2. The active tab's editor dir is in fileEditorOpenDirs (the panel is visible)
+ *   3. The editor dir has an active file in fileEditorStates (something is open)
+ *
+ * This is evaluated from durable store state, not from transient DOM focus, so
+ * it survives CodeMirror re-renders on font-size change and works in preview
+ * mode where no .cm-editor DOM node exists.
+ */
+export function isEditorZoomTarget(): boolean {
+  const s = useSessionStore.getState()
+  if (!s.fileEditorFocused) return false
+  const activeTab = s.tabs.find((t) => t.id === s.activeTabId)
+  if (!activeTab) return false
+  const dir = editorDirForTab(activeTab)
+  if (!s.fileEditorOpenDirs.has(dir)) return false
+  const dirState = s.fileEditorStates.get(dir)
+  return !!(dirState && dirState.activeFileId)
+}
+
+/**
+ * Returns true when a floating pop-up (FloatingPanel) is currently mounted.
+ * A pop-up is the zoom target when it's open and visible, taking precedence
+ * over the editor and conversation.
+ *
+ * Uses durable store state (openFloatingPanelCount), not transient DOM focus,
+ * matching the same discipline as isEditorZoomTarget(). Survives font-size-
+ * change re-renders that might blur the pop-up's DOM element.
+ */
+export function isPreviewZoomTarget(): boolean {
+  return useSessionStore.getState().openFloatingPanelCount > 0
+}
+
+/**
+ * Handle a Cmd+T / Cmd+Shift+T keystroke.
+ *
+ * Resolves the new-conversation routing action from the current preference
+ * state and either creates a tab directly ('plain', 'profile', 'locked') or
+ * — when the action is 'show-picker' — dispatches
+ * `ion:open-new-conversation-picker` with the target directory so TabStrip
+ * can open the NewConversationPicker anchored to its + button.
+ *
+ * Extracted from the keydown handler to make it independently testable
+ * without a DOM or React render environment.
+ *
+ * @param dir          Target working directory for the new tab.
+ * @param label        Log label ('Cmd+T' or 'Cmd+Shift+T').
+ * @param dispatchFn   Dependency-injected event dispatcher (defaults to
+ *                     `window.dispatchEvent` so the hook path stays clean).
+ */
+export function handleNewConversationShortcut(
+  dir: string,
+  label: string,
+  dispatchFn: (e: Event) => void = (e) => window.dispatchEvent(e),
+): void {
+  const s = useSessionStore.getState()
+  const { engineProfiles, defaultEngineProfileId, enterpriseNewConversationDefaults: policy } = usePreferencesStore.getState()
+  const action = resolveNewConversationAction(engineProfiles, defaultEngineProfileId, policy)
+  console.log(
+    `[Shortcuts] ${label}: resolvedAction=${action.kind}` +
+      ` dir=${dir}` +
+      ` activeTabId=${s.activeTabId ? s.activeTabId.slice(0, 8) : 'none'}`,
+  )
+  try {
+    const result = executeNewConversationAction(
+      dir,
+      action,
+      (d) => {
+        console.log(`[Shortcuts] ${label}: createTabInDirectory dir=${d}`)
+        return s.createTabInDirectory(d)
+      },
+      (d, opts) => {
+        console.log(`[Shortcuts] ${label}: createConversationTab dir=${d} profileId=${opts?.profileId ?? 'none'}`)
+        return s.createConversationTab(d, opts)
+      },
+    )
+    if (result === 'show-picker') {
+      console.log(`[Shortcuts] ${label}: show-picker -> dispatching ion:open-new-conversation-picker dir=${dir}`)
+      dispatchFn(new CustomEvent('ion:open-new-conversation-picker', { detail: { dir } }))
+    }
+  } catch (err) {
+    console.error(
+      `[Shortcuts] ${label}: executeNewConversationAction threw` +
+        ` action=${action.kind} dir=${dir} err=${err instanceof Error ? err.message : String(err)}`,
+    )
+    throw err
+  }
+}
 
 interface CloseConfirmTab {
   id: string
@@ -12,122 +109,216 @@ interface CloseConfirmTab {
 /**
  * Global keyboard shortcuts. Mounted once at the App root.
  *
- * Cmd+1 file explorer · Cmd+2 terminal · Cmd+3 git panel · Cmd+E editor
- * Cmd+T new tab · Cmd+Shift+T new tab in current dir · Cmd+W close tab (confirm)
- * Cmd+H/L prev/next tab · Cmd+J/K collapse/expand · Cmd+Y tall toggle
- * Cmd+, settings · Cmd+R recent dirs · Cmd+N scratch file
- * Cmd+= / Cmd+- grow/shrink the focused component's font · Cmd+0 reset it.
- *   Focus in the file editor (CodeMirror) → editor font size; the editor's
- *   own keymap (FileEditorCodeMirror) handles Cmd+= / Cmd+-, so this global
- *   handler defers for those keys. Otherwise → conversation message font
- *   size. Cmd+0 resets the focused component to the shipped default
- *   (SETTINGS_DEFAULTS) for both editor and conversation. These keys no
- *   longer zoom the whole UI; uiZoom remains adjustable from Settings.
- * Cmd+F find in conversation · Cmd+G next match · Cmd+Shift+G prev match
- * Shift+Tab toggle plan/auto · Ctrl+` toggle terminal · Ctrl+Shift+` add shell
+ * Every shortcut is catalog-driven: the keydown handler reads the resolved
+ * binding Map (defaults ⊕ user overrides from settings.json) and uses
+ * matchesChord() instead of hardcoded `e.metaKey && e.key === 'x'` checks.
+ * This makes user overrides actually control behavior — not just a display
+ * list. See `shortcuts/shortcut-catalog.ts` for the catalog and
+ * `shortcuts/chord.ts` for the chord DSL.
+ *
+ * Shortcut groups:
+ *   Navigation: tab.prev (Cmd+H) · tab.next (Cmd+L) · tab.close (Cmd+W)
+ *   Panels: panel.explorer (Cmd+1) · panel.terminal (Cmd+2) · panel.git (Cmd+3) ·
+ *           panel.editor (Cmd+E) · terminal.toggle (Ctrl+`) · terminal.addShell (Ctrl+Shift+`)
+ *   Layout: layout.collapse (Cmd+J) · layout.expand (Cmd+K) · layout.tall (Cmd+Y)
+ *   Tabs: tab.new (Cmd+T) · tab.newHere (Cmd+Shift+T) · tab.recentDirs (Cmd+R) ·
+ *         tab.scratch (Cmd+N)
+ *   Zoom: zoom.in (Cmd+=) · zoom.out (Cmd+-) · zoom.reset (Cmd+0)
+ *     Zoom routing precedence (durable store state, not DOM focus):
+ *       1. isPreviewZoomTarget() → previewFontSize  (a pop-up is open)
+ *       2. isEditorZoomTarget()  → editorFontSize   (file editor is active)
+ *       3. else                  → conversationFontSize
+ *     Cmd+0 resets the active target to SETTINGS_DEFAULTS.
+ *   Conversation: conversation.find (Cmd+F) · conversation.findNext (Cmd+G) ·
+ *                 conversation.findPrev (Cmd+Shift+G) · permission.togglePlanAuto (Shift+Tab)
+ *   App: settings.open (Cmd+,)
  *
  * The Cmd+W flow asks the host App to render a confirmation dialog by
  * invoking `setCloseConfirmTab` with the active tab metadata.
+ *
+ * Conflict resolution: when two commands resolve to the same chord (possible
+ * via user overrides), the first-in-catalog-order command wins and a warning
+ * is logged. See resolveBindings() in shortcut-catalog.ts.
  */
 export function useKeyboardShortcuts(setCloseConfirmTab: (t: CloseConfirmTab | null) => void) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key === '1') {
+      // Resolve bindings fresh on each event so override changes take effect
+      // immediately without remounting the hook.
+      const { keyboardShortcuts } = usePreferencesStore.getState()
+      const bindings = resolveBindings(keyboardShortcuts)
+
+      // Per-keystroke trace for every Cmd- or Ctrl-modified key. Gated to
+      // debug level — verbose but useful for regression forensics.
+      if (e.metaKey || e.ctrlKey) {
+        const ae = document.activeElement
+        const activeTabId = useSessionStore.getState().activeTabId
+        const activeTab = useSessionStore.getState().tabs.find((t) => t.id === activeTabId)
+        console.debug(
+          `[Shortcuts] keydown key=${e.key} meta=${e.metaKey} ctrl=${e.ctrlKey} shift=${e.shiftKey}` +
+            ` defaultPrevented=${e.defaultPrevented}` +
+            ` activeEl=${ae?.tagName ?? 'null'}${ae?.className ? '.' + (ae.className as string).trim().replace(/\s+/g, '.') : ''}` +
+            ` inCmEditor=${!!(ae?.closest('.cm-editor'))}` +
+            ` inXterm=${!!(ae?.closest('.xterm'))}` +
+            ` activeTabId=${activeTabId ? activeTabId.slice(0, 8) : 'none'}` +
+            ` tabHasExtensions=${activeTab ? tabHasExtensions(activeTab) : false}`,
+        )
+      }
+
+      // — Navigation ——————————————————————————————————————————————————
+
+      if (matchesChord(e, bindings.get('panel.explorer') ?? null)) {
         e.preventDefault()
         const id = useSessionStore.getState().activeTabId
         useSessionStore.getState().toggleFileExplorer(id)
       }
-      if (e.metaKey && e.key === 'e') {
+      if (matchesChord(e, bindings.get('panel.editor') ?? null)) {
         e.preventDefault()
         const id = useSessionStore.getState().activeTabId
         useSessionStore.getState().toggleFileEditor(id)
       }
-      if (e.metaKey && e.key === '2') {
+      if (matchesChord(e, bindings.get('panel.terminal') ?? null)) {
         e.preventDefault()
         const id = useSessionStore.getState().activeTabId
         useSessionStore.getState().toggleTerminal(id)
       }
-      if (e.ctrlKey && e.key === '`') {
+      if (matchesChord(e, bindings.get('terminal.addShell') ?? null)) {
         e.preventDefault()
-        if (e.shiftKey) {
-          // Ctrl+Shift+`: add a new shell instance in the current tab
-          const s = useSessionStore.getState()
-          const id = s.activeTabId
-          const tab = s.tabs.find((t) => t.id === id)
-          if (tab) {
-            if (!s.terminalOpenTabIds.has(id)) s.toggleTerminal(id)
-            s.addTerminalInstance(id, 'user', tab.workingDirectory)
-          }
-        } else {
-          // Ctrl+`: toggle terminal
-          const id = useSessionStore.getState().activeTabId
-          useSessionStore.getState().toggleTerminal(id)
+        const s = useSessionStore.getState()
+        const id = s.activeTabId
+        const tab = s.tabs.find((t) => t.id === id)
+        if (tab) {
+          if (!s.terminalOpenTabIds.has(id)) s.toggleTerminal(id)
+          s.addTerminalInstance(id, 'user', tab.workingDirectory)
         }
+      } else if (matchesChord(e, bindings.get('terminal.toggle') ?? null)) {
+        e.preventDefault()
+        const id = useSessionStore.getState().activeTabId
+        useSessionStore.getState().toggleTerminal(id)
       }
-      if (e.metaKey && e.key === '3') {
+      if (matchesChord(e, bindings.get('panel.git') ?? null)) {
         e.preventDefault()
         useSessionStore.getState().toggleGitPanel()
       }
-      if (e.shiftKey && e.key === 'Tab') {
+
+      // — Layout ————————————————————————————————————————————————————
+
+      if (matchesChord(e, bindings.get('permission.togglePlanAuto') ?? null)) {
         e.preventDefault()
         const s = useSessionStore.getState()
         const tab = s.tabs.find((t) => t.id === s.activeTabId)
-        const current = tab?.permissionMode ?? 'plan'
+        const current = tab ? effectivePermissionMode(tab, s.conversationPanes) : 'plan'
         s.setPermissionMode(current === 'plan' ? 'auto' : 'plan', 'keyboard')
       }
-      if (e.metaKey && e.key === 'k') {
+      if (matchesChord(e, bindings.get('layout.expand') ?? null)) {
         e.preventDefault()
         const s = useSessionStore.getState()
         if (!s.isExpanded) s.toggleExpanded()
       }
-      if (e.metaKey && e.key === 'j') {
+      if (matchesChord(e, bindings.get('layout.collapse') ?? null)) {
         e.preventDefault()
         const s = useSessionStore.getState()
         if (s.isExpanded) s.toggleExpanded()
       }
-      if (e.metaKey && (e.key === '=' || e.key === '+')) {
-        // Editor focus: CodeMirror's own keymap (FileEditorCodeMirror) handles
-        // Mod-= and already bumps editorFontSize. Defer to it — do not also act
-        // here, or the size would step twice. preventDefault is intentionally
-        // skipped so the editor keymap still receives the event.
-        if (document.activeElement?.closest('.cm-editor')) return
-        e.preventDefault()
+
+      // — Zoom ——————————————————————————————————————————————————————
+      // Route to preview, then editor, then conversation based on durable
+      // store state. isPreviewZoomTarget() and isEditorZoomTarget() both
+      // survive re-renders caused by the font-size change itself.
+      //
+      // zoom.in  (Cmd+=) and zoom.inShifted (Cmd++) are both catalog entries
+      // so user overrides cover both aliases. zoom.inShifted uses shiftOptional
+      // in chord.ts so matchesChord accepts the Shift+= event (e.key='+') even
+      // though the chord string doesn't carry an explicit Shift modifier.
+
+      // Shared zoom-in body — called by both zoom.in and zoom.inShifted.
+      const doZoomIn = () => {
         const p = usePreferencesStore.getState()
-        p.setConversationFontSize(p.conversationFontSize + 1)
-      }
-      if (e.metaKey && e.key === '-') {
-        if (document.activeElement?.closest('.cm-editor')) return
-        e.preventDefault()
-        const p = usePreferencesStore.getState()
-        p.setConversationFontSize(p.conversationFontSize - 1)
-      }
-      if (e.metaKey && e.key === '0') {
-        // Reset the focused component's font to the shipped default. Unlike
-        // Cmd+= / Cmd+-, CodeMirror has no Mod-0 binding, so this global
-        // handler resets the editor itself when the editor is focused.
-        e.preventDefault()
-        const p = usePreferencesStore.getState()
-        if (document.activeElement?.closest('.cm-editor')) {
-          p.setEditorFontSize(SETTINGS_DEFAULTS.editorFontSize)
+        if (isPreviewZoomTarget()) {
+          const prev = p.previewFontSize
+          p.setPreviewFontSize(prev + 1)
+          console.debug(`[Shortcuts] zoom.in: previewFontSize ${prev} -> ${prev + 1} (preview target)`)
+        } else if (isEditorZoomTarget()) {
+          const prev = p.editorFontSize
+          p.setEditorFontSize(prev + 1)
+          console.debug(`[Shortcuts] zoom.in: editorFontSize ${prev} -> ${prev + 1} (editor target)`)
         } else {
-          p.setConversationFontSize(SETTINGS_DEFAULTS.conversationFontSize)
+          const prev = p.conversationFontSize
+          p.setConversationFontSize(prev + 1)
+          console.debug(`[Shortcuts] zoom.in: conversationFontSize ${prev} -> ${prev + 1}`)
         }
       }
-      if (e.metaKey && e.key === 'h') {
+
+      if (matchesChord(e, bindings.get('zoom.in') ?? null)) {
+        e.preventDefault()
+        doZoomIn()
+      }
+      if (matchesChord(e, bindings.get('zoom.inShifted') ?? null)) {
+        e.preventDefault()
+        doZoomIn()
+      }
+
+      if (matchesChord(e, bindings.get('zoom.out') ?? null)) {
+        e.preventDefault()
+        const p = usePreferencesStore.getState()
+        if (isPreviewZoomTarget()) {
+          const prev = p.previewFontSize
+          p.setPreviewFontSize(prev - 1)
+          console.debug(`[Shortcuts] zoom.out: previewFontSize ${prev} -> ${prev - 1} (preview target)`)
+        } else if (isEditorZoomTarget()) {
+          const prev = p.editorFontSize
+          p.setEditorFontSize(prev - 1)
+          console.debug(`[Shortcuts] zoom.out: editorFontSize ${prev} -> ${prev - 1} (editor target)`)
+        } else {
+          const prev = p.conversationFontSize
+          p.setConversationFontSize(prev - 1)
+          console.debug(`[Shortcuts] zoom.out: conversationFontSize ${prev} -> ${prev - 1}`)
+        }
+      }
+
+      if (matchesChord(e, bindings.get('zoom.reset') ?? null)) {
+        // Reset the active zoom target's font to the shipped default.
+        e.preventDefault()
+        const p = usePreferencesStore.getState()
+        if (isPreviewZoomTarget()) {
+          const prev = p.previewFontSize
+          p.setPreviewFontSize(SETTINGS_DEFAULTS.previewFontSize)
+          console.debug(
+            `[Shortcuts] zoom.reset: previewFontSize ${prev} -> ${SETTINGS_DEFAULTS.previewFontSize} (preview target)`,
+          )
+        } else if (isEditorZoomTarget()) {
+          const prev = p.editorFontSize
+          p.setEditorFontSize(SETTINGS_DEFAULTS.editorFontSize)
+          console.debug(
+            `[Shortcuts] zoom.reset: editorFontSize ${prev} -> ${SETTINGS_DEFAULTS.editorFontSize} (editor target)`,
+          )
+        } else {
+          const prev = p.conversationFontSize
+          p.setConversationFontSize(SETTINGS_DEFAULTS.conversationFontSize)
+          console.debug(
+            `[Shortcuts] zoom.reset: conversationFontSize ${prev} -> ${SETTINGS_DEFAULTS.conversationFontSize}` +
+              ` activeEl=${document.activeElement?.tagName ?? 'null'}`,
+          )
+        }
+      }
+
+      // — Navigation (tabs) ————————————————————————————————————————
+
+      if (matchesChord(e, bindings.get('tab.prev') ?? null)) {
         e.preventDefault()
         const { tabs, activeTabId, selectTab } = useSessionStore.getState()
         const idx = tabs.findIndex((t) => t.id === activeTabId)
         const prev = tabs[(idx - 1 + tabs.length) % tabs.length]
         if (prev) selectTab(prev.id)
       }
-      if (e.metaKey && e.key === 'l') {
+      if (matchesChord(e, bindings.get('tab.next') ?? null)) {
         e.preventDefault()
         const { tabs, activeTabId, selectTab } = useSessionStore.getState()
         const idx = tabs.findIndex((t) => t.id === activeTabId)
         const next = tabs[(idx + 1) % tabs.length]
         if (next) selectTab(next.id)
       }
-      if (e.metaKey && e.key === 'w') {
+      if (matchesChord(e, bindings.get('tab.close') ?? null)) {
         e.preventDefault()
         const { tabs, activeTabId } = useSessionStore.getState()
         const tab = tabs.find((t) => t.id === activeTabId)
@@ -139,39 +330,38 @@ export function useKeyboardShortcuts(setCloseConfirmTab: (t: CloseConfirmTab | n
           })
         }
       }
-      if (e.metaKey && !e.shiftKey && e.key === 'n') {
+      if (matchesChord(e, bindings.get('tab.scratch') ?? null)) {
         e.preventDefault()
         const s = useSessionStore.getState()
         const tab = s.tabs.find((t) => t.id === s.activeTabId)
         if (!tab) return
         const dir = editorDirForTab(tab)
         if (!s.fileEditorOpenDirs.has(dir)) {
-          // Open the editor panel (without creating a default file — we'll create one below)
           useSessionStore.setState({ fileEditorOpenDirs: new Set([...s.fileEditorOpenDirs, dir]), fileEditorFocused: true })
         }
         s.createScratchFile(dir)
       }
-      if (e.metaKey && e.shiftKey && e.key === 't') {
+      if (matchesChord(e, bindings.get('tab.newHere') ?? null)) {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('ion:close-group-pickers'))
         const s = useSessionStore.getState()
         const tab = s.tabs.find((t) => t.id === s.activeTabId)
-        if (tab?.workingDirectory) {
-          s.createTabInDirectory(tab.workingDirectory)
-        } else {
-          s.createTab()
-        }
-      }
-      if (e.metaKey && !e.shiftKey && e.key === 't') {
+        const dir = tab?.workingDirectory || usePreferencesStore.getState().defaultBaseDirectory || ''
+        handleNewConversationShortcut(dir, 'Cmd+Shift+T')
+      } else if (matchesChord(e, bindings.get('tab.new') ?? null)) {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('ion:close-group-pickers'))
-        useSessionStore.getState().createTab()
+        const dir = usePreferencesStore.getState().defaultBaseDirectory || ''
+        handleNewConversationShortcut(dir, 'Cmd+T')
       }
-      if (e.metaKey && e.key === 'r') {
+      if (matchesChord(e, bindings.get('tab.recentDirs') ?? null)) {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('ion:open-recent-dirs'))
       }
-      if (e.metaKey && e.key === 'y') {
+
+      // — Layout tall ——————————————————————————————————————————————
+
+      if (matchesChord(e, bindings.get('layout.tall') ?? null)) {
         e.preventDefault()
         const s = useSessionStore.getState()
         const id = s.activeTabId
@@ -188,21 +378,27 @@ export function useKeyboardShortcuts(setCloseConfirmTab: (t: CloseConfirmTab | n
           }
         }
       }
-      if (e.metaKey && e.key === ',') {
+
+      // — App ———————————————————————————————————————————————————————
+
+      if (matchesChord(e, bindings.get('settings.open') ?? null)) {
         e.preventDefault()
         const s = useSessionStore.getState()
         if (s.settingsOpen) s.closeSettings()
         else s.openSettings()
       }
-      if (e.metaKey && !e.shiftKey && e.key === 'f') {
+
+      // — Conversation search ————————————————————————————————————————
+
+      if (matchesChord(e, bindings.get('conversation.find') ?? null)) {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('ion:open-conversation-search'))
       }
-      if (e.metaKey && !e.shiftKey && e.key === 'g') {
+      if (matchesChord(e, bindings.get('conversation.findNext') ?? null)) {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('ion:search-next'))
       }
-      if (e.metaKey && e.shiftKey && e.key === 'g') {
+      if (matchesChord(e, bindings.get('conversation.findPrev') ?? null)) {
         e.preventDefault()
         window.dispatchEvent(new CustomEvent('ion:search-prev'))
       }

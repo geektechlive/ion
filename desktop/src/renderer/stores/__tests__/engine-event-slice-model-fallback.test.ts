@@ -1,26 +1,16 @@
 /**
- * engine-event-slice — engine_model_fallback handling.
+ * model_fallback — WI-001 normalized path.
  *
- * The engine emits `engine_model_fallback` once per run when the
- * requested model couldn't be resolved to a provider and the runloop
- * fell back to the configured `defaultModel`. The desktop renderer's
- * policy (one possible consumer choice — see CLAUDE.md § "The
- * typed-event corollary") is to display a ⚠ glyph on the affected
- * EngineTabStrip pill until the next idle transition.
+ * After the single-path collapse (WI-001), engine_model_fallback is promoted
+ * to the NormalizedEvent variant `model_fallback` handled by handleNormalizedEvent
+ * in event-slice.ts.
  *
  * This test pins:
- *
- *   1. `engine_model_fallback` writes a per-instance entry into the
- *      `engineModelFallbacks` map keyed by `${tabId}:${instanceId}`.
- *   2. The subsequent `engine_status { state: "idle" }` for the same
- *      instance clears the entry.
- *   3. Other instances are unaffected (write and clear are per-key).
- *
- * Auto-clear semantics: no wall-clock timer. The indicator stays
- * sticky until the run actually completes — if the run never goes
- * idle, the indicator persists, which is the correct UX because the
- * underlying configuration mistake (missing tiers.standard) is still
- * latent.
+ *   1. `model_fallback` writes an entry into `engineModelFallbacks` keyed by
+ *      bare tabId (one fallback slot per tab, owned by the active instance
+ *      at event time).
+ *   2. The subsequent `task_complete` clears the entry for that tab.
+ *   3. `session_init` (while running) does not clear the entry.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -32,60 +22,78 @@ vi.mock('../session-store-helpers', () => ({
   totalInputTokens: vi.fn(() => 0),
   scheduleDoneGroupMove: vi.fn(),
 }))
+vi.mock('../slices/event-slice-titling', () => ({ maybeGenerateTabTitle: vi.fn() }))
+vi.mock('../../preferences', () => ({
+  usePreferencesStore: { getState: vi.fn(() => ({ expandToolResults: false, aiGeneratedTitles: false, autoGroupMovement: false })) },
+}))
+vi.mock('../slices/engine-event-slice-messages', () => ({
+  handleCrossNormalizedEvent: vi.fn(() => false),
+}))
 
-import { createEngineEventSlice } from '../slices/engine-event-slice'
-import { handleEngineStatusEvent } from '../slices/engine-event-status'
+import { createEventSlice } from '../slices/event-slice'
 import type { State } from '../session-store-types'
+
+function makeInstance(id: string) {
+  return {
+    id, label: id, messages: [], messageCount: 0, modelOverride: null, sessionModel: null,
+    permissionMode: 'auto', permissionDenied: null, permissionQueue: [], elicitationQueue: [],
+    conversationIds: [], draftInput: '', agentStates: [],
+    statusFields: null, planFilePath: null, thinkingEffort: 'off', sealed: false,
+  }
+}
 
 function buildHarness() {
   const state: any = {
     tabs: [{
       id: 'tab1',
-      hasEngineExtension: true,
+      engineProfileId: 'test-profile',
       status: 'running',
       lastEventAt: 0,
+      permissionMode: 'auto',
       permissionDenied: null,
       contextTokens: 0,
       contextPercent: 0,
+      hasUnread: false,
+      queuedPrompts: [],
       historicalSessionIds: [],
+      activeRequestId: null,
+      currentActivity: null,
     }],
     activeTabId: 'tab1',
+    isExpanded: false,
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     engineModelFallbacks: new Map(),
-    conversationPanes: new Map([
-      ['tab1', { instances: [
-        { id: 'inst1', label: 'inst1', messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null },
-        { id: 'inst-a', label: 'inst-a', messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null },
-        { id: 'inst-b', label: 'inst-b', messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null },
-      ], activeInstanceId: 'inst1' }],
-    ]),
+    conversationPanes: new Map([['tab1', {
+      instances: [makeInstance('main')],
+      activeInstanceId: 'main',
+    }]]),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
     Object.assign(state, patch)
   }
   const get = () => state as State
-  const slice = createEngineEventSlice(set, get) as State
-  return { state, slice, set }
+  const slice = createEventSlice(set, get) as State
+  return { state, slice }
 }
 
-describe('engine_model_fallback slice handling', () => {
-  it('writes engineModelFallbacks entry keyed by tabId:instanceId', () => {
+describe('model_fallback (WI-001 normalized path)', () => {
+  it('writes engineModelFallbacks entry keyed by bare tabId (active instance)', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_model_fallback',
-      fallbackRequestedModel: 'standard',
+    slice.handleNormalizedEvent('tab1', {
+      type: 'model_fallback',
+      requestedModel: 'standard',
       fallbackModel: 'claude-sonnet-4-6',
-      fallbackReason: 'no_provider_found',
+      reason: 'no_provider_found',
     } as any)
 
-    const entry = state.engineModelFallbacks.get(key)
+    // Key is the bare tabId, not a compound key.
+    const entry = state.engineModelFallbacks.get('tab1')
     expect(entry).toBeDefined()
     expect(entry?.requestedModel).toBe('standard')
     expect(entry?.fallbackModel).toBe('claude-sonnet-4-6')
@@ -93,80 +101,54 @@ describe('engine_model_fallback slice handling', () => {
     expect(typeof entry?.at).toBe('number')
   })
 
-  it('clears the entry on engine_status state=idle for the same instance', () => {
-    const { state, slice, set } = buildHarness()
-    const key = 'tab1:inst1'
+  it('clears the entry on task_complete for the same tab', () => {
+    const { state, slice } = buildHarness()
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_model_fallback',
-      fallbackRequestedModel: 'standard',
+    slice.handleNormalizedEvent('tab1', {
+      type: 'model_fallback',
+      requestedModel: 'standard',
       fallbackModel: 'claude-sonnet-4-6',
-      fallbackReason: 'no_provider_found',
+      reason: 'no_provider_found',
     } as any)
-    expect(state.engineModelFallbacks.has(key)).toBe(true)
+    expect(state.engineModelFallbacks.has('tab1')).toBe(true)
 
-    // Drive the idle transition through the status handler directly —
-    // the slice's case 'engine_status' delegates to handleEngineStatusEvent.
-    handleEngineStatusEvent(set, key, 'tab1', {
-      type: 'engine_status',
-      fields: { state: 'idle' },
+    // task_complete (idle transition) should clear the indicator.
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0.001,
+      durationMs: 1000,
+      numTurns: 1,
+      permissionDenials: [],
     } as any)
 
-    expect(state.engineModelFallbacks.has(key)).toBe(false)
+    expect(state.engineModelFallbacks.has('tab1')).toBe(false)
   })
 
-  it('leaves other instances untouched on write and clear', () => {
-    const { state, slice, set } = buildHarness()
-    const a = 'tab1:inst-a'
-    const b = 'tab1:inst-b'
+  it('does not clear the entry on session_init (running)', () => {
+    const { state, slice } = buildHarness()
 
-    slice.handleEngineEvent(a, {
-      type: 'engine_model_fallback',
-      fallbackRequestedModel: 'standard',
+    slice.handleNormalizedEvent('tab1', {
+      type: 'model_fallback',
+      requestedModel: 'standard',
       fallbackModel: 'claude-sonnet-4-6',
-      fallbackReason: 'no_provider_found',
+      reason: 'no_provider_found',
     } as any)
-    slice.handleEngineEvent(b, {
-      type: 'engine_model_fallback',
-      fallbackRequestedModel: 'fast',
-      fallbackModel: 'claude-haiku-4-5',
-      fallbackReason: 'no_provider_found',
-    } as any)
+    expect(state.engineModelFallbacks.has('tab1')).toBe(true)
 
-    expect(state.engineModelFallbacks.size).toBe(2)
-
-    // Idle only instance A — B's indicator must stay.
-    handleEngineStatusEvent(set, a, 'tab1', {
-      type: 'engine_status',
-      fields: { state: 'idle' },
-    } as any)
-
-    expect(state.engineModelFallbacks.has(a)).toBe(false)
-    expect(state.engineModelFallbacks.has(b)).toBe(true)
-    expect(state.engineModelFallbacks.get(b)?.fallbackModel).toBe('claude-haiku-4-5')
-  })
-
-  it('does not perturb the entry on a running-state engine_status tick', () => {
-    const { state, slice, set } = buildHarness()
-    const key = 'tab1:inst1'
-
-    slice.handleEngineEvent(key, {
-      type: 'engine_model_fallback',
-      fallbackRequestedModel: 'standard',
-      fallbackModel: 'claude-sonnet-4-6',
-      fallbackReason: 'no_provider_found',
-    } as any)
-    expect(state.engineModelFallbacks.has(key)).toBe(true)
-
-    // A status tick that is NOT idle (cost-only update, running, etc.)
-    // must not clear the indicator. The renderer's auto-clear rule is
-    // tied to the idle transition specifically.
-    handleEngineStatusEvent(set, key, 'tab1', {
-      type: 'engine_status',
-      fields: { state: 'running', totalCostUsd: 0.001 },
+    // session_init (running) must not clear the indicator.
+    slice.handleNormalizedEvent('tab1', {
+      type: 'session_init',
+      sessionId: 'sess-2',
+      model: 'claude-sonnet-4-6',
+      tools: [],
+      mcpServers: [],
+      skills: [],
+      version: '',
+      isWarmup: false,
     } as any)
 
-    expect(state.engineModelFallbacks.has(key)).toBe(true)
-    expect(state.engineModelFallbacks.get(key)?.fallbackModel).toBe('claude-sonnet-4-6')
+    expect(state.engineModelFallbacks.has('tab1')).toBe(true)
+    expect(state.engineModelFallbacks.get('tab1')?.fallbackModel).toBe('claude-sonnet-4-6')
   })
 })

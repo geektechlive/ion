@@ -48,7 +48,7 @@ export function loadOtherBackendTabs(): Array<{
         title: labels[tab.conversationId!] || tab.customTitle || tab.title || 'Untitled',
         customTitle: tab.customTitle,
         workingDirectory: tab.workingDirectory,
-        permissionMode: tab.permissionMode,
+        permissionMode: tab.permissionMode ?? 'auto',
       }))
   } catch (err) {
     log(`Failed to load other backend tabs: ${err}`)

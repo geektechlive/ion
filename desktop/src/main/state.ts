@@ -34,7 +34,6 @@ export const bashProcesses = new Map<string, ChildProcess>()
 export const fileWatchers = new Map<string, FileWatcherEntry>()
 export const recentlyWrittenPaths = new Set<string>()
 export const activeAssistantMessages = new Map<string, { id: string; content: string }>()
-export const activeToolInputs = new Map<string, Map<string, string>>() // tabId -> (toolId -> accumulated input)
 export const lastMessagePreview = new Map<string, string>()
 export const terminalOutputAccumulator = new Map<string, string>()
 
@@ -147,12 +146,12 @@ export const deviceFocusMap = new Map<string, { tabId: string | null; interceptE
 export const forwardedEnginePermissionDenials = new Set<string>()
 
 /**
- * Last tab status forwarded to iOS for engine-view tabs.
+ * Last tab status forwarded to iOS for extension-hosted conversations.
  *
- * Engine-view events bypass `EngineControlPlane` (compound key mismatch:
+ * Extension-hosted events bypass `EngineControlPlane` (compound key mismatch:
  * the control plane is keyed by bare tabId, engine-view events arrive as
  * `tabId:instanceId`). That means no `tab-status-change` event fires on
- * the sessionPlane for engine tabs — iOS never learns the tab transitioned
+ * the sessionPlane for extension tabs — iOS never learns the tab transitioned
  * from 'running' to 'idle'/'completed'.
  *
  * `wireEngineBridgeEvents` synthesizes `tab_status` messages for iOS from
@@ -162,5 +161,5 @@ export const forwardedEnginePermissionDenials = new Set<string>()
  * Keyed by bare tabId (not compound key) since `tab_status` is a per-tab
  * concept on iOS.
  */
-export const lastForwardedEngineTabStatus = new Map<string, string>()
+export const lastForwardedTabStatus = new Map<string, string>()
 

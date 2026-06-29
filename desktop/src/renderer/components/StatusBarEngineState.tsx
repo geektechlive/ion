@@ -1,42 +1,53 @@
 import React from 'react'
+import { useShallow } from 'zustand/shallow'
 import { useColors } from '../theme'
-import { useActiveEngineStatusFields, useActiveEngineAgentRunningCount } from './StatusBarEngineHelpers'
+import { useSessionStore } from '../stores/sessionStore'
+import { useActiveEngineAgentRunningCount } from './StatusBarEngineHelpers'
 
 /**
- * Engine state slot — renders the orchestrator state dot + label in
- * the unified `StatusBar` left cluster. Engine tabs only.
+ * Engine state slot — renders the orchestrator run-activity dot + label in
+ * the unified `StatusBar` left cluster.
  *
- * Three visual states (priority order):
- *   - state === 'running'  → orange `statusRunning` pulse + `[running]`
- *   - state === 'idle' AND agentRunningCount > 0 →
+ * Two visual states (priority order):
+ *   - orchestrator running (`tab.status === 'running' | 'connecting'`) →
+ *       orange `statusRunning` pulse + `[running]`
+ *   - orchestrator NOT running AND agentRunningCount > 0 →
  *       yellow `statusWaitingChildren` pulse +
  *       `[waiting for N background agent(s)]`
- *   - everything else (idle with no children, error, etc.) →
- *       no dot, `[{state}]` (existing behaviour)
+ *   - everything else → renders nothing (this is a run-activity indicator;
+ *       there is no idle label).
+ *
+ * SOURCE OF TRUTH: this slot reads the two signals that are actually
+ * populated in the renderer — `tab.status` for the orchestrator's own
+ * run-state (the same signal the tab pill, model picker, and directory
+ * picker read) and `useActiveEngineAgentRunningCount()` for the dispatched
+ * background-agent count. It does NOT read `inst.statusFields`: that field
+ * is never populated in the renderer (it exists only for the main-process
+ * iOS snapshot projection), so gating on it suppressed this slot entirely.
+ *
+ * TAB-TYPE-AGNOSTIC: the `Agent` tool dispatches background sub-agents
+ * regardless of whether a harness is loaded, so a plain conversation can have
+ * running children too. Both signals here are tab-type-agnostic, matching the
+ * tab-pill yellow dot (`anyEngineInstanceHasRunningChildren`) and the close
+ * guard that blocks closing any tab with running children.
  *
  * Foreground orange beats background yellow because the orchestrator's
  * own activity is the strongest signal — matches the priority cascade
- * in `TabStripStatusDot.tsx` / `TabStripShared.getTabStatusColor`. The
- * pulse animation reuses `.animate-pulse-dot`, only the background
- * color differs between the two pulsing branches.
- *
- * Extracted verbatim from the former engine status bar (the
- * bottom-of-engine-view slab that was dissolved into the unified
- * `StatusBar`).
+ * in `TabStripShared.getTabStatusColor`. The pulse animation reuses
+ * `.animate-pulse-dot`, only the background color differs between the two
+ * pulsing branches.
  */
 export function StatusBarEngineState() {
   const colors = useColors()
-  const status = useActiveEngineStatusFields()
+  const status = useSessionStore(
+    useShallow((s) => s.tabs.find((t) => t.id === s.activeTabId)?.status ?? null),
+  )
   const agentRunningCount = useActiveEngineAgentRunningCount()
 
-  if (!status) return null
+  const isRun = status === 'running' || status === 'connecting'
+  const isWaitingChildren = !isRun && agentRunningCount > 0
 
-  const isRun = status.state === 'running'
-  const isWaitingChildren = status.state === 'idle' && agentRunningCount > 0
-
-  if (!isRun && !isWaitingChildren) {
-    return <span style={{ color: colors.textTertiary, fontSize: 10 }}>[{status.state}]</span>
-  }
+  if (!isRun && !isWaitingChildren) return null
 
   const dotColor = isRun ? colors.statusRunning : colors.statusWaitingChildren
   const labelColor = isRun ? colors.statusRunning : colors.statusWaitingChildren

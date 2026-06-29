@@ -63,6 +63,27 @@ export function isPlanCreatedDivider(content: string): boolean {
 }
 
 /**
+ * Format the divider system message inserted into scrollback when an
+ * EXISTING plan is written again (a subsequent plan-mode entry for the same
+ * plan file). Mirrors `formatPlanCreatedDivider` but signals an update of the
+ * same plan rather than the first creation. The created-vs-updated decision is
+ * made by the consumer: the first divider for a given plan path is "created",
+ * any subsequent divider for the same path is "updated".
+ */
+export function formatPlanUpdatedDivider(at: Date, slug?: string): string {
+  const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (slug) {
+    return `── Plan updated at ${time} · ${slug} ──`
+  }
+  return `── Plan updated at ${time} ──`
+}
+
+/** Sentinel-prefix check for plan-updated dividers. */
+export function isPlanUpdatedDivider(content: string): boolean {
+  return content.startsWith('── Plan updated')
+}
+
+/**
  * Format the divider system message inserted into scrollback when the
  * engine confirms a mid-turn steer message was injected into the
  * conversation. `messageLength` is included so the user can distinguish

@@ -11,9 +11,17 @@ import type { Message } from '../../../shared/types'
 interface ToolGroupProps {
   tools: Message[]
   skipMotion?: boolean
+  /**
+   * When true, the group is hosted inside AgentTurnGroup, which already owns
+   * the "Used N tools" collapse header, the expand/collapse state, and the
+   * left timeline border. In embedded mode ToolGroup renders only the timeline
+   * rail + tool rows (always open, no own header, no collapsed summary) so the
+   * turn shows a single header instead of two stacked ones.
+   */
+  embedded?: boolean
 }
 
-export const ToolGroup = React.memo(function ToolGroup({ tools, skipMotion }: ToolGroupProps) {
+export const ToolGroup = React.memo(function ToolGroup({ tools, skipMotion, embedded }: ToolGroupProps) {
   const hasRunning = tools.some((t) => t.toolStatus === 'running')
   const hasUserExecuted = tools.some((t) => t.userExecuted)
   const expandToolResults = usePreferencesStore((s) => s.expandToolResults)
@@ -42,7 +50,10 @@ export const ToolGroup = React.memo(function ToolGroup({ tools, skipMotion }: To
   // the collapsed row signals that work is in progress without causing the
   // expand → add → collapse flash for every tool that fires in sequence.
   const forceOpen = expandToolResults && hasRunning && !userToggledRef.current
-  const isOpen = expanded || forceOpen
+  // When embedded inside AgentTurnGroup the parent owns the collapse header and
+  // only mounts this group when its own row is expanded, so the embedded group
+  // is always open — it never renders its own header or collapsed summary.
+  const isOpen = embedded || expanded || forceOpen
 
   const handleExpand = () => {
     userToggledRef.current = true
@@ -57,7 +68,7 @@ export const ToolGroup = React.memo(function ToolGroup({ tools, skipMotion }: To
   if (isOpen) {
     const inner = (
       <div className="py-1">
-        {!hasRunning && (
+        {!embedded && !hasRunning && (
           <div
             className="flex items-center gap-1 cursor-pointer mb-1.5"
             data-ion-ui

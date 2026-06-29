@@ -52,7 +52,6 @@ function makeTab() {
   return {
     id: 'tab1',
     title: 'Engine',
-    hasEngineExtension: false,
     engineProfileId: null,
     workingDirectory: '/tmp',
     hasChosenDirectory: true,
@@ -90,7 +89,7 @@ function buildHarness() {
       sessionModel: 'mock-model',
     }),
     backend: 'api',
-    sendMessage: vi.fn(),
+    submit: vi.fn(),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial

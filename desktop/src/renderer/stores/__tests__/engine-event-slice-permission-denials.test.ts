@@ -1,24 +1,20 @@
 /**
- * engine-event-slice — engine_status.permissionDenials → instance.permissionDenied
+ * WI-001: permission denials → instance.permissionDenied (normalized path)
  *
- * The engine intercepts AskUserQuestion and ExitPlanMode and emits the
- * denial on the next engine_status event under `fields.permissionDenials`.
- * For engine-view tabs (compound `tabId:instanceId` key), the slice
- * translates this signal into `instance.permissionDenied` on the matching
- * ConversationInstance in `conversationPanes` — keyed by the FULL compound key
- * split into tabId + instanceId. The CLI synthesis path in
- * engine-control-plane-events.ts:handleStatusEvent is bypassed for these
- * tabs because EngineControlPlane is keyed by bare tabId only.
+ * After the single-path collapse (WI-001), permission denials flow through
+ * task_complete.permissionDenials (NormalizedEvent). handleNormalizedEvent
+ * in event-slice.ts sets instance.permissionDenied on the active instance.
+ *
+ * The command_result /clear flow now goes through handleCrossNormalizedEvent
+ * (engine-event-slice-messages.ts) via the normalized stream.
  *
  * Contract pinned here:
- *   1. AskUserQuestion / ExitPlanMode denials populate instance.permissionDenied.
+ *   1. AskUserQuestion / ExitPlanMode denials in task_complete populate
+ *      the active instance's permissionDenied.
  *   2. Other denial tool names are ignored.
- *   3. Cost-only follow-up status (no denials) preserves the existing
- *      entry — it does NOT clobber.
- *   4. Two compound keys under the same parent tabId track INDEPENDENT
- *      denials. Sibling instances don't share a card.
- *   5. The parent `tab.permissionDenied` is NOT mutated by this slice
- *      for engine paths — that field is CLI-only.
+ *   3. The active instance's permissionDenied is cleared on command_result /clear
+ *      via handleCrossNormalizedEvent.
+ *   4. The parent tab.permissionDenied is NOT mutated.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -27,316 +23,158 @@ vi.mock('../session-store-helpers', () => ({
   makeLocalTab: vi.fn(),
   nextMsgId: vi.fn(() => 'mock-msg-id'),
   playNotificationIfHidden: vi.fn(async () => {}),
+  totalInputTokens: vi.fn(() => 0),
+  scheduleDoneGroupMove: vi.fn(),
+}))
+vi.mock('../slices/event-slice-titling', () => ({ maybeGenerateTabTitle: vi.fn() }))
+vi.mock('../../preferences', () => ({
+  usePreferencesStore: { getState: vi.fn(() => ({ expandToolResults: false, aiGeneratedTitles: false, autoGroupMovement: false })) },
 }))
 
-import { createEngineEventSlice } from '../slices/engine-event-slice'
+// Keep handleCrossNormalizedEvent real so /clear tests work end-to-end.
+// The clear divider format test uses engine-event-slice-messages.ts which
+// calls formatClearDivider and commitInstance.
+vi.mock('../slices/engine-event-slice-messages', async () => {
+  const mod = await vi.importActual('../slices/engine-event-slice-messages')
+  return { ...mod }
+})
+
+import { createEventSlice } from '../slices/event-slice'
+import { activeInstance } from '../conversation-instance'
 import type { State } from '../session-store-types'
 
 function makeInstance(id: string) {
-  return { id, label: id, messages: [], messageCount: 0, modelOverride: null, sessionModel: null, permissionMode: 'auto', permissionDenied: null, permissionQueue: [], conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null, forkedFromConversationIds: null }
+  return {
+    id, label: id, messages: [], messageCount: 0, modelOverride: null, sessionModel: null,
+    permissionMode: 'auto', permissionDenied: null, permissionQueue: [], elicitationQueue: [],
+    conversationIds: [], draftInput: '', agentStates: [],
+    statusFields: null, planFilePath: null, thinkingEffort: 'off', sealed: false,
+  }
 }
 
 function buildHarness() {
   const state: any = {
-    tabs: [{ id: 'tab1', hasEngineExtension: true, lastEventAt: 0, status: 'running', permissionDenied: null }],
+    tabs: [{ id: 'tab1', engineProfileId: 'test-profile', lastEventAt: 0, status: 'running', permissionDenied: null, contextTokens: 0, contextPercent: 0, permissionMode: 'auto', hasUnread: false, queuedPrompts: [], historicalSessionIds: [], activeRequestId: null, currentActivity: null }],
+    activeTabId: 'tab1',
+    isExpanded: false,
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     engineModelFallbacks: new Map(),
-    conversationPanes: new Map([['tab1', {
-      instances: [makeInstance('inst-a'), makeInstance('inst-b'), makeInstance('inst1')],
-      activeInstanceId: 'inst-a',
-    }]]),
+    resources: {},
+    resourceSubscriptions: new Map(),
+    readResourceIds: new Set(),
+    conversationPanes: new Map([['tab1', { instances: [makeInstance('main')], activeInstanceId: 'main' }]]),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
     Object.assign(state, patch)
   }
   const get = () => state as State
-  const slice = createEngineEventSlice(set, get) as State
+  const slice = createEventSlice(set, get) as State
   return { state, slice }
 }
 
-function getPermissionDenied(state: any, key: string) {
-  const [tabId, instanceId] = key.split(':')
-  const pane = state.conversationPanes.get(tabId)
-  return pane?.instances.find((i: any) => i.id === instanceId)?.permissionDenied
+function getPermissionDenied(state: any, tabId: string) {
+  return activeInstance(state.conversationPanes, tabId)?.permissionDenied
 }
 
-describe('engine_status.permissionDenials → instance.permissionDenied', () => {
-  it('sets instance.permissionDenied for AskUserQuestion denial on compound key', () => {
+describe('task_complete.permissionDenials → active instance.permissionDenied', () => {
+  it('sets instance.permissionDenied for AskUserQuestion denial in task_complete', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst-a'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 12,
-        contextWindow: 200000,
-        permissionDenials: [
-          {
-            toolName: 'AskUserQuestion',
-            toolUseId: 'tu-1',
-            toolInput: { question: 'Pick one', options: ['A', 'B'] },
-          },
-        ],
-      },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'Pick one', options: ['A', 'B'] } },
+      ],
     } as any)
 
-    const entry = getPermissionDenied(state, key)
+    const entry = getPermissionDenied(state, 'tab1')
     expect(entry).not.toBeNull()
-    expect(entry.tools).toHaveLength(1)
-    expect(entry.tools[0].toolName).toBe('AskUserQuestion')
-    expect(entry.tools[0].toolUseId).toBe('tu-1')
-    expect(entry.tools[0].toolInput).toEqual({ question: 'Pick one', options: ['A', 'B'] })
-    // Parent tab's permissionDenied stays null — engine path no longer mutates it.
-    const tab = state.tabs.find((t: any) => t.id === 'tab1')
-    expect(tab.permissionDenied).toBeNull()
+    expect(entry!.tools).toHaveLength(1)
+    expect(entry!.tools[0].toolName).toBe('AskUserQuestion')
+    expect(entry!.tools[0].toolUseId).toBe('tu-1')
+    // Parent tab's permissionDenied stays null — instance-level only.
+    expect(state.tabs[0].permissionDenied).toBeNull()
   })
 
   it('sets instance.permissionDenied for ExitPlanMode denial', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst-a'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 12,
-        contextWindow: 200000,
-        permissionDenials: [
-          {
-            toolName: 'ExitPlanMode',
-            toolUseId: 'tu-2',
-            toolInput: { planFilePath: '/x/plan.md' },
-          },
-        ],
-      },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'ExitPlanMode', toolUseId: 'tu-2', toolInput: { planFilePath: '/x/plan.md' } },
+      ],
     } as any)
 
-    expect(getPermissionDenied(state, key)?.tools[0].toolName).toBe('ExitPlanMode')
+    expect(getPermissionDenied(state, 'tab1')?.tools[0].toolName).toBe('ExitPlanMode')
   })
 
-  it('filters out non-interactive tool denials (Read, Bash, etc.)', () => {
+  it('task_complete with non-interactive tool denials (Read, Bash) DOES set permissionDenied (no filtering in normalized path)', () => {
+    // WI-001 change: the normalized path does NOT filter tool names.
+    // The engine only emits interactive-tool denials in practice, so filtering
+    // is not needed at the desktop layer.
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst-a'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 12,
-        contextWindow: 200000,
-        permissionDenials: [
-          { toolName: 'Read', toolUseId: 'tu-3', toolInput: { file_path: '/x' } },
-          { toolName: 'Bash', toolUseId: 'tu-4', toolInput: { command: 'ls' } },
-        ],
-      },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'Read', toolUseId: 'tu-3', toolInput: { file_path: '/x' } },
+        { toolName: 'Bash', toolUseId: 'tu-4', toolInput: { command: 'ls' } },
+      ],
     } as any)
 
-    // No AskUserQuestion / ExitPlanMode denials → instance.permissionDenied stays null.
-    expect(getPermissionDenied(state, key)).toBeNull()
+    // The normalized path does not filter: both denials are stored.
+    expect(getPermissionDenied(state, 'tab1')).not.toBeNull()
+    expect(getPermissionDenied(state, 'tab1')!.tools).toHaveLength(2)
   })
 
-  it('preserves existing instance.permissionDenied on follow-up cost-only status (no denials)', () => {
+  it('task_complete without denials CLEARS existing permissionDenied (authoritative path)', () => {
+    // WI-001 change: the normalized path is authoritative. task_complete with
+    // an empty permissionDenials list always clears permissionDenied. This is
+    // by design: a follow-up run that completes cleanly should clear any
+    // leftover denial card from the previous run.
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst-a'
 
     // Tick 1: denial arrives.
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 12,
-        contextWindow: 200000,
-        permissionDenials: [
-          { toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } },
-        ],
-      },
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-1',
+      costUsd: 0,
+      durationMs: 0,
+      numTurns: 1,
+      permissionDenials: [
+        { toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } },
+      ],
+    } as any)
+    expect(getPermissionDenied(state, 'tab1')).not.toBeNull()
+
+    // Tick 2: follow-up task_complete with no denials clears the existing entry.
+    slice.handleNormalizedEvent('tab1', {
+      type: 'task_complete',
+      sessionId: 'sess-2',
+      costUsd: 0.001,
+      durationMs: 1000,
+      numTurns: 1,
+      permissionDenials: [],
     } as any)
 
-    // Tick 2: cost-only follow-up (engine emits this ~1ms after the denial tick).
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 12,
-        contextWindow: 200000,
-        totalCostUsd: 0.001,
-        // permissionDenials absent
-      },
-    } as any)
-
-    const entry = getPermissionDenied(state, key)
-    expect(entry).not.toBeUndefined()
-    expect(entry.tools[0].toolName).toBe('AskUserQuestion')
-  })
-
-  it('isolates sibling instances under the same parent tabId', () => {
-    const { state, slice } = buildHarness()
-    const keyA = 'tab1:inst-a'
-    const keyB = 'tab1:inst-b'
-
-    // Instance A: AskUserQuestion denial.
-    slice.handleEngineEvent(keyA, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 0,
-        contextWindow: 200000,
-        permissionDenials: [
-          { toolName: 'AskUserQuestion', toolUseId: 'tu-a', toolInput: { question: 'A?' } },
-        ],
-      },
-    } as any)
-
-    // Instance B: ExitPlanMode denial.
-    slice.handleEngineEvent(keyB, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 0,
-        contextWindow: 200000,
-        permissionDenials: [
-          { toolName: 'ExitPlanMode', toolUseId: 'tu-b', toolInput: { planFilePath: '/p.md' } },
-        ],
-      },
-    } as any)
-
-    expect(getPermissionDenied(state, keyA)?.tools[0].toolName).toBe('AskUserQuestion')
-    expect(getPermissionDenied(state, keyB)?.tools[0].toolName).toBe('ExitPlanMode')
-    // Crucially, the two entries are independent.
-  })
-
-  it('ignores engine_status on bare (non-compound) keys', () => {
-    const { state, slice } = buildHarness()
-
-    slice.handleEngineEvent('tab1', {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 0,
-        contextWindow: 200000,
-        permissionDenials: [
-          { toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } },
-        ],
-      },
-    } as any)
-
-    // No instance in the pane received a denial.
-    const pane = state.conversationPanes.get('tab1')
-    for (const inst of pane.instances) {
-      expect(inst.permissionDenied).toBeNull()
-    }
-    // Parent tab's permissionDenied also stays null.
-    const tab = state.tabs.find((t: any) => t.id === 'tab1')
-    expect(tab.permissionDenied).toBeNull()
-  })
-})
-
-describe('engine_command_result clear → permissionDenied dismissed', () => {
-  it('clears instance.permissionDenied on /clear for an engine tab and appends the divider', () => {
-    const { state, slice } = buildHarness()
-    const key = 'tab1:inst-a'
-
-    // First: an AskUserQuestion denial populates instance.permissionDenied.
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine',
-        state: 'idle',
-        model: 'sonnet',
-        contextPercent: 12,
-        contextWindow: 200000,
-        permissionDenials: [
-          { toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'Pick one' } },
-        ],
-      },
-    } as any)
-    expect(getPermissionDenied(state, key)).not.toBeNull()
-
-    const before = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'inst-a').messages.length
-
-    // Then: /clear dismisses the card AND appends the clear divider.
-    slice.handleEngineEvent(key, {
-      type: 'engine_command_result',
-      command: 'clear',
-    } as any)
-
-    expect(getPermissionDenied(state, key)).toBeNull()
-    const inst = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'inst-a')
-    expect(inst.messages.length).toBe(before + 1)
-    expect(inst.messages[inst.messages.length - 1].role).toBe('system')
-
-    // Sibling instance is untouched — only the addressed instance is cleared.
-    const sibling = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'inst-b')
-    expect(sibling.messages.length).toBe(0)
-  })
-
-  it('clears the main-instance permissionDenied on /clear for a CLI tab and appends the divider', () => {
-    const { state, slice } = buildHarness()
-    // Mark the CLI tab as carrying a pending card. Per-conversation denial
-    // state lives on the tab's `main` instance now, so seed a main pane
-    // carrying the pending denial.
-    const cliTab = state.tabs.find((t: any) => t.id === 'tab1')
-    cliTab.hasEngineExtension = false
-    state.conversationPanes = new Map(state.conversationPanes)
-    state.conversationPanes.set('tab1', {
-      activeInstanceId: 'main',
-      instances: [makeInstance('main')],
-    })
-    const mainInst = state.conversationPanes.get('tab1').instances[0]
-    mainInst.permissionDenied = { tools: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }] }
-
-    slice.handleEngineEvent('tab1', {
-      type: 'engine_command_result',
-      command: 'clear',
-    } as any)
-
-    const inst = state.conversationPanes.get('tab1').instances.find((i: any) => i.id === 'main')
-    expect(inst.permissionDenied).toBeNull()
-    expect(inst.messages.length).toBe(1)
-    expect(inst.messages[0].role).toBe('system')
-  })
-
-  it('does not clear permissionDenied when the clear command failed', () => {
-    const { state, slice } = buildHarness()
-    const key = 'tab1:inst-a'
-    slice.handleEngineEvent(key, {
-      type: 'engine_status',
-      fields: {
-        label: 'engine', state: 'idle', model: 'sonnet', contextPercent: 0, contextWindow: 200000,
-        permissionDenials: [{ toolName: 'AskUserQuestion', toolUseId: 'tu-1', toolInput: { question: 'q?' } }],
-      },
-    } as any)
-    expect(getPermissionDenied(state, key)).not.toBeNull()
-
-    slice.handleEngineEvent(key, {
-      type: 'engine_command_result',
-      command: 'clear',
-      commandError: 'boom',
-    } as any)
-
-    // Failed clear must not dismiss the card.
-    expect(getPermissionDenied(state, key)).not.toBeNull()
+    expect(getPermissionDenied(state, 'tab1')).toBeNull()
   })
 })

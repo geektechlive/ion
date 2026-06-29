@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useColors } from '../../theme'
 import { CopyButton } from './CopyButton'
-import { isPlanCreatedDivider } from '../../../shared/clear-divider'
+import { isPlanCreatedDivider, isPlanUpdatedDivider } from '../../../shared/clear-divider'
 import { PlanViewer } from '../PlanViewer'
 import type { Message } from '../../../shared/types'
 
@@ -20,8 +20,11 @@ export function SystemMessage({ message, skipMotion }: SystemMessageProps) {
   const isDivider = content.startsWith('──')
   const colors = useColors()
 
-  // Plan-created dividers carry a planFilePath so the slug can be clickable.
-  const hasPlanLink = isDivider && isPlanCreatedDivider(content) && !!message.planFilePath
+  // Plan-created and plan-updated dividers carry a planFilePath so the slug
+  // can be clickable (opens the plan preview). Both lifecycle dividers refer
+  // to the same plan file; the only difference is the label.
+  const hasPlanLink =
+    isDivider && (isPlanCreatedDivider(content) || isPlanUpdatedDivider(content)) && !!message.planFilePath
   const [planData, setPlanData] = useState<{ content: string; fileName: string; filePath: string } | null>(null)
 
   const handlePlanClick = useCallback(async () => {

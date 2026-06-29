@@ -1,16 +1,8 @@
 import type { AgentStateUpdate } from '../../shared/types'
-import type { Message } from '../../shared/types'
+import type { DispatchInfo } from '../../shared/types-engine'
 
-/** Structured dispatch info extracted from agent metadata. */
-export interface DispatchInfo {
-  id: string
-  task: string
-  model: string
-  conversationId: string
-  elapsed?: number
-  status: string
-  startTime?: number
-}
+// Re-export so existing renderer imports keep working.
+export type { DispatchInfo }
 
 /** Read a metadata field with fallback */
 export function meta<T>(agent: AgentStateUpdate, key: string, fallback: T): T {
@@ -118,33 +110,4 @@ export function formatDuration(secs: number): string {
   const h = Math.floor(secs / 3600)
   const m = Math.floor((secs % 3600) / 60)
   return `${h}h ${m}m`
-}
-
-/**
- * When multiple dispatches share a conversationId (engine reuses the
- * session), slice the conversation messages by the dispatch's startTime
- * boundary so each pager tab shows only its own work. Dispatch startTime
- * is in seconds; message timestamps are in milliseconds.
- */
-export function sliceMessagesForDispatch(
-  msgs: Message[],
-  dispatch: DispatchInfo,
-  allDispatches: DispatchInfo[],
-): Message[] {
-  if (!dispatch.startTime) return msgs
-  const startMs = dispatch.startTime * 1000
-
-  // Find the next dispatch sharing this conversationId that starts later.
-  const siblings = allDispatches
-    .filter(d => d.conversationId === dispatch.conversationId)
-    .sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0))
-  const next = siblings.find(d => (d.startTime ?? 0) > dispatch.startTime!)
-  const endMs = next?.startTime ? next.startTime * 1000 : undefined
-
-  return msgs.filter(m => {
-    if (!m.timestamp) return true
-    if (m.timestamp < startMs) return false
-    if (endMs != null && m.timestamp >= endMs) return false
-    return true
-  })
 }

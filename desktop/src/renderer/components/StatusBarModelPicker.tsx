@@ -9,32 +9,30 @@ import { ModelPickerPopover } from './ModelPickerPopover'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
-import { useActiveEngineStatusFields, useActiveEngineKey } from './StatusBarEngineHelpers'
+import { useActiveEngineStatusFields } from './StatusBarEngineHelpers'
 import { activeInstance } from '../stores/conversation-instance'
+import { tabHasExtensions } from '../../shared/tab-predicates'
 
 /* ─── Model Picker (inline — tightly coupled to StatusBar) ─── */
 
 /**
- * Single model picker rendered in the unified `StatusBar` left
- * cluster. Sources state differently depending on the active tab
- * type:
+ * Single model picker rendered in the unified `StatusBar` left cluster. There
+ * is no tab-type read/write fork — the per-conversation model lives on the
+ * active conversation INSTANCE for every tab:
  *
- * - **Conversation tabs**: reads `tab.modelOverride` / `tab.sessionModel`
- *   from the active tab; writes via `setTabModel(activeTabId, modelId)`.
+ * - Reads `inst.modelOverride` / `inst.sessionModel` (via `activeInstance`) for
+ *   every tab; writes via `setTabModel(activeTabId, modelId)`, which commits the
+ *   active instance's `modelOverride`.
+ * - `harnessGoverned` (a DATA predicate: does an extension/harness govern this
+ *   conversation?) only folds in the preferences' `engineDefaultModel` as a
+ *   default and is never a read/write fork.
+ * - Shows the `(actualLabel)` parenthetical when the engine reports a different
+ *   running model (`engineStatusFields.model`) than the current selection. That
+ *   is pure data — null for a plain conversation, so the parenthetical
+ *   self-hides.
  *
- * - **Engine tabs**: reads `engineModelOverrides[${tabId}:${instanceId}]`
- *   from the active engine instance, falling back to the preferences'
- *   `engineDefaultModel`; writes via `setEngineModel(tabId, modelId)`.
- *   Also shows the `(actualLabel)` parenthetical when the engine's
- *   actual running model (`engineStatusFields[key].model`) differs
- *   from the user's current selection — mirroring the rendering in
- *   the former engine status bar.
- *
- * The popover, busy-state gating, and visual styling are identical for
- * both tab types — only the underlying read/write source changes. This
- * is one component, not a fork: per CLAUDE.md § "Solution quality" we
- * prefer a single component that does the right thing over a "simpler"
- * branch into two near-duplicate files.
+ * The popover, busy-state gating, and visual styling are identical for every
+ * tab type.
  */
 export function ModelPicker() {
   const preferredModel = usePreferencesStore((s) => s.preferredModel)
@@ -43,24 +41,20 @@ export function ModelPicker() {
     useShallow((s) => {
       const t = s.tabs.find((t) => t.id === s.activeTabId)
       if (!t) return undefined
-      // Per-conversation model state (`sessionModel` / `modelOverride`) now
-      // lives on the active instance, resolved via `activeInstance`.
+      // Per-conversation model state (`sessionModel` / `modelOverride`) lives on
+      // the active instance for EVERY tab type, resolved via `activeInstance`.
       const inst = activeInstance(s.conversationPanes, t.id)
-      return { status: t.status, sessionModel: inst?.sessionModel ?? null, modelOverride: inst?.modelOverride ?? null, hasEngineExtension: t.hasEngineExtension }
+      // `harnessGoverned` is a DATA predicate — does an extension/harness govern
+      // this conversation's model? — used only for the engine-default fallback
+      // and the "engine reports a different model" parenthetical, never as a
+      // read/write fork. The model itself is read + written the same way for all.
+      return { status: t.status, sessionModel: inst?.sessionModel ?? null, modelOverride: inst?.modelOverride ?? null, harnessGoverned: tabHasExtensions(t) }
     }),
   )
   const activeTabId = useSessionStore((s) => s.activeTabId)
   const setTabModel = useSessionStore((s) => s.setTabModel)
-  const setEngineModel = useSessionStore((s) => s.setEngineModel)
-  // Engine-only state sources — null on conversation tabs.
+  // Engine-only state source — null on plain conversations (absence of data).
   const engineStatus = useActiveEngineStatusFields()
-  const engineKey = useActiveEngineKey()
-  const engineModelOverride = useSessionStore((s) => {
-    if (!engineKey) return undefined
-    const pane = s.conversationPanes.get(engineKey.tabId)
-    const inst = pane?.instances.find((i) => i.id === engineKey.instanceId)
-    return inst?.modelOverride ?? undefined
-  })
   const popoverLayer = usePopoverLayer()
   const colors = useColors()
   const [open, setOpen] = useState(false)
@@ -76,10 +70,12 @@ export function ModelPicker() {
   // engine tabs we use the active instance's engine status because
   // each instance can be in a different run-state and only the active
   // one gates the picker.
-  const isEngine = !!tab?.hasEngineExtension
-  const isBusy = isEngine
-    ? engineStatus?.state === 'running'
-    : (tab?.status === 'running' || tab?.status === 'connecting')
+  // Busy-gating from the conversation's run status — the same signal for every
+  // tab type (tab.status reflects the active conversation's run state).
+  const isBusy = tab?.status === 'running' || tab?.status === 'connecting'
+  // `harnessGoverned` only influences the engine-default fallback + the
+  // actual-model parenthetical below; it is data, not a read/write fork.
+  const harnessGoverned = !!tab?.harnessGoverned
 
   useEffect(() => {
     if (!hasModels) fetchModels()
@@ -118,43 +114,41 @@ export function ModelPicker() {
     setOpen((o) => !o)
   }
 
-  // Effective model + display label resolve from per-tab-type sources.
-  // Engine tabs fold in `engineDefaultModel` from preferences as a
-  // sensible default before falling back to the global `preferredModel`.
-  const effectiveModel = isEngine
-    ? (engineModelOverride || engineDefaultModel || preferredModel || AVAILABLE_MODELS[0].id)
-    : (tab?.modelOverride || preferredModel || AVAILABLE_MODELS[0].id)
+  // Effective model + display label resolve from ONE source for every tab:
+  // the active instance's override (carried on `tab.modelOverride` here). A
+  // harness-governed conversation folds in `engineDefaultModel` as a sensible
+  // default before falling back to the global `preferredModel` — that fold is
+  // the only place `harnessGoverned` (data) participates, not a read fork.
+  const effectiveModel = tab?.modelOverride
+    || (harnessGoverned ? engineDefaultModel : '')
+    || preferredModel
+    || AVAILABLE_MODELS[0].id
 
   const activeLabel = (() => {
-    if (isEngine) {
-      // Engine tabs: prefer the active instance's override, then the
-      // engine default, then preferred, then sessionModel echo, then
-      // the static fallback. Mirrors the resolution order used by the
-      // former engine status bar.
-      if (engineModelOverride) return getModelDisplayLabel(engineModelOverride)
-      if (engineDefaultModel) return getModelDisplayLabel(engineDefaultModel)
-      if (preferredModel) return getModelDisplayLabel(preferredModel)
-      if (engineStatus?.model) return getModelDisplayLabel(engineStatus.model)
-      return AVAILABLE_MODELS[0].label
-    }
-    // Conversation tabs: original resolution order, unchanged.
     if (tab?.modelOverride) return getModelDisplayLabel(tab.modelOverride)
+    if (harnessGoverned && engineDefaultModel) return getModelDisplayLabel(engineDefaultModel)
     if (preferredModel) return getModelDisplayLabel(preferredModel)
+    // Echo the model the engine reports it is actually running (governed
+    // conversations) or the tab's last session model — both live as data and
+    // are simply absent for an ungoverned plain tab that hasn't run yet.
+    if (engineStatus?.model) return getModelDisplayLabel(engineStatus.model)
     if (tab?.sessionModel) return getModelDisplayLabel(tab.sessionModel)
     return AVAILABLE_MODELS[0].label
   })()
 
-  // On engine tabs only: show the (actualLabel) parenthetical when
-  // the engine reports it is actually using a different model than
-  // the user's selection. Conversation tabs don't have this signal.
-  const actualModel = isEngine ? engineStatus?.model : undefined
+  // Show the (actualLabel) parenthetical when the engine reports it is actually
+  // using a different model than the user's selection. This is a pure DATA
+  // signal (engineStatus.model) — null for a plain conversation, so the
+  // parenthetical self-hides; no tab-type fork.
+  const actualModel = engineStatus?.model
   const actualLabel = actualModel ? getModelDisplayLabel(actualModel) : null
-  const modelDiffers = isEngine && actualModel && actualLabel !== activeLabel
+  const modelDiffers = !!actualModel && actualLabel !== activeLabel
 
   const handleSelect = (modelId: string) => {
-    if (isEngine) {
-      setEngineModel(activeTabId, modelId)
-    } else if (activeTabId) {
+    // One write path for every tab: setTabModel writes the active instance's
+    // modelOverride (the unified home for the per-conversation model). The old
+    // setEngineModel did the identical thing and is gone.
+    if (activeTabId) {
       setTabModel(activeTabId, modelId)
     }
   }

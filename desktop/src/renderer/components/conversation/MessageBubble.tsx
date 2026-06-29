@@ -47,7 +47,7 @@ export function MessageBubble({ message, skipMotion, actions }: MessageBubblePro
   const defaultActions = <CopyButton text={displayContent} />
 
   const content = (
-    <div className="group/msg relative inline-flex flex-col items-end max-w-[85%]">
+    <div className="group/msg relative inline-flex flex-col items-end max-w-[85%] min-w-0">
       {hasInlineImages && <InlineMessageImages content={message.content || ''} attachments={message.attachments} />}
       {displayContent.trim() && (
         <div
@@ -60,7 +60,7 @@ export function MessageBubble({ message, skipMotion, actions }: MessageBubblePro
             borderRadius: '14px 14px 4px 14px',
           }}
         >
-          <div className="prose-cloud prose-cloud-user">
+          <div className="prose-cloud prose-cloud-user min-w-0 overflow-hidden">
             <Markdown remarkPlugins={REMARK_PLUGINS} components={userMarkdownComponents}>
               {displayContent}
             </Markdown>

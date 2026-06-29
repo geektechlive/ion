@@ -4,6 +4,42 @@ import type { ConversationRef } from './types-engine'
 // ─── Persisted Tab State ───
 
 /**
+ * The reason a new engine session id was cut for a tab. This is the policy that
+ * makes session-cuts auditable and makes restart-fragmentation impossible: ONLY
+ * an explicit checkpoint appends a ledger entry. A process/engine restart never
+ * cuts a new id — it resumes `currentSessionId`.
+ *
+ *  - `clear`      — the user cleared context (in-place `/clear`, same id; or the
+ *                   Implement-plan clear-context cut, which mints a new id).
+ *  - `compaction` — a compaction event split the session (optional: today
+ *                   compaction is in-place and does NOT append; reserved for a
+ *                   future compaction-driven split).
+ *  - `fork`       — a tree-navigation fork branched the conversation.
+ *  - `unknown`    — migration backfill for pre-ledger `conversationIds[]` chains
+ *                   whose original cut reason was not recorded.
+ */
+export type SessionCutReason = 'clear' | 'compaction' | 'fork' | 'unknown'
+
+/**
+ * One entry in a tab's session ledger: a single engine conversation file that
+ * the tab has owned over its life. The newest entry's id is the tab's
+ * `currentSessionId`. Older entries remain so the renderer can concatenate the
+ * full scrollback across clears/compaction even though the agent only ever sees
+ * the current session's context.
+ */
+export interface SessionLedgerEntry {
+  /** The engine conversation id (a `~/.ion/conversations/<id>.*` file). */
+  id: string
+  /** Why this session was cut from its predecessor. */
+  reason: SessionCutReason
+  /** Unix ms when the entry was appended. */
+  createdAt: number
+  /** The id this session descends from (the prior current id), when known.
+   *  Mirrors the engine's on-disk `parentId` so the chain is navigable. */
+  parentId?: string
+}
+
+/**
  * Unified persisted conversation instance. Every tab — plain or
  * extension-hosted — persists its conversation state as one or more of these
  * inside `PersistedTab.conversationPane`. A plain conversation has exactly one
@@ -30,7 +66,26 @@ export interface PersistedConversationInstance {
   sessionModel?: string | null
   permissionMode?: 'auto' | 'plan'
   permissionDenied?: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null
+  /**
+   * @deprecated Pre-ledger session chain. Read on load and migrated into
+   * `sessions[]` (reason `unknown`). Still WRITTEN alongside `sessions` for one
+   * release so a downgrade keeps resuming; new readers should prefer
+   * `currentSessionId` / `sessions`.
+   */
   conversationIds?: string[]
+  /**
+   * The tab's session ledger: every engine conversation it has owned, oldest
+   * first, newest last. The newest entry's id == `currentSessionId`. Only a
+   * checkpoint cut appends; restart never does. Absent on legacy files (the
+   * loader derives it from `conversationIds`).
+   */
+  sessions?: SessionLedgerEntry[]
+  /**
+   * The live engine session id the tab resumes on restart. The newest ledger
+   * entry's id. Persisted explicitly so restore resolves the resume target
+   * without walking the ledger and so a restart provably cannot append.
+   */
+  currentSessionId?: string
   draftInput?: string
   agentStates?: Array<{ name: string; id?: string; status: string; metadata?: Record<string, any> }>
   planFilePath?: string | null
@@ -44,6 +99,20 @@ export interface PersistedConversationPane {
 }
 
 export interface PersistedTab {
+  /**
+   * Durable tab identity. The desktop session key IS the bare tabId
+   * (shared/session-key.ts → sessionKey() returns the tabId verbatim), and the
+   * engine treats that key as opaque. Before this field existed the tabId lived
+   * only in renderer memory, so every cold restart minted a fresh one — handing
+   * the engine a NEW session key for the same logical tab. The engine's
+   * key→conversationId binding store (session-bindings.json) then missed, the
+   * engine pre-minted an empty conversation, and the tab's history fragmented
+   * across N disjoint files. Persisting the tabId makes the session key durable:
+   * restore reuses it, the binding store hits, and the tab keeps ONE session id
+   * across every restart. Optional for back-compat — legacy files have no `id`;
+   * the loader mints one on first restore and persists it from then on.
+   */
+  id?: string
   conversationId: string | null
   historicalSessionIds?: string[]
   lastKnownSessionId?: string
@@ -52,7 +121,13 @@ export interface PersistedTab {
   workingDirectory: string
   hasChosenDirectory: boolean
   additionalDirs: string[]
-  permissionMode: 'auto' | 'plan'
+  /**
+   * @deprecated Legacy tab-level permission mode field. Written by persistence
+   * before WI-002; read by restoration paths as a fallback when the persisted
+   * conversation instance has no `permissionMode`. New persistence no longer
+   * writes this field — the mode lives on `PersistedConversationInstance`.
+   */
+  permissionMode?: 'auto' | 'plan'
   permissionDenied?: { tools: Array<{ toolName: string; toolUseId: string; toolInput?: Record<string, unknown> }> } | null
   planFilePath?: string | null
   bashResults?: Array<{ command: string; stdout: string; stderr: string }>

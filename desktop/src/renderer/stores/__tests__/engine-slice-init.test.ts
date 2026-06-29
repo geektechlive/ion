@@ -1,14 +1,16 @@
 /**
- * engine-slice — Session-started divider seeded by addEngineInstance
+ * engine-slice — single-instance lifecycle and session-start divider
  *
- * Pins the contract that calling addEngineInstance for a new tab/instance
- * seeds a single "── Session started at <time> ──" system divider into
- * the instance's `messages` field in `conversationPanes`. This is the only
+ * Pins the contract that calling addEngineInstance for a new tab seeds a
+ * single "── Session started at <time> ──" system divider into the
+ * instance's `messages` field in `conversationPanes`. This is the only
  * insertion site for the session-start divider; tab restoration (where
  * instances already exist) intentionally bypasses addEngineInstance so
  * persisted dividers are preserved without duplication.
  *
  * Also pins:
+ *   - The single-instance guard: a second addEngineInstance call on the
+ *     same tab returns the existing instance id (no-op, no second instance).
  *   - resetEngineInstance re-seeds the divider after wiping per-instance
  *     state, so the engine-instance reset path leaves the user with a
  *     clean scrollback that visibly marks the reset boundary.
@@ -54,8 +56,7 @@ function makeTab(id: string) {
   return {
     id,
     title: 'Engine',
-    hasEngineExtension: true,
-    engineProfileId: null,
+    engineProfileId: 'test-profile',
     workingDirectory: '/tmp',
     hasChosenDirectory: true,
     pillIcon: null,
@@ -120,6 +121,38 @@ describe('engine-slice — addEngineInstance seeds session-start divider', () =>
     // the renderer's list-item keying.
     expect(msgs1[0].id).not.toBe(msgs2[0].id)
   })
+
+  it('passes pendingParentConversationId to engineStart as parentConversationId and clears it', () => {
+    // Checkpoint cut (clear-context) wiring: the tab carries the prior id as
+    // pendingParentConversationId; the next engine start forwards it so the
+    // engine records the new conversation's on-disk parentId. (Commit 4.)
+    const { state, slice } = buildHarness()
+    ;((globalThis as any).window.ion.engineStart as ReturnType<typeof vi.fn>).mockClear()
+    state.tabs = state.tabs.map((t: any) =>
+      t.id === 'tab1' ? { ...t, pendingParentConversationId: 'parent-conv-xyz' } : t
+    )
+
+    slice.addEngineInstance!('tab1')
+
+    const startMock = (globalThis as any).window.ion.engineStart as ReturnType<typeof vi.fn>
+    const call = startMock.mock.calls.find((c: any[]) => c[0] === 'tab1')
+    expect(call).toBeTruthy()
+    expect(call![1].parentConversationId).toBe('parent-conv-xyz')
+    // The one-shot transient is consumed.
+    const tab = state.tabs.find((t: any) => t.id === 'tab1')
+    expect(tab.pendingParentConversationId).toBeNull()
+  })
+
+  it('omits parentConversationId when no pending parent is set', () => {
+    const { slice } = buildHarness()
+    ;((globalThis as any).window.ion.engineStart as ReturnType<typeof vi.fn>).mockClear()
+
+    slice.addEngineInstance!('tab2')
+
+    const startMock = (globalThis as any).window.ion.engineStart as ReturnType<typeof vi.fn>
+    const call = startMock.mock.calls.find((c: any[]) => c[0] === 'tab2')
+    expect(call![1].parentConversationId).toBeUndefined()
+  })
 })
 
 describe('engine-slice — resetEngineInstance', () => {
@@ -140,7 +173,7 @@ describe('engine-slice — resetEngineInstance', () => {
       agentStates: [{ name: 'chief', status: 'idle' }],
       statusFields: { state: 'running' },
     }
-    state.engineUsage.set(`tab1:${instanceId}`, { percent: 5, tokens: 100, cost: 0.001 })
+    state.engineUsage.set('tab1', { percent: 5, tokens: 100, cost: 0.001 })
 
     slice.resetEngineInstance!('tab1', instanceId)
 
@@ -158,7 +191,7 @@ describe('engine-slice — resetEngineInstance', () => {
     expect(inst?.conversationIds).toEqual([])
 
     // Non-ConversationInstance Maps cleaned up.
-    expect(state.engineUsage.has(`tab1:${instanceId}`)).toBe(false)
+    expect(state.engineUsage.has('tab1')).toBe(false)
 
     // The instance pane entry itself is preserved.
     expect(state.conversationPanes.get('tab1')?.instances.some((i: any) => i.id === instanceId)).toBe(true)
@@ -179,5 +212,30 @@ describe('engine-slice — resetEngineInstance', () => {
 
     // No new instances created, no existing ones wiped.
     expect(state.conversationPanes.get('tab1')?.instances.length ?? 0).toBe(panesBeforeSize)
+  })
+})
+
+describe('engine-slice — single-instance guard (#256 phase 1)', () => {
+  it('returns existing instance id when tab already has an instance (no second instance created)', () => {
+    const { state, slice } = buildHarness()
+    const firstId = slice.addEngineInstance!('tab1')
+    expect(firstId).toBeTruthy()
+    expect(state.conversationPanes.get('tab1')?.instances.length).toBe(1)
+
+    // Second call: must return the existing id, not create a new instance.
+    const secondId = slice.addEngineInstance!('tab1')
+    expect(secondId).toBe(firstId)
+    expect(state.conversationPanes.get('tab1')?.instances.length).toBe(1)
+  })
+
+  it('no multi-instance operations exist on the slice', () => {
+    const { slice } = buildHarness()
+    // These operations were removed in conversation unification #256 phase 1.
+    // If any reappear, these assertions catch the regression.
+    expect((slice as any).removeEngineInstance).toBeUndefined()
+    expect((slice as any).selectEngineInstance).toBeUndefined()
+    expect((slice as any).renameEngineInstance).toBeUndefined()
+    expect((slice as any).moveEngineInstance).toBeUndefined()
+    expect((slice as any).reorderEngineInstances).toBeUndefined()
   })
 })

@@ -95,7 +95,7 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
               className="ml-1 pl-3 mb-1"
               style={{ borderLeft: `1px solid ${colors.timelineLine}` }}
             >
-              <ToolGroup tools={tools} skipMotion />
+              <ToolGroup tools={tools} skipMotion embedded />
             </div>
           </motion.div>
         )}

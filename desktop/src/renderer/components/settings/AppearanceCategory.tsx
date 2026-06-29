@@ -27,14 +27,14 @@ export function AppearanceCategory() {
   const setDefaultTallConversation = usePreferencesStore((s) => s.setDefaultTallConversation)
   const defaultTallTerminal = usePreferencesStore((s) => s.defaultTallTerminal)
   const setDefaultTallTerminal = usePreferencesStore((s) => s.setDefaultTallTerminal)
-  const defaultTallEngine = usePreferencesStore((s) => s.defaultTallEngine)
-  const setDefaultTallEngine = usePreferencesStore((s) => s.setDefaultTallEngine)
   const editorWordWrap = usePreferencesStore((s) => s.editorWordWrap)
   const setEditorWordWrap = usePreferencesStore((s) => s.setEditorWordWrap)
   const editorFontSize = usePreferencesStore((s) => s.editorFontSize)
   const setEditorFontSize = usePreferencesStore((s) => s.setEditorFontSize)
   const conversationFontSize = usePreferencesStore((s) => s.conversationFontSize)
   const setConversationFontSize = usePreferencesStore((s) => s.setConversationFontSize)
+  const previewFontSize = usePreferencesStore((s) => s.previewFontSize)
+  const setPreviewFontSize = usePreferencesStore((s) => s.setPreviewFontSize)
   const closeExplorerOnFileOpen = usePreferencesStore((s) => s.closeExplorerOnFileOpen)
   const setCloseExplorerOnFileOpen = usePreferencesStore((s) => s.setCloseExplorerOnFileOpen)
   const hideOnExternalLaunch = usePreferencesStore((s) => s.hideOnExternalLaunch)
@@ -132,13 +132,6 @@ export function AppearanceCategory() {
         onChange={setDefaultTallTerminal}
       />
 
-      <SettingToggle
-        label="Engine Tabs"
-        description="Open engine tabs in tall mode."
-        checked={defaultTallEngine}
-        onChange={setDefaultTallEngine}
-      />
-
       <SettingHeading>Theme</SettingHeading>
 
       <SettingSection label="Color Theme" description="Choose a visual theme for the app.">
@@ -228,6 +221,12 @@ export function AppearanceCategory() {
 
       <SettingSection description="Conversation message font size in pixels.">
         {fontStepper(conversationFontSize, setConversationFontSize)}
+      </SettingSection>
+
+      <SettingHeading>Preview</SettingHeading>
+
+      <SettingSection description="Plan, diff, and other pop-up preview font size in pixels.">
+        {fontStepper(previewFontSize, setPreviewFontSize)}
       </SettingSection>
 
       <SettingHeading>Terminal</SettingHeading>

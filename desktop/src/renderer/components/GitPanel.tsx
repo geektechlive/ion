@@ -47,7 +47,7 @@ export function GitPanel() {
       const safeCwd = directory.replace(/'/g, "'\\''")
       useSessionStore.getState().runInTerminal(activeTabId, `cd '${safeCwd}' && ${commitCommand}`)
     } else {
-      useSessionStore.getState().sendMessage('commit the current changes')
+      useSessionStore.getState().submit(activeTabId, 'commit the current changes')
     }
   }, [commitCommand, directory, activeTabId])
 

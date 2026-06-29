@@ -12,10 +12,12 @@
 import { EventEmitter } from 'events'
 import { RelayClient, type RelayClientOptions } from './relay-client'
 import { LANServer, type LANServerOptions } from './lan-server'
-import { encrypt, decrypt } from './crypto'
+import { decrypt } from './crypto'
 import { compressPayload, decompressPayload } from './transport-compression'
 import { startLanAuth, handleLanAuthResponse, type LanAuthCtx } from './transport-lan-auth'
 import { log as _log } from '../logger'
+import { RetransmitBuffer, replayRange } from './retransmit-buffer'
+import { buildDeviceFrame } from './transport-frame'
 import type {
   TransportState,
   WireMessage,
@@ -51,6 +53,11 @@ export class RemoteTransport extends EventEmitter {
   private relays: Map<string, RelayClient> = new Map()    // deviceId -> relay
   private deviceSecrets: Map<string, Buffer> = new Map()   // deviceId -> shared secret
   private lastReceivedSeq: Map<string, number> = new Map() // deviceId -> last seq
+  // Per-device retransmit buffer: keeps recently-sent encrypted frames so a
+  // forward-seq-gap from iOS (a frame lost during a transport switch) can be
+  // recovered by replaying the originals instead of waiting for the snapshot
+  // reconcile. See retransmit-buffer.ts and resend().
+  private retransmit = new RetransmitBuffer()
   private lan: LANServer | null = null
   private _state: TransportState = 'disconnected'
   private config: RemoteTransportConfig
@@ -65,12 +72,21 @@ export class RemoteTransport extends EventEmitter {
   // connectionId -> deviceId mapping for authenticated LAN clients
   private lanDeviceMap: Map<string, string> = new Map()
 
-  // Critical event types that must never be dropped
+  // Critical event types that must never be dropped under backpressure.
+  // The live-transcript deltas (text/tool start/end) are included so a
+  // high-rate streaming run is not preferentially dropped while sparse
+  // status/snapshot events survive — the exact asymmetry that made streamed
+  // text "freeze" on iOS while everything else appeared to arrive. The
+  // retransmit buffer (retransmit-buffer.ts) additionally recovers any frame
+  // lost in transit (transport switch); this set prevents the desktop from
+  // *choosing* to drop a live delta in the first place.
   private static readonly CRITICAL_TYPES = new Set([
     'desktop_permission_request', 'desktop_snapshot', 'desktop_tab_created', 'desktop_tab_closed',
     'desktop_conversation_history', 'desktop_heartbeat', 'desktop_terminal_snapshot',
-    'desktop_engine_conversation_history',
+    // desktop_engine_conversation_history is retired (WI-004 / #259). Removed from
+    // CRITICAL_TYPES. desktop_conversation_history covers all tabs.
     'desktop_agent_state', 'desktop_status', 'desktop_message_end', 'desktop_engine_error',
+    'desktop_text_delta', 'desktop_tool_start', 'desktop_tool_end',
   ])
 
   constructor(config: RemoteTransportConfig) {
@@ -259,55 +275,27 @@ export class RemoteTransport extends EventEmitter {
   /** Encrypt and send an event to all connected devices. Returns true if sent to at least one. */
   private _sendToAll(event: RemoteEvent, push: boolean, pushTitle?: string, pushBody?: string): boolean {
     const plaintext = JSON.stringify(event)
-    // Compress: raw DEFLATE (no gzip header) + 0x01 version prefix.
-    // iOS uses Apple Compression framework with COMPRESSION_ZLIB to decompress.
-    const wire = compressPayload(plaintext)
     if (event.type === 'desktop_snapshot') {
+      // Compress once just for the observability log (buildDeviceFrame
+      // re-compresses per device; raw DEFLATE is deterministic + cheap).
+      const wire = compressPayload(plaintext)
       log(`snapshot payload: ${plaintext.length} bytes → ${wire.length} bytes compressed, ${(event as any).tabs?.length ?? 0} tabs`)
     }
     let sentAny = false
 
     // Send to each device via its preferred transport.
     for (const [deviceId, secret] of this.deviceSecrets) {
-      const msg: WireMessage = {
-        seq: ++this.seq,
-        ts: Date.now(),
-        deviceId,
-      } as WireMessage
+      const msg = buildDeviceFrame(deviceId, secret, plaintext, () => ++this.seq, push, pushTitle, pushBody)
+      if (!msg) continue // encrypt failed — skip this device
 
-      // Encrypt per-device.
-      if (secret && secret.length === 32) {
-        try {
-          const { nonce, ciphertext } = encrypt(wire, secret)
-          ;(msg as any).nonce = nonce
-          ;(msg as any).ciphertext = ciphertext
-        } catch (err) {
-          log(`encrypt failed for device ${deviceId}: ${(err as Error).message}`)
-          continue
-        }
-        ;(msg as any).push = push || undefined
-        ;(msg as any).pushTitle = push ? pushTitle : undefined
-        ;(msg as any).pushBody = push ? pushBody : undefined
-      } else {
-        ;(msg as any).payload = plaintext
-        ;(msg as any).push = push || undefined
-        ;(msg as any).pushTitle = push ? pushTitle : undefined
-        ;(msg as any).pushBody = push ? pushBody : undefined
-      }
+      // Buffer the built frame for retransmission BEFORE sending, so a frame
+      // lost in transit can be replayed on an iOS resend request. We buffer
+      // every frame we attempt to send (LAN or relay); a resend re-sends the
+      // byte-identical original. Do not buffer resend replays themselves
+      // (resend() re-sends from here-stored frames, not via _sendToAll).
+      this.retransmit.record(deviceId, msg)
 
-      // Prefer LAN if this device has an authenticated LAN connection.
-      const lanConnectionId = this._getLanConnectionForDevice(deviceId)
-      if (lanConnectionId && this.lan?.hasClient(lanConnectionId)) {
-        this.lan.send(msg, lanConnectionId)
-        sentAny = true
-      } else {
-        // Fall back to relay.
-        const relay = this.relays.get(deviceId)
-        if (relay?.connected) {
-          relay.send(msg)
-          sentAny = true
-        }
-      }
+      if (this._deliverFrame(deviceId, msg)) sentAny = true
     }
 
     return sentAny
@@ -418,39 +406,43 @@ export class RemoteTransport extends EventEmitter {
   sendToDevice(deviceId: string, event: RemoteEvent, push = false): void {
     const secret = this.deviceSecrets.get(deviceId)
     if (!secret) return
+    const msg = buildDeviceFrame(deviceId, secret, JSON.stringify(event), () => ++this.seq, push)
+    if (!msg) return
+    this.retransmit.record(deviceId, msg)
+    this._deliverFrame(deviceId, msg)
+  }
 
-    const plaintext = JSON.stringify(event)
-    const wire = compressPayload(plaintext)
-    const msg: WireMessage = {
-      seq: ++this.seq,
-      ts: Date.now(),
-      deviceId,
-    } as WireMessage
-
-    if (secret.length === 32) {
-      try {
-        const { nonce, ciphertext } = encrypt(wire, secret)
-        ;(msg as any).nonce = nonce
-        ;(msg as any).ciphertext = ciphertext
-      } catch (err) {
-        log(`encrypt failed for device ${deviceId}: ${(err as Error).message}`)
-        return
-      }
-      ;(msg as any).push = push || undefined
-    } else {
-      ;(msg as any).payload = plaintext
-      ;(msg as any).push = push || undefined
+  /**
+   * Replay buffered frames for `[fromSeq, toSeq]` in response to an iOS
+   * `desktop_request_resend` (it detected a forward seq gap). Frames still in
+   * the buffer are re-sent byte-identically (original seq preserved so iOS fills
+   * the gap); an evicted range yields `desktop_resend_unavailable` so iOS heals
+   * via the snapshot reconcile instead. See retransmit-buffer.ts.
+   */
+  resend(deviceId: string, fromSeq: number, toSeq: number): void {
+    const complete = replayRange(this.retransmit, deviceId, fromSeq, toSeq,
+      (frame) => this._deliverFrame(deviceId, frame))
+    log(`resend: device=${deviceId} range=[${fromSeq},${toSeq}] complete=${complete}`)
+    if (!complete) {
+      this.sendToDevice(deviceId, { type: 'desktop_resend_unavailable', fromSeq })
     }
+  }
 
+  /** Deliver a pre-built (seq-stamped, encrypted) frame to a device over its
+   *  preferred transport (LAN if connected, else relay). Returns true if it was
+   *  handed to a transport. Shared by _sendToAll, sendToDevice, and resend. */
+  private _deliverFrame(deviceId: string, frame: WireMessage): boolean {
     const lanConnectionId = this._getLanConnectionForDevice(deviceId)
     if (lanConnectionId && this.lan?.hasClient(lanConnectionId)) {
-      this.lan.send(msg, lanConnectionId)
-    } else {
-      const relay = this.relays.get(deviceId)
-      if (relay?.connected) {
-        relay.send(msg)
-      }
+      this.lan.send(frame, lanConnectionId)
+      return true
     }
+    const relay = this.relays.get(deviceId)
+    if (relay?.connected) {
+      relay.send(frame)
+      return true
+    }
+    return false
   }
 
   private _handleIncoming(msg: WireMessage, deviceId: string): void {

@@ -50,7 +50,7 @@ interface Handlers {
  */
 export function buildPermissionDeniedHandlers(
   tab: TabState,
-  sendMessage: (
+  submitPrompt: (
     content: string,
     workingDir?: string,
     attachments?: Attachment[],
@@ -59,10 +59,16 @@ export function buildPermissionDeniedHandlers(
   ) => void,
 ): Handlers {
   const dismissPermissionDenied = () => {
+    // Clear the denial on the active conversation INSTANCE, not on the tab.
+    // The permission-denied card reads `inst.permissionDenied` for every tab
+    // type (the field moved to the instance under #256); clearing the stale
+    // `tab.permissionDenied` here left the card stuck on-screen. commitInstance
+    // targets the active instance (the single `main` instance for a plain tab).
     useSessionStore.setState((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.id === tab.id ? { ...t, permissionDenied: null } : t
-      ),
+      conversationPanes: commitInstance(s.conversationPanes, tab.id, (i) => ({
+        ...i,
+        permissionDenied: null,
+      })),
     }))
   }
 
@@ -70,13 +76,13 @@ export function buildPermissionDeniedHandlers(
 
   const onAnswer = (answer: string) => {
     dismissPermissionDenied()
-    sendMessage(answer)
+    submitPrompt(answer)
   }
 
   const onApprove = (toolNames: string[]) => {
     window.ion.approveDeniedTools(tab.id, toolNames)
     dismissPermissionDenied()
-    sendMessage('The denied tools have been approved. Please retry the operation.')
+    submitPrompt('The denied tools have been approved. Please retry the operation.')
   }
 
   const onImplement = async (clearContext: boolean = false) => {
@@ -88,15 +94,15 @@ export function buildPermissionDeniedHandlers(
     // main-process tab is already 'completed' at this point, which is
     // sufficient to suppress stale denial re-promotion.
     //
-    // Setting 'connecting' caused sendMessage to silently drop the
-    // implement prompt (sendMessage guards on status==='connecting').
-    // Setting 'running' caused sendMessage to route the prompt through
-    // steer() instead of prompt() (sendMessage treats running as isBusy).
-    // Both are wrong — sendMessage must see a non-busy, non-connecting
+    // Setting 'connecting' caused submit to silently drop the
+    // implement prompt (submit guards on status==='connecting').
+    // Setting 'running' caused submit to route the prompt through
+    // steer() instead of prompt() (submit treats running as isBusy).
+    // Both are wrong — submit must see a non-busy, non-connecting
     // status so it dispatches via window.ion.prompt().
     //
-    // sendMessage itself sets 'connecting' at dispatch time (line ~157),
-    // which is the correct transition point.
+    // submit itself sets 'connecting' at dispatch time, which is the
+    // correct transition point.
 
     // Switch to auto mode for implementation
     useSessionStore.getState().setPermissionMode('auto', 'plan_approved')
@@ -159,6 +165,12 @@ export function buildPermissionDeniedHandlers(
       useSessionStore.setState((s) => {
         const conversationPanes = commitInstance(s.conversationPanes, tab.id, (inst) => ({
           ...inst,
+          // Checkpoint cut: the next engine session id this instance receives
+          // (minted after resetTabSession on the next prompt) is a deliberate
+          // clear-context cut. Tag it `clear` so the session ledger records the
+          // reason and links it to the prior id via parentId. Consumed once by
+          // the session_init append site.
+          pendingCutReason: 'clear' as const,
           messages: [
             ...inst.messages,
             {
@@ -170,6 +182,7 @@ export function buildPermissionDeniedHandlers(
           ],
           planFilePath: null,
           permissionQueue: [],
+          elicitationQueue: [],
           permissionDenied: null,
         }))
         return {
@@ -183,6 +196,11 @@ export function buildPermissionDeniedHandlers(
                     ...(t.conversationId && !t.historicalSessionIds.includes(t.conversationId)
                       ? [t.conversationId] : []),
                   ],
+                  // Record the conversation we're cutting away from as the
+                  // parent of the next one, so the engine writes it as the new
+                  // conversation's on-disk parentId (the linkage that matches
+                  // the desktop session ledger). Consumed once at the next start.
+                  pendingParentConversationId: t.conversationId,
                   conversationId: null,
                   lastResult: null,
                   currentActivity: '',
@@ -214,6 +232,7 @@ export function buildPermissionDeniedHandlers(
           ],
           planFilePath: null,
           permissionQueue: [],
+          elicitationQueue: [],
           permissionDenied: null,
         }))
         return {
@@ -261,7 +280,7 @@ export function buildPermissionDeniedHandlers(
       path: planFilePath,
     }] : undefined
 
-    sendMessage(implementPrompt, tab.workingDirectory, planAttachment, undefined, true)
+    submitPrompt(implementPrompt, tab.workingDirectory, planAttachment, undefined, true)
   }
 
   const onImplementAndUnpin = async (clearContext: boolean = false): Promise<void> => {

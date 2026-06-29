@@ -38,7 +38,7 @@ export function isSkeletonTab(
  * restoration reads them.
  *
  * Two layers of back-compat collapse here:
- *   1. The `isEngine` → `hasEngineExtension` rename (coalesced inside
+ *   1. The `isEngine` → `engineProfileId` derivation (coalesced inside
  *      `migrateTabToUnified`).
  *   2. The split persisted shape (flat plain-tab fields + `engine*` maps) →
  *      the unified `conversationPane`. `migrateTabToUnified` is the SAME pure
@@ -64,6 +64,41 @@ export function readMainInstance(tab: PersistedTab): PersistedConversationInstan
   const pane = tab.conversationPane
   if (!pane || pane.instances.length === 0) return null
   return pane.instances.find((i) => i.id === 'main') ?? pane.instances[0]
+}
+
+/**
+ * Resolve the plan file path to forward on a `tab_restore` permission-mode
+ * re-assert. Returns the instance's `planFilePath` only when restoring into
+ * plan mode (the engine ignores it on 'auto', and forwarding it there would be
+ * misleading). undefined when not in plan mode or no path persisted.
+ *
+ * Used by all three plain-tab restore paths (active / skeleton / sessionless)
+ * so the engine re-adopts the conversation's existing plan instead of
+ * allocating a fresh slug on the next plan-mode prompt. Pure helper so the
+ * three call sites share one rule and stay under the file-size cap.
+ */
+export function planPathForRestore(
+  mode: 'auto' | 'plan',
+  inst: PersistedConversationInstance | null,
+): string | undefined {
+  return mode === 'plan' ? (inst?.planFilePath || undefined) : undefined
+}
+
+/**
+ * Re-assert a restored tab's permission mode to the engine, forwarding the
+ * persisted plan file path so plan-mode continuity survives restart. Resolves
+ * the mode from the instance (falling back to the legacy tab-level field for
+ * pre-WI-002 saves), then sends `setPermissionMode(..., 'tab_restore', path)`.
+ * Centralizes the three plain-tab restore call sites (active / skeleton /
+ * sessionless) behind one rule.
+ */
+export function reassertRestoredPlanMode(
+  tabId: string,
+  inst: PersistedConversationInstance | null,
+  legacyTabMode: 'auto' | 'plan' | undefined,
+): void {
+  const mode: 'auto' | 'plan' = inst?.permissionMode ?? legacyTabMode ?? 'auto'
+  window.ion.setPermissionMode(tabId, mode, 'tab_restore', planPathForRestore(mode, inst))
 }
 
 /**

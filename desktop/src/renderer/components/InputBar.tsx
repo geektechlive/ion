@@ -40,8 +40,7 @@ export function InputBar() {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const measureRef = useRef<HTMLTextAreaElement | null>(null)
 
-  const sendMessage = useSessionStore((s) => s.sendMessage)
-  const submitEnginePrompt = useSessionStore((s) => s.submitEnginePrompt)
+  const submit = useSessionStore((s) => s.submit)
   // (clearTab/addSystemMessage/addEngineSystemMessage were used by the
   // pre-pipeline renderer slash dispatch; they remain available on the
   // store and are now driven by engine_command_result subscribers in
@@ -51,16 +50,10 @@ export function InputBar() {
   const addAttachments = useSessionStore((s) => s.addAttachments)
   const removeAttachment = useSessionStore((s) => s.removeAttachment)
   const setDraftInput = useSessionStore((s) => s.setDraftInput)
-  const setEngineDraftInput = useSessionStore((s) => s.setEngineDraftInput)
   const clearPendingInput = useSessionStore((s) => s.clearPendingInput)
 
   const activeTabId = useSessionStore((s) => s.activeTabId)
   const tab = useSessionStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
-  const activeInstanceId = useSessionStore((s) => {
-    const t = s.tabs.find((t) => t.id === s.activeTabId)
-    if (!t?.hasEngineExtension) return null
-    return s.conversationPanes.get(t.id)?.activeInstanceId ?? null
-  })
   const bashExecuting = tab?.bashExecuting ?? false
   const tabsReady = useSessionStore((s) => s.tabsReady)
   const initProgress = useSessionStore((s) => s.initProgress)
@@ -108,8 +101,11 @@ export function InputBar() {
   }))
 
   // Merge extension-registered commands from the engine's command registry.
-  // The key matches the engine session key used by engine-event-slice.ts.
-  const extensionKey = tab?.hasEngineExtension && activeInstanceId ? `${activeTabId}:${activeInstanceId}` : activeTabId
+  // The registry is keyed by the bare tabId (the engine session key for every
+  // conversation post-#256), so there is no tab-type fork: a plain tab simply
+  // has no registered extension commands and getRendererExtensionCommands
+  // returns an empty list.
+  const extensionKey = activeTabId
   const extensionExtra: SlashCommand[] = extensionKey
     ? getRendererExtensionCommands(extensionKey).map((ec) => ({
       command: `/${ec.name}`,
@@ -138,22 +134,6 @@ export function InputBar() {
     textareaRef.current?.focus()
     setBashMode(false)
   }, [activeTabId])
-
-  // ─── Per-engine-instance draft input sync ───
-  // Save current input to departing instance, restore arriving instance's draft
-  const prevInstanceRef = useRef<string | null>(activeInstanceId)
-  useEffect(() => {
-    const prevInst = prevInstanceRef.current
-    if (tab?.hasEngineExtension && activeTabId && prevInst && prevInst !== activeInstanceId) {
-      setEngineDraftInput(`${activeTabId}:${prevInst}`, input)
-      const arrivingDraft = activeInstanceId
-        ? (useSessionStore.getState().conversationPanes.get(activeTabId)?.instances.find(i => i.id === activeInstanceId)?.draftInput ?? '')
-        : ''
-      setInput(arrivingDraft)
-      setSlashFilter(null)
-    }
-    prevInstanceRef.current = activeInstanceId
-  }, [activeInstanceId])
 
   // ─── Rewind: restore user message to input bar ───
   const pendingInput = tab?.pendingInput
@@ -267,7 +247,7 @@ export function InputBar() {
   // ─── Slash commands ───
   // The slash menu only sets the input text; the real dispatch happens
   // inside handleSend below, which hands the raw text (including any leading
-  // "/") to the main process via window.ion.prompt / window.ion.enginePrompt.
+  // "/") to the main process via window.ion.prompt (the single unified prompt IPC).
   // The unified prompt pipeline (desktop/src/main/prompt-pipeline.ts) owns
   // all slash routing: extension-command dispatch, .md template expansion,
   // and the /clear short-circuit for sessions that haven't started yet.
@@ -325,7 +305,7 @@ export function InputBar() {
     // Slash-command routing is NOT done here any more. After the unified
     // prompt pipeline (desktop/src/main/prompt-pipeline.ts) the renderer is
     // a dumb pipe: it hands raw text — including any leading "/" — to the
-    // main process via window.ion.prompt / window.ion.enginePrompt, and the
+    // main process via window.ion.prompt (the single unified prompt IPC), and the
     // main-process pipeline decides between extension command dispatch,
     // .md template expansion, and normal LLM prompt submission. This makes
     // desktop and remote (iOS) paths behaviourally identical and removes
@@ -335,20 +315,18 @@ export function InputBar() {
     // emitted by the engine via engine_command_result events and inserted
     // by the engine-event-slice subscriber, so the same trigger works for
     // both desktop-initiated and iOS-initiated /clear.
+    // Unified submit for EVERY tab — plain or extension-backed. No tab-type
+    // fork: `submit` reads tab.attachments internally and resolves the tab's
+    // extensions from its profile (data), which routes the prompt through the
+    // engine pipeline for extension-backed tabs and the CLI pipeline otherwise.
     const currentTab = useSessionStore.getState().tabs.find(t => t.id === useSessionStore.getState().activeTabId)
-    if (currentTab?.hasEngineExtension) {
-      const enginePane = useSessionStore.getState().conversationPanes.get(currentTab.id)
-      if (enginePane?.activeInstanceId) {
-        setEngineDraftInput(`${currentTab.id}:${enginePane.activeInstanceId}`, '')
-      }
-      submitEnginePrompt(currentTab.id, prompt || (attachments.length > 0 ? 'See attached files' : ''), undefined, undefined, attachments.length > 0 ? attachments : undefined)
-      requestAnimationFrame(() => textareaRef.current?.focus())
-      return
-    }
-    sendMessage(prompt || 'See attached files')
+    if (!currentTab) return
+    // Clear the per-tab draft (bare tabId key — single instance per tab).
+    setDraftInput(currentTab.id, '')
+    submit(currentTab.id, prompt || (attachments.length > 0 ? 'See attached files' : ''))
     // Refocus after React re-renders from the state update
     requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [input, isBusy, sendMessage, submitEnginePrompt, attachments.length, showSlashMenu, slashFilter, slashIndex, handleSlashSelect, bashMode, bashExecuting, tab?.workingDirectory, startBashCommand, completeBashCommand, extraCommands, isConnecting, activeTabId, setDraftInput, setEngineDraftInput, setBashMode])
+  }, [input, isBusy, submit, attachments.length, showSlashMenu, slashFilter, slashIndex, handleSlashSelect, bashMode, bashExecuting, tab?.workingDirectory, startBashCommand, completeBashCommand, extraCommands, isConnecting, activeTabId, setDraftInput, setBashMode])
 
   // ─── Keyboard ───
   const handleKeyDown = (e: React.KeyboardEvent) => {

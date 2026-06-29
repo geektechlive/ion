@@ -3,7 +3,10 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { CaretRight, ArrowsOutSimple, ArrowsInSimple } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
-import { meta, isAgentVisible, sortAgents, getLabelBg, getStatusSuffix, getDispatches, sliceMessagesForDispatch } from './agent-panel-helpers'
+import { useSessionStore } from '../stores/sessionStore'
+import { meta, isAgentVisible, sortAgents, getLabelBg, getStatusSuffix, getDispatches } from './agent-panel-helpers'
+import { reconcileActivity } from './agent-dispatch-activity'
+import { mapConversationMessages } from './agent-conversation-mapper'
 import { AgentExpandedView } from './AgentExpandedView'
 import { AgentDetailPanel } from './AgentDetailPanel'
 import type { AgentStateUpdate } from '../../shared/types'
@@ -27,6 +30,10 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
   const colors = useColors()
   const agentPanelDefaultOpen = usePreferencesStore((s) => s.agentPanelDefaultOpen)
   const agentDetailPopup = usePreferencesStore((s) => s.agentDetailPopup)
+  // Live push transcript, keyed by child conversationId. Folded from
+  // dispatch_activity deltas in the engine-event slice; reconciled with the
+  // file-backed snapshot below.
+  const dispatchActivity = useSessionStore((s) => s.dispatchActivity)
   const [agentExpanded, setAgentExpanded] = useState<Map<string, boolean>>(new Map())
   const [panelCollapsed, setPanelCollapsed] = useState(true)
   // Keyed by conversationId — each dispatch's conversation is loaded independently
@@ -63,21 +70,19 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
     prevVisibleCount.current = visible.length
   }, [visible.length, agentPanelDefaultOpen])
 
-  const loadSingleConversation = useCallback(async (convId: string) => {
-    if (!convId || convMessages.has(convId)) return
+  /** Force-refetch a conversation, bypassing the "already loaded" guard.
+   *  Used by the live poller so an open popup's running dispatch keeps
+   *  pulling newly persisted messages as the child agent works. The child
+   *  conversation file grows incrementally on disk (the engine saves after
+   *  every assistant turn and tool result), so each refetch returns a longer
+   *  transcript until the dispatch reaches a terminal state. */
+  const refetchConversation = useCallback(async (convId: string) => {
+    if (!convId) return
     setConvLoading(prev => { const next = new Map(prev); next.set(convId, true); return next })
     try {
       console.log(`[AgentPanel] fetching conversation: convId=${convId}`)
       const data = await window.ion.getConversation(convId, 0, 200)
-      const msgs: Message[] = (data.messages || []).map((m: any, i: number) => ({
-        id: `${convId.slice(0, 8)}-${i}`,
-        role: m.role,
-        content: m.content,
-        toolName: m.toolName || '',
-        toolInput: m.toolInput || '',
-        toolStatus: 'completed' as const,
-        timestamp: m.timestamp || 0,
-      }))
+      const msgs: Message[] = mapConversationMessages(data.messages || [])
       console.log(`[AgentPanel] loaded ${msgs.length} messages for convId=${convId}`)
       setConvMessages(prev => { const next = new Map(prev); next.set(convId, msgs); return next })
     } catch (err) {
@@ -85,7 +90,14 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
     } finally {
       setConvLoading(prev => { const next = new Map(prev); next.set(convId, false); return next })
     }
-  }, [convMessages])
+  }, [])
+
+  /** One-shot load: fetch the conversation only if it hasn't been loaded
+   *  yet. The live poller uses refetchConversation to force a refresh. */
+  const loadSingleConversation = useCallback(async (convId: string) => {
+    if (!convId || convMessages.has(convId)) return
+    return refetchConversation(convId)
+  }, [convMessages, refetchConversation])
 
   /** Load the conversation for the selected dispatch of an agent,
    *  then lazily preload the remaining dispatches in the background. */
@@ -138,6 +150,46 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
     if (popupAgent) loadAgentDispatch(popupAgent)
   }, [popupDispatchSig]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Slow reconcile for the open popup — the live transcript is carried in real
+  // time by the dispatch_activity push path (folded into the store, reconciled
+  // in resolveDispatchData). This timer is the CORRECTNESS BACKSTOP, not the
+  // streaming path: it re-fetches the file-backed snapshot on a slow cadence so
+  // any gap from a dropped delta or reconnect self-heals (the snapshot replaces
+  // the cached list and reconcileActivity re-applies surviving push entries).
+  // A final reconcile fires once when the dispatch reaches a terminal state so
+  // the popup shows the complete persisted transcript regardless of whether the
+  // last few deltas landed.
+  const popupDispatches = popupAgent ? getDispatches(popupAgent) : []
+  const popupSelIdx = popupAgent
+    ? (selectedDispatch.get(popupAgent.name) ?? popupDispatches.length - 1)
+    : -1
+  const popupSelDispatch = popupSelIdx >= 0 ? popupDispatches[popupSelIdx] : undefined
+  const popupSelConvId = popupSelDispatch?.conversationId || ''
+  // Treat the dispatch as running when its own status is running, or (when the
+  // structured entry has no status yet) when the agent itself is running.
+  const popupSelRunning = popupAgent
+    ? (popupSelDispatch?.status
+        ? popupSelDispatch.status === 'running'
+        : popupAgent.status === 'running')
+    : false
+  const RECONCILE_INTERVAL_MS = 12000
+  useEffect(() => {
+    if (!popupAgentName || !popupSelConvId || !popupSelRunning) return
+    const timer = setInterval(() => {
+      refetchConversation(popupSelConvId)
+    }, RECONCILE_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [popupAgentName, popupSelConvId, popupSelRunning, refetchConversation])
+  // One final reconcile when the running dispatch transitions to terminal, so
+  // the popup converges on the complete persisted transcript.
+  const prevPopupRunning = useRef(false)
+  useEffect(() => {
+    if (popupAgentName && popupSelConvId && prevPopupRunning.current && !popupSelRunning) {
+      refetchConversation(popupSelConvId)
+    }
+    prevPopupRunning.current = popupSelRunning
+  }, [popupAgentName, popupSelConvId, popupSelRunning, refetchConversation])
+
   /** Check if any conversation is currently loading for an agent. */
   const isAgentLoading = useCallback((agent: AgentStateUpdate): boolean => {
     const dispatches = getDispatches(agent)
@@ -151,11 +203,25 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
     const activeConvId = dispatches[dispIdx]?.conversationId || ''
     const rawMsgs = activeConvId ? convMessages.get(activeConvId) : undefined
     const activeDispatch = dispatches[dispIdx]
-    const sharesConvId = activeDispatch && dispatches.some(d => d.id !== activeDispatch.id && d.conversationId === activeConvId && activeConvId)
-    const slicedMsgs = rawMsgs && sharesConvId ? sliceMessagesForDispatch(rawMsgs, activeDispatch, dispatches) : rawMsgs
     const isLoading = activeConvId ? convLoading.get(activeConvId) || false : false
-    return { dispatches, dispIdx, slicedMsgs, isLoading }
-  }, [selectedDispatch, convMessages, convLoading])
+    // Reconcile the file-backed snapshot (rawMsgs) with the live push
+    // transcript (dispatchActivity). The snapshot is authoritative and heals
+    // any gap; push entries the snapshot does not yet cover (the live in-flight
+    // partial) are appended so the popup streams in real time. When no snapshot
+    // has loaded yet, the push entries alone drive the popup.
+    // Look up by dispatchAgentId (activeDispatch.id) so two dispatches that
+    // share a conversationId read from separate push buffers. convId-keying
+    // caused dispatch 1's entries to appear in dispatch 2's popup.
+    const pushMsgs = activeDispatch?.id ? dispatchActivity?.[activeDispatch.id] : undefined
+    let mergedMsgs = rawMsgs
+    if (pushMsgs && pushMsgs.length > 0) {
+      mergedMsgs = reconcileActivity(rawMsgs ?? [], {
+        order: pushMsgs.map((_, i) => `idx:${i}`),
+        entries: Object.fromEntries(pushMsgs.map((m, i) => [`idx:${i}`, { key: `idx:${i}`, seq: i, ts: m.timestamp ?? 0, message: m }])),
+      })
+    }
+    return { dispatches, dispIdx, slicedMsgs: mergedMsgs, isLoading }
+  }, [selectedDispatch, convMessages, convLoading, dispatchActivity])
 
   const toggleAgent = (name: string, agent: AgentStateUpdate) => {
     // Popup mode: open floating panel instead of inline expand

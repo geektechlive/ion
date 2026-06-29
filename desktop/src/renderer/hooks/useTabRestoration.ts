@@ -3,11 +3,12 @@ import type { Message, TabState } from '../../shared/types'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import { setSavedBuffer } from '../components/TerminalInstance'
-import { restoreEngineTab } from './useTabRestoration-engine'
+import { restoreConversationTab } from './useTabRestoration-engine'
 import { makeLocalTab } from '../stores/session-store-helpers'
 import { makeMainPane, commitInstance, activeInstance } from '../stores/conversation-instance'
 import { lastPendingCardTool } from '../../shared/pending-card'
-import { parseToolInput, isSkeletonTab, normalizeLegacyTabFields, readMainInstance } from './useTabRestoration-helpers'
+import { parseToolInput, isSkeletonTab, normalizeLegacyTabFields, readMainInstance, reassertRestoredPlanMode, orderSessionCandidates, startSessionsSequentially } from './useTabRestoration-helpers'
+import { tabHasExtensions, persistedTabHasExtensions } from '../../shared/tab-predicates'
 
 /**
  * Bootstrap effect run once at app start. Initializes static info, restores
@@ -34,12 +35,23 @@ export function useTabRestoration() {
         // conversation state from conversationPane uniformly.
         saved.tabs = normalizeLegacyTabFields(saved.tabs)
         useSessionStore.setState({ initProgress: `Restoring ${saved.tabs.length} tabs…` })
-        // Restore each saved tab
+        // Gate persistence during the restore loop. Each per-tab setState fires the
+        // persist subscriber, producing ~N partial saves before all tabs are loaded.
+        // These partial saves trip the GUARD (on-disk has N tabs, incoming has 1..N-1)
+        // and generate ~N "refusing save" rejections. Setting rehydrating=true makes
+        // the subscriber early-return for the entire restore window; it is cleared
+        // alongside tabsReady=true after the loop completes. The on-disk tab-count
+        // GUARD remains as the backstop for any other callers.
+        useSessionStore.setState({ rehydrating: true })
+        // Restore each saved tab.
+        // persistedTabHasExtensions: ROUTING (IPC path), not content-vs-skeleton.
+        // Content-vs-skeleton is data-driven in serializeConversationPane (WI-005).
+        // Legacy hasEngineExtension fallback is a one-time migration READ only.
         const restoredTabIds: Array<{ tabId: string; sessionId: string | null; index: number }> = []
         for (let i = 0; i < saved.tabs.length; i++) {
           useSessionStore.setState({ initProgress: `Restoring tab ${i + 1} of ${saved.tabs.length}…` })
           const st = saved.tabs[i]
-          if (st.conversationId && !st.hasEngineExtension) {
+          if (st.conversationId && !persistedTabHasExtensions(st)) {
             // Determine if this is the active tab (loads messages eagerly)
             const isActiveTab = (saved.activeTabIndex !== undefined && saved.activeTabIndex !== null && i === saved.activeTabIndex) ||
                                 (!!(saved.activeSessionId && st.conversationId === saved.activeSessionId))
@@ -66,17 +78,21 @@ export function useTabRestoration() {
               restoredTabIds.push({ tabId, sessionId: st.conversationId, index: i })
 
               // Patch extra per-tab settings that resumeSession doesn't handle.
-              // modelOverride / draftInput / permissionDenied / planFilePath
-              // moved off TabState onto the active `main` ConversationInstance,
-              // so they are layered onto the existing pane (seeded eagerly at
-              // tab creation / by resumeSession) via commitInstance in the same
-              // set, rather than written to the tab object.
+              // modelOverride / draftInput / permissionDenied / planFilePath /
+              // permissionMode moved off TabState onto the active `main`
+              // ConversationInstance, so they are layered onto the existing pane
+              // (seeded eagerly at tab creation / by resumeSession) via
+              // commitInstance in the same set, rather than written to the tab object.
               useSessionStore.setState((s) => {
                 const main = readMainInstance(st)
+                // permissionMode: prefer instance-persisted value; fall back to
+                // legacy tab-level field for tabs saved before WI-002.
+                const restoredMode: 'auto' | 'plan' = main?.permissionMode ?? (st as any).permissionMode ?? 'auto'
                 const conversationPanes = commitInstance(s.conversationPanes, tabId, (inst) => ({
                   ...inst,
                   modelOverride: main?.modelOverride || null,
                   draftInput: main?.draftInput ?? '',
+                  permissionMode: restoredMode,
                   // Persisted permissionDenied is authoritative over resumeSession reconstruction
                   ...(main?.permissionDenied ? { permissionDenied: main.permissionDenied } : {}),
                   ...(main?.planFilePath ? { planFilePath: main.planFilePath } : {}),
@@ -90,7 +106,6 @@ export function useTabRestoration() {
                           customTitle: st.customTitle || null,
                           hasChosenDirectory: st.hasChosenDirectory,
                           additionalDirs: st.additionalDirs,
-                          permissionMode: st.permissionMode,
                           bashResults: st.bashResults || [],
                           pillColor: st.pillColor || null,
                           pillIcon: st.pillIcon || null,
@@ -113,7 +128,7 @@ export function useTabRestoration() {
                   ),
                 }
               })
-              window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
+              reassertRestoredPlanMode(tabId, readMainInstance(st), (st as any).permissionMode)
               if (st.draftInput) console.log(`[restore] draft for tab ${tabId.slice(0, 8)} len=${st.draftInput.length}`)
             } else {
               // Non-active tab: create skeleton tab whose `main` instance has
@@ -138,7 +153,6 @@ export function useTabRestoration() {
                 workingDirectory: st.workingDirectory,
                 hasChosenDirectory: st.hasChosenDirectory,
                 additionalDirs: st.additionalDirs,
-                permissionMode: st.permissionMode,
                 bashResults: st.bashResults || [],
                 pillColor: st.pillColor || null,
                 pillIcon: st.pillIcon || null,
@@ -164,6 +178,8 @@ export function useTabRestoration() {
               // moved off TabState onto the instance — restored here via the
               // makeMainPane overrides and written into conversationPanes in the same set.
               const main = readMainInstance(st)
+              // permissionMode: prefer instance-persisted; fall back to legacy tab-level field.
+              const skeletonMode: 'auto' | 'plan' = main?.permissionMode ?? (st as any).permissionMode ?? 'auto'
               const pane = makeMainPane({
                 messages: [],
                 messageCount: main?.messageCount ?? 0,
@@ -171,6 +187,7 @@ export function useTabRestoration() {
                 draftInput: main?.draftInput ?? '',
                 permissionDenied: main?.permissionDenied ?? null,
                 planFilePath: main?.planFilePath ?? null,
+                permissionMode: skeletonMode,
               })
 
               useSessionStore.setState((s) => {
@@ -178,11 +195,11 @@ export function useTabRestoration() {
                 conversationPanes.set(tabId, pane)
                 return { tabs: [...s.tabs, tab], conversationPanes }
               })
-              window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
+              reassertRestoredPlanMode(tabId, main, (st as any).permissionMode)
               if (main?.draftInput) console.log(`[restore] skeleton tab ${tabId.slice(0, 8)} draft len=${main.draftInput.length}`)
             }
-          } else if (st.hasEngineExtension) {
-            restoreEngineTab(st, restoredTabIds, i)
+          } else if (persistedTabHasExtensions(st)) {
+            await restoreConversationTab(st, restoredTabIds, i)
           } else if (st.isTerminalOnly) {
             // Terminal-only tab
             const tabId = await useSessionStore.getState().createTerminalTab()
@@ -238,9 +255,11 @@ export function useTabRestoration() {
             // the pane with those overrides (empty scrollback) and write it
             // into conversationPanes in the same set as the tab-level patch.
             const sessionlessMain = readMainInstance(st)
+            const sessionlessMode: 'auto' | 'plan' = sessionlessMain?.permissionMode ?? (st as any).permissionMode ?? 'auto'
             const sessionlessPane = makeMainPane({
               modelOverride: sessionlessMain?.modelOverride || null,
               draftInput: sessionlessMain?.draftInput ?? '',
+              permissionMode: sessionlessMode,
             })
 
             useSessionStore.setState((s) => {
@@ -255,7 +274,6 @@ export function useTabRestoration() {
                         customTitle: st.customTitle || null,
                         hasChosenDirectory: st.hasChosenDirectory,
                         additionalDirs: st.additionalDirs,
-                        permissionMode: st.permissionMode,
                         pillColor: st.pillColor || null,
                         pillIcon: st.pillIcon || null,
                         forkedFromSessionId: st.forkedFromSessionId || null,
@@ -273,41 +291,47 @@ export function useTabRestoration() {
                 ),
               }
             })
-            window.ion.setPermissionMode(tabId, st.permissionMode, 'tab_restore')
+            reassertRestoredPlanMode(tabId, sessionlessMain, (st as any).permissionMode)
             if (sessionlessMain?.draftInput) console.log(`[restore] draft for sessionless tab ${tabId.slice(0, 8)} len=${sessionlessMain.draftInput.length}`)
           }
         }
 
         // Eager durable session start for restored NORMAL (non-engine) tabs
-        // that have a conversationId. This mirrors what engine tabs already do
-        // in useTabRestoration-engine.ts: the session is started on reopen with
-        // the persisted conversationId injected, so the conversation resumes
-        // under a stable key and is immediately clearable — instead of being a
-        // sessionless shell until the first prompt (the gap behind the reported
-        // /clear "session not found" drift). Fire-and-forget with logging; the
-        // main-process ensureSession is idempotent.
-        for (const { tabId, index } of restoredTabIds) {
+        // that have a conversationId. Staggered: the active tab starts first
+        // (what the user sees), then remaining tabs start sequentially so the
+        // shared engine daemon's dispatch goroutine isn't overwhelmed by a
+        // simultaneous burst. Ordering + sequential start are pure/structural
+        // helpers so the no-burst contract is unit-pinned (see
+        // useTabRestoration-helpers.ts).
+        const sessionCandidates = restoredTabIds.filter(({ index }) => {
           const st = saved.tabs[index]
-          if (!st || st.hasEngineExtension || st.isTerminalOnly) continue
-          if (!st.conversationId) continue
-          window.ion
-            .ensureEngineSession({
+          return st && !persistedTabHasExtensions(st) && !st.isTerminalOnly && st.conversationId
+        })
+        const activeIdx = saved.activeTabIndex ?? -1
+        const activeFirst = orderSessionCandidates(sessionCandidates, activeIdx)
+        await startSessionsSequentially(activeFirst, async ({ tabId, index }) => {
+          const st = saved.tabs[index]
+          // Read permission mode from the restored conversation instance (the
+          // authoritative location post-WI-002). Fall back to the legacy
+          // tab-level field for tabs persisted before WI-002.
+          const restoredMain = readMainInstance(st)
+          const sessionPermMode: 'auto' | 'plan' = restoredMain?.permissionMode ?? (st as any).permissionMode ?? 'auto'
+          try {
+            const res = await window.ion.ensureEngineSession({
               tabId,
               workingDirectory: st.workingDirectory,
-              conversationId: st.conversationId,
-              permissionMode: st.permissionMode,
+              conversationId: st.conversationId!,
+              permissionMode: sessionPermMode,
             })
-            .then((res) => {
-              if (res?.ok) {
-                console.log(`[restore] eager session started for ${tabId.slice(0, 8)} conversationId=${st.conversationId?.slice(0, 24)}`)
-              } else {
-                console.warn(`[restore] eager session start failed for ${tabId.slice(0, 8)}: ${res?.error ?? 'unknown'}`)
-              }
-            })
-            .catch((err: { message?: string }) => {
-              console.warn(`[restore] eager session start threw for ${tabId.slice(0, 8)}: ${err?.message ?? String(err)}`)
-            })
-        }
+            if (res?.ok) {
+              console.log(`[restore] eager session started for ${tabId.slice(0, 8)} conversationId=${st.conversationId?.slice(0, 24)}`)
+            } else {
+              console.warn(`[restore] eager session start failed for ${tabId.slice(0, 8)}: ${res?.error ?? 'unknown'}`)
+            }
+          } catch (err: any) {
+            console.warn(`[restore] eager session start threw for ${tabId.slice(0, 8)}: ${err?.message ?? String(err)}`)
+          }
+        })
 
         useSessionStore.setState({ initProgress: 'Loading history…' })
         // Load historical session messages for tabs that have them
@@ -535,7 +559,7 @@ export function useTabRestoration() {
         const restoredExpanded = typeof saved.isExpanded === 'boolean'
           ? saved.isExpanded
           : usePreferencesStore.getState().expandOnTabSwitch
-        useSessionStore.setState({ isExpanded: restoredExpanded, tabsReady: true, initProgress: null })
+        useSessionStore.setState({ isExpanded: restoredExpanded, tabsReady: true, rehydrating: false, initProgress: null })
         return
       }
 
@@ -557,6 +581,7 @@ export function useTabRestoration() {
                 tabs: s.tabs.map((t, idx) => (idx === 0 ? { ...t, id: tabId } : t)),
                 activeTabId: tabId,
                 tabsReady: true,
+                rehydrating: false,
                 initProgress: null,
               }))
               return
@@ -565,7 +590,7 @@ export function useTabRestoration() {
             }
           }
           // All retries failed — still set tabsReady so UI isn't stuck forever
-          useSessionStore.setState({ tabsReady: true, initProgress: null })
+          useSessionStore.setState({ tabsReady: true, rehydrating: false, initProgress: null })
         }
         registerInitialTab()
       }

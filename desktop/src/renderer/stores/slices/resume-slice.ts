@@ -1,8 +1,8 @@
 import type { TabState, Message } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
-import { makeLocalTab, nextMsgId } from '../session-store-helpers'
-import { makeMainPane, commitInstance, activeInstance } from '../conversation-instance'
+import { makeLocalTab, nextMsgId, initialPermissionMode } from '../session-store-helpers'
+import { makeMainPane, commitInstance, activeInstance, effectivePermissionMode } from '../conversation-instance'
 import { lastPendingCardTool, type PendingCardMessage } from '../../../shared/pending-card'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
@@ -62,10 +62,11 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           workingDirectory: source.workingDirectory,
           hasChosenDirectory: source.hasChosenDirectory,
           additionalDirs: [...source.additionalDirs],
-          permissionMode: source.permissionMode,
           pillColor: source.pillColor,
           pillIcon: source.pillIcon,
         }
+        // Carry the source instance's permission mode onto the new pane instance.
+        const forkMode = effectivePermissionMode(source, get().conversationPanes)
         // Seed the forked tab's `main` pane with the carried-over scrollback +
         // restored denial. modelOverride carries from the source instance.
         console.log(`[store] forkTab: source=${sourceTabId.slice(0, 8)} new=${tab.id.slice(0, 8)}:main msgs=${messages.length} restoredDenied=${restoredDenied ? 'yes' : 'no'}`)
@@ -76,11 +77,12 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
             messageCount: messages.length,
             modelOverride: sourceInst.modelOverride,
             permissionDenied: restoredDenied,
+            permissionMode: forkMode,
           })),
           activeTabId: tab.id,
           isExpanded: true,
         }))
-        window.ion.setPermissionMode(tabId, tab.permissionMode, 'tab_create')
+        window.ion.setPermissionMode(tabId, forkMode, 'tab_create')
         return tabId
       } catch {
         return null
@@ -116,6 +118,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           ...i,
           messages: rewoundMessages,
           permissionQueue: [],
+          elicitationQueue: [],
           permissionDenied: restoredDenied,
           draftInput: targetMessage.content,
         }))
@@ -174,13 +177,14 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           workingDirectory: source.workingDirectory,
           hasChosenDirectory: source.hasChosenDirectory,
           additionalDirs: [...source.additionalDirs],
-          permissionMode: source.permissionMode,
           pillColor: source.pillColor,
           pillIcon: source.pillIcon,
           // pendingInput stays on the tab (one-shot InputBar pre-fill); draftInput
           // is seeded onto the instance below.
           pendingInput: targetMessage.content,
         }
+        // Carry the source instance's permission mode onto the new pane instance.
+        const forkMode = effectivePermissionMode(source, get().conversationPanes)
         console.log(`[store] forkFromMessage: source=${tabId.slice(0, 8)} new=${tab.id.slice(0, 8)}:main msgs=${messages.length} restoredDenied=${restoredDenied ? 'yes' : 'no'}`)
         set((s) => ({
           tabs: [...s.tabs, tab],
@@ -190,11 +194,12 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
             modelOverride: sourceInst.modelOverride,
             permissionDenied: restoredDenied,
             draftInput: targetMessage.content,
+            permissionMode: forkMode,
           })),
           activeTabId: tab.id,
           isExpanded: true,
         }))
-        window.ion.setPermissionMode(newTabId, tab.permissionMode, 'tab_create')
+        window.ion.setPermissionMode(newTabId, forkMode, 'tab_create')
         return newTabId
       } catch {
         return null

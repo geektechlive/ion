@@ -40,6 +40,25 @@ export function getRendererExtensionCommands(key: string): Array<{ name: string;
   return extensionCommandsByKey.get(key) ?? []
 }
 
+/**
+ * Per-dispatch live-transcript fold state, keyed by dispatchAgentId (NOT
+ * conversationId). Holds the in-flight push entries (deduped by toolId / seq)
+ * so each incoming `dispatch_activity` delta folds onto the prior state. The
+ * materialized Message[] is mirrored into the store (`dispatchActivity`) for
+ * the popup to read; this map is the authoritative fold accumulator.
+ *
+ * Why dispatchAgentId, not conversationId: when an agent is re-dispatched the
+ * engine reuses the same child conversationId but issues a new dispatchAgentId
+ * and resets seq to 0. Keying by convId causes the two dispatches' push buffers
+ * to collide — entries from dispatch 1 survive into dispatch 2's fold state.
+ * dispatchAgentId is unique per dispatch invocation and is already present on
+ * every wire event, so it is the correct routing key.
+ */
+export const dispatchActivityFoldByDispatchId = new Map<
+  string,
+  import('../../components/agent-dispatch-activity').DispatchActivityState
+>()
+
 // ─── Instance-write helpers ───────────────────────────────────────────────────
 //
 // Each helper returns a new conversationPanes Map with the specified ConversationInstance

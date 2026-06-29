@@ -6,8 +6,10 @@ import type { useColors } from '../theme'
 import type { TabState } from '../../shared/types'
 import type { ConversationPane } from '../../shared/types-engine'
 import { activeInstance } from '../stores/conversation-instance'
+import { tabHasExtensions } from '../../shared/tab-predicates'
 import { computeAnchoredPosition } from './tabstrip-anchored-position'
 export { computeAnchoredPosition } from './tabstrip-anchored-position'
+export { tabHasExtensions } from '../../shared/tab-predicates'
 export type { AnchoredPositionInput } from './tabstrip-anchored-position'
 
 /** Pill background-color presets shown in the color picker. `null` means "use theme default". */
@@ -312,7 +314,7 @@ function waitingStateFromTools(
  *
  * - Normal (single-instance) tabs: read from the active `main` instance
  *   via `activeInstance(conversationPanes, tab.id)`.
- * - Engine tabs (`tab.hasEngineExtension === true`): fold across every engine
+ * - Engine tabs (`tabHasExtensions(tab) === true`): fold across every engine
  *   instance under this tab in `conversationPanes`, returning the
  *   worst-priority waiting state ('question' > 'plan-ready' > null).
  *
@@ -329,30 +331,19 @@ export function getWaitingState(
   tab: TabState,
   conversationPanes: Map<string, ConversationPane> = useSessionStore.getState().conversationPanes,
 ): WaitingState {
-  if (tab.hasEngineExtension) {
-    const pane = conversationPanes.get(tab.id)
-    if (!pane || pane.instances.length === 0) return null
-    let hasPlanReady = false
-    for (const inst of pane.instances) {
-      const ws = waitingStateFromTools(inst.permissionDenied?.tools)
-      if (ws === 'question') return 'question'
-      if (ws === 'plan-ready') hasPlanReady = true
-    }
-    return hasPlanReady ? 'plan-ready' : null
+  // DATA-driven (not tab-type): fold the waiting state across ALL of the tab's
+  // instances. A plain conversation has a single `main` instance, so the fold
+  // collapses to reading that one instance's permissionDenied; an
+  // extension-backed tab folds across its instances. One path for both.
+  const pane = conversationPanes.get(tab.id)
+  if (!pane || pane.instances.length === 0) return null
+  let hasPlanReady = false
+  for (const inst of pane.instances) {
+    const ws = waitingStateFromTools(inst.permissionDenied?.tools)
+    if (ws === 'question') return 'question'
+    if (ws === 'plan-ready') hasPlanReady = true
   }
-  // Normal tab: the single `main` instance holds permissionDenied now.
-  const inst = activeInstance(conversationPanes, tab.id)
-  return waitingStateFromTools(inst?.permissionDenied?.tools)
-}
-
-/** Same tristate logic as `getWaitingState`, but for a single engine
- *  instance identified by its compound `${tabId}:${instanceId}` key.
- *  Used by the engine sub-tab pill renderer to draw a per-instance
- *  status dot. */
-export function getEngineInstanceWaitingState(tabId: string, instanceId: string): WaitingState {
-  const pane = useSessionStore.getState().conversationPanes.get(tabId)
-  const inst = pane?.instances.find((i) => i.id === instanceId)
-  return waitingStateFromTools(inst?.permissionDenied?.tools)
+  return hasPlanReady ? 'plan-ready' : null
 }
 
 /**
@@ -403,6 +394,45 @@ export function anyEngineInstanceHasRunningChildren(tabId: string): boolean {
   return false
 }
 
+// ─── Harness badge helpers ─────────────────────────────────────────────────
+//
+// The harness badge is a small rectangular text chip shown on every tab pill
+// that has extensions loaded. It shows an abbreviated profile name so the
+// user can see at a glance which harness is running — useful when multiple
+// engine-tab profiles are open side by side.
+//
+// Phase gate: visibility is intentionally behind `tabHasExtensions` (imported
+// from shared/tab-predicates.ts, the single source of truth for extension
+// presence). The predicate derives from `tab.engineProfileId`, replacing the
+// old stored `hasEngineExtension` boolean.
+// Re-exported at the top of this file so existing importers keep working.
+
+/**
+ * Abbreviate a profile name to at most 8 characters for the harness badge.
+ *
+ * Rules (applied in order):
+ *  1. Falsy name → 'EXT'
+ *  2. Strip leading/trailing whitespace.
+ *  3. If the stripped name is ≤ 8 chars → return it as-is (e.g. 'COS', 'Orion', 'ion-dev').
+ *  4. Split into words, take the first letter of each word, uppercase it,
+ *     join, cap at 8 chars (e.g. 'Ion Dev' → 'ID', 'My Long Name X' → 'MLN').
+ *  5. Fallback: first 8 chars uppercased.
+ */
+export function abbreviateProfileName(name: string | null | undefined): string {
+  if (!name) return 'EXT'
+  const trimmed = name.trim()
+  if (!trimmed) return 'EXT'
+  if (trimmed.length <= 8) return trimmed
+  // Initials from whitespace-separated words
+  const words = trimmed.split(/\s+/)
+  if (words.length > 1) {
+    const initials = words.map((w) => w[0].toUpperCase()).join('')
+    return initials.slice(0, 8)
+  }
+  // Single long word: first 8 chars uppercased
+  return trimmed.slice(0, 8).toUpperCase()
+}
+
 /** Status-dot color/pulse/glow derived from a tab's runtime state. Used by both single dots and stacked group dots. */
 export function getTabStatusColor(
   tab: TabState,
@@ -434,13 +464,15 @@ export function getTabStatusColor(
     bg = colors.statusComplete; glow = true; glowColor = colors.tabGlowPlanReady
   } else if (waitingState === 'question') {
     bg = colors.infoText; glow = true; glowColor = colors.tabGlowQuestion
-  } else if (tab.status === 'connecting' || tab.status === 'running' || (tab.hasEngineExtension && isAnyEngineInstanceRunning(tab.id))) {
+  } else if (tab.status === 'connecting' || tab.status === 'running' || isAnyEngineInstanceRunning(tab.id)) {
     // Orange "foreground running" wins over yellow "background only" —
     // the orchestrator's own activity is the strongest signal. Yellow
     // "awaiting children" fires below for the case where orchestrator
-    // is idle but dispatched agents are still executing.
+    // is idle but dispatched agents are still executing. Data-driven: the
+    // instance fold runs for every tab (a plain conversation with background
+    // agents qualifies too), so no tab-type guard.
     bg = colors.statusRunning; pulse = true
-  } else if (tab.hasEngineExtension && anyEngineInstanceHasRunningChildren(tab.id)) {
+  } else if (anyEngineInstanceHasRunningChildren(tab.id)) {
     // Yellow "awaiting children" — orchestrator idle, dispatched
     // background agents still running. Visually distinct from the
     // orange running state so users can tell at a glance whether
@@ -454,4 +486,36 @@ export function getTabStatusColor(
   }
 
   return { bg, pulse, glow, glowColor }
+}
+
+/** Model-fallback fact stored per engine instance. */
+export interface TabModelFallback {
+  requestedModel: string
+  fallbackModel: string
+  reason: string
+  at: number
+}
+
+/**
+ * Resolve the model-fallback fact for a tab's active engine instance, if any.
+ *
+ * The engine emits `engine_model_fallback` when a requested model is
+ * unavailable and it runs with the configured default instead. The fact is
+ * stored in `engineModelFallbacks` keyed by bare tabId (one fallback slot
+ * per tab — the active instance at event time owns it). This pure resolver
+ * maps a tab to its fallback so the tab pill (TabStripTabPill) and any test
+ * can derive the desktop ⚠ indicator from the same logic, avoiding a
+ * reimplemented derivation in the component vs. its test.
+ *
+ * Returns `null` when the tab has no pane, no active instance, or no
+ * fallback recorded for that tab.
+ */
+export function resolveTabModelFallback(
+  conversationPanes: Map<string, ConversationPane>,
+  engineModelFallbacks: Map<string, TabModelFallback>,
+  tabId: string,
+): TabModelFallback | null {
+  const inst = activeInstance(conversationPanes, tabId)
+  if (!inst) return null
+  return engineModelFallbacks.get(tabId) ?? null
 }

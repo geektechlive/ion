@@ -42,8 +42,8 @@ export function ResourceViewer({ title, content, onClose }: ResourceViewerProps)
     <FloatingPanel title={title} onClose={onClose} defaultWidth={720} defaultHeight={420}>
       <div style={{ overflowY: 'auto', overflowX: 'auto', flex: 1, padding: '12px 16px' }}>
         <div
-          className="text-[13px] leading-[1.6] prose-cloud min-w-0 overflow-hidden"
-          style={{ color: colors.textSecondary, maxWidth: '100%' }}
+          className="leading-[1.6] prose-cloud min-w-0 overflow-hidden"
+          style={{ color: colors.textSecondary, maxWidth: '100%', fontSize: 'var(--ion-conv-font-size, 13px)' }}
         >
           <Markdown remarkPlugins={REMARK_PLUGINS} components={markdownComponents}>
             {content}

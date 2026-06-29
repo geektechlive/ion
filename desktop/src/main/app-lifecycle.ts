@@ -186,7 +186,7 @@ export function setupAppLifecycle(): void {
       state.forceQuit = true
       terminalManager.destroyAll()
       // Bootout the daemon so launchd does not restart it after we exit.
-      await engineBridge.shutdownAndWait().catch(() => {})
+      await engineBridge.shutdownAndWait().catch((e) => { log(`engine daemon bootout failed on quit (non-fatal): ${e instanceof Error ? e.message : String(e)}`) })
       sessionPlane.shutdown()
       globalShortcut.unregisterAll()
       if (state.tray) { state.tray.destroy(); state.tray = null }
@@ -202,7 +202,7 @@ export function setupAppLifecycle(): void {
       state.forceQuit = true
       terminalManager.destroyAll()
       // Bootout the daemon so launchd does not restart it after we exit.
-      await engineBridge.shutdownAndWait().catch(() => {})
+      await engineBridge.shutdownAndWait().catch((e) => { log(`engine daemon bootout failed on quit (non-fatal): ${e instanceof Error ? e.message : String(e)}`) })
       sessionPlane.shutdown()
       globalShortcut.unregisterAll()
       if (state.tray) { state.tray.destroy(); state.tray = null }

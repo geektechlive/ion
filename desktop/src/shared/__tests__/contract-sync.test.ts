@@ -100,6 +100,17 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   thinking_block_start: [],
   thinking_delta: ['text'],
   thinking_block_end: ['elapsedSeconds', 'redacted', 'totalTokens'],
+  // Extension-surface events (WI-001: single-path collapse)
+  message_end: ['contextPercent', 'cost', 'inputTokens', 'outputTokens'],
+  agent_state: ['agents'],
+  harness_message: ['dedupKey', 'message', 'source'],
+  working_message: ['message'],
+  notify: ['level', 'message'],
+  dialog: ['defaultValue', 'dialogId', 'method', 'options', 'title'],
+  extension_died: ['extensionName'],
+  extension_respawned: ['attemptNumber', 'extensionName'],
+  extension_dead_permanent: ['attemptNumber', 'extensionName'],
+  events_dropped: ['count'],
 }
 
 // ─── TS SharedTypes field map ───
@@ -141,6 +152,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'forceNewConversation',
     'maxTokens',
     'model',
+    'parentConversationId',
     'profileId',
     'sessionId',
     'systemHint',

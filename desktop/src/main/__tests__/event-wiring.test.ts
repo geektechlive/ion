@@ -47,11 +47,10 @@ vi.mock('../state', () => ({
     sendReconcileState: vi.fn(),
   },
   activeAssistantMessages: new Map(),
-  activeToolInputs: new Map(),
   lastMessagePreview: new Map(),
   extensionCommandRegistry: new Map(),
   forwardedEnginePermissionDenials: mockPermDenialSet,
-  lastForwardedEngineTabStatus: mockLastStatusMap,
+  lastForwardedTabStatus: mockLastStatusMap,
 }))
 
 vi.mock('../broadcast', () => ({ broadcast: vi.fn() }))

@@ -1,10 +1,13 @@
 import React, { useCallback } from 'react'
-import { X, GitBranch, GitFork, FolderSimple, PushPin } from '@phosphor-icons/react'
+import { X, GitBranch, GitFork, FolderSimple, PushPin, Warning } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { useSessionStore } from '../stores/sessionStore'
 import type { TabState } from '../../shared/types'
-import { getWaitingState, isAnyEngineInstanceRunning, anyEngineInstanceHasRunningChildren, formatRelativeShort } from './TabStripShared'
+import {
+  getWaitingState, isAnyEngineInstanceRunning, anyEngineInstanceHasRunningChildren,
+  formatRelativeShort, abbreviateProfileName, resolveTabModelFallback,
+} from './TabStripShared'
 import { activeInstance } from '../stores/conversation-instance'
 import { StatusDot } from './TabStripStatusDot'
 import { InlineRenameInput } from './TabStripInlineRenameInput'
@@ -57,6 +60,18 @@ export function TabPill({
   const colors = useColors()
   const gitOpsMode = usePreferencesStore((s) => s.gitOpsMode)
   const tabGroupMode = usePreferencesStore((s) => s.tabGroupMode)
+  // Resolve the profile name for the harness badge. DATA-driven: the badge
+  // renders iff the tab carries an engineProfileId (a resolvable harness name),
+  // not because of a tab-type branch. A plain conversation carries no profile
+  // id, so it has no harness name and shows no badge — purely by absence of
+  // data. Subscribe narrowly so the pill only re-renders when engine profiles
+  // change. Falls back to 'EXT' if the profile id has no matching entry
+  // (deleted profile, pre-Phase-2 tab).
+  const harnessBadgeLabel = usePreferencesStore((s) => {
+    if (!tab.engineProfileId) return null
+    const profile = s.engineProfiles.find((p) => p.id === tab.engineProfileId)
+    return abbreviateProfileName(profile?.name)
+  })
 
   // Subscribe to conversationPanes so this component re-renders when any engine
   // instance's statusFields or agentStates changes. Both fields now live
@@ -67,6 +82,18 @@ export function TabPill({
   // subscribe unconditionally rather than only for engine tabs.
   const conversationPanes = useSessionStore((s) => s.conversationPanes)
 
+  // Model-fallback warning for this tab's active instance. The engine emits
+  // engine_model_fallback when a requested model is unavailable and it runs
+  // with the configured default instead; the desktop's policy is to surface
+  // a small ⚠ on the affected tab pill (the iOS counterpart renders the same
+  // glyph on its EngineInstanceBar — see AGENTS.md parity table). Derived via
+  // the shared resolveTabModelFallback so the component and its test share one
+  // derivation. Subscribe narrowly so the pill only re-renders when this tab's
+  // fallback state changes. Cleared on the next idle transition.
+  const modelFallback = useSessionStore((s) =>
+    resolveTabModelFallback(s.conversationPanes, s.engineModelFallbacks, tab.id),
+  )
+
   const isRunning = tab.status === 'running' || tab.status === 'connecting'
   const displayTitle = tab.customTitle || tab.title
 
@@ -75,14 +102,15 @@ export function TabPill({
   const inst = activeInstance(conversationPanes, tab.id)
   const hasPermission = (inst?.permissionQueue.length ?? 0) > 0
 
-  // For engine tabs, check if any sub-tab instance is running so the
-  // main tab pill pulses even when the active instance is idle.
-  const anyInstanceRunning = tab.hasEngineExtension && isAnyEngineInstanceRunning(tab.id)
-  // Parallel "any sub-instance has running dispatched background
-  // children" derivation — drives the yellow "awaiting children" dot
-  // and the hard-block on the X close button. Foreground orange wins
-  // over background yellow in the StatusDot priority cascade.
-  const anyInstanceHasRunningChildren = tab.hasEngineExtension && anyEngineInstanceHasRunningChildren(tab.id)
+  // DATA-driven (not tab-type): does ANY instance of this tab have a running
+  // run / running dispatched children? A plain conversation has one instance
+  // and can dispatch background agents too, so we fold across instances for
+  // every tab. The helpers read the tab's pane regardless of tab type.
+  const anyInstanceRunning = isAnyEngineInstanceRunning(tab.id)
+  // Parallel "any instance has running dispatched background children" —
+  // drives the yellow "awaiting children" dot and the hard-block on the X
+  // close button. Foreground orange wins over background yellow.
+  const anyInstanceHasRunningChildren = anyEngineInstanceHasRunningChildren(tab.id)
   const effectiveStatus = (anyInstanceRunning && !isRunning) ? 'running' as const : tab.status
   // Combined "must not close" predicate. Hard-blocks the X close
   // button below. Mirrors the action-layer guard in tab-slice.ts
@@ -156,13 +184,51 @@ export function TabPill({
       >
         <StatusDot status={effectiveStatus} hasUnread={tab.hasUnread} hasPermission={hasPermission} bashExecuting={tab.bashExecuting} waitingState={waitingState} pillIcon={tab.pillIcon} hasRunningChildren={anyInstanceHasRunningChildren} />
       </span>
+      {harnessBadgeLabel !== null && (
+        // Harness badge: abbreviated profile name in an accent-tinted chip.
+        // Shown iff harnessBadgeLabel is non-null, i.e. the tab carries an
+        // engineProfileId (data). A plain conversation has none and shows no
+        // badge — by absence of data, not a tab-type branch.
+        // Style spec: 4px border-radius, accent bg/border/text at 25/40/100%
+        // opacity, 9px/600 weight, flex-shrink-0 so it never collapses.
+        <span
+          className="flex-shrink-0"
+          style={{
+            fontSize: 9,
+            fontWeight: 600,
+            color: colors.accent,
+            background: `${colors.accent}25`,
+            border: `1px solid ${colors.accent}40`,
+            borderRadius: 4,
+            padding: '1px 3px',
+            lineHeight: 1.4,
+            letterSpacing: '0.02em',
+          }}
+        >
+          {harnessBadgeLabel}
+        </span>
+      )}
+      {modelFallback && (
+        // Model-fallback ⚠: the requested model was unavailable and the tab
+        // is running with the configured default. Mirrors the iOS
+        // EngineInstanceBar indicator (AGENTS.md parity table). The title
+        // attribute carries the requested-vs-fallback detail on hover.
+        <span
+          className="flex-shrink-0 inline-flex"
+          data-testid={`model-fallback-warning-${tab.id}`}
+          title={`Requested model "${modelFallback.requestedModel}" not configured; running with default "${modelFallback.fallbackModel}"`}
+          style={{ color: colors.accent }}
+        >
+          <Warning size={11} weight="fill" />
+        </span>
+      )}
       {tab.groupPinned && tabGroupMode === 'manual' && (
         <PushPin size={10} color={colors.textTertiary} className="flex-shrink-0" style={{ opacity: 0.7 }} />
       )}
       {tab.forkedFromSessionId && !tab.worktree ? (
         <GitFork size={11} color={colors.textTertiary} className="flex-shrink-0" />
       ) : tab.worktree ? (
-        <GitBranch size={11} color="#4ade80" style={{ opacity: 0.7 }} className="flex-shrink-0" />
+        <GitBranch size={11} color={colors.worktreeGreen} style={{ opacity: 0.7 }} className="flex-shrink-0" />
       ) : gitOpsMode === 'worktree' ? (
         <FolderSimple size={11} color={colors.textTertiary} className="flex-shrink-0" />
       ) : null}
@@ -172,7 +238,7 @@ export function TabPill({
           style={{
             fontSize: 10,
             fontWeight: 500,
-            color: tab.worktree ? '#4ade80' : colors.textSecondary,
+            color: tab.worktree ? colors.worktreeGreen : colors.textSecondary,
             opacity: tab.worktree ? 0.6 : 0.5,
             cursor: 'default',
           }}

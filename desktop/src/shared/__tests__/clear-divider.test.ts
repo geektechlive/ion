@@ -18,6 +18,8 @@ import {
   formatSessionStartDivider,
   formatPlanCreatedDivider,
   isPlanCreatedDivider,
+  formatPlanUpdatedDivider,
+  isPlanUpdatedDivider,
   formatSteerAppliedDivider,
   isSteerAppliedDivider,
   buildClearDividerRemoteEvent,
@@ -158,6 +160,45 @@ describe('isPlanCreatedDivider', () => {
     expect(isPlanCreatedDivider(formatSessionStartDivider(new Date()))).toBe(false)
     expect(isPlanCreatedDivider('Error: something')).toBe(false)
     expect(isPlanCreatedDivider('')).toBe(false)
+  })
+
+  it('does NOT match a plan-updated divider (created ≠ updated)', () => {
+    expect(isPlanCreatedDivider(formatPlanUpdatedDivider(new Date(), 'slug'))).toBe(false)
+  })
+})
+
+describe('formatPlanUpdatedDivider', () => {
+  it('emits the `── Plan updated at <time> ──` shape without slug', () => {
+    const out = formatPlanUpdatedDivider(new Date('2024-01-01T15:42:00'))
+    expect(out.startsWith('── Plan updated at ')).toBe(true)
+    expect(out.endsWith(' ──')).toBe(true)
+    expect(out.includes(' · ')).toBe(false)
+  })
+
+  it('includes the slug when provided', () => {
+    const out = formatPlanUpdatedDivider(new Date('2024-01-01T15:42:00'), 'frosty-twirling-finch')
+    expect(out.startsWith('── Plan updated at ')).toBe(true)
+    expect(out.includes(' · frosty-twirling-finch')).toBe(true)
+    expect(out.endsWith(' ──')).toBe(true)
+  })
+
+  it('is detected by isPlanUpdatedDivider', () => {
+    expect(isPlanUpdatedDivider(formatPlanUpdatedDivider(new Date()))).toBe(true)
+    expect(isPlanUpdatedDivider(formatPlanUpdatedDivider(new Date(), 'slug'))).toBe(true)
+  })
+})
+
+describe('isPlanUpdatedDivider', () => {
+  it('rejects unrelated dividers and system messages', () => {
+    expect(isPlanUpdatedDivider(formatClearDivider(new Date()))).toBe(false)
+    expect(isPlanUpdatedDivider(formatImplementDivider(new Date()))).toBe(false)
+    expect(isPlanUpdatedDivider(formatSessionStartDivider(new Date()))).toBe(false)
+    expect(isPlanUpdatedDivider('Error: something')).toBe(false)
+    expect(isPlanUpdatedDivider('')).toBe(false)
+  })
+
+  it('does NOT match a plan-created divider (updated ≠ created)', () => {
+    expect(isPlanUpdatedDivider(formatPlanCreatedDivider(new Date(), 'slug'))).toBe(false)
   })
 })
 

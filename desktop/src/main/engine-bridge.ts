@@ -383,7 +383,7 @@ export class EngineBridge extends EventEmitter {
 
   // ─── Public API ───
 
-  async startSession(key: string, config: EngineConfig): Promise<{ ok: boolean; error?: string }> {
+  async startSession(key: string, config: EngineConfig): Promise<{ ok: boolean; error?: string; conversationId?: string }> {
     return startSessionImpl(this, key, config)
   }
 
@@ -466,11 +466,41 @@ export class EngineBridge extends EventEmitter {
     this._send({ cmd: 'permission_response', key, questionId, optionId })
   }
 
+  sendElicitationResponse(
+    key: string,
+    requestId: string,
+    response: Record<string, unknown> | undefined,
+    cancelled: boolean,
+  ): void {
+    log(`sendElicitationResponse: key=${key} requestId=${requestId} cancelled=${cancelled}`)
+    this._send({
+      cmd: 'elicitation_response',
+      key,
+      elicitRequestId: requestId,
+      elicitResponse: response,
+      elicitCancelled: cancelled,
+    })
+  }
+
   sendRaw(payload: Record<string, unknown>): void { this._send(payload) }
 
-  sendSetPlanMode(key: string, enabled: boolean, allowedTools?: string[], source?: string, allowedBashCommands?: string[]): void {
-    log(`sendSetPlanMode: key=${key} enabled=${enabled} source=${source ?? 'unknown'} bashCmds=${JSON.stringify(allowedBashCommands)}`)
-    this._send({ cmd: 'set_plan_mode', key, enabled, allowedTools, source, planModeAllowedBashCommands: allowedBashCommands })
+  sendSetPlanMode(key: string, enabled: boolean, allowedTools?: string[], source?: string, allowedBashCommands?: string[], planFilePath?: string): void {
+    log(`sendSetPlanMode: key=${key} enabled=${enabled} source=${source ?? 'unknown'} bashCmds=${JSON.stringify(allowedBashCommands)} planFilePath=${planFilePath ?? '<none>'}`)
+    // planFilePath restores plan-file continuity on a plan-mode toggle: when
+    // the engine session was replaced (rebound) it lost its in-memory path,
+    // and the engine's set_plan_mode handler re-adopts this path (if it exists
+    // on disk) so the next prompt reuses the conversation's existing plan
+    // instead of allocating a fresh slug. Omitted when empty — the engine
+    // treats absence as "no restore", preserving prior behavior.
+    this._send({
+      cmd: 'set_plan_mode',
+      key,
+      enabled,
+      allowedTools,
+      source,
+      planModeAllowedBashCommands: allowedBashCommands,
+      ...(planFilePath ? { planFilePath } : {}),
+    })
   }
 
   // ─── Conversation-data RPCs ───

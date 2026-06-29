@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import {
-  Terminal, CaretLeft, CaretRight, ArrowsInSimple, ArrowsOutSimple, Lightning, ChatCircle,
+  Terminal, CaretLeft, CaretRight, ArrowsInSimple, ArrowsOutSimple, ChatCircle,
 } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
 import { HistoryPicker } from './HistoryPicker'
@@ -10,7 +10,8 @@ import { NotificationsBell } from './NotificationsPanel'
 import { BranchPickerDialog } from './BranchPickerDialog'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
-import { EngineProfilePicker } from './EngineProfilePicker'
+import { NewConversationPicker, resolveNewConversationAction, executeNewConversationAction } from './NewConversationPicker'
+import { createNewConversationTab } from './new-conversation-tab'
 import { useTabGroups } from '../hooks/useTabGroups'
 import type { TabState } from '../../shared/types'
 import { useManualReorder } from '../hooks/useManualReorder'
@@ -42,12 +43,12 @@ export function TabStrip() {
   const createTabInDirectory = useSessionStore((s) => s.createTabInDirectory)
   const toggleTerminal = useSessionStore((s) => s.toggleTerminal)
   const createTerminalTab = useSessionStore((s) => s.createTerminalTab)
-  const createEngineTab = useSessionStore((s) => s.createEngineTab)
   const terminalOpenTabIds = useSessionStore((s) => s.terminalOpenTabIds)
   const colors = useColors()
   const isExpanded = useSessionStore((s) => s.isExpanded)
   const toggleExpanded = useSessionStore((s) => s.toggleExpanded)
   const tabsReady = useSessionStore((s) => s.tabsReady)
+  const enterpriseNewConversationDefaults = usePreferencesStore((s) => s.enterpriseNewConversationDefaults)
   const worktreeUncommittedMap = useSessionStore((s) => s.worktreeUncommittedMap)
   const { mode: groupMode, groups, ungrouped } = useTabGroups()
 
@@ -57,8 +58,8 @@ export function TabStrip() {
   const [colorPickerAnchor, setColorPickerAnchor] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
   const [dirMenuTabId, setDirMenuTabId] = useState<string | null>(null)
   const [dirMenuAnchor, setDirMenuAnchor] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
-  const [dirPickerState, setDirPickerState] = useState<{ anchor: { x: number; y: number; bottom: number }; mode: 'conversation' | 'terminal' | 'engine' } | null>(null)
-  const [enginePickerState, setEnginePickerState] = useState<{ anchor: { x: number; y: number; bottom: number }; dir: string } | null>(null)
+  const [dirPickerState, setDirPickerState] = useState<{ anchor: { x: number; y: number; bottom: number }; mode: 'conversation' | 'terminal' } | null>(null)
+  const [convPickerState, setConvPickerState] = useState<{ anchor: { x: number; y: number; bottom: number }; dir: string } | null>(null)
   const [tabMenuId, setTabMenuId] = useState<string | null>(null)
   const [tabMenuAnchor, setTabMenuAnchor] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
   const plusButtonRef = useRef<HTMLButtonElement>(null)
@@ -94,6 +95,34 @@ export function TabStrip() {
     const id = dirMenuTabId || tabMenuId
     if (id) checkWorktreeUncommitted(tabs.find((t) => t.id === id))
   }, [dirMenuTabId, tabMenuId])
+
+  // Keyboard shortcut bridge: Cmd+T / Cmd+Shift+T fire this event when the
+  // resolved action is 'show-picker' so the picker opens anchored to the +
+  // button, matching the click-driven path.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const dir = (e as CustomEvent<{ dir: string }>).detail?.dir ?? ''
+      const btn = plusButtonRef.current
+      const raw = btn ? btn.getBoundingClientRect() : new DOMRect(0, 40, 0, 0)
+      const rect = zoomRect(raw)
+      setConvPickerState({ anchor: { x: rect.left, y: rect.top, bottom: rect.bottom }, dir })
+    }
+    window.addEventListener('ion:open-new-conversation-picker', handler)
+    return () => window.removeEventListener('ion:open-new-conversation-picker', handler)
+  }, [])
+
+  // Keyboard shortcut bridge: Cmd+R fires this event so the recent-directories
+  // picker opens anchored to the + button, matching the click-driven path.
+  useEffect(() => {
+    const handler = () => {
+      const btn = plusButtonRef.current
+      const raw = btn ? btn.getBoundingClientRect() : new DOMRect(0, 40, 0, 0)
+      const rect = zoomRect(raw)
+      setDirPickerState({ anchor: { x: rect.left, y: rect.top, bottom: rect.bottom }, mode: 'conversation' })
+    }
+    window.addEventListener('ion:open-recent-dirs', handler)
+    return () => window.removeEventListener('ion:open-recent-dirs', handler)
+  }, [])
 
   // Scroll the confirming-close tab into view after it expands
   useEffect(() => {
@@ -149,6 +178,10 @@ export function TabStrip() {
   // Convert vertical wheel to horizontal scroll (also allow native horizontal scroll)
   const onWheel = useCallback((e: React.WheelEvent) => {
     if (!scrollRef.current) return
+    // Wheel events from portaled popovers (e.g. the group picker dropdown) bubble
+    // through React's component tree even though their DOM target is elsewhere.
+    // Only act on events whose real DOM target lives inside this scroll container.
+    if (!scrollRef.current.contains(e.nativeEvent.target as Node)) return
     const delta = e.deltaX || e.deltaY
     if (delta === 0) return
     e.preventDefault()
@@ -178,7 +211,9 @@ export function TabStrip() {
       onOpenColorPicker={(tabId, anchor) => { setColorPickerTabId(tabId); setColorPickerAnchor(anchor) }}
       onCloseColorPicker={() => setColorPickerTabId(null)}
       onOpenDirMenu={(tabId, anchor) => { setDirMenuTabId(tabId); setDirMenuAnchor(anchor) }}
-      onCreateTabInDir={(dir) => createTabInDirectory(dir, shouldUseWorktree(false))}
+      onCreateTabInDir={(dir) => {
+        createNewConversationTab(dir)
+      }}
       dirMenuTabId={dirMenuTabId}
       onOpenTabMenu={(tabId, anchor) => { setTabMenuId(tabId); setTabMenuAnchor(anchor) }}
       tabRefs={tabRefs}
@@ -304,7 +339,9 @@ export function TabStrip() {
               dirName={dirName}
               tabId={menuTab.id}
               tabGroupId={menuTab.groupId || undefined}
-              onCreateTab={() => createTabInDirectory(menuTab.workingDirectory, shouldUseWorktree(false))}
+              onCreateTab={() => {
+                createNewConversationTab(menuTab.workingDirectory)
+              }}
               onForkTab={menuTab.conversationId ? () => { useSessionStore.getState().forkTab(menuTab.id) } : undefined}
               onFinishWork={menuTab.worktree ? () => { useSessionStore.getState().finishWorktreeTab(menuTab.id) } : undefined}
               finishWorkDisabled={menuTab.worktree ? (worktreeUncommittedMap.has(menuTab.id) ? worktreeUncommittedMap.get(menuTab.id)! : 'checking') : undefined}
@@ -323,19 +360,14 @@ export function TabStrip() {
               usePreferencesStore.getState().addRecentBaseDirectory(dir)
               usePreferencesStore.getState().incrementDirectoryUsage(dir)
               switch (dirPickerState.mode) {
-                case 'conversation': createTabInDirectory(dir, shouldUseWorktree(false)); break
-                case 'terminal': createTerminalTab(dir); break
-                case 'engine': {
-                  const profiles = usePreferencesStore.getState().engineProfiles
-                  if (profiles.length === 0) {
-                    window.dispatchEvent(new CustomEvent('ion:open-settings'))
-                  } else if (profiles.length === 1) {
-                    createEngineTab(dir, profiles[0].id)
-                  } else {
-                    setEnginePickerState({ anchor: dirPickerState!.anchor, dir })
+                case 'conversation': {
+                  const result = createNewConversationTab(dir)
+                  if (result === 'show-picker') {
+                    setConvPickerState({ anchor: dirPickerState!.anchor, dir })
                   }
                   break
                 }
+                case 'terminal': createTerminalTab(dir); break
               }
             }}
             onClose={() => setDirPickerState(null)}
@@ -344,19 +376,23 @@ export function TabStrip() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {enginePickerState && (
-          <EngineProfilePicker
-            key="engine-profile-picker"
-            anchor={enginePickerState.anchor}
-            onSelect={(profileId) => {
-              createEngineTab(enginePickerState.dir, profileId)
-              setEnginePickerState(null)
+        {convPickerState && (
+          <NewConversationPicker
+            key="new-conversation-picker"
+            anchor={convPickerState.anchor}
+            onPlain={() => {
+              createTabInDirectory(convPickerState.dir, shouldUseWorktree(false))
+              setConvPickerState(null)
+            }}
+            onProfile={(profileId) => {
+              useSessionStore.getState().createConversationTab(convPickerState.dir, { profileId })
+              setConvPickerState(null)
             }}
             onOpenSettings={() => {
               window.dispatchEvent(new CustomEvent('ion:open-settings'))
-              setEnginePickerState(null)
+              setConvPickerState(null)
             }}
-            onClose={() => setEnginePickerState(null)}
+            onClose={() => setConvPickerState(null)}
           />
         )}
       </AnimatePresence>
@@ -373,7 +409,9 @@ export function TabStrip() {
               onRename={() => { setTabMenuId(null); setEditingTabId(menuTab.id) }}
               onForkTab={menuTab.conversationId ? () => { useSessionStore.getState().forkTab(menuTab.id) } : undefined}
               onNewTabInDir={() => {
-                if (menuTab.workingDirectory) createTabInDirectory(menuTab.workingDirectory, shouldUseWorktree(false))
+                if (menuTab.workingDirectory) {
+                  createNewConversationTab(menuTab.workingDirectory)
+                }
               }}
               onFinishWork={() => {
                 useSessionStore.getState().finishWorktreeTab(menuTab.id)
@@ -407,6 +445,23 @@ export function TabStrip() {
           ref={plusButtonRef}
           onClick={(e) => {
             window.dispatchEvent(new CustomEvent('ion:close-group-pickers'))
+            // Check for enterprise lock before opening the directory picker.
+            const { engineProfiles, defaultEngineProfileId } = usePreferencesStore.getState()
+            const action = resolveNewConversationAction(engineProfiles, defaultEngineProfileId, enterpriseNewConversationDefaults)
+            if (action.kind === 'locked') {
+              // Locked: bypass both pickers entirely. Open with the mandated dir
+              // + profile via the shared executor so the open-logic isn't
+              // duplicated here.
+              const dir = action.baseDirectory || usePreferencesStore.getState().defaultBaseDirectory
+              executeNewConversationAction(
+                dir,
+                action,
+                (d, wt) => createTabInDirectory(d, wt),
+                (d, opts) => useSessionStore.getState().createConversationTab(d, opts),
+                shouldUseWorktree(false),
+              )
+              return
+            }
             const rect = zoomRect((e.currentTarget as HTMLElement).getBoundingClientRect())
             setDirPickerState({ anchor: { x: rect.left, y: rect.top, bottom: rect.bottom }, mode: 'conversation' })
           }}
@@ -431,18 +486,6 @@ export function TabStrip() {
           title="New terminal tab (Alt+click: toggle panel)"
         >
           <Terminal size={14} />
-        </button>
-
-        <button
-          onClick={(e) => {
-            const rect = zoomRect((e.currentTarget as HTMLElement).getBoundingClientRect())
-            setDirPickerState({ anchor: { x: rect.left, y: rect.top, bottom: rect.bottom }, mode: 'engine' })
-          }}
-          className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full transition-colors"
-          style={{ color: colors.textTertiary }}
-          title="New engine tab"
-        >
-          <Lightning size={14} />
         </button>
 
         {/* <HistoryPicker /> */}

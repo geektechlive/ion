@@ -2,19 +2,90 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { IPC } from '../../../shared/types'
 import { log as _log } from '../../logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, lastForwardedEngineTabStatus, extensionCommandRegistry } from '../../state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, lastMessagePreview, lastForwardedTabStatus, extensionCommandRegistry } from '../../state'
 import { broadcast } from '../../broadcast'
 import { terminalManager } from '../../terminal-manager-instance'
 import { readSettings, readClaudeCompat } from '../../settings-store'
 import { getRemoteTabStates } from '../snapshot'
 import { autoPullDiagnosticLogs } from './diagnostics'
 import { broadcastSync, sendSync } from './tabs-sync'
-import { processIncomingPrompt } from '../../prompt-pipeline'
 import { resolveDiscoveryWorkingDir } from '../../ipc-validation'
 import type { RemoteCommand } from '../protocol'
 
+export { handlePrompt, handleCancel } from './tabs-prompt'
+
 function log(msg: string): void {
   _log('main', msg)
+}
+
+/**
+ * Push the latest engine state (agents, status fields, working message,
+ * model override) for a tab to the remote transport. Called after a
+ * successful `desktop_load_conversation` response when the session is
+ * currently running, so the mobile client overwrites any stale local state
+ * from a previous session.
+ *
+ * The gate is purely on runtime session status ('running' | 'connecting'),
+ * NOT on tab type or extension presence. After WI-001/WI-002, any
+ * conversation's messages live on the active instance regardless of backend;
+ * the same live-state push applies whenever the session is running.
+ *
+ * Engine contract: `engine_agent_state` is a complete snapshot. The
+ * authoritative truth is "what the renderer holds right now" — including
+ * the empty case. We forward unconditionally: an empty `agents: []`
+ * payload tells the mobile client "drop your stale rows from a previous
+ * session." Without this, iOS reconnects show ghost agents from connections
+ * ago. See docs/architecture/agent-state.md.
+ */
+async function sendCurrentEngineState(tabId: string, deviceId: string): Promise<void> {
+  if (!state.mainWindow || !state.remoteTransport) return
+  const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+  try {
+    const snapshot = await state.mainWindow.webContents.executeJavaScript(`
+      (function() {
+        var store = window.__Ion_SESSION_STORE__;
+        if (!store) return null;
+        var s = store.getState();
+        var pane = s.conversationPanes.get('${escapedTab}');
+        var inst = pane ? (pane.instances.find(function(i) { return i.id === pane.activeInstanceId; }) || pane.instances[0]) : null;
+        var instId = inst ? inst.id : null;
+        var agents = (inst && inst.agentStates) || [];
+        var status = (inst && inst.statusFields) || null;
+        var key = '${escapedTab}' + (instId ? ':' + instId : '');
+        var working = s.engineWorkingMessages.get(key) || '';
+        var modelOverride = window.__Ion_resolveEngineModel ? window.__Ion_resolveEngineModel('${escapedTab}') : null;
+        return { instId: instId, agents: agents, status: status, working: working, modelOverride: modelOverride };
+      })()
+    `)
+    if (!snapshot) {
+      log(`sendCurrentEngineState: no snapshot available tabId=${tabId}`)
+      return
+    }
+    const instanceId: string | null = snapshot.instId ?? null
+    const agents = snapshot.agents || []
+    log(`sendCurrentEngineState: tabId=${tabId} instanceId=${instanceId} agents=${agents.length} status=${!!snapshot.status} working=${snapshot.working ? 'present' : 'empty'} modelOverride=${snapshot.modelOverride ? 'present' : 'none'}`)
+
+    // Always send the authoritative agent snapshot — including empty.
+    state.remoteTransport.sendToDevice(deviceId, {
+      type: 'desktop_agent_state', tabId, instanceId, agents,
+    })
+    if (snapshot.status) {
+      state.remoteTransport.sendToDevice(deviceId, {
+        type: 'desktop_status', tabId, instanceId, fields: snapshot.status,
+      })
+    }
+    // Always forward working message (use '' to clear stale banner on resync).
+    state.remoteTransport.sendToDevice(deviceId, {
+      type: 'desktop_working_message', tabId, instanceId, message: snapshot.working || '',
+    })
+    if (snapshot.modelOverride) {
+      state.remoteTransport.sendToDevice(deviceId, {
+        type: 'desktop_model_override', tabId, instanceId, model: snapshot.modelOverride,
+      })
+    }
+  } catch (err) {
+    log(`sendCurrentEngineState error: ${(err as Error).message}`)
+  }
 }
 
 export async function handleSync(deviceId: string): Promise<void> {
@@ -64,6 +135,38 @@ function notifyTabCreated(tabId: string): void {
 }
 
 export async function handleCreateTab(cmd: Extract<RemoteCommand, { type: 'desktop_create_tab' }>): Promise<void> {
+  // When profileId is present the iOS client wants an extension-hosted
+  // conversation. Route through createConversationTab with profileId in opts.
+  // When absent, create a plain CLI tab.
+  if (cmd.profileId) {
+    let dir = cmd.workingDirectory
+    if (!dir) {
+      const s = readSettings()
+      dir = s.defaultBaseDirectory || homedir() || ''
+    }
+    if (!dir) return
+    try {
+      const escaped = dir.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+      const profileArg = `'${cmd.profileId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+      log(`handleCreateTab: extension tab, profileId=${cmd.profileId}`)
+      const tabId = await state.mainWindow?.webContents.executeJavaScript(`
+        (function() {
+          var store = window.__Ion_SESSION_STORE__;
+          if (!store) return null;
+          var prev = store.getState().activeTabId;
+          var id = store.getState().createConversationTab('${escaped}', { profileId: ${profileArg} });
+          store.setState({ activeTabId: prev });
+          return id;
+        })()
+      `)
+      if (tabId) notifyTabCreated(tabId)
+    } catch (err) {
+      log(`handleCreateTab (engine): ${(err as Error).message}`)
+    }
+    return
+  }
+
+  // Plain CLI tab (legacy path).
   // When the iOS client requests pinning into a specific group (e.g. the
   // per-group "+" button next to a group header), forward the group id as
   // the 4th positional argument to createTabInDirectory. The renderer-side
@@ -118,127 +221,26 @@ export async function handleCreateTerminalTab(cmd: Extract<RemoteCommand, { type
   }
 }
 
-export async function handleCreateEngineTab(cmd: Extract<RemoteCommand, { type: 'desktop_create_engine_tab' }>): Promise<void> {
-  let dir = cmd.workingDirectory
-  if (!dir) {
-    const s = readSettings()
-    dir = s.defaultBaseDirectory || homedir() || ''
-  }
-  if (!dir) return
-  try {
-    const escaped = dir.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-    const profileArg = cmd.profileId ? `'${cmd.profileId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'` : 'undefined'
-    const tabId = await state.mainWindow?.webContents.executeJavaScript(`
-      (function() {
-        var store = window.__Ion_SESSION_STORE__;
-        if (!store) return null;
-        var prev = store.getState().activeTabId;
-        var id = store.getState().createEngineTab('${escaped}', ${profileArg});
-        store.setState({ activeTabId: prev });
-        return id;
-      })()
-    `)
-    if (tabId) notifyTabCreated(tabId)
-  } catch (err) {
-    log(`create_engine_tab error: ${(err as Error).message}`)
-  }
-}
-
 export function handleCloseTab(cmd: Extract<RemoteCommand, { type: 'desktop_close_tab' }>): void {
   const tabId = cmd.tabId
   sessionPlane.closeTab(tabId)
   terminalManager.destroyByPrefix(`${tabId}:`)
+  // Conversations now key their engine session by the bare tabId (ADR-010),
+  // so stop that session directly. stopByPrefix(`${tabId}:`) only matches
+  // compound keys (terminals, legacy `${tabId}:main` sessions) and would
+  // silently leave the bare-key conversation session orphaned in both the
+  // desktop activeSessions map and the engine daemon.
+  void engineBridge.stopSession(tabId)
   engineBridge.stopByPrefix(`${tabId}:`)
   broadcast(IPC.REMOTE_CLOSE_TAB, tabId)
   state.remoteTransport?.send({ type: 'desktop_tab_closed', tabId })
 
   // Clean up all per-tab main-process state to prevent memory leaks.
   activeAssistantMessages.delete(tabId)
-  activeToolInputs.delete(tabId)
   lastMessagePreview.delete(tabId)
-  lastForwardedEngineTabStatus.delete(tabId)
+  lastForwardedTabStatus.delete(tabId)
   for (const key of extensionCommandRegistry.keys()) {
     if (key === tabId || key.startsWith(`${tabId}:`)) extensionCommandRegistry.delete(key)
-  }
-}
-
-/**
- * Resolve the working directory the renderer has stored for a given tab.
- * Used by handlePrompt to feed the unified prompt pipeline a projectPath
- * for `.md` template expansion — without it, `.md` lookup would only
- * search `~/.claude/commands/` and miss project-scoped commands at
- * `${cwd}/.claude/commands/`. Returns undefined when the tab isn't found
- * or mainWindow isn't ready (defensive — in that case the pipeline still
- * runs, just without project-scoped `.md` discovery).
- */
-async function resolveTabProjectPath(tabId: string): Promise<string | undefined> {
-  if (!state.mainWindow) return undefined
-  try {
-    const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-    const cwd = await state.mainWindow.webContents.executeJavaScript(`
-      (function() {
-        var store = window.__Ion_SESSION_STORE__;
-        if (!store) return null;
-        var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTab}'; });
-        return tab && tab.workingDirectory ? tab.workingDirectory : null;
-      })()
-    `)
-    return cwd || undefined
-  } catch (err) {
-    log(`resolveTabProjectPath: error tab=${tabId}: ${(err as Error).message}`)
-    return undefined
-  }
-}
-
-export async function handlePrompt(cmd: Extract<RemoteCommand, { type: 'desktop_prompt' }>): Promise<void> {
-  const reqId = cmd.clientMsgId || `remote-${Date.now()}`
-  // Echo the user's typed text back to iOS with a canonical ms timestamp so
-  // iOS replaces its optimistic entry by id (fixing the "56 years ago"
-  // symptom that motivated the pipeline refactor). For non-slash text the
-  // pipeline still goes through this echo before broadcasting to the
-  // renderer; for slash text the pipeline handles the echo itself in
-  // handleSlash().
-  //
-  // We do the echo here UNCONDITIONALLY for normal prompts because the
-  // pipeline only echoes from handleSlash() (and from clearConnectingStatus
-  // for terminal command outcomes). The redundancy is intentional: a normal
-  // remote prompt has no "command outcome" event to anchor an echo on, so
-  // we echo at the entry point. Slash echoes inside the pipeline are extra
-  // confirmations, not the only ones — but for the non-slash path this
-  // echo is the only one.
-  state.remoteTransport?.send({
-    type: 'desktop_message_added',
-    tabId: cmd.tabId,
-    message: { id: reqId, role: 'user', content: cmd.text, timestamp: Date.now(), source: 'remote' },
-  })
-  // Resolve the tab's working directory from the renderer store so the
-  // pipeline can find project-scoped `.md` templates (e.g.
-  // ${cwd}/.claude/commands/ion--review-changes.md). The renderer is the
-  // authoritative source for per-tab cwd; sessionPlane only stores it
-  // implicitly via the most recent submitPrompt. Awaiting this query is
-  // cheap (single executeJavaScript round-trip) and the work-in-flight
-  // overlap with the engine dispatch is unavoidable anyway.
-  const projectPath = await resolveTabProjectPath(cmd.tabId)
-  // Fire-and-forget the unified pipeline. Errors are logged inside the
-  // pipeline; we never want a thrown error here to crash the transport.
-  void processIncomingPrompt({
-    tabId: cmd.tabId,
-    text: cmd.text,
-    attachments: cmd.attachments,
-    reqId,
-    source: 'remote',
-    isEngineTab: false,
-    projectPath,
-    implementationPhase: cmd.implementationPhase,
-  }).catch((err: unknown) => {
-    log(`handlePrompt: pipeline error: ${(err as Error).message}`)
-  })
-}
-
-export function handleCancel(cmd: Extract<RemoteCommand, { type: 'desktop_cancel' }>): void {
-  if (!sessionPlane.cancelTab(cmd.tabId)) {
-    log(`remote cancel: tab ${cmd.tabId} not in sessionPlane, sending abort directly`)
-    engineBridge.sendAbort(cmd.tabId)
   }
 }
 
@@ -254,7 +256,13 @@ export async function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type
   // The generic sessionPlane.setPermissionMode uses bare tabId which
   // silently misses the engine session. Detect engine tabs and route
   // through the compound-key bridge path.
+  //
+  // We also pull the active instance's planFilePath so an iOS-origin plan
+  // toggle restores plan-file continuity identically to the desktop path:
+  // when entering plan mode the engine re-adopts an existing on-disk plan
+  // instead of allocating a fresh slug. Parity with tab-slice.ts.
   let routed = false
+  let planFilePath: string | undefined
   if (state.mainWindow) {
     try {
       const escapedTab = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
@@ -264,16 +272,22 @@ export async function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type
           if (!store) return null;
           var s = store.getState();
           var tab = s.tabs.find(function(t) { return t.id === '${escapedTab}'; });
-          if (!tab || !tab.hasEngineExtension) return null;
+          if (!tab) return null;
           var pane = s.conversationPanes.get('${escapedTab}');
-          if (!pane || !pane.activeInstanceId) return null;
-          return { instanceId: pane.activeInstanceId };
+          var inst = pane ? (pane.instances.find(function(i) { return i.id === pane.activeInstanceId; }) || pane.instances[0]) : null;
+          return {
+            isEngine: !!tab.engineProfileId,
+            instanceId: pane ? pane.activeInstanceId : null,
+            planFilePath: inst ? (inst.planFilePath || null) : null,
+          };
         })()
       `)
-      if (info?.instanceId) {
-        const compoundKey = `${cmd.tabId}:${info.instanceId}`
-        log(`Remote set_permission_mode: engine tab, using compound key=${compoundKey}`)
-        engineBridge.sendSetPlanMode(compoundKey, mode === 'plan', undefined, 'remote')
+      if (mode === 'plan' && info?.planFilePath) {
+        planFilePath = info.planFilePath
+      }
+      if (info?.isEngine && info?.instanceId) {
+        log(`Remote set_permission_mode: engine tab, using key=${cmd.tabId} planFilePath=${planFilePath ?? '<none>'}`)
+        engineBridge.sendSetPlanMode(cmd.tabId, mode === 'plan', undefined, 'remote', undefined, planFilePath)
         routed = true
       }
     } catch (err) {
@@ -283,7 +297,7 @@ export async function handleSetPermissionMode(cmd: Extract<RemoteCommand, { type
 
   // CLI tabs (or fallback when engine detection fails)
   if (!routed) {
-    sessionPlane.setPermissionMode(cmd.tabId, mode)
+    sessionPlane.setPermissionMode(cmd.tabId, mode, 'remote', planFilePath)
   }
 
   // Always broadcast so the UI updates regardless of tab type
@@ -315,7 +329,6 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
       state.remoteTransport?.sendToDevice(deviceId, { type: 'desktop_conversation_history', tabId: cmd.tabId, messages: [], hasMore: false })
       return
     }
-
     const escapedTabId = cmd.tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
     const escapedBefore = cmd.before ? cmd.before.replace(/\\/g, '\\\\').replace(/'/g, "\\'") : ''
 
@@ -368,7 +381,7 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
           });
           var hasMore = startIdx > 0;
           var cursor = hasMore && page.length > 0 ? page[0].id : undefined;
-          return { messages: page, hasMore: hasMore, cursor: cursor, total: total };
+          return { messages: page, hasMore: hasMore, cursor: cursor, total: total, tabStatus: tab.status };
         } catch(e) { return { messages: [], hasMore: false }; }
       })()
     `) || { messages: [], hasMore: false }
@@ -438,6 +451,16 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
       hasMore: result.hasMore || false,
       cursor: result.cursor,
     })
+
+    // Additionally push live engine state when the session is running, so iOS
+    // immediately has up-to-date agents, status fields, and working message
+    // on reconnect. Gate on RUNTIME status — not tab type or extension
+    // presence — since any conversation's session may be running.
+    const tabStatus = result.tabStatus as string | undefined
+    if (tabStatus === 'running' || tabStatus === 'connecting') {
+      log(`load_conversation: session is ${tabStatus}, pushing live engine state tabId=${cmd.tabId}`)
+      await sendCurrentEngineState(cmd.tabId, deviceId)
+    }
   } catch (err) {
     log(`load_conversation error: ${(err as Error).message}`)
     state.remoteTransport?.sendToDevice(deviceId, { type: 'desktop_conversation_history', tabId: cmd.tabId, messages: [], hasMore: false })

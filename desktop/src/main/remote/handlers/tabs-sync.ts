@@ -17,6 +17,7 @@ import { readSettings } from '../../settings-store'
 import { projectCurrentSettings, projectableSchema, projectableGroups } from '../../projectable-settings'
 import { getRemoteTabStates } from '../snapshot'
 import { readRemoteDisplay } from './display'
+import { getEnterprisePolicyNewConversationDefaults } from '../../engine-bridge-fs'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -65,11 +66,27 @@ export async function sendSync(send: (event: any) => void): Promise<void> {
   // allowlist and the rationale for which settings are projected. The
   // schema + groups ride alongside the values so iOS auto-renders the
   // Settings detail view without hardcoding the projection metadata.
+  //
+  // `newConversationPolicy` projects the resolved enterprise new-tab lock so
+  // remote clients enforce the same constraint as the desktop. The policy
+  // comes from the local engine IPC (`get_enterprise_policy`) and is NOT
+  // a user-editable setting, so it lives as a discrete top-level field
+  // rather than inside the `settings` key-value map.
+  let newConversationPolicy: { baseDirectory: string; engineProfileId: string; locked: boolean } | null = null
+  try {
+    const policy = await getEnterprisePolicyNewConversationDefaults()
+    if (policy) {
+      newConversationPolicy = { baseDirectory: policy.baseDirectory, engineProfileId: policy.engineProfileId, locked: policy.locked }
+    }
+  } catch (err) {
+    log(`SNAP-SEND: getEnterprisePolicyNewConversationDefaults failed (non-fatal): ${err}`)
+  }
   send({
     type: 'desktop_settings_snapshot',
     settings: projectCurrentSettings(),
     schema: projectableSchema(),
     groups: projectableGroups(),
+    newConversationPolicy,
   })
   for (const tab of tabs) {
     if (tab.isTerminalOnly && tab.terminalInstances && tab.terminalInstances.length > 0) {

@@ -5,7 +5,7 @@ import { IPC } from '../../shared/types'
 import { state } from '../state'
 import { showWindow } from '../window-manager'
 import { validateExternalUrl } from '../ipc-validation'
-import { engineIsRemote, getEngineHostInfo, listEngineDirectory } from '../engine-bridge-fs'
+import { engineIsRemote, getEngineHostInfo, listEngineDirectory, getEnterprisePolicyNewConversationDefaults } from '../engine-bridge-fs'
 import { log as _log } from '../logger'
 
 function log(msg: string): void {
@@ -61,6 +61,11 @@ export function registerFileDialogIpc(): void {
   )
 
   ipcMain.handle(IPC.ENGINE_IS_REMOTE, async () => engineIsRemote())
+
+  // Enterprise policy: fetch the NewConversationDefaults section from the engine's
+  // merged config (includes MDM/system-level settings). Returns null when no
+  // enterprise config is active.
+  ipcMain.handle(IPC.GET_ENTERPRISE_POLICY, async () => getEnterprisePolicyNewConversationDefaults())
 
   ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, url: string) => {
     const validUrl = validateExternalUrl(url)

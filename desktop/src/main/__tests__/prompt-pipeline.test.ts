@@ -178,7 +178,7 @@ describe('processIncomingPrompt — non-slash text', () => {
       text: 'hello world',
       reqId: 'req-1',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       projectPath: '/proj',
       runOptions: opts as any,
     })
@@ -193,7 +193,7 @@ describe('processIncomingPrompt — non-slash text', () => {
       text: 'hello from ios',
       reqId: 'req-2',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
     })
     expect(mocks.submitPromptMock).not.toHaveBeenCalled()
     expect(mocks.broadcastMock).toHaveBeenCalledWith(expect.stringMatching(/remote-user-message/i), expect.objectContaining({
@@ -211,7 +211,7 @@ describe('processIncomingPrompt — slash, engine has command', () => {
       text: '/clear',
       reqId: 'req-3',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/clear' } as any,
     })
     expect(mocks.sendCommandMock).toHaveBeenCalledTimes(1)
@@ -225,7 +225,7 @@ describe('processIncomingPrompt — slash, engine has command', () => {
       text: '/clear',
       reqId: 'req-4',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/clear' } as any,
     })
     // executeJavaScript called at least once for clear-status mutation.
@@ -240,7 +240,7 @@ describe('processIncomingPrompt — slash, engine has command', () => {
       text: '/export markdown json',
       reqId: 'req-5',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/export markdown json' } as any,
     })
     expect(mocks.sendCommandMock).toHaveBeenCalledWith('tab-1', 'export', 'markdown json')
@@ -263,7 +263,7 @@ describe('processIncomingPrompt — slash, engine disclaims, re-submit with reso
       text: '/ion--review 138',
       reqId: 'req-6',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       projectPath: '/proj',
       runOptions: opts,
     })
@@ -293,7 +293,7 @@ describe('processIncomingPrompt — slash, engine ALSO disclaims the resolveSlas
       text: '/typo-no-such-command',
       reqId: 'req-8',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: opts,
     })
     // Re-submitted with resolveSlash=true; now the engine disclaims the
@@ -313,7 +313,7 @@ describe('processIncomingPrompt — slash, engine ALSO disclaims the resolveSlas
       text: '/typo-no-such-command',
       reqId: 'req-9',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
     })
     // Remote re-submit rides REMOTE_USER_MESSAGE (renderer bounce not
     // simulated here); the engine disclaims the resolveSlash send too, so
@@ -332,7 +332,7 @@ describe('processIncomingPrompt — slash, engine ALSO disclaims the resolveSlas
       text: '/typo-no-such-command',
       reqId: 'user-msg-id-123',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
     })
     emitBridgeEvent('tab-1', { type: 'engine_command_result', command: 'typo-no-such-command', commandError: 'unknown_command', message: 'unknown command' })
     await new Promise((r) => setTimeout(r, 0))
@@ -353,7 +353,7 @@ describe('processIncomingPrompt — bash shortcut', () => {
       text: '! ls -la',
       reqId: 'req-10',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
     })
     expect(mocks.broadcastMock).toHaveBeenCalledWith(expect.stringMatching(/remote-bash-command/i), expect.objectContaining({
       tabId: 'tab-1',
@@ -363,16 +363,16 @@ describe('processIncomingPrompt — bash shortcut', () => {
     expect(mocks.submitPromptMock).not.toHaveBeenCalled()
   })
 
-  it('does NOT trigger bash shortcut for engine tabs', async () => {
+  it('does NOT trigger bash shortcut for extension-hosted tabs', async () => {
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: '! ls',
       reqId: 'req-11',
       source: 'remote',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst-1',
     })
-    // Engine tab — falls through to submitAsPrompt → broadcast REMOTE_ENGINE_PROMPT, NOT a bash command.
+    // Extension-hosted tab — falls through to submitAsPrompt → broadcast REMOTE_ENGINE_PROMPT, NOT a bash command.
     const bashCalls = (mocks.broadcastMock as any).mock.calls.filter((c: any[]) => /remote-bash-command/i.test(c[0]))
     expect(bashCalls).toHaveLength(0)
   })
@@ -396,7 +396,7 @@ describe('processIncomingPrompt — engine disclaims, remote slash re-submit (iO
       text: '/ion--review-changes 138,139',
       reqId: 'req-fresh',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
       projectPath: '/Users/me/proj',
     })
   })
@@ -407,7 +407,7 @@ describe('processIncomingPrompt — engine disclaims, remote slash re-submit (iO
       text: '/ion--review-changes 138,139',
       reqId: 'req-fresh-2',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
       projectPath: '/Users/me/proj',
     })
     expect(mocks.broadcastMock).toHaveBeenCalledWith(expect.stringMatching(/remote-user-message/i), expect.objectContaining({
@@ -418,17 +418,17 @@ describe('processIncomingPrompt — engine disclaims, remote slash re-submit (iO
   })
 })
 
-describe('processIncomingPrompt — engine tab', () => {
-  it('uses compound key `${tabId}:${instanceId}` for extension command dispatch', async () => {
+describe('processIncomingPrompt — extension-hosted tab', () => {
+  it('uses bare tabId for extension command dispatch (Phase 4b)', async () => {
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: '/clear',
       reqId: 'req-12',
       source: 'remote',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst-x',
     })
-    expect(mocks.sendCommandMock).toHaveBeenCalledWith('tab-1:inst-x', 'clear', '')
+    expect(mocks.sendCommandMock).toHaveBeenCalledWith('tab-1', 'clear', '')
   })
 
   it('non-slash text broadcasts REMOTE_ENGINE_PROMPT for remote-source', async () => {
@@ -437,7 +437,7 @@ describe('processIncomingPrompt — engine tab', () => {
       text: 'hello',
       reqId: 'req-13',
       source: 'remote',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst-x',
     })
     expect(mocks.broadcastMock).toHaveBeenCalledWith(expect.stringMatching(/remote-engine-prompt/i), expect.objectContaining({
@@ -446,9 +446,34 @@ describe('processIncomingPrompt — engine tab', () => {
     }))
   })
 
-  it('re-submits an unknown desktop-source slash via sendPrompt with the RAW text and resolveSlash=true', async () => {
-    // Engine-tab desktop path re-submits straight through engineBridge.sendPrompt
-    // with the raw text + resolveSlash=true (NOT an expanded body).
+  it('remote-source slash on engine tab broadcasts REMOTE_ENGINE_PROMPT with resolveSlash=true', async () => {
+    // Engine disclaims /align → handleSlash sets resolveSlash=true → broadcast
+    // MUST carry it so the renderer round-trip short-circuits (no FIFO corruption).
+    mocks.sendCommandMock.mockImplementation((key: string, command: string) => {
+      setTimeout(() => emitBridgeEvent(key, { type: 'engine_command_result', command, commandError: 'unknown_command', message: `unknown command: ${command}` }), 0)
+    })
+    await processIncomingPrompt({
+      tabId: 'tab-1',
+      text: '/align',
+      reqId: 'req-remote-slash-1',
+      source: 'remote',
+      hasExtensions: true,
+      instanceId: 'inst-x',
+    })
+    expect(mocks.broadcastMock).toHaveBeenCalledWith(
+      expect.stringMatching(/remote-engine-prompt/i),
+      expect.objectContaining({
+        tabId: 'tab-1',
+        text: '/align',
+        resolveSlash: true,
+      }),
+    )
+  })
+
+  it('re-submits an unknown desktop-source slash via submitPrompt with the RAW text and resolveSlash=true', async () => {
+    // Extension-hosted desktop path re-submits straight through the unified
+    // submitPrompt with the raw text + resolveSlash=true on RunOptions (NOT an
+    // expanded body, NOT a separate engine dispatch).
     mocks.sendCommandMock.mockImplementation((key: string, command: string) => {
       setTimeout(() => emitBridgeEvent(key, { type: 'engine_command_result', command, commandError: 'unknown_command', message: `unknown command: ${command}` }), 0)
     })
@@ -457,16 +482,15 @@ describe('processIncomingPrompt — engine tab', () => {
       text: '/diagram the auth flow',
       reqId: 'req-14',
       source: 'desktop',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst-x',
+      runOptions: { prompt: '/diagram the auth flow', projectPath: '/tmp', extensions: ['ext-a'] },
     })
-    expect(mocks.sendPromptMock).toHaveBeenCalledTimes(1)
-    const call = mocks.sendPromptMock.mock.calls[0]
-    // sendPrompt signature: (key, text, ..., resolveSlash) — text is 2nd
-    // positional (index 1), resolveSlash is the 12th (index 11).
-    expect(call[0]).toBe('tab-1:inst-x')
-    expect(call[1]).toBe('/diagram the auth flow')
-    expect(call[11]).toBe(true)
+    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
+    const call = mocks.submitPromptMock.mock.calls[0]
+    expect(call[0]).toBe('tab-1')                    // tabId
+    expect(call[2].prompt).toBe('/diagram the auth flow')  // raw invocation
+    expect(call[2].resolveSlash).toBe(true)          // engine owns expansion
   })
 })
 
@@ -493,7 +517,7 @@ describe('processIncomingPrompt — /clear with no engine session (unknown_comma
       text: '/clear',
       reqId: 'req-clear-1',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/clear' } as any,
     })
     expect(mocks.submitPromptMock).not.toHaveBeenCalled()
@@ -510,7 +534,7 @@ describe('processIncomingPrompt — /clear with no engine session (unknown_comma
       text: '/clear',
       reqId: 'req-clear-2',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
     })
     // remoteTransport.send must have been called with a message_added or
     // engine_harness_message carrying the divider content.
@@ -536,7 +560,7 @@ describe('processIncomingPrompt — /clear with no engine session (unknown_comma
       text: '/no-such-command',
       reqId: 'req-clear-3',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: opts,
     })
     // The /clear short-circuit does NOT fire for non-clear commands — they
@@ -560,7 +584,7 @@ describe('processIncomingPrompt — /clear with no engine session (unknown_comma
       text: '/clear',
       reqId: 'req-clear-4',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/clear' } as any,
     })
     // The engine handled it; neither the divider NOR .md expansion NOR

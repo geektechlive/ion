@@ -4,6 +4,8 @@ import { motion } from 'framer-motion'
 import { X } from '@phosphor-icons/react'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
+import { usePreferencesStore } from '../preferences'
+import { useSessionStore } from '../stores/sessionStore'
 
 interface FloatingPanelProps {
   title: string
@@ -36,6 +38,16 @@ export function FloatingPanel({
 }: FloatingPanelProps) {
   const popoverLayer = usePopoverLayer()
   const colors = useColors()
+  const previewFontSize = usePreferencesStore((s) => s.previewFontSize)
+  const incOpenFloatingPanelCount = useSessionStore((s) => s.incOpenFloatingPanelCount)
+  const decOpenFloatingPanelCount = useSessionStore((s) => s.decOpenFloatingPanelCount)
+
+  // Track this panel's open state for the zoom-target detection.
+  // isPreviewZoomTarget() in useKeyboardShortcuts reads openFloatingPanelCount > 0.
+  useEffect(() => {
+    incOpenFloatingPanelCount()
+    return () => decOpenFloatingPanelCount()
+  }, [incOpenFloatingPanelCount, decOpenFloatingPanelCount])
 
   // Position: start offset toward the left so it doesn't cover the main conversation column
   const [pos, setPos] = useState(initialPos ?? { x: 60, y: 80 })
@@ -191,8 +203,10 @@ export function FloatingPanel({
         </span>
       </div>
 
-      {/* Content area */}
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      {/* Content area — apply preview font-size variable here only (not on
+          header/chrome). Pop-up content bodies read var(--ion-conv-font-size)
+          so they scale with previewFontSize while buttons/headers stay fixed. */}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', ['--ion-conv-font-size' as string]: `${previewFontSize}px` }}>
         {children}
       </div>
 

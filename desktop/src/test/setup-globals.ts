@@ -1,0 +1,39 @@
+// Test setup: backfill browser globals that renderer modules touch at import
+// time. Runs in every test file (node and jsdom environments alike).
+//
+// `localStorage` is the only global that needs backfilling: jsdom does not
+// expose a working `localStorage` in this runner configuration, and the
+// preferences store reads it synchronously at module load. A minimal in-memory
+// implementation keeps those imports side-effect-safe without pulling in a full
+// DOM for logic tests. Component tests that need real DOM APIs still opt into
+// jsdom via the `// @vitest-environment jsdom` docblock; this shim is harmless
+// there because it only installs when `localStorage` is missing or non-functional.
+function installLocalStorageShim(): void {
+  const g = globalThis as unknown as { localStorage?: Storage }
+  const hasWorking =
+    typeof g.localStorage?.getItem === 'function' &&
+    typeof g.localStorage?.setItem === 'function'
+  if (hasWorking) return
+
+  const store = new Map<string, string>()
+  const shim: Storage = {
+    get length() {
+      return store.size
+    },
+    clear: () => store.clear(),
+    getItem: (key: string) => (store.has(key) ? store.get(key)! : null),
+    key: (index: number) => Array.from(store.keys())[index] ?? null,
+    removeItem: (key: string) => {
+      store.delete(key)
+    },
+    setItem: (key: string, value: string) => {
+      store.set(key, String(value))
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: shim,
+  })
+}
+
+installLocalStorageShim()

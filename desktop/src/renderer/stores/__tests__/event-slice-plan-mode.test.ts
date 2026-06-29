@@ -45,7 +45,6 @@ function makeTab() {
   return {
     id: 'tab1',
     title: 'Engine',
-    hasEngineExtension: false,
     engineProfileId: null,
     workingDirectory: '/tmp',
     hasChosenDirectory: true,
@@ -87,7 +86,7 @@ function buildHarness() {
       planFilePath: '/tmp/plan.md',
     }),
     backend: 'api',
-    sendMessage: vi.fn(),
+    submit: vi.fn(),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
@@ -117,7 +116,7 @@ describe('event-slice — engine_plan_mode_changed', () => {
     expect(mainInstance(state.conversationPanes, 'tab1')?.planFilePath).toBe('/tmp/plan.md')
   })
 
-  it('DOES set permissionMode to plan on planModeEnabled=true', () => {
+  it('DOES set instance permissionMode to plan on planModeEnabled=true (WI-001: instance, not parent)', () => {
     const { state, slice } = buildHarness()
     state.tabs[0].permissionMode = 'auto'
 
@@ -127,7 +126,10 @@ describe('event-slice — engine_plan_mode_changed', () => {
       planFilePath: '/tmp/plan.md',
     } as any)
 
-    expect(state.tabs[0].permissionMode).toBe('plan')
+    // WI-001: writes to the active INSTANCE, not the parent tab.
+    expect(mainInstance(state.conversationPanes, 'tab1')?.permissionMode).toBe('plan')
+    // Parent tab.permissionMode stays unchanged (sticky-parent invariant).
+    expect(state.tabs[0].permissionMode).toBe('auto')
   })
 
   it('appends a "Plan created" divider system message on planModeEnabled=true', () => {
@@ -169,10 +171,207 @@ describe('event-slice — engine_plan_mode_changed', () => {
 
     expect(mainInstance(state.conversationPanes, 'tab1')!.messages.length).toBe(messagesBefore)
   })
+
+  it('inserts a "Plan updated" divider when same planFilePath already in messages', () => {
+    // A second engine_plan_mode_changed{enabled:true} for the SAME planFilePath
+    // means the same plan is being written again (the engine emits this when a
+    // run starts while the session is already in plan mode — a subsequent turn
+    // updating the existing plan). The FIRST divider for a path is "Plan
+    // created"; a subsequent divider for the same path is "Plan updated". Both
+    // carry planFilePath so the slug stays clickable. (The engine does not
+    // re-emit on a bare reconnect — no run, no emit — so this never fires
+    // spuriously on pure resume; it fires only when a real turn re-enters plan
+    // mode for an existing plan.)
+    const { state, slice } = buildHarness()
+
+    // Seed the created divider as if it came from a prior turn / restore.
+    const inst = mainInstance(state.conversationPanes, 'tab1')!
+    const existingDivider = {
+      id: 'prior-divider',
+      role: 'system' as const,
+      content: '── Plan created at 10:00 AM · old-plan ──',
+      timestamp: 1000,
+      planFilePath: '/tmp/plan.md',
+    }
+    inst.messages = [existingDivider]
+
+    // Engine emits enabled:true again for the same plan (a continuation turn).
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_mode_changed' as any,
+      planModeEnabled: true,
+      planFilePath: '/tmp/plan.md',
+      planSlug: 'my-plan',
+    } as any)
+
+    const msgs = mainInstance(state.conversationPanes, 'tab1')!.messages
+    // Now 2: the original created divider plus a new "Plan updated" divider.
+    expect(msgs.length).toBe(2)
+    expect(msgs[0].content).toMatch(/^── Plan created at /)
+    const updated = msgs[1]
+    expect(updated.role).toBe('system')
+    expect(updated.content).toMatch(/^── Plan updated at /)
+    expect(updated.content).toContain('my-plan')
+    // The updated divider also carries planFilePath so its slug is clickable.
+    expect(updated.planFilePath).toBe('/tmp/plan.md')
+  })
+
+  it('idempotency guard: DOES insert divider when planFilePath differs (new plan)', () => {
+    // A new plan file path is a genuine new plan phase — the divider should land.
+    const { state, slice } = buildHarness()
+    const inst = mainInstance(state.conversationPanes, 'tab1')!
+    inst.messages = [{
+      id: 'prior-divider',
+      role: 'system' as const,
+      content: '── Plan created at 10:00 AM · old-plan ──',
+      timestamp: 1000,
+      planFilePath: '/tmp/plan-1.md',
+    }]
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_mode_changed' as any,
+      planModeEnabled: true,
+      planFilePath: '/tmp/plan-2.md',
+      planSlug: 'new-plan',
+    } as any)
+
+    const msgs = mainInstance(state.conversationPanes, 'tab1')!.messages
+    expect(msgs.length).toBe(2)
+    expect(msgs[1].planFilePath).toBe('/tmp/plan-2.md')
+    expect(msgs[1].content).toContain('new-plan')
+  })
+
+  it('idempotency guard: DOES insert divider when planFilePath is absent (cannot dedup)', () => {
+    // No planFilePath → no dedup key → always insert.
+    const { state, slice } = buildHarness()
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_mode_changed' as any,
+      planModeEnabled: true,
+      planSlug: 'unnamed-plan',
+      // no planFilePath
+    } as any)
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_mode_changed' as any,
+      planModeEnabled: true,
+      planSlug: 'unnamed-plan',
+    } as any)
+
+    // Both inserts land — no planFilePath means no dedup.
+    const msgs = mainInstance(state.conversationPanes, 'tab1')!.messages
+    expect(msgs.length).toBe(2)
+  })
+})
+
+describe('event-slice — engine_plan_proposal as card trigger (Bug #2)', () => {
+  it('synthesizes an ExitPlanMode permissionDenied when none is present', () => {
+    // The proposal event is a first-class card trigger: even if task_complete
+    // loses the control-plane race, the card must render from the proposal.
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionDenied = null
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'exit',
+      planFilePath: '/tmp/plan.md',
+      planSlug: 'my-plan',
+    } as any)
+
+    const denied = mainInstance(state.conversationPanes, 'tab1')!.permissionDenied
+    expect(denied).not.toBeNull()
+    expect(denied!.tools).toHaveLength(1)
+    expect(denied!.tools[0].toolName).toBe('ExitPlanMode')
+    expect(denied!.tools[0].toolInput?.planFilePath).toBe('/tmp/plan.md')
+  })
+
+  it('does NOT overwrite an existing permissionDenied (idempotent with task_complete)', () => {
+    // If task_complete already set the denial, the proposal must not clobber it
+    // — same card, not a duplicate or a replacement with a synthesized id.
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionDenied = {
+      tools: [{ toolName: 'ExitPlanMode', toolUseId: 'real-engine-id', toolInput: { planFilePath: '/tmp/plan.md' } }],
+    }
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'exit',
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    const denied = mainInstance(state.conversationPanes, 'tab1')!.permissionDenied
+    expect(denied!.tools).toHaveLength(1)
+    // The original engine id is preserved — the synthesized branch did not run.
+    expect(denied!.tools[0].toolUseId).toBe('real-engine-id')
+  })
+
+  it('does NOT synthesize a denial for a non-exit proposal kind', () => {
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionDenied = null
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'something_else',
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionDenied).toBeNull()
+  })
+})
+
+describe('event-slice — engine_plan_proposal recovers instance plan mode (Bug #1 Layer 2)', () => {
+  it('sets instance permissionMode to plan when the entry event was dropped (mode was auto)', () => {
+    // Simulate the dropped-entry-event scenario: the instance is still at the
+    // 'auto' creation default because engine_plan_mode_changed{enabled:true}
+    // never reached the renderer. A kind="exit" proposal must recover plan mode.
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionMode = 'auto'
+    inst0.permissionDenied = null
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'exit',
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('plan')
+  })
+
+  it('does NOT flip an instance that is already plan (no redundant write needed) and never flips to auto', () => {
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionMode = 'plan'
+    inst0.permissionDenied = null
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'exit',
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    // Stays plan — a proposal NEVER flips to auto (that is onImplement's job).
+    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('plan')
+  })
+
+  it('does NOT recover mode for a non-exit proposal kind', () => {
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionMode = 'auto'
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'something_else',
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('auto')
+  })
 })
 
 describe('event-slice — task_complete with ExitPlanMode denial', () => {
-  it('populates permissionDenied and does NOT schedule sendMessage while in plan mode', () => {
+  it('populates permissionDenied and does NOT schedule submit while in plan mode', () => {
     const { state, slice } = buildHarness()
 
     slice.handleNormalizedEvent!('tab1', {
@@ -198,6 +397,6 @@ describe('event-slice — task_complete with ExitPlanMode denial', () => {
     expect(denied!.tools[0].toolName).toBe('ExitPlanMode')
 
     // Confirm no synthetic "Plan mode is not active..." message was scheduled.
-    expect(state.sendMessage).not.toHaveBeenCalled()
+    expect(state.submit).not.toHaveBeenCalled()
   })
 })
