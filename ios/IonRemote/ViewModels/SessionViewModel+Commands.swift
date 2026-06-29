@@ -15,48 +15,13 @@ extension SessionViewModel {
         send(.sync)
     }
 
-    func sendPrompt(tabId: String, text: String, attachments: [CommandAttachment]? = nil) {
-        let clientMsgId = UUID().uuidString
-        send(.prompt(tabId: tabId, text: text, clientMsgId: clientMsgId, attachments: attachments))
-        // Optimistic local insert so the user's message appears immediately
-        // (dismisses empty state, enables scroll-to-bottom) rather than waiting
-        // for the desktop to echo it back via messageAdded.
-        if conversationLoaded.contains(tabId) {
-            let optimistic = Message(
-                id: clientMsgId,
-                role: .user,
-                content: text,
-                // Milliseconds since epoch — matches every other timestamp
-                // insertion in iOS (SessionViewModel+EngineEvents.swift,
-                // +EventHandlers.swift, NormalizedEvent+Lifecycle.swift,
-                // RemoteCommand+Encode.swift) and the ms shape used by
-                // MessageBubble.relativeTimestamp which divides by 1000 to
-                // reconstruct seconds for Date(timeIntervalSince1970:).
-                // Without the * 1000 the optimistic bubble briefly shows
-                // "56 years ago" before the desktop echoes the canonical
-                // message_added back and id-replacement fixes it.
-                timestamp: Date().timeIntervalSince1970 * 1000,
-                source: .remote
-            )
-            if var existing = messages[tabId] {
-                existing.append(optimistic)
-                messages[tabId] = existing
-            } else {
-                messages[tabId] = [optimistic]
-            }
-            messageCountByTab[tabId] = messages[tabId]?.count ?? 0
-        }
-        // Optimistic status: show activity indicator immediately so the user
-        // sees "Thinking…" rather than staring at their sent message while the
-        // prompt travels over the relay to the desktop engine.
-        // Mirrors desktop send-slice.ts which sets 'connecting' on send.
-        // Guard against downgrading from .running (queued-prompt case).
-        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-            if tabs[idx].status != .running {
-                tabs[idx].status = .connecting
-            }
-        }
-    }
+    // Unified prompt submit (`submit` / `sendPrompt`), the `instanceId` data
+    // resolver (`resolveSubmitInstanceId`), and the unified per-tab model
+    // override (`setModel`) live in SessionViewModel+Submit.swift. They were
+    // moved there when the #256 follow-up collapsed the engine-vs-plain submit /
+    // setModel forks into single branch-free paths and the unified bodies pushed
+    // this file over the Swift 600-line cap. See CLAUDE.md → "When a file
+    // exceeds the cap".
 
     func cancel(tabId: String) {
         send(.cancel(tabId: tabId))
@@ -106,6 +71,22 @@ extension SessionViewModel {
         send(.respondPermission(tabId: tabId, questionId: questionId, optionId: optionId))
     }
 
+    /// Answer an extension elicitation (ctx.elicit). `approved` true sends an
+    /// empty approval payload; false sends cancelled. The desktop routes this to
+    /// the engine's `elicitation_response`, unblocking the parked run. Optimistically
+    /// remove the entry from the local queue so the card dismisses immediately.
+    func respondElicitation(tabId: String, requestId: String, approved: Bool) {
+        send(.respondElicitation(
+            tabId: tabId,
+            requestId: requestId,
+            response: approved ? [:] : nil,
+            cancelled: !approved
+        ))
+        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            tabs[idx].elicitationQueue?.removeAll { $0.requestId == requestId }
+        }
+    }
+
     /// Dismiss a special permission card (AskUserQuestion/ExitPlanMode) without
     /// sending respond_permission -- the tool was already auto-allowed on desktop.
     func dismissSpecialPermission(tabId: String, questionId: String) {
@@ -121,10 +102,11 @@ extension SessionViewModel {
         if questionId.hasPrefix("restored-") {
             dismissedRestoredCards.insert(questionId)
         } else if let instanceId {
-            // Live engine-instance card dismissed -- suppress snapshot
-            // re-injection for this sub-tab only ("tabId:instanceId" key).
-            DiagnosticLog.log("PERM: dismissSpecialPermission: tabId=\(tabId.prefix(8)) instance-scoped dismissal instanceId=\(instanceId.prefix(8))")
-            dismissedLiveSpecialTabs.insert("\(tabId):\(instanceId)")
+            // Post-#256: engine session key is bare tabId; instanceId is vestigial.
+            // Insert bare tabId so snapshot sweep reads the same key.
+            _ = instanceId // unused for keying post-#256
+            DiagnosticLog.log("PERM: dismissSpecialPermission: tabId=\(tabId.prefix(8)) engine-instance dismissal (keyed bare tabId post-#256)")
+            dismissedLiveSpecialTabs.insert(tabId)
         } else {
             // Live card dismissed -- block restoredSpecialCard from re-triggering
             DiagnosticLog.log("PERM: dismissSpecialPermission: tabId=\(tabId.prefix(8)) tab-scoped dismissal (no instanceId)")
@@ -132,11 +114,11 @@ extension SessionViewModel {
         }
     }
 
+    @MainActor
     func loadConversation(tabId: String) {
         guard !loadingConversation.contains(tabId) else { return }
-        messages.removeValue(forKey: tabId)
-        messageCountByTab.removeValue(forKey: tabId)
-        liveText.removeValue(forKey: tabId)
+        setConversationMessages(tabId: tabId, [])
+        clearLiveText(tabId: tabId)
         conversationLoaded.remove(tabId)
         conversationHasMore.removeValue(forKey: tabId)
         conversationCursor.removeValue(forKey: tabId)
@@ -146,9 +128,9 @@ extension SessionViewModel {
         startLoadTimer(tabId: tabId)
     }
 
+    @MainActor
     func clearConversation(tabId: String) {
-        messages.removeValue(forKey: tabId)
-        messageCountByTab.removeValue(forKey: tabId)
+        setConversationMessages(tabId: tabId, [])
         conversationLoaded.remove(tabId)
         conversationHasMore.removeValue(forKey: tabId)
         conversationCursor.removeValue(forKey: tabId)
@@ -195,7 +177,7 @@ extension SessionViewModel {
         conversationLoadRetryCount.removeValue(forKey: tabId)
     }
 
-    func createTab(workingDirectory: String? = nil, pinToGroupId: String? = nil) {
+    func createTab(workingDirectory: String? = nil, pinToGroupId: String? = nil, profileId: String? = nil) {
         let dir = workingDirectory ?? defaultBaseDirectory
         awaitingLocalTabCreation = true
         // When `pinToGroupId` is supplied (e.g. via the per-group `+` button
@@ -205,15 +187,19 @@ extension SessionViewModel {
         // auto-group movement from yanking the tab away from the user's
         // explicit choice. When nil, the desktop falls back to its default
         // group placement (legacy behavior).
-        send(.createTab(workingDirectory: dir, pinToGroupId: pinToGroupId))
+        // When `profileId` is supplied the desktop creates an engine tab with
+        // that profile; nil creates a plain conversation tab. This is the
+        // unified post-#256 wire path — both plain and engine tabs go through
+        // the same `desktop_create_tab` command shape.
+        send(.createTab(workingDirectory: dir, pinToGroupId: pinToGroupId, profileId: profileId))
     }
 
     func closeTab(_ tabId: String) {
         pendingCloseTabIds.insert(tabId)
         send(.closeTab(tabId: tabId))
         tabs.removeAll { $0.id == tabId }
-        liveText.removeValue(forKey: tabId)
-        messages.removeValue(forKey: tabId)
+        conversationInstances.removeValue(forKey: tabId)
+        activeEngineInstance.removeValue(forKey: tabId)
         loadingConversation.remove(tabId)
         conversationLoaded.remove(tabId)
         conversationHasMore.removeValue(forKey: tabId)
@@ -236,20 +222,18 @@ extension SessionViewModel {
     }
 
     /// Set the per-conversation extended-thinking effort. Optimistically
-    /// updates the local tab (bare) or active engine instance, then sends the
+    /// updates the active conversation instance, then sends the
     /// desktop_set_thinking_effort command so the next prompt from either
     /// client carries the level. effort is "off"|"low"|"medium"|"high".
+    ///
+    /// WI-002 (#259): every tab — plain or extension-hosted — stores its
+    /// control fields on the single ConversationInstanceInfo (post-#256
+    /// unification). There is no tab-type branch; the instance is the
+    /// single authoritative home.
+    @MainActor
     func setThinkingEffort(tabId: String, effort: String) {
-        if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-            if tabs[idx].hasEngineExtension == true,
-               let instId = activeEngineInstance[tabId],
-               var insts = tabs[idx].conversationInstances,
-               let iIdx = insts.firstIndex(where: { $0.id == instId }) {
-                insts[iIdx].thinkingEffort = effort == "off" ? nil : effort
-                tabs[idx].conversationInstances = insts
-            } else {
-                tabs[idx].thinkingEffort = effort == "off" ? nil : effort
-            }
+        mutateEngineInstance(tabId: tabId, instanceId: nil) { inst in
+            inst.thinkingEffort = effort == "off" ? nil : effort
         }
         send(.setThinkingEffort(tabId: tabId, effort: effort))
     }
@@ -276,62 +260,13 @@ extension SessionViewModel {
     // an optimistic-insert block. See CLAUDE.md → "When a file exceeds the
     // cap".
 
-    // MARK: - Engine Instance Commands
+    // Engine instance management commands (addEngineInstance, removeEngineInstance,
+    // moveEngineInstance, selectEngineInstance, renameEngineInstance) were removed
+    // in #256 (single-instance collapse). The desktop already silently ignored
+    // the corresponding wire commands; removing the iOS send path completes cleanup.
 
-    func addEngineInstance(tabId: String) {
-        send(.engineAddInstance(tabId: tabId))
-    }
-
-    func removeEngineInstance(tabId: String, instanceId: String) {
-        send(.engineRemoveInstance(tabId: tabId, instanceId: instanceId))
-    }
-
-    func moveEngineInstance(sourceTabId: String, instanceId: String, targetTabId: String) {
-        ionLog.info("moveEngineInstance: \(sourceTabId):\(instanceId) -> \(targetTabId)")
-        // Optimistic local update: move instance between conversationInstances dictionaries
-        if var srcInstances = conversationInstances[sourceTabId],
-           let idx = srcInstances.firstIndex(where: { $0.id == instanceId }) {
-            let inst = srcInstances.remove(at: idx)
-            conversationInstances[sourceTabId] = srcInstances.isEmpty ? nil : srcInstances
-            var tgtInstances = conversationInstances[targetTabId] ?? []
-            tgtInstances.append(inst)
-            conversationInstances[targetTabId] = tgtInstances
-            // Update active instance on target
-            activeEngineInstance[targetTabId] = instanceId
-            // Update active instance on source (last remaining or nil)
-            if srcInstances.isEmpty {
-                activeEngineInstance.removeValue(forKey: sourceTabId)
-            } else if activeEngineInstance[sourceTabId] == instanceId {
-                activeEngineInstance[sourceTabId] = srcInstances.last?.id
-            }
-        }
-        send(.engineMoveInstance(sourceTabId: sourceTabId, instanceId: instanceId, targetTabId: targetTabId))
-    }
-
-    func selectEngineInstance(tabId: String, instanceId: String) {
-        activeEngineInstance[tabId] = instanceId
-        send(.engineSelectInstance(tabId: tabId, instanceId: instanceId))
-        // Load conversation for the newly selected instance
-        loadEngineConversation(tabId: tabId)
-    }
-
-    func renameEngineInstance(tabId: String, instanceId: String, label: String) {
-        // Update local state immediately
-        if var instances = conversationInstances[tabId] {
-            if let idx = instances.firstIndex(where: { $0.id == instanceId }) {
-                instances[idx].label = label
-                conversationInstances[tabId] = instances
-            }
-        }
-        send(.engineRenameInstance(tabId: tabId, instanceId: instanceId, label: label))
-    }
-
-    func loadEngineConversation(tabId: String) {
-        let instanceId = activeEngineInstance[tabId]
-        let instList = conversationInstances[tabId]?.map(\.id) ?? []
-        DiagnosticLog.log("LOAD-CONV: loadEngineConversation tabId=\(tabId.prefix(8)) instanceId=\(instanceId?.prefix(8) ?? "nil") allInstances=\(instList.map { $0.prefix(8) })")
-        send(.loadEngineConversation(tabId: tabId, instanceId: instanceId))
-    }
+    // loadEngineConversation removed (WI-004 / #259). History load is unified:
+    // loadConversation handles every tab via loadConversationHistory().
 
     func sendTerminalInput(tabId: String, instanceId: String, data: String) {
         send(.terminalInput(tabId: tabId, instanceId: instanceId, data: data))

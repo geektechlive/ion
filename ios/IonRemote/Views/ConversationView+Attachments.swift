@@ -3,7 +3,7 @@ import PhotosUI
 
 // MARK: - Attachments
 
-extension EngineView {
+extension ConversationView {
 
     func addFileAttachment(path: String, name: String) {
         let imageExts: Set = ["png", "jpg", "jpeg", "gif", "webp", "svg"]

@@ -8,17 +8,19 @@ import SwiftUI
 // `+` button. The `+` button supports two interactions:
 //
 //   • Tap: opens the new-tab bottom sheet with `pendingPinToGroupId` set
-//     so the sheet's "New Tab" action will stamp pinToGroupId on the
-//     outbound createTab command. This is the fix for: per-group `+`
+//     so the sheet's "New Conversation" action will stamp pinToGroupId on
+//     the outbound createTab command. This is the fix for: per-group `+`
 //     used to create tabs that the first prompt's auto-movement
 //     immediately yanked into the planning group.
 //
 //   • Long press: shows a context menu with quick actions for creating
-//     a new conversation tab (with pin), terminal tab, or engine tab in
-//     this directory. The "New Tab" path is the only one currently
-//     pinned-to-group — extending the same fix to "New Terminal" /
-//     "New Engine" would require additive `pinToGroupId` fields on
-//     `create_terminal_tab` / `create_engine_tab`, which are out of scope.
+//     a new conversation tab (with pin) or a terminal tab in this
+//     directory. Post-#256: the separate "New Engine" context menu item
+//     is gone — "New Tab" now routes through `onNewConversation` which
+//     applies `resolveNewConversationAction` (plain/profile/picker).
+//     Extending the group-pin fix to the context menu path would require
+//     the caller to defer showing the picker until after setting
+//     pendingPinToGroupId, which is out of scope for this change.
 
 struct TabListGroupHeader: View {
     let group: (label: String, id: String, icon: String, directory: String?, tabs: [RemoteTabState])
@@ -26,9 +28,10 @@ struct TabListGroupHeader: View {
     let tabGroupMode: String
     @Binding var pendingPinToGroupId: String?
     @Binding var showNewTab: Bool
-    let onCreateConversationTab: (_ dir: String, _ pinToGroupId: String?) -> Void
+    /// Called when the user taps "New Tab" in the context menu (long press).
+    /// Routes through `resolveNewConversationAction` in the caller.
+    let onNewConversation: (_ dir: String, _ pinToGroupId: String?) -> Void
     let onCreateTerminalTab: (_ dir: String) -> Void
-    let onCreateEngineTab: (_ dir: String) -> Void
     let onToggleCollapsed: () -> Void
 
     var body: some View {
@@ -44,12 +47,9 @@ struct TabListGroupHeader: View {
             if let dir = group.directory {
                 Button {
                     // Per-group `+`: capture the group id so the sheet's
-                    // "New Tab" action can stamp pinToGroupId on the
-                    // outbound command, and the new tab will be born
-                    // inside this group with groupPinned=true. Only
-                    // applies when the desktop is in manual tab-group
-                    // mode (otherwise the desktop-side handler ignores
-                    // the field, but we still set it to mark intent).
+                    // "New Conversation" action can stamp pinToGroupId on
+                    // the outbound command, and the new tab will be born
+                    // inside this group with groupPinned=true.
                     pendingPinToGroupId = tabGroupMode == "manual" ? group.id : nil
                     showNewTab = true
                 } label: {
@@ -59,16 +59,9 @@ struct TabListGroupHeader: View {
                 }
                 .contextMenu {
                     Button {
-                        // Long-press → "New Tab": same per-group
-                        // semantics as the sheet path (above). When in
-                        // manual group mode we forward pinToGroupId so
-                        // the desktop creates the tab inside this group
-                        // with groupPinned=true. The same fix would apply
-                        // to "New Terminal" / "New Engine" below if
-                        // their commands carried a pinToGroupId field —
-                        // out of scope for the current bug report.
+                        // Long-press → "New Tab": per-group semantics.
                         let pin = tabGroupMode == "manual" ? group.id : nil
-                        onCreateConversationTab(dir, pin)
+                        onNewConversation(dir, pin)
                     } label: {
                         Label("New Tab", systemImage: "plus")
                     }
@@ -76,11 +69,6 @@ struct TabListGroupHeader: View {
                         onCreateTerminalTab(dir)
                     } label: {
                         Label("New Terminal", systemImage: "terminal")
-                    }
-                    Button {
-                        onCreateEngineTab(dir)
-                    } label: {
-                        Label("New Engine", systemImage: "bolt.fill")
                     }
                 }
             }

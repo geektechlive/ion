@@ -14,6 +14,12 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// desktop snapshot's RemoteTabState.thinkingEffort.
     var thinkingEffort: String?
     var permissionQueue: [PermissionRequest]
+    /// Live extension elicitations (ctx.elicit) awaiting a user decision on the
+    /// active instance. The head entry renders an approval card; iOS answers via
+    /// the `desktop_respond_elicitation` command. Optional/absent on older
+    /// desktops (additive, non-breaking). Mirrors the desktop snapshot's
+    /// RemoteTabState.elicitationQueue.
+    var elicitationQueue: [ElicitationRequest]?
     var lastMessage: String?
     var contextTokens: Int?
     var contextPercent: Double?
@@ -28,6 +34,14 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// rationale.
     var contextWindow: Int?
     var messageCount: Int?
+    /// Conversation tail fingerprint from the desktop snapshot — the staleness
+    /// signal for the main-conversation heal. iOS computes the same fingerprint
+    /// (conversationTailFingerprint in SessionViewModel+Snapshot.swift) over its
+    /// local tail and re-fetches history when they diverge (dropped live deltas,
+    /// e.g. a LAN↔relay transport switch). Empty/nil for cold-start tabs.
+    /// Algorithm pinned byte-identically with the desktop
+    /// (shared/conversation-fingerprint.ts + snapshot.ts inline JS).
+    var convFingerprint: String?
     var queuedPrompts: [String]?
     var isTerminalOnly: Bool?
     var hasEngineExtension: Bool?
@@ -57,6 +71,11 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// yellow until they're upgraded. See CLAUDE.md § "Common parity
     /// surfaces" parity table for the desktop/iOS parity rule.
     var hasRunningChildren: Bool?
+    /// Engine profile ID for this tab. Non-nil when the tab was created with
+    /// a specific engine profile (i.e. `hasEngineExtension == true`). Used
+    /// by `TabRowView` to resolve the profile display name for the harness
+    /// badge. Mirrors `RemoteTabState.engineProfileId` in protocol.ts.
+    var engineProfileId: String?
 
     var displayTitle: String {
         customTitle ?? title
@@ -99,7 +118,25 @@ struct EngineInstanceModelFallback: Codable, Sendable, Equatable {
 
 // MARK: - ConversationInstanceInfo
 
+/// The single per-tab conversation record (post-#256 unification).
+///
+/// Mirrors the desktop's `ConversationInstance`: every non-terminal tab —
+/// plain or extension — has exactly **one** of these, the `main` instance
+/// (`id == ConversationInstanceInfo.mainInstanceId`). It carries all of the
+/// tab's conversation state: the message list, live streaming text, agent
+/// states, status, and model override.
+///
+/// Before #256's iOS completion, plain tabs stored their state in loose
+/// top-level dictionaries on `SessionViewModel` (`messages[tabId]`,
+/// `liveText[tabId]`, …) while engine tabs used this struct. The unification
+/// collapses both onto this single record, reached through the accessors in
+/// `SessionViewModel+Conversation.swift`.
 struct ConversationInstanceInfo: Codable, Identifiable, Sendable {
+    /// The canonical id for the single conversation instance every tab owns.
+    /// Matches the desktop's `'main'` instance id so the two clients agree on
+    /// the per-instance key for any wire surface that still carries one.
+    static let mainInstanceId = "main"
+
     let id: String
     var label: String
     /// Per-engine-instance waiting state, decoded from the desktop snapshot.
@@ -145,12 +182,33 @@ struct ConversationInstanceInfo: Codable, Identifiable, Sendable {
     /// thinkingEffort so iOS shows the right level for the active sub-tab.
     var thinkingEffort: String? = nil
 
-    // Non-Codable conversation state — populated by ConversationInstance,
-    // not decoded from the snapshot JSON.
+    // Non-Codable conversation state — populated by live events /
+    // loadEngineConversation, not decoded from the snapshot JSON.
     var messages: [Message] = []
     var agentStates: [AgentStateUpdate] = []
     var statusFields: StatusFields? = nil
     var modelOverride: String? = nil
+    /// Live streaming text accumulator for the relay text-chunk path
+    /// (`text_chunk`/`tool_call`/`tool_result`/`error` events that arrive
+    /// before a conversation's history is loaded). Distinct from `messages`,
+    /// which is the structured/loaded view. Cleared when history loads or the
+    /// turn completes. Plain tabs used the old top-level `liveText[tabId]`
+    /// dict; post-#256 both tab types share this field via
+    /// `SessionViewModel.liveText(_:)` / `setLiveText(tabId:_:)`.
+    var liveText: String = ""
+    /// In-progress thinking-block accumulator: the `Message.id` of the live
+    /// `.thinking` message that `thinking_block_start` created, so
+    /// `thinking_delta` can append to it and `thinking_block_end` can finalize
+    /// it. Nil when no reasoning block is in progress. Cleared on stream reset /
+    /// history reload so a stale in-progress block never lingers. Replaces the
+    /// old top-level `thinkingInProgress[compoundKey]` dict (post-#256).
+    var thinkingMessageId: String? = nil
+    /// Transient "working" status line the engine emits while a run is active
+    /// (e.g. "Reading files…"). Distinct from `messages` and `liveText`: it is a
+    /// replace-style single-line indicator rendered above the scrollback, not
+    /// appended content. Empty when no working message is active. Replaces the
+    /// old top-level `engineWorkingMessages[compoundKey]` dict (post-#256).
+    var workingMessage: String = ""
 
     // Explicit CodingKeys so the four fields above are excluded from
     // JSON encoding/decoding and don't break snapshot deserialization.
@@ -163,6 +221,28 @@ struct ConversationInstanceInfo: Codable, Identifiable, Sendable {
         case modelFallback
         case conversationIds
         case thinkingEffort
+    }
+}
+
+extension ConversationInstanceInfo {
+    /// Resolve the active engine-instance id for a tab from a (possibly legacy
+    /// multi-instance) snapshot: prefer the explicit `activeConversationInstanceId`,
+    /// otherwise fall back to the first instance's id, otherwise nil.
+    ///
+    /// This is the single source of truth for the resolution that
+    /// `SessionViewModel+Snapshot` performs when projecting a snapshot
+    /// (`activeEngineInstance[tab.id] = ...`). Extracted so it is unit-testable
+    /// directly — driving this function pins the *shipped* behavior rather than
+    /// re-deriving a similar expression inline in a test.
+    ///
+    /// Post-#256 every tab is single-instance, but the engine/desktop may still
+    /// deliver a legacy multi-instance snapshot during migration, so the
+    /// resolution must stay correct for >1 instances.
+    static func resolveActiveInstanceId(
+        activeId: String?,
+        instances: [ConversationInstanceInfo]
+    ) -> String? {
+        activeId ?? instances.first?.id
     }
 }
 
@@ -181,13 +261,34 @@ struct PermissionRequest: Codable, Identifiable, Sendable {
     let options: [PermissionOption]
     /// Engine instance (sub-tab) this request belongs to. Populated by the
     /// desktop for engine-view denials (both the live `permission_request`
-    /// event and the snapshot queue promotion) so `EngineView` can scope
+    /// event and the snapshot queue promotion) so `ConversationView` can scope
     /// the plan/question card to the owning sub-conversation. Nil for CLI
     /// tabs and for payloads from older desktops — nil passes the
     /// active-instance filter for backward compatibility.
     var instanceId: String? = nil
 
     var id: String { questionId }
+}
+
+// MARK: - ElicitationRequest
+
+/// A live extension elicitation (`ctx.elicit`) awaiting a user decision.
+/// Mirrors `ElicitationRequest` in `src/shared/types-session.ts`. The engine
+/// fans `engine_elicitation_request` to every client and parks the run on an
+/// indefinite human-wait until one answers; iOS renders an approval card from
+/// `mode` + `schema` and replies with the `desktop_respond_elicitation`
+/// command keyed by `requestId`.
+struct ElicitationRequest: Codable, Identifiable, Sendable {
+    /// Engine-assigned id echoed back in the response command.
+    let requestId: String
+    /// Renderer selector ("approval", "select", ...). May be empty.
+    let mode: String
+    /// Harness-defined description of what is being requested.
+    let schema: [String: AnyCodable]?
+    /// Optional deep-link URL for web flows.
+    let url: String?
+
+    var id: String { requestId }
 }
 
 // MARK: - ActiveToolInfo

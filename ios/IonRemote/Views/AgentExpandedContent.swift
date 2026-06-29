@@ -1,9 +1,15 @@
 import SwiftUI
 
 /// Shared expanded content for an agent: model tag, dispatch pager,
-/// dispatch task bubble, conversation history, and loading states.
+/// conversation history, and loading states.
 /// Embedded by `AgentBarRow` (inline, height-capped) and
 /// `AgentDetailFullScreenView` (full-screen, uncapped).
+///
+/// When `pinHeader` is true (full-screen popup only), the view renders
+/// a `VStack { headerView; ScrollView { bodyView } }` so the header
+/// stays pinned above a scrolling transcript. When false (default), the
+/// entire content is in a single VStack so the caller's ScrollView wraps it
+/// all — keeping the inline AgentBarRow expand unchanged.
 struct AgentExpandedContent: View {
     let agent: AgentStateUpdate
     let messages: [Message]?
@@ -11,8 +17,15 @@ struct AgentExpandedContent: View {
     let isLoadingMessages: Bool
     let onLoadDispatch: ((String) -> Void)?
     let onPreloadDispatches: ((String) -> Void)?
+    /// When true, the view renders its header above a self-managed
+    /// ScrollView so the header stays pinned. Set only by
+    /// AgentDetailFullScreenView. AgentBarRow leaves this false.
+    var pinHeader: Bool = false
     @Environment(\.appTheme) private var theme
     @State private var selectedDispatchIndex: Int?
+    /// Live clock for the duration ticker — only ticks when pinHeader is true
+    /// and the agent is running, to avoid a needless timer in every inline row.
+    @State private var now = Date()
 
     // MARK: - Computed
 
@@ -23,6 +36,19 @@ struct AgentExpandedContent: View {
         return agent.dispatches[idx]
     }
 
+    /// Whether the "Working…" spinner should show for the current selection.
+    /// When a specific dispatch is selected (pager / multi-dispatch), it is gated
+    /// strictly on that dispatch's own status — never the live agent's — so a
+    /// non-running dispatch never borrows a sibling's running state. In the
+    /// single-dispatch case (no pager), fall back to the agent's status.
+    private var dispatchIsRunning: Bool {
+        DispatchBodyState.isRunning(
+            hasActiveDispatch: activeDispatch != nil,
+            dispatchStatus: activeDispatch?.status,
+            agentStatus: agent.status
+        )
+    }
+
     private var activeMessages: [Message]? {
         if let dispatch = activeDispatch {
             // A specific dispatch is selected via the pager. If it has a
@@ -30,92 +56,111 @@ struct AgentExpandedContent: View {
             // no conversation yet), return nil so the UI shows "Working…"
             // instead of leaking another dispatch's conversation.
             guard !dispatch.conversationId.isEmpty else { return nil }
-            let msgs = convMessageCache[dispatch.conversationId]
-            // When multiple dispatches share a conversationId (the engine
-            // reuses the same session), slice messages by the dispatch's
-            // time window so each pager tab shows only its own work.
-            if let msgs, sharesConversationId(dispatch) {
-                return sliceMessages(msgs, for: dispatch)
-            }
-            return msgs
+            return convMessageCache[dispatch.conversationId]
         }
         // Single dispatch (no pager) — use the first dispatch's conversation.
         if let convId = agent.dispatches.first?.conversationId, !convId.isEmpty {
-            let msgs = convMessageCache[convId]
-            if let msgs, let first = agent.dispatches.first, agent.dispatches.count > 1,
-               sharesConversationId(first) {
-                return sliceMessages(msgs, for: first)
-            }
-            return msgs
+            return convMessageCache[convId]
         }
         return messages
     }
 
-    /// Whether a dispatch shares its conversationId with any other dispatch.
-    private func sharesConversationId(_ dispatch: DispatchInfo) -> Bool {
-        guard !dispatch.conversationId.isEmpty else { return false }
-        return agent.dispatches.contains { $0.id != dispatch.id && $0.conversationId == dispatch.conversationId }
-    }
+    // MARK: - Body
 
-    /// Slices messages from a shared conversation to only those belonging to
-    /// a specific dispatch, using the dispatch startTime as a boundary.
-    /// Messages with timestamps ≥ this dispatch's start and < the next
-    /// dispatch's start are included. Dispatch startTime is in seconds;
-    /// message timestamps are in milliseconds.
-    private func sliceMessages(_ msgs: [Message], for dispatch: DispatchInfo) -> [Message] {
-        guard let startSec = dispatch.startTime else { return msgs }
-        let startMs = startSec * 1000
-
-        let siblings = agent.dispatches
-            .filter { $0.conversationId == dispatch.conversationId }
-            .sorted { ($0.startTime ?? 0) < ($1.startTime ?? 0) }
-        let nextStart: Double? = siblings
-            .first { ($0.startTime ?? 0) > startSec }
-            .flatMap { $0.startTime.map { $0 * 1000 } }
-
-        return msgs.filter { msg in
-            guard let ts = msg.timestamp else { return true }
-            if ts < startMs { return false }
-            if let end = nextStart, ts >= end { return false }
-            return true
+    var body: some View {
+        if pinHeader {
+            // Pinned layout: header outside the ScrollView, transcript inside.
+            VStack(alignment: .leading, spacing: 0) {
+                headerView
+                ScrollView {
+                    bodyView
+                }
+            }
+            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { t in
+                if agent.status == "running" { now = t }
+            }
+        } else {
+            // Inline layout (AgentBarRow): single VStack, caller owns scrolling.
+            VStack(alignment: .leading, spacing: 6) {
+                headerView
+                bodyView
+            }
+            .padding(.vertical, 6)
+            .onAppear { logDispatchState(event: "onAppear") }
+            .onChange(of: selectedDispatchIndex) { _ in logDispatchState(event: "selectionChange") }
         }
     }
 
-    var body: some View {
+    // MARK: - Header view (model tag + dispatch picker)
+
+    /// The pinned header: model tag and dispatch picker.
+    /// Rendered above the ScrollView in pinned layout; inline in default layout.
+    @ViewBuilder var headerView: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Model tag
+            // Model tag + duration (duration shown only in pinned layout to
+            // avoid doubling the duration that AgentBarRow.headerRow already
+            // shows in the compact row above the inline expand).
             let activeModel = activeDispatch?.model ?? agent.model
-            if let model = activeModel, !model.isEmpty {
+            if (activeModel != nil && !(activeModel?.isEmpty ?? true)) || (pinHeader && elapsedSeconds != nil) {
                 HStack(spacing: 4) {
-                    Image(systemName: "cpu")
-                        .font(.caption2)
-                    Text(modelLabel(model))
-                        .font(.caption2)
+                    if let model = activeModel, !model.isEmpty {
+                        Image(systemName: "cpu")
+                            .font(.caption2)
+                        Text(modelLabel(model))
+                            .font(.caption2)
+                    }
+                    if pinHeader, let secs = elapsedSeconds {
+                        if activeModel != nil && !(activeModel?.isEmpty ?? true) {
+                            Text("|")
+                                .font(.caption2)
+                                .opacity(0.4)
+                        }
+                        Image(systemName: "clock")
+                            .font(.caption2)
+                        Text(AgentDuration.format(secs))
+                            .font(.caption2.monospacedDigit())
+                    }
                 }
                 .foregroundStyle(theme.textSecondary.opacity(0.5))
                 .padding(.horizontal, 12)
+                .padding(.top, pinHeader ? 8 : 0)
             }
 
             // Dispatch picker (shown when multiple dispatches exist)
             if agent.dispatches.count > 1 {
                 dispatchPicker
             }
+        }
+        .padding(.bottom, pinHeader ? 4 : 0)
+    }
 
-            // Dispatch task (the orchestrator's instruction to the agent)
-            let activeTask = activeDispatch?.task ?? agent.task
-            if let task = activeTask, !task.isEmpty {
-                dispatchBubble(task)
-            }
+    // MARK: - Body view (conversation transcript)
 
+    /// The scrollable transcript: messages, loading indicator, or fallback.
+    /// Branch selection is delegated to DispatchBodyState.branch so the
+    /// decision logic is unit-testable apart from the SwiftUI view.
+    @ViewBuilder var bodyView: some View {
+        let msgs = activeMessages
+        let branch = DispatchBodyState.branch(
+            hasMessages: !(msgs?.isEmpty ?? true),
+            isLoading: isLoadingMessages,
+            hasActiveDispatch: activeDispatch != nil,
+            hasFullOutput: !(agent.fullOutput?.isEmpty ?? true),
+            isRunning: dispatchIsRunning
+        )
+        VStack(alignment: .leading, spacing: 0) {
             // Agent conversation history (loaded on expand).
             // When loaded, replaces fullOutput (matches desktop behavior).
-            // Skips user messages whose content matches the dispatch task
-            // already shown in the bubble above.
-            if let msgs = activeMessages, !msgs.isEmpty {
-                ForEach(conversationMessages(msgs)) { msg in
-                    conversationBubble(msg)
+            // Tool and thinking rows are rendered via EngineToolGroupRow /
+            // EngineMessageRow for parity with the main conversation and
+            // desktop ToolGroup.
+            switch branch {
+            case .messages:
+                let filtered = conversationMessages(msgs ?? [])
+                ForEach(groupDispatchItems(filtered)) { item in
+                    dispatchItemRow(item)
                 }
-            } else if isLoadingMessages {
+            case .loading:
                 HStack(spacing: 6) {
                     ProgressView().scaleEffect(0.6)
                     Text("Loading conversation…")
@@ -123,19 +168,20 @@ struct AgentExpandedContent: View {
                         .foregroundStyle(theme.textSecondary.opacity(0.5))
                 }
                 .padding(.horizontal, 12)
-            } else if activeDispatch == nil,
-                      let fullOutput = agent.fullOutput, !fullOutput.isEmpty {
+            case .fullOutput:
                 // Fallback: show fullOutput only when no conversation loaded
                 // and no specific dispatch is selected. In multi-dispatch mode
                 // fullOutput is the agent's global output — not scoped to the
                 // selected dispatch — so showing it would leak previous
                 // dispatch content into a new dispatch that hasn't responded yet.
-                MarkdownContentView(
-                    blocks: MarkdownBlockCache.shared.blocks(for: fullOutput)
-                )
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-            } else if agent.status == "running" || activeDispatch?.status == "running" {
+                if let fullOutput = agent.fullOutput, !fullOutput.isEmpty {
+                    MarkdownContentView(
+                        blocks: MarkdownBlockCache.shared.blocks(for: fullOutput)
+                    )
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                }
+            case .working:
                 HStack(spacing: 6) {
                     ProgressView().scaleEffect(0.6)
                     Text("Working…")
@@ -143,9 +189,53 @@ struct AgentExpandedContent: View {
                         .foregroundStyle(theme.textSecondary.opacity(0.5))
                 }
                 .padding(.horizontal, 12)
+            case .noTranscript:
+                // A specific dispatch is selected but it is not running and has no
+                // transcript (empty conversationId, or no cached messages). The
+                // engine recorded no conversation for this dispatch — show the
+                // honest static state, never a spinner that implies live work.
+                Text("No transcript recorded for this dispatch")
+                    .font(.caption2)
+                    .foregroundStyle(theme.textSecondary.opacity(0.5))
+                    .padding(.horizontal, 12)
+            case .empty:
+                EmptyView()
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, pinHeader ? 8 : 0)
+        .onAppear {
+            if !pinHeader { return }
+            logDispatchState(event: "onAppear")
+        }
+        .onChange(of: selectedDispatchIndex) { _ in
+            if !pinHeader { return }
+            logDispatchState(event: "selectionChange")
+        }
+    }
+
+    // MARK: - Elapsed seconds (pinned layout only)
+
+    private var elapsedSeconds: Int? {
+        // When a specific dispatch is selected (pager / multi-dispatch), compute
+        // strictly from that dispatch's own status/startTime/elapsed. Do NOT fall
+        // back to the live agent's clock — a dispatch with no startTime and a
+        // non-running status must show no ticking timer rather than borrowing the
+        // agent's running duration. Only the single-dispatch (activeDispatch == nil)
+        // path falls back to the agent-level values.
+        if let dispatch = activeDispatch {
+            return AgentDuration.elapsedSeconds(
+                status: dispatch.status,
+                startTime: dispatch.startTime,
+                elapsed: dispatch.elapsed,
+                now: now
+            )
+        }
+        return AgentDuration.elapsedSeconds(
+            status: agent.status,
+            startTime: agent.startTime,
+            elapsed: agent.elapsed,
+            now: now
+        )
     }
 
     // MARK: - Dispatch picker
@@ -180,36 +270,74 @@ struct AgentExpandedContent: View {
         }
     }
 
-    // MARK: - Dispatch bubble
-
-    private func dispatchBubble(_ task: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Image(systemName: "arrow.right.circle.fill")
-                .font(.caption)
-                .foregroundStyle(theme.accent.opacity(0.7))
-                .padding(.top, 2)
-            Text(task)
-                .font(.caption2)
-                .foregroundStyle(theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.accent.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 10)
-    }
-
     // MARK: - Conversation rendering
 
+    /// Filter messages for display. Drops empty assistant rows.
+    /// Preserves tool, thinking, user, and all other roles.
     private func conversationMessages(_ msgs: [Message]) -> [Message] {
-        let task = activeDispatch?.task ?? agent.task ?? ""
         return msgs.filter { msg in
-            guard msg.role == .assistant || msg.role == .user else { return false }
-            if msg.role == .user && !task.isEmpty && msg.content.trimmingCharacters(in: .whitespacesAndNewlines) == task.trimmingCharacters(in: .whitespacesAndNewlines) {
+            // Drop empty assistant rows.
+            if msg.role == .assistant && msg.content.isEmpty {
                 return false
             }
-            return !msg.content.isEmpty
+            return true
+        }
+    }
+
+    // MARK: - Grouping for dispatch view
+
+    /// A lightweight grouped item for the dispatch preview list.
+    enum DispatchItem: Identifiable {
+        case single(Message)
+        case toolGroup([Message])
+        var id: String {
+            switch self {
+            case .single(let m): return m.id
+            case .toolGroup(let ms): return "tg-\(ms.first?.id ?? "")"
+            }
+        }
+    }
+
+    /// Groups consecutive .tool messages into DispatchItem.toolGroup so they
+    /// render as a single collapsed EngineToolGroupRow pill. All other roles
+    /// produce individual .single items. Preserves timestamp order.
+    private func groupDispatchItems(_ msgs: [Message]) -> [DispatchItem] {
+        var result: [DispatchItem] = []
+        var toolBuf: [Message] = []
+        for msg in msgs {
+            if msg.role == .tool {
+                toolBuf.append(msg)
+            } else {
+                if !toolBuf.isEmpty {
+                    result.append(.toolGroup(toolBuf))
+                    toolBuf = []
+                }
+                result.append(.single(msg))
+            }
+        }
+        if !toolBuf.isEmpty {
+            result.append(.toolGroup(toolBuf))
+        }
+        return result
+    }
+
+    @ViewBuilder
+    private func dispatchItemRow(_ item: DispatchItem) -> some View {
+        switch item {
+        case .toolGroup(let tools):
+            // Reuse the existing collapsible pill — same component as the main
+            // conversation view. Matches desktop ToolGroup behavior.
+            EngineToolGroupRow(tools: tools)
+                .padding(.horizontal, 10)
+        case .single(let msg):
+            // Thinking rows delegate to ThinkingRowView via EngineMessageRow.
+            // User and assistant rows use conversationBubble.
+            if msg.role == .thinking {
+                EngineMessageRow(message: msg)
+                    .padding(.horizontal, 12)
+            } else {
+                conversationBubble(msg)
+            }
         }
     }
 
@@ -247,5 +375,19 @@ struct AgentExpandedContent: View {
         if model.contains("sonnet") { return "Sonnet" }
         if model.contains("haiku") { return "Haiku" }
         return model
+    }
+
+    private func logDispatchState(event: String) {
+        let idx = selectedDispatchIndex ?? (agent.dispatches.count - 1)
+        let dispatch = agent.dispatches.indices.contains(idx) ? agent.dispatches[idx] : nil
+        let dispatchId = dispatch?.id ?? ""
+        let convId = dispatch?.conversationId ?? ""
+        let rawCount = activeMessages?.count ?? 0
+        let filtered = conversationMessages(activeMessages ?? [])
+        let toolCount = filtered.filter { $0.role == .tool }.count
+        let assistantCount = filtered.filter { $0.role == .assistant }.count
+        let thinkingCount = filtered.filter { $0.role == .thinking }.count
+        let userCount = filtered.filter { $0.role == .user }.count
+        DiagnosticLog.log("DISPATCH-VIEW: \(event) idx=\(idx) convId=\(convId) dispatchId=\(dispatchId) raw=\(rawCount) filtered=\(filtered.count) tool=\(toolCount) assistant=\(assistantCount) thinking=\(thinkingCount) user=\(userCount)")
     }
 }

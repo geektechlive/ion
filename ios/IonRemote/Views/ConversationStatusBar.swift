@@ -29,13 +29,11 @@ struct ConversationStatusBar: View {
     // Engine-specific optional parameters
     var hasEngineExtension: Bool = false
     var extensionName: String? = nil
-    var statusState: String? = nil
-    /// Number of dispatched background agents currently running.
-    /// When `statusState == "idle"` and this is > 0 the bar renders
-    /// the yellow "awaiting children" pulse + label instead of the
-    /// gray "idle" text. Mirrors the desktop's `agentRunningCount`
-    /// prop on `EngineFooter`. Defaults to 0 for older snapshots
-    /// that don't carry the field.
+    /// Number of dispatched background agents currently running. When
+    /// `isRunning` is false and this is > 0 the bar renders the yellow
+    /// "waiting for N background agent(s)" pulse + label (see
+    /// `resolveRunActivity`). Mirrors the desktop's `agentRunningCount`.
+    /// Defaults to 0 for older snapshots that don't carry the field.
     var runningAgentCount: Int = 0
 
     // Extended-thinking (per-conversation). When `thinkingGloballyEnabled` is
@@ -49,6 +47,73 @@ struct ConversationStatusBar: View {
     var onSelectThinkingEffort: (String) -> Void = { _ in }
 
     @State private var showModeConfirm = false
+
+    /// Engine-derived inputs for the status bar, resolved nil-safely from an
+    /// optional `StatusFields`. The bar must ALWAYS render for engine tabs (like
+    /// it does for plain conversations); when an engine instance has no status
+    /// yet, these fall back to safe values so the core controls (model picker,
+    /// permission toggle, attachments) stay visible and the status-dependent
+    /// chrome (status dot, context %, extension name) self-hides.
+    struct EngineInputs: Equatable {
+        let preferredModel: String
+        let contextPercent: Double?
+        let engineContextWindow: Int?
+        let extensionName: String?
+    }
+
+    /// Resolve `EngineInputs` from an optional `StatusFields` and the global
+    /// preferred-model fallback. Pure — pinned by ConversationStatusBarVisibilityTests
+    /// so the "always render, degrade gracefully" contract cannot regress back to
+    /// gating the whole bar on `statusFields != nil`.
+    static func resolveEngineInputs(
+        fields: StatusFields?,
+        fallbackPreferredModel: String,
+    ) -> EngineInputs {
+        EngineInputs(
+            preferredModel: fields?.model ?? fallbackPreferredModel,
+            contextPercent: fields?.contextPercent,
+            engineContextWindow: (fields?.contextWindow ?? 0) > 0 ? fields?.contextWindow : nil,
+            extensionName: fields?.extensionName,
+        )
+    }
+
+    /// Run-activity indicator decision for the status-bar dot + label.
+    ///
+    /// Derived from the two signals that are reliably present in the iOS view
+    /// layer — `isRunning` (orchestrator run-state, which `ConversationView`
+    /// derives from `tab.status`) and `runningAgentCount` (the live count of
+    /// dispatched background agents in the `running` status). It does NOT read
+    /// `StatusFields.state`: that field is non-Codable and snapshot-excluded on
+    /// iOS, so gating the dot on it hid the yellow "waiting for N background
+    /// agent(s)" label whenever the orchestrator went idle with a child still
+    /// running.
+    ///
+    /// Priority cascade (matches the desktop `getTabStatusColor` /
+    /// `TabRowView.statusInfo`): foreground orange "running" beats background
+    /// yellow "awaiting children". When neither applies, `show` is false and the
+    /// bar renders no dot/label (this is a run-activity indicator only — there is
+    /// no idle label). Pure + static so it is unit-testable directly, pinning the
+    /// shipped logic rather than a re-derivation.
+    struct RunActivity: Equatable {
+        let show: Bool
+        let isRunning: Bool
+        let label: String
+    }
+
+    static func resolveRunActivity(isRunning: Bool, runningAgentCount: Int) -> RunActivity {
+        if isRunning {
+            return RunActivity(show: true, isRunning: true, label: "running")
+        }
+        if runningAgentCount > 0 {
+            let suffix = runningAgentCount == 1 ? "" : "s"
+            return RunActivity(
+                show: true,
+                isRunning: false,
+                label: "waiting for \(runningAgentCount) background agent\(suffix)",
+            )
+        }
+        return RunActivity(show: false, isRunning: false, label: "")
+    }
 
     /// The effective model: override > preferred > default fallback.
     private var effectiveModel: String {
@@ -125,41 +190,40 @@ struct ConversationStatusBar: View {
                     .frame(height: 12)
             }
 
-            // Running/idle/waiting dot indicator (when statusState is provided).
+            // Running/waiting dot indicator.
             //
-            // Three visual states, priority cascade matches desktop's
-            // EngineFooter and the StatusDot/getTabStatusColor cascade
-            // in TabStripStatusDot.tsx / TabStripShared.ts:
-            //   - state == "running"  → orange `theme.statusRunning`
-            //     dot, label = state text (orange/foreground)
-            //   - state == "idle" AND runningAgentCount > 0 →
-            //     yellow `theme.statusWaitingChildren` dot, label =
-            //     "waiting for N background agent(s)" (yellow/background)
-            //   - otherwise → gray dot, plain `state` text (truly idle)
+            // Two visual states, priority cascade matches the desktop's
+            // StatusBarEngineState and the getTabStatusColor / TabRowView
+            // .statusInfo cascade:
+            //   - isRunning (orchestrator running/connecting, derived from
+            //     tab.status) → orange `theme.statusRunning` dot + "running"
+            //   - NOT running AND runningAgentCount > 0 → yellow
+            //     `theme.statusWaitingChildren` dot + "waiting for N
+            //     background agent(s)"
+            //   - otherwise → no dot/label (run-activity indicator only)
             //
-            // The pulse is implicit on iOS — the InstancePulsingDot
-            // is reused in EngineInstanceBar; for this footer we keep
-            // the dot static like the prior implementation to avoid
-            // animating two separate status bars on screen. The label
-            // color carries the signal.
-            if let state = statusState {
-                let isRunningState = state.lowercased() == "running"
-                let isWaitingChildren = state.lowercased() == "idle" && runningAgentCount > 0
-                let dotColor: Color = isRunningState
+            // Reads `isRunning` + `runningAgentCount` — the signals reliably
+            // present in the iOS view layer — NOT `statusState`, which comes
+            // from `StatusFields.state` and is nil whenever the orchestrator is
+            // idle with a child still running (the bug this fixes). The pulse
+            // is implicit on iOS — the dot is kept static here like the prior
+            // footer to avoid animating two status surfaces at once; the label
+            // color carries the signal. Decision pinned by
+            // ConversationStatusBarWaitingTests via resolveRunActivity.
+            let runActivity = Self.resolveRunActivity(
+                isRunning: isRunning,
+                runningAgentCount: runningAgentCount,
+            )
+            if runActivity.show {
+                let activeColor = runActivity.isRunning
                     ? theme.statusRunning
-                    : (isWaitingChildren ? theme.statusWaitingChildren : Color.gray)
-                let labelColor: Color = isRunningState
-                    ? theme.statusRunning
-                    : (isWaitingChildren ? theme.statusWaitingChildren : Color.secondary)
-                let labelText: String = isWaitingChildren
-                    ? "waiting for \(runningAgentCount) background agent\(runningAgentCount == 1 ? "" : "s")"
-                    : state
+                    : theme.statusWaitingChildren
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(dotColor)
+                        .fill(activeColor)
                         .frame(width: 6, height: 6)
-                    Text(labelText)
-                        .foregroundStyle(labelColor)
+                    Text(runActivity.label)
+                        .foregroundStyle(activeColor)
                 }
 
                 Divider()

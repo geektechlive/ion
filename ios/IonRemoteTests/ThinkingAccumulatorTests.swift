@@ -79,7 +79,7 @@ final class ThinkingAccumulatorTests: XCTestCase {
         XCTAssertFalse(finalRows[0].thinkingRedacted)
 
         // In-progress id forgotten so a stray late delta can't reopen it.
-        XCTAssertNil(vm.thinkingInProgress[vm.resolveEngineKey(tabId: tabId, instanceId: instanceId)])
+        XCTAssertNil(vm.thinkingMessageId(tabId))
     }
 
     // MARK: - Summary-only (deltas absent)
@@ -180,14 +180,13 @@ final class ThinkingAccumulatorTests: XCTestCase {
     /// This is the iOS analogue of resetting an in-flight stream accumulator.
     func testClearAccumulatorDropsInProgressBlock() {
         let vm = makeViewModel()
-        let key = vm.resolveEngineKey(tabId: tabId, instanceId: instanceId)
 
         vm.handleEngineThinkingBlockStart(tabId: tabId, instanceId: instanceId)
-        XCTAssertNotNil(vm.thinkingInProgress[key], "block in progress after start")
+        XCTAssertNotNil(vm.thinkingMessageId(tabId), "block in progress after start")
 
         // Simulate a conversation-history reload wiping the accumulator.
-        vm.clearThinkingAccumulator(forKey: key)
-        XCTAssertNil(vm.thinkingInProgress[key], "accumulator cleared on stream reset")
+        vm.clearThinkingAccumulator(forKey: tabId)
+        XCTAssertNil(vm.thinkingMessageId(tabId), "accumulator cleared on stream reset")
 
         // A late delta must now be a no-op — content of the (still-present)
         // row must not change because the id binding is gone.

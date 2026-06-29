@@ -12,6 +12,9 @@ extension DiagnosticLog {
         case .heartbeat:
             return // skip — fires every few seconds
 
+        case .resendUnavailable(let fromSeq):
+            log("EVENT: resendUnavailable fromSeq=\(fromSeq)")
+
         case .snapshot(let tabs, let dirs, let groupMode, _, _, _, _, _, _, _, _):
             log("EVENT: snapshot tabs=\(tabs.count) dirs=\(dirs.count) groupMode=\(groupMode ?? "nil")")
 
@@ -137,6 +140,8 @@ extension DiagnosticLog {
             log("EVENT: engineLlmCall tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
         case .engineDispatchStart(let tabId, let instId):
             log("EVENT: engineDispatchStart tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        case .engineDispatchActivity(let tabId, _, let agentId, let convId, let kind, let seq, _, let toolId, _, _, _):
+            log("EVENT: engineDispatchActivity tab=\(tabId.prefix(8)) agent=\(agentId.prefix(16)) conv=\(convId.prefix(8)) kind=\(kind) seq=\(seq) toolId=\(toolId ?? "")")
 
         case .engineError(let tabId, let instId, let msg):
             log("ERR: engine tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") msg=\(msg.prefix(80))")
@@ -171,8 +176,9 @@ extension DiagnosticLog {
         case .engineHarnessMessage(let tabId, let instId, let msg, _, _):
             log("EVENT: engineHarnessMessage tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") len=\(msg.count)")
 
-        case .engineConversationHistory(let tabId, let instId, let msgs):
-            log("EVENT: engineConvHistory tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") msgs=\(msgs.count)")
+        // engineConversationHistory log arm removed (WI-004 / #259).
+        // History arrives via .conversationHistory (desktop_conversation_history),
+        // logged by handleConversationHistory in SessionViewModel+PermissionMessageEvents.
 
         case .agentConversationHistory(let agentName, let convId, let msgs):
             log("EVENT: agentConvHistory agent=\(agentName) convId=\(convId ?? "nil") msgs=\(msgs.count)")
@@ -245,12 +251,13 @@ extension DiagnosticLog {
             // separately at the view layer.
             log("EVENT: engineExport tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") format=\(exportFormat ?? "nil") bytes=\(message.count)")
 
-        case .desktopSettingsSnapshot(let settings, let schema, let groups):
+        case .desktopSettingsSnapshot(let settings, let schema, let groups, let newConversationPolicy):
             // Snapshot of the desktop's projectable user preferences.
             // Logged with counts only — the actual values can be
             // sensitive and the wire payload is small enough that a
             // future diagnostic dump can capture the full record if
             // needed.
+            _ = newConversationPolicy // logged at assignment site in EventHandlers
             log("EVENT: desktopSettingsSnapshot values=\(settings.count) schema=\(schema.count) groups=\(groups.count)")
 
         case .gitChangesResponse(let dir, _):

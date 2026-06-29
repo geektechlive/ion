@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - AgentTurnRow
 
 /// Renders an agent turn: a collapsible activity panel (tools) with assistant
-/// text below (always visible). Used by both EngineView and ConversationView
+/// text below (always visible). Used by ConversationView
 /// when the unified turn view setting is active.
 struct AgentTurnRow: View {
     let tools: [Message]

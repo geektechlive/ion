@@ -269,9 +269,6 @@ extension SessionViewModel {
         connectionState = .disconnected
         tabs = []
         tabIds = []
-        liveText = [:]
-        messages = [:]
-        messageCountByTab = [:]
         loadingConversation = []
         conversationLoaded = []
         conversationHasMore = [:]
@@ -283,11 +280,8 @@ extension SessionViewModel {
         terminalInstances = [:]
         activeTerminalInstance = [:]
         terminalInstanceLabels = [:]
-        engineWorkingMessages = [:]
         engineDialogs = [:]
         enginePinnedPrompt = [:]
-        engineConversationLoaded = []
-        thinkingInProgress = [:]
         conversationInstances = [:]
         activeEngineInstance = [:]
         engineProfiles = []
@@ -295,6 +289,7 @@ extension SessionViewModel {
         // doesn't briefly render the previous desktop's settings while
         // the new pairing's initial snapshot is in flight.
         desktopSettings = nil
+        enterpriseNewConversationPolicy = nil
         pendingCloseTabIds = []
         pendingInputByTab = [:]
         awaitingLocalTabCreation = false
@@ -446,8 +441,8 @@ extension SessionViewModel {
                 self.activeDeviceId = nil
                 self.hasConnectedBefore = false
                 UserDefaults.standard.set(false, forKey: "hasConnectedBefore")
-                self.liveText = [:]
-                self.messages = [:]
+                self.conversationInstances = [:]
+                self.activeEngineInstance = [:]
                 self.loadingConversation = []
                 self.conversationLoaded = []
                 self.conversationHasMore = [:]

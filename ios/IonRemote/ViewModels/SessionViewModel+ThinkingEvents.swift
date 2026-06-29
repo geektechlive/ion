@@ -5,8 +5,8 @@ import Foundation
 // Binds the three desktop_thinking_* events into a per-instance reasoning
 // row in the engine conversation:
 //
-//   block_start → append a live `.thinking` Message and remember its id in
-//                 `thinkingInProgress` (keyed by engine compound key).
+//   block_start → append a live `.thinking` Message and remember its id in the
+//                 tab's single instance (`thinkingMessageId`, post-#256).
 //   delta       → append `thinkingText` to that live message's content. May
 //                 NOT arrive (low-bandwidth / streamThinkingToRemote off /
 //                 redacted block) — in which case the row stays summary-only.
@@ -28,11 +28,11 @@ import Foundation
 //   3. Summary-only: thinkingActive == false and content empty; shows
 //      "💭 Thought for {n}s" (+ token estimate) or "🔒 redacted reasoning".
 //
-// Stream-reset semantics: `thinkingInProgress` is cleared whenever the
-// conversation is reloaded (engineConversationHistory), an instance is
-// removed, or transient state is wiped — so a block that never received its
-// block_end (transport drop mid-reasoning) never leaves a permanently
-// "thinking…" row bound to a stale message id. See clearThinkingAccumulator.
+// Stream-reset semantics: the tab's `thinkingMessageId` is cleared whenever the
+// conversation is reloaded (desktop_conversation_history / handleConversationHistory)
+// or transient state is wiped — so a block that never received its block_end
+// (transport drop mid-reasoning) never leaves a permanently "thinking…" row bound
+// to a stale message id. See clearThinkingAccumulator.
 
 extension SessionViewModel {
 
@@ -43,11 +43,10 @@ extension SessionViewModel {
     /// thinking rows at once.
     @MainActor
     func handleEngineThinkingBlockStart(tabId: String, instanceId: String?) {
-        let key = resolveEngineKey(tabId: tabId, instanceId: instanceId)
-        DiagnosticLog.log("ENGINE: thinking-block-start key=\(key.prefix(16))")
+        DiagnosticLog.log("ENGINE: thinking-block-start tabId=\(tabId.prefix(16))")
 
-        // Defensive close of any orphaned in-progress block for this key.
-        finalizeInProgressThinking(key: key, tabId: tabId, instanceId: instanceId,
+        // Defensive close of any orphaned in-progress block for this tab.
+        finalizeInProgressThinking(tabId: tabId, instanceId: instanceId,
                                    totalTokens: nil, elapsedSeconds: nil, redacted: nil)
 
         let msgId = UUID().uuidString
@@ -59,7 +58,7 @@ extension SessionViewModel {
             thinkingActive: true
         )
         mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.messages.append(msg) }
-        thinkingInProgress[key] = msgId
+        setThinkingMessageId(tabId: tabId, msgId)
     }
 
     /// An incremental chunk of reasoning text arrived. Append it to the live
@@ -69,8 +68,7 @@ extension SessionViewModel {
     @MainActor
     func handleEngineThinkingDelta(tabId: String, instanceId: String?, thinkingText: String) {
         guard !thinkingText.isEmpty else { return }
-        let key = resolveEngineKey(tabId: tabId, instanceId: instanceId)
-        guard let msgId = thinkingInProgress[key] else { return }
+        guard let msgId = thinkingMessageId(tabId) else { return }
         mutateEngineInstance(tabId: tabId, instanceId: instanceId) { inst in
             if let idx = inst.messages.lastIndex(where: { $0.id == msgId }) {
                 inst.messages[idx].content += thinkingText
@@ -92,11 +90,10 @@ extension SessionViewModel {
         elapsedSeconds: Double?,
         redacted: Bool?
     ) {
-        let key = resolveEngineKey(tabId: tabId, instanceId: instanceId)
-        DiagnosticLog.log("ENGINE: thinking-block-end key=\(key.prefix(16)) tokens=\(totalTokens.map(String.init) ?? "nil") elapsed=\(elapsedSeconds.map { String(format: "%.1f", $0) } ?? "nil") redacted=\(redacted ?? false)")
+        DiagnosticLog.log("ENGINE: thinking-block-end tabId=\(tabId.prefix(16)) tokens=\(totalTokens.map(String.init) ?? "nil") elapsed=\(elapsedSeconds.map { String(format: "%.1f", $0) } ?? "nil") redacted=\(redacted ?? false)")
 
-        if thinkingInProgress[key] != nil {
-            finalizeInProgressThinking(key: key, tabId: tabId, instanceId: instanceId,
+        if thinkingMessageId(tabId) != nil {
+            finalizeInProgressThinking(tabId: tabId, instanceId: instanceId,
                                        totalTokens: totalTokens, elapsedSeconds: elapsedSeconds, redacted: redacted)
             return
         }
@@ -119,20 +116,19 @@ extension SessionViewModel {
         mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.messages.append(msg) }
     }
 
-    /// Finalize the live thinking message for `key` (if any): clear the
-    /// active flag and stamp the summary fields. Always removes the
-    /// in-progress id so a follow-up delta can't reopen a closed block.
+    /// Finalize the live thinking message for `tabId` (if any): clear the
+    /// active flag and stamp the summary fields. Always clears the in-progress
+    /// id so a follow-up delta can't reopen a closed block.
     @MainActor
     private func finalizeInProgressThinking(
-        key: String,
         tabId: String,
         instanceId: String?,
         totalTokens: Int?,
         elapsedSeconds: Double?,
         redacted: Bool?
     ) {
-        guard let msgId = thinkingInProgress[key] else { return }
-        thinkingInProgress[key] = nil
+        guard let msgId = thinkingMessageId(tabId) else { return }
+        setThinkingMessageId(tabId: tabId, nil)
         mutateEngineInstance(tabId: tabId, instanceId: instanceId) { inst in
             guard let idx = inst.messages.lastIndex(where: { $0.id == msgId }) else { return }
             inst.messages[idx].thinkingActive = false
@@ -142,13 +138,13 @@ extension SessionViewModel {
         }
     }
 
-    /// Clear the in-progress thinking accumulator for one compound key.
-    /// Called on conversation reload (engineConversationHistory) and instance
-    /// removal so a block that never closed doesn't keep a stale message id
-    /// bound after the underlying messages are replaced. This is the iOS
-    /// analogue of resetting an in-flight stream accumulator.
+    /// Clear the in-progress thinking accumulator for one tab. Called on
+    /// conversation reload (desktop_conversation_history → handleConversationHistory)
+    /// so a block that never closed doesn't keep a stale message id bound after
+    /// the underlying messages are replaced. This is the iOS analogue of
+    /// resetting an in-flight stream accumulator.
     @MainActor
-    func clearThinkingAccumulator(forKey key: String) {
-        thinkingInProgress.removeValue(forKey: key)
+    func clearThinkingAccumulator(forKey tabId: String) {
+        setThinkingMessageId(tabId: tabId, nil)
     }
 }

@@ -107,6 +107,20 @@ extension RemoteEvent {
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             return true
+        case .engineDispatchActivity(let tabId, let instanceId, let agentId, let conversationId, let kind, let seq, let toolName, let toolId, let textDelta, let isError, let ts):
+            try container.encode(TypeKey.engineDispatchActivity, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(agentId, forKey: .dispatchAgentId)
+            try container.encode(conversationId, forKey: .dispatchConversationId)
+            try container.encode(kind, forKey: .dispatchActivityKind)
+            try container.encode(seq, forKey: .dispatchSeq)
+            try container.encodeIfPresent(toolName, forKey: .toolName)
+            try container.encodeIfPresent(toolId, forKey: .toolId)
+            try container.encodeIfPresent(textDelta, forKey: .dispatchTextDelta)
+            try container.encode(isError, forKey: .dispatchToolIsError)
+            try container.encodeIfPresent(ts, forKey: .dispatchActivityTs)
+            return true
 
         case .engineError(let tabId, let instanceId, let message):
             try container.encode(TypeKey.engineError, forKey: .type)
@@ -193,12 +207,9 @@ extension RemoteEvent {
             try container.encodeIfPresent(metadata, forKey: .metadata)
             return true
 
-        case .engineConversationHistory(let tabId, let instanceId, let messages):
-            try container.encode(TypeKey.engineConversationHistory, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encodeIfPresent(instanceId, forKey: .instanceId)
-            try container.encode(messages, forKey: .messages)
-            return true
+        // engineConversationHistory encode arm removed (WI-004 / #259).
+        // History is delivered via desktop_conversation_history; there is
+        // no engine-side NormalizedEvent case to encode for it.
 
         case .agentConversationHistory(let agentName, let conversationId, let messages):
             try container.encode(TypeKey.agentConversationHistory, forKey: .type)
@@ -330,11 +341,12 @@ extension RemoteEvent {
             _ = tabId; _ = instanceId; _ = resourceKind; _ = resourceSubId; _ = resourceDelta
             return false
 
-        case .desktopSettingsSnapshot(let settings, let schema, let groups):
+        case .desktopSettingsSnapshot(let settings, let schema, let groups, let newConversationPolicy):
             try container.encode(TypeKey.desktopSettingsSnapshot, forKey: .type)
             try container.encode(settings, forKey: .settings)
             try container.encode(schema, forKey: .schema)
             try container.encode(groups, forKey: .groups)
+            try container.encodeIfPresent(newConversationPolicy, forKey: .newConversationPolicy)
             return true
 
         case .engineIntercept(let tabId, let instanceId, let level, let title, let message, let source, let metadata):

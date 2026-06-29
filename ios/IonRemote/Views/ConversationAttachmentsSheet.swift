@@ -98,7 +98,7 @@ struct ConversationAttachmentsSheet: View {
     // MARK: - Computed
 
     private var conversationMessages: [Message] {
-        viewModel.messages[tabId] ?? []
+        viewModel.conversationMessages(tabId)
     }
 
     private var attachments: [ExtractedAttachment] {

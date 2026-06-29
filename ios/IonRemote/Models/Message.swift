@@ -38,6 +38,15 @@ struct Message: Codable, Identifiable, Sendable {
     /// EngineMessageRow reads this to choose the intercept banner style.
     /// Client-only field — NOT part of the wire protocol, NOT persisted.
     var interceptLevel: String? = nil
+    /// Path to the plan file associated with a plan-lifecycle divider message.
+    /// Populated only on `role: .system` divider messages whose content starts
+    /// with "── Plan created" or "── Plan updated" (built by
+    /// handleEnginePlanModeChanged in SessionViewModel+EngineEvents.swift from
+    /// the engine_plan_mode_changed event's planFilePath). EngineMessageRow
+    /// reads it to make the plan slug a tappable link that opens the plan
+    /// preview. Mirrors the desktop `Message.planFilePath`. Client-only field —
+    /// NOT part of the wire protocol, NOT persisted (excluded from CodingKeys).
+    var planFilePath: String? = nil
 
     // MARK: - Extended-thinking summary (issue #158)
     //

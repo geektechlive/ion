@@ -90,6 +90,23 @@ extension RemoteEvent {
             default: return nil
             }
 
+        case .engineDispatchActivity:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let agentId = try container.decodeIfPresent(String.self, forKey: .dispatchAgentId) ?? ""
+            let conversationId = try container.decodeIfPresent(String.self, forKey: .dispatchConversationId) ?? ""
+            let kind = try container.decodeIfPresent(String.self, forKey: .dispatchActivityKind) ?? ""
+            let seq = try container.decodeIfPresent(Int.self, forKey: .dispatchSeq) ?? 0
+            let toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+            let toolId = try container.decodeIfPresent(String.self, forKey: .toolId)
+            let textDelta = try container.decodeIfPresent(String.self, forKey: .dispatchTextDelta)
+            let isError = try container.decodeIfPresent(Bool.self, forKey: .dispatchToolIsError) ?? false
+            // Emit timestamp (unix millis). Decoded so the iOS mirror carries
+            // the full wire shape (Go engine_event.go + desktop both send it);
+            // tolerant-absent so legacy payloads without it still decode.
+            let ts = try container.decodeIfPresent(Int64.self, forKey: .dispatchActivityTs)
+            return .engineDispatchActivity(tabId: tabId, instanceId: instanceId, agentId: agentId, conversationId: conversationId, kind: kind, seq: seq, toolName: toolName, toolId: toolId, textDelta: textDelta, isError: isError, ts: ts)
+
         case .engineError:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
@@ -170,11 +187,9 @@ extension RemoteEvent {
             let metadata = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata)
             return .engineHarnessMessage(tabId: tabId, instanceId: instanceId, message: message, source: source, metadata: metadata)
 
-        case .engineConversationHistory:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
-            let messages = try Message.decodeEngineArray(from: container, forKey: .messages)
-            return .engineConversationHistory(tabId: tabId, instanceId: instanceId, messages: messages)
+        // engineConversationHistory decode arm removed (WI-004 / #259).
+        // History for every tab arrives via desktop_conversation_history
+        // (TypeKey.conversationHistory), decoded in NormalizedEvent+Stream.swift.
 
         case .agentConversationHistory:
             let agentName = try container.decode(String.self, forKey: .agentName)
@@ -338,10 +353,15 @@ extension RemoteEvent {
             // not merge values across snapshots — same semantics as
             // engine_agent_state. See DesktopSettingsModel.swift for
             // the higher-level state struct the view binds to.
+            //
+            // `newConversationPolicy` is optional — absent/null on older desktop
+            // builds that predate #256 enterprise projection. Decodes
+            // to nil in that case (forward-compat, no picker regression).
             let settings = try container.decode([String: AnyCodable].self, forKey: .settings)
             let schema = try container.decode([DesktopSettingSchemaEntry].self, forKey: .schema)
             let groups = try container.decode([DesktopSettingGroupDescriptor].self, forKey: .groups)
-            return .desktopSettingsSnapshot(settings: settings, schema: schema, groups: groups)
+            let newConversationPolicy = try container.decodeIfPresent(RemoteNewConversationPolicy.self, forKey: .newConversationPolicy)
+            return .desktopSettingsSnapshot(settings: settings, schema: schema, groups: groups, newConversationPolicy: newConversationPolicy)
 
         case .engineIntercept:
             // Intercept event routed from the desktop after it has applied

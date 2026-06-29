@@ -11,18 +11,34 @@ struct PlanApprovalCardView: View {
 
     // MARK: - Plan data (preview path, plan gentle-perching-lemon)
     //
-    // The snapshot no longer carries `planContent` (full body). It now carries:
+    // The snapshot carries a bounded preview for instant card render:
     //   planContentPreview: String   — first 4 KB for instant card render
     //   planSizeBytes: Int           — full file size in bytes
     //   planTruncated: Bool          — true when file > 4 KB
     //
     // iOS renders the preview immediately. On expand (showFullPlan) or
     // "Copy Plan", it fetches the full body via PlanContentStore (paged
-    // request_plan_content commands). The legacy `planContent` key is no
-    // longer read — do NOT reference it.
+    // request_plan_content commands).
+    //
+    // Fallback to inline `planContent`: two card-source paths deliver the full
+    // body inline in `toolInput.planContent` and NEVER carry `planContentPreview`
+    // — (1) the desktop snapshot promotes a permission denial whose toolInput was
+    // backfilled from conversation history, and its preview enrichment is skipped
+    // when the plan file is unreadable on disk; (2) `computeRestoredSpecialCard`
+    // synthesizes the card from a persisted ExitPlanMode message, and the preview
+    // key is snapshot-only so it is structurally absent. Reading ONLY
+    // `planContentPreview` made both produce a blank card. We therefore prefer the
+    // preview and fall back to the inline `planContent` the card already carries.
+    // (Earlier this comment said "never read planContent" — that was the bug.)
 
     private var planContentPreview: String? {
         request.toolInput?["planContentPreview"]?.value as? String
+    }
+
+    /// Full plan body delivered inline on the card's toolInput by the backfill /
+    /// restored-synthesis paths (which never produce `planContentPreview`).
+    private var planContentInline: String? {
+        request.toolInput?["planContent"]?.value as? String
     }
 
     private var planSizeBytes: Int {
@@ -37,11 +53,28 @@ struct PlanApprovalCardView: View {
         request.toolInput?["planFilePath"]?.value as? String
     }
 
-    /// Content to display in the inline preview. Uses the preview string from
-    /// the snapshot. Never reads the old `planContent` key.
+    /// Content to display in the inline preview. Prefers the bounded snapshot
+    /// preview; falls back to the inline `planContent` the card carries when the
+    /// snapshot did not enrich a preview (restored / synthesized cards, or an
+    /// unreadable plan file). Nil only when neither is present.
     private var displayContent: String? {
-        guard let preview = planContentPreview, !preview.isEmpty else { return nil }
-        return preview
+        Self.resolveDisplayContent(toolInput: request.toolInput)
+    }
+
+    /// Pure precedence resolver for the inline card body, extracted so the
+    /// `planContentPreview` → inline-`planContent` fallback is unit-testable
+    /// without instantiating the SwiftUI view (which needs an @Environment
+    /// SessionViewModel). Returns the non-empty preview if present, else the
+    /// non-empty inline body, else nil. Pin: a card carrying only `planContent`
+    /// (the backfill / restored-synthesis shape) must resolve to that body.
+    static func resolveDisplayContent(toolInput: [String: AnyCodable]?) -> String? {
+        if let preview = toolInput?["planContentPreview"]?.value as? String, !preview.isEmpty {
+            return preview
+        }
+        if let inline = toolInput?["planContent"]?.value as? String, !inline.isEmpty {
+            return inline
+        }
+        return nil
     }
 
     /// Full plan body assembled from paged fetches, once complete.
@@ -215,8 +248,9 @@ struct PlanApprovalCardView: View {
                 implement()
             }
         }) {
-            // Use the full assembled body when available; fall back to preview.
-            let content = fullPlanContent ?? planContentPreview ?? ""
+            // Use the full assembled body when available; fall back to the
+            // bounded preview, then to the inline body the card carries.
+            let content = fullPlanContent ?? planContentPreview ?? planContentInline ?? ""
             let isFetching = viewModel.planContentStore.isFetching(questionId: request.questionId)
             PlanFullScreenView(content: content, isFetching: isFetching) {
                 implementOnDismiss = true
@@ -250,7 +284,7 @@ struct PlanApprovalCardView: View {
         if let full = fullPlanContent {
             UIPasteboard.general.string = full
         } else {
-            UIPasteboard.general.string = planContentPreview ?? ""
+            UIPasteboard.general.string = planContentPreview ?? planContentInline ?? ""
             ensurePlanFetched()
         }
     }

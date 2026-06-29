@@ -390,6 +390,48 @@ final class ContractSyncTests: XCTestCase {
         }
     }
 
+    func testEngineDispatchActivityDecode() throws {
+        // tool_start (with dispatchActivityTs — the full wire shape)
+        let startJSON = """
+        {"type":"desktop_dispatch_activity","tabId":"t1","instanceId":"i1","dispatchAgentId":"dispatch-dev-1","dispatchConversationId":"child-conv","dispatchActivityKind":"tool_start","dispatchSeq":1,"toolName":"Read","toolId":"tool-1","dispatchActivityTs":1782088921498}
+        """.data(using: .utf8)!
+        let startEvent = try decoder.decode(RemoteEvent.self, from: startJSON)
+        guard case .engineDispatchActivity(_, _, let agentId, let convId, let kind, let seq, let toolName, let toolId, _, _, let ts) = startEvent else {
+            return XCTFail("Expected engineDispatchActivity (tool_start)")
+        }
+        XCTAssertEqual(agentId, "dispatch-dev-1")
+        XCTAssertEqual(convId, "child-conv")
+        XCTAssertEqual(kind, "tool_start")
+        XCTAssertEqual(seq, 1)
+        XCTAssertEqual(toolName, "Read")
+        XCTAssertEqual(toolId, "tool-1")
+        XCTAssertEqual(ts, 1782088921498)
+
+        // text delta
+        let textJSON = """
+        {"type":"desktop_dispatch_activity","tabId":"t1","dispatchAgentId":"a","dispatchConversationId":"c","dispatchActivityKind":"text","dispatchSeq":2,"dispatchTextDelta":"hello"}
+        """.data(using: .utf8)!
+        let textEvent = try decoder.decode(RemoteEvent.self, from: textJSON)
+        guard case .engineDispatchActivity(_, _, _, _, let tkind, _, _, _, let textDelta, _, let textTs) = textEvent else {
+            return XCTFail("Expected engineDispatchActivity (text)")
+        }
+        XCTAssertEqual(tkind, "text")
+        XCTAssertEqual(textDelta, "hello")
+        // Absent dispatchActivityTs decodes as nil (tolerant mirror).
+        XCTAssertNil(textTs)
+
+        // tool_end with error
+        let endJSON = """
+        {"type":"desktop_dispatch_activity","tabId":"t1","dispatchAgentId":"a","dispatchConversationId":"c","dispatchActivityKind":"tool_end","dispatchSeq":3,"toolId":"tool-1","dispatchToolIsError":true}
+        """.data(using: .utf8)!
+        let endEvent = try decoder.decode(RemoteEvent.self, from: endJSON)
+        guard case .engineDispatchActivity(_, _, _, _, let ekind, _, _, _, _, let isError, _) = endEvent else {
+            return XCTFail("Expected engineDispatchActivity (tool_end)")
+        }
+        XCTAssertEqual(ekind, "tool_end")
+        XCTAssertTrue(isError)
+    }
+
     func testEngineMessageEndDecode() throws {
         let json = """
         {"type":"desktop_message_end","tabId":"t1","usage":{"inputTokens":100,"outputTokens":50,"contextPercent":30,"cost":0.01}}

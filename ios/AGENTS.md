@@ -65,7 +65,7 @@ When adding a test, ensure it's a member of the `IonRemoteTests` target, not `Io
 ## Tests (`IonRemoteTests/`)
 
 - XCTest. Mirror the source folder structure inside `IonRemoteTests/`.
-- Existing test files: `E2ECryptoTests.swift`, `NormalizedEventLifecycleTests.swift`, `NormalizedEventStreamTests.swift`, `NormalizedEventPermissionTests.swift`, `NormalizedEventTerminalTests.swift`, `RelayClientTests.swift`, `TransportManagerTests.swift`.
+- See `IonRemoteTests/` for the full XCTest suite (mirrors the source folder structure).
 - Wire-format changes (`NormalizedEvent`, `RemoteCommand`, `RemoteTabState`) must update the corresponding test fixtures.
 - Crypto changes must keep `E2ECryptoTests.swift` passing — it round-trips real pairing handshakes.
 - Network changes must keep `RelayClientTests.swift` and `TransportManagerTests.swift` green.

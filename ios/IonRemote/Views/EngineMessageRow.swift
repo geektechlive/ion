@@ -1,4 +1,3 @@
-// @file-size-exception: unified rendering component absorbing MessageBubble and ToolGroupView; slash-bubble decomposed to EngineMessageRow+SlashBubble.swift; further decomposition deferred to Workstream C
 import SwiftUI
 
 // MARK: - EngineMessageRow
@@ -9,6 +8,10 @@ import SwiftUI
 /// row. In conversation-view usage the optional params unlock the full rich
 /// rendering: timestamps, copy/share/rewind context menus, voice overlays,
 /// blinking cursor, and attachment previews.
+///
+/// Tool-role rendering lives in EngineMessageRow+ToolBubble.swift.
+/// Slash-command bubble + parser live in EngineMessageRow+SlashBubble.swift.
+/// Utility support types live in EngineMessageRow+Support.swift.
 struct EngineMessageRow: View {
     @Environment(\.appTheme) var theme
     let message: Message
@@ -22,20 +25,26 @@ struct EngineMessageRow: View {
     var onSkipSpeaking: (() -> Void)? = nil
     var onStopAllSpeaking: (() -> Void)? = nil
     var hasPendingSpeech: Bool = false
+    /// Tap handler for a plan-lifecycle divider's slug link. When set and the
+    /// message is a "Plan created"/"Plan updated" divider carrying a
+    /// planFilePath, the slug renders as a tappable link that calls this with
+    /// the plan file path (the conversation view opens the plan preview).
+    /// Mirrors the `onRewind` callback pattern.
+    var onTapPlan: ((String) -> Void)? = nil
 
     // Shared state
     @State private var previewImage: UIImage?
     @State private var previewName: String = ""
 
     // Conversation-view-only state
-    @State private var isToolExpanded = false
+    @State var isToolExpanded = false
     @State private var showRewindConfirm = false
     @State private var showCopyButton = false
     @State private var showCopiedCheck = false
     @State private var containerWidth: CGFloat = UIScreen.main.bounds.width
 
     /// True when operating in full conversation-view mode.
-    private var isConversationMode: Bool {
+    var isConversationMode: Bool {
         copyableContent != nil || onRewind != nil || onFork != nil || isSpeaking || isRunning || onSkipSpeaking != nil
     }
 
@@ -455,148 +464,10 @@ struct EngineMessageRow: View {
     }
 
     // MARK: - Tool
-
-    private var toolMessage: some View {
-        Group {
-            if isConversationMode {
-                conversationToolBubble
-            } else {
-                engineToolBubble
-            }
-        }
-    }
-
-    private var toolAccentColor: Color {
-        switch message.toolStatus {
-        case .running:  return .orange
-        case .completed: return .green
-        case .error:    return .red
-        case nil:       return .gray
-        }
-    }
-
-    /// Full conversation-view tool bubble: expandable input/output detail.
-    private var conversationToolBubble: some View {
-        HStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(toolAccentColor)
-                .frame(width: 2)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    withAnimation(IonTheme.snappySpring) {
-                        isToolExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        conversationToolStatusIcon
-
-                        Text(message.toolName ?? "Tool")
-                            .font(.subheadline.monospaced())
-                            .foregroundStyle(.primary)
-
-                        Spacer()
-
-                        Image(systemName: isToolExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.plain)
-
-                if isToolExpanded {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let input = message.toolInput, !input.isEmpty {
-                            Text("Input:")
-                                .font(.caption.bold())
-                                .foregroundStyle(.secondary)
-                            Text(input)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                                .lineLimit(10)
-                        }
-                        if !message.content.isEmpty {
-                            Text(message.toolStatus == .error ? "Error:" : "Result:")
-                                .font(.caption.bold())
-                                .foregroundStyle(message.toolStatus == .error ? .red : .secondary)
-                            Text(message.content)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                                .lineLimit(20)
-                                .foregroundStyle(message.toolStatus == .error ? .red : .primary)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            }
-        }
-        .background(Color(.tertiarySystemFill))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 1)
-    }
-
-    private var conversationToolStatusIcon: some View {
-        Group {
-            switch message.toolStatus {
-            case .running:
-                ProgressView()
-                    .controlSize(.mini)
-            case .completed:
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.subheadline)
-            case .error:
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.red)
-                    .font(.subheadline)
-            case nil:
-                Image(systemName: "gearshape")
-                    .foregroundStyle(.secondary)
-                    .font(.subheadline)
-            }
-        }
-    }
-
-    /// Engine-view compact tool bubble: icon + name only, no expand.
-    private var engineToolBubble: some View {
-        HStack(spacing: 6) {
-            engineToolStatusIcon
-            Text(message.toolName ?? "tool")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-
-    @ViewBuilder
-    private var engineToolStatusIcon: some View {
-        switch message.toolStatus {
-        case .running:
-            ProgressView()
-                .scaleEffect(0.6)
-        case .completed:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.green)
-        case .error:
-            Image(systemName: "xmark.circle.fill")
-                .font(.caption2)
-                .foregroundStyle(.red)
-        case nil:
-            Image(systemName: "wrench")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-    }
+    // Tool-role rendering (toolMessage, conversationToolBubble,
+    // engineToolBubble, toolAccentColor, status icons) lives in
+    // EngineMessageRow+ToolBubble.swift. That extension is referenced
+    // here by `toolMessage` in the body switch above.
 
     // MARK: - Harness (engine-only)
 
@@ -683,12 +554,7 @@ struct EngineMessageRow: View {
     private var conversationSystemBubble: some View {
         HStack(spacing: 8) {
             VStack { Divider() }
-            Text(message.content)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .layoutPriority(1)
+            PlanDividerLabel(message: message, onTapPlan: onTapPlan)
             VStack { Divider() }
         }
         .padding(.horizontal, 24)
@@ -700,16 +566,15 @@ struct EngineMessageRow: View {
     private var engineSystemBubble: some View {
         Group {
             if message.content.hasPrefix("──") {
-                // Lifecycle divider (session-start, plan-created, implementing)
-                // — render with horizontal rules matching conversationSystemBubble.
+                // Lifecycle divider (session-start, plan-created/updated,
+                // implementing) — render with horizontal rules. The plan
+                // created/updated dividers render their slug as a tappable
+                // link when a planFilePath + onTapPlan handler are present;
+                // PlanDividerLabel owns that decision and degrades to plain
+                // text for every other divider.
                 HStack(spacing: 8) {
                     VStack { Divider() }
-                    Text(message.content)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .layoutPriority(1)
+                    PlanDividerLabel(message: message, onTapPlan: onTapPlan)
                     VStack { Divider() }
                 }
                 .padding(.horizontal, 24)
@@ -724,179 +589,5 @@ struct EngineMessageRow: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Attachment marker parsing
-
-/// Result of splitting a user-message body on `[Attached image: PATH]`
-/// markers. `images` lists each path in source order; `text` is the body
-/// with markers removed and incidental blank lines collapsed.
-struct AttachmentSegments {
-    var images: [String]
-    var text: String
-}
-
-private let attachedImagePattern: NSRegularExpression = {
-    // Path matches anything except a closing bracket so the regex stops at
-    // the marker boundary rather than greedily eating the whole line.
-    return try! NSRegularExpression(pattern: #"\[Attached image: ([^\]]+)\]"#)
-}()
-
-func parseAttachmentSegments(_ raw: String) -> AttachmentSegments {
-    let ns = raw as NSString
-    let range = NSRange(location: 0, length: ns.length)
-    let matches = attachedImagePattern.matches(in: raw, range: range)
-    if matches.isEmpty {
-        return AttachmentSegments(images: [], text: raw)
-    }
-    var images: [String] = []
-    var cleaned = NSMutableString(string: raw)
-    for match in matches.reversed() {
-        if match.numberOfRanges < 2 { continue }
-        let path = ns.substring(with: match.range(at: 1))
-        images.insert(path, at: 0)
-        cleaned.replaceCharacters(in: match.range, with: "")
-    }
-    var text = cleaned as String
-    // Collapse runs of blank lines that would otherwise be left behind by
-    // marker removal (e.g. "[marker]\n\nactual text" → "actual text").
-    while text.contains("\n\n\n") { text = text.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
-    text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    return AttachmentSegments(images: images, text: text)
-}
-
-// MARK: - InlineAttachmentImage
-
-/// Renders the image at `path` inline in a message bubble. Looks up bytes
-/// in the local cache first; on a miss, asks the desktop for them via
-/// `RemoteImageFetcher`. Renders a small placeholder while the fetch is
-/// in flight or after a permanent failure (e.g. file gone on the desktop).
-struct InlineAttachmentImage: View {
-    let path: String
-    let onTap: (UIImage) -> Void
-
-    @Environment(SessionViewModel.self) private var viewModel
-    @State private var image: UIImage?
-    @State private var failed: Bool = false
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: IonTheme.Radius.medium))
-                    .onTapGesture { onTap(image) }
-            } else {
-                placeholder
-            }
-        }
-        .onAppear { loadIfNeeded() }
-        .onChange(of: path) { _, _ in
-            image = nil
-            failed = false
-            loadIfNeeded()
-        }
-    }
-
-    private var placeholder: some View {
-        HStack(spacing: 4) {
-            Image(systemName: failed ? "photo.badge.exclamationmark" : "photo")
-                .font(.caption2)
-            Text((path as NSString).lastPathComponent)
-                .font(.caption2)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Color(.secondarySystemFill))
-        .clipShape(Capsule())
-        .foregroundStyle(.secondary)
-    }
-
-    private func loadIfNeeded() {
-        if image != nil || failed { return }
-        if let local = AttachmentImageCache.shared.image(forKey: path) {
-            image = local
-            return
-        }
-        RemoteImageFetcher.shared.request(path: path, viewModel: viewModel) { fetched in
-            if let fetched {
-                image = fetched
-            } else {
-                failed = true
-            }
-        }
-    }
-}
-
-// MARK: - BlinkingModifier
-
-struct BlinkingModifier: ViewModifier {
-    @State private var pulse = false
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(pulse ? 0.3 : 1.0)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                    pulse = true
-                }
-            }
-    }
-}
-
-// MARK: - Color hex init
-
-extension Color {
-    init(hex: UInt, opacity: Double = 1.0) {
-        self.init(
-            .sRGB,
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255,
-            opacity: opacity
-        )
-    }
-}
-
-// MARK: - MarkdownBlockCache
-
-/// Caches parsed `[MarkdownBlock]` arrays so full block-level markdown is only
-/// parsed once per unique content string, not on every SwiftUI re-render.
-@MainActor
-final class MarkdownBlockCache {
-    static let shared = MarkdownBlockCache()
-
-    private let cache = NSCache<NSString, CacheEntry>()
-
-    private class CacheEntry {
-        let value: [MarkdownBlock]
-        init(_ value: [MarkdownBlock]) { self.value = value }
-    }
-
-    init() {
-        cache.countLimit = 200
-    }
-
-    func blocks(for content: String) -> [MarkdownBlock] {
-        let key = content as NSString
-        if let entry = cache.object(forKey: key) {
-            return entry.value
-        }
-        let result = MarkdownFormatter.parse(content)
-        cache.setObject(CacheEntry(result), forKey: key)
-        return result
-    }
-}
-
-// MARK: - Container Width Preference
-
-struct ContainerWidthKey: PreferenceKey {
-    static let defaultValue: CGFloat = UIScreen.main.bounds.width
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }

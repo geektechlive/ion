@@ -9,7 +9,12 @@ enum RemoteCommand: Codable, Sendable {
     /// movement skips it. Older Ion desktops that don't know the field
     /// simply ignore it; behavior degrades to the legacy default-group
     /// placement.
-    case createTab(workingDirectory: String?, pinToGroupId: String? = nil)
+    ///
+    /// `profileId` and `extensions` are present when the caller wants an
+    /// engine-hosted conversation. When absent the desktop creates a plain
+    /// CLI tab. This merges the former `desktop_create_engine_tab` wire
+    /// command into the unified create-tab shape (#256).
+    case createTab(workingDirectory: String?, pinToGroupId: String? = nil, profileId: String? = nil, extensions: [String]? = nil)
     case createTerminalTab(workingDirectory: String?)
     case closeTab(tabId: String)
     case resetTabSession(tabId: String)
@@ -36,9 +41,18 @@ enum RemoteCommand: Codable, Sendable {
     /// `enterPlanModeDescription` field of its own if it ever became
     /// an independent harness — at which point it would also need its
     /// own copy of the prose. Today the wire stays minimal.
-    case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil, implementationPhase: Bool? = nil)
+    /// `instanceId` scopes the prompt to a specific engine instance. When
+    /// present the desktop routes through the engine pipeline (isEngineTab=true).
+    /// When absent the desktop uses the CLI pipeline. This merges the former
+    /// `desktop_engine_prompt` wire command into the unified prompt shape (#256).
+    case prompt(tabId: String, text: String, origin: String? = "remote", clientMsgId: String? = nil, attachments: [CommandAttachment]? = nil, implementationPhase: Bool? = nil, instanceId: String? = nil)
     case cancel(tabId: String)
     case respondPermission(tabId: String, questionId: String, optionId: String)
+    /// Answer a live extension elicitation (ctx.elicit). `cancelled` true means
+    /// the user declined; `response` carries the approval payload (empty object
+    /// on a plain approve). Lockstep desktop↔iOS wire — mirrors the desktop's
+    /// `desktop_respond_elicitation` command.
+    case respondElicitation(tabId: String, requestId: String, response: [String: AnyCodable]?, cancelled: Bool)
     case setPermissionMode(tabId: String, mode: PermissionMode)
     /// Per-conversation extended-thinking effort change. effort is one of
     /// "off"|"low"|"medium"|"high". The desktop applies it to the same
@@ -46,6 +60,11 @@ enum RemoteCommand: Codable, Sendable {
     /// either client carries the level. Lockstep desktop↔iOS wire.
     case setThinkingEffort(tabId: String, effort: String)
     case loadConversation(tabId: String, before: String?)
+    /// Ask the desktop to replay wire frames [fromSeq, toSeq] after iOS detected
+    /// a forward seq gap (frames lost in transit, e.g. a LAN↔relay transport
+    /// switch). The desktop replays the byte-identical originals from its
+    /// retransmit buffer, or answers desktop_resend_unavailable. Lockstep wire.
+    case requestResend(fromSeq: UInt64, toSeq: UInt64)
     case terminalInput(tabId: String, instanceId: String, data: String)
     case terminalResize(tabId: String, instanceId: String, cols: Int, rows: Int)
     case terminalAddInstance(tabId: String)
@@ -71,20 +90,14 @@ enum RemoteCommand: Codable, Sendable {
     /// Nil only for callers that can guarantee a desktop-minted id.
     case engineRewind(tabId: String, instanceId: String, messageId: String, userTurnIndex: Int?)
     case unpair
-    case createEngineTab(workingDirectory: String?, profileId: String?)
-    case enginePrompt(tabId: String, text: String, instanceId: String? = nil, attachments: [CommandAttachment]? = nil, implementationPhase: Bool? = nil)
     case engineAbort(tabId: String, instanceId: String? = nil)
     case engineDialogResponse(tabId: String, dialogId: String, value: String, instanceId: String? = nil)
-    case engineAddInstance(tabId: String)
-    case engineRemoveInstance(tabId: String, instanceId: String)
-    case engineRenameInstance(tabId: String, instanceId: String, label: String)
-    // Note: engineRenameInstance above was the old case. It is now unified with
-    // renameTerminalInstance at the wire level (both use "desktop_rename_terminal_instance").
-    // The associated value case is preserved for backward compat within iOS code;
-    // encoding and decoding both route through the renameTerminalInstance TypeKey.
-    case engineSelectInstance(tabId: String, instanceId: String)
-    case engineMoveInstance(sourceTabId: String, instanceId: String, targetTabId: String)
-    case loadEngineConversation(tabId: String, instanceId: String?)
+    // Multi-instance conversation commands removed in #256 (single-instance collapse).
+    // engineAddInstance, engineRemoveInstance, engineRenameInstance, engineSelectInstance,
+    // engineMoveInstance are no longer sent. The desktop dispatch already
+    // silently dropped them; removing the iOS send path completes the cleanup.
+    // loadEngineConversation is retired (WI-004 / #259). iOS now sends
+    // loadConversation for every tab via loadConversationHistory().
     case loadAgentConversation(conversationIds: [String])
     case setTabGroupMode(mode: String)
     case moveTabToGroup(tabId: String, groupId: String)
@@ -208,9 +221,11 @@ enum RemoteCommand: Codable, Sendable {
         case prompt = "desktop_prompt"
         case cancel = "desktop_cancel"
         case respondPermission = "desktop_respond_permission"
+        case respondElicitation = "desktop_respond_elicitation"
         case setPermissionMode = "desktop_set_permission_mode"
         case setThinkingEffort = "desktop_set_thinking_effort"
         case loadConversation = "desktop_load_conversation"
+        case requestResend = "desktop_request_resend"
         case terminalInput = "desktop_terminal_input"
         case terminalResize = "desktop_terminal_resize"
         case terminalAddInstance = "desktop_terminal_add_instance"
@@ -223,17 +238,12 @@ enum RemoteCommand: Codable, Sendable {
         case forkFromMessage = "desktop_fork_from_message"
         case engineRewind = "desktop_engine_rewind"
         case unpair = "desktop_unpair"
-        case createEngineTab = "desktop_create_engine_tab"
-        case enginePrompt = "desktop_engine_prompt"
         case engineAbort = "desktop_engine_abort"
         case engineDialogResponse = "desktop_engine_dialog_response"
-        case engineAddInstance = "desktop_engine_add_instance"
-        case engineRemoveInstance = "desktop_engine_remove_instance"
-        // Note: engineRenameInstance was aligned with renameTerminalInstance.
-        // Both now map to "desktop_rename_terminal_instance" -- use renameTerminalInstance.
-        case engineSelectInstance = "desktop_engine_select_instance"
-        case engineMoveInstance = "desktop_engine_move_instance"
-        case loadEngineConversation = "desktop_load_engine_conversation"
+        // Multi-instance TypeKeys removed in #256. The desktop dispatch
+        // already silently ignored these; no wire traffic expected.
+        // loadEngineConversation TypeKey retired in WI-004 / #259. iOS now
+        // sends loadConversation for every tab.
         case loadAgentConversation = "desktop_load_agent_conversation"
         case setTabGroupMode = "desktop_set_tab_group_mode"
         case moveTabToGroup = "desktop_move_tab_to_group"
@@ -289,6 +299,9 @@ enum RemoteCommand: Codable, Sendable {
         // command needs both (e.g. a hypothetical "create_tab_in_group_and_send"
         // that names a target group AND a separate pin source).
         case pinToGroupId
+        // `extensions` carries the optional list of extension IDs for
+        // engine-hosted tabs created via the unified desktop_create_tab shape.
+        case extensions
         case directory, path, staged, paths, skip, limit, message, filePath, content, includeHidden, hash
         // fs_rename payload — both paths are absolute and live under a
         // project root. New CodingKeys (no collision with existing entries);
@@ -338,6 +351,13 @@ enum RemoteCommand: Codable, Sendable {
         // setThinkingEffort payload. `tabId` is shared above; `effort` is the
         // canonical wire key ("off"|"low"|"medium"|"high"), unique here.
         case effort
+        // respondElicitation payload. `tabId` is shared above. `requestId`
+        // identifies the elicitation; `response` carries the approval payload
+        // (type-erased map, distinct from the shared `value` key); `cancelled`
+        // is the decline flag. All three are unique to this command.
+        case requestId, response, cancelled
+        // requestResend payload — the inclusive wire-frame seq range to replay.
+        case fromSeq, toSeq
     }
 
     // `init(from decoder:)` is in RemoteCommand+Decode.swift to keep this
