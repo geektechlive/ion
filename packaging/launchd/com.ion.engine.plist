@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.ion.engine.plist — Ion Engine LaunchAgent template
+  -------------------------------------------------------
+  This file is a TEMPLATE. The installer substitutes $HOME with the real
+  user home directory before writing the file to
+  ~/Library/LaunchAgents/com.ion.engine.plist.
+
+  The engine binds its own Unix socket at $HOME/.ion/engine.sock on startup.
+
+  - RunAtLoad starts the engine immediately so the socket is ready before
+    the desktop connects for the first time.
+  - KeepAlive.SuccessfulExit=false restarts on crash; a graceful 'ion shutdown'
+    exits 0 and launchd does NOT restart.
+  - Quit All (from the desktop) should use 'launchctl bootout' to stop the
+    engine and prevent restart until the next desktop launch.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Label must match the plist filename without the .plist suffix. -->
+    <key>Label</key>
+    <string>com.ion.engine</string>
+
+    <!-- The installed engine binary. Installer replaces $HOME. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>$HOME/.ion/bin/ion</string>
+        <string>serve</string>
+    </array>
+
+    <!-- Start immediately when the agent is loaded (login or bootstrap). -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!--
+      Only restart on non-zero exit (crash, OOM, SIGKILL).
+      A graceful exit (ion shutdown -> exit(0)) does NOT trigger restart.
+      launchctl bootout stops the agent and removes it from the bootstrap
+      namespace, preventing automatic restart until the next bootstrap.
+    -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Log stdout/stderr. The engine's structured log goes to engine.log
+         via utils.Log; these files capture any raw output (startup banner,
+         fatal errors before logging is initialised). -->
+    <key>StandardOutPath</key>
+    <string>$HOME/.ion/engine-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>$HOME/.ion/engine-stderr.log</string>
+
+    <!-- Working directory: user home so relative paths resolve sensibly. -->
+    <key>WorkingDirectory</key>
+    <string>$HOME</string>
+
+    <!--
+      ProcessType=Interactive gives the engine normal scheduling priority.
+      Background would de-prioritise it, causing latency spikes on prompts.
+    -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!--
+      ThrottleInterval=5: launchd waits at least 5 seconds between crash
+      restarts. The default (10 s) is acceptable; 5 s is the minimum that
+      avoids a tight restart loop without being user-visible on recovery.
+    -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>

@@ -15,7 +15,7 @@ import (
 // a burst of text deltas can never crowd out state events, even with
 // 12+ concurrent engine sessions.
 const (
-	stateQueueSize  = 64
+	stateQueueSize  = 256
 	streamQueueSize = 1024
 )
 

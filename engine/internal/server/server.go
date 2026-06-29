@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/auth"
@@ -159,19 +158,13 @@ func (s *Server) Start() error {
 			return fmt.Errorf("failed to listen on %s: %w", s.socketPath, err)
 		}
 	} else {
-		// Unix domain socket mode.
+		// Unix domain socket mode. The caller holds the PID lock, so no
+		// other engine process is alive. Any leftover socket file is stale
+		// and safe to remove without dialing.
 		if _, statErr := os.Stat(s.socketPath); statErr == nil {
-			conn, dialErr := net.Dial("unix", s.socketPath)
-			if dialErr != nil {
-				utils.Log("Server", "removing stale socket: "+s.socketPath)
-				if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
-					utils.Log("Server", fmt.Sprintf("Start: remove stale socket %s failed: %v", s.socketPath, err))
-				}
-			} else {
-				if err := conn.Close(); err != nil {
-					utils.Log("Server", fmt.Sprintf("Start: probe-conn close failed: %v", err))
-				}
-				return fmt.Errorf("socket already in use: %s", s.socketPath)
+			utils.Log("Server", "removing stale socket: "+s.socketPath)
+			if err := os.Remove(s.socketPath); err != nil && !os.IsNotExist(err) {
+				utils.Log("Server", fmt.Sprintf("Start: remove stale socket %s failed: %v", s.socketPath, err))
 			}
 		}
 		ln, err = net.Listen("unix", s.socketPath)
@@ -410,11 +403,7 @@ func (s *Server) writeToClient(conn net.Conn, line string) {
 	}
 	payload := []byte(line)
 	select {
-	case cw.stateQueue <- payload: // Results always go to state queue
-	default:
-		n := atomic.AddInt64(&cw.stateDropped, 1)
-		if n == 1 || n%256 == 0 {
-			utils.Log("Server", fmt.Sprintf("client state queue full; dropped %d events", n))
-		}
+	case cw.stateQueue <- payload:
+	case <-cw.done:
 	}
 }
