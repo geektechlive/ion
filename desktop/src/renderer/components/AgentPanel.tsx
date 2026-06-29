@@ -4,13 +4,14 @@ import { CaretRight, ArrowsOutSimple, ArrowsInSimple } from '@phosphor-icons/rea
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { useSessionStore } from '../stores/sessionStore'
-import { meta, isAgentVisible, sortAgents, getLabelBg, getStatusSuffix, getDispatches } from './agent-panel-helpers'
+import { meta, isAgentVisible, sortAgents, getLabelBg, getStatusSuffix, getDispatches, selectAgentDepths } from './agent-panel-helpers'
 import { reconcileActivity } from './agent-dispatch-activity'
 import { mapConversationMessages } from './agent-conversation-mapper'
 import { AgentExpandedView } from './AgentExpandedView'
 import { AgentDetailPanel } from './AgentDetailPanel'
 import type { AgentStateUpdate } from '../../shared/types'
 import type { Message } from '../../shared/types'
+import type { DispatchTelemetryEntry } from '../../shared/types-engine'
 
 const DEFAULT_PANEL_HEIGHT = 200
 const MIN_PANEL_HEIGHT = 80
@@ -18,6 +19,8 @@ const MAX_PANEL_PCT = 0.8
 
 interface Props {
   agents: AgentStateUpdate[]
+  /** Flat dispatch telemetry entries for deriving nesting depth. */
+  dispatchTelemetry?: DispatchTelemetryEntry[]
   isFullscreen?: boolean
   onToggleFullscreen?: () => void
   /** Custom panel height in pixels (rows container). Undefined = default. */
@@ -26,7 +29,7 @@ interface Props {
   onPanelHeightChange?: (height: number) => void
 }
 
-export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeight, onPanelHeightChange }: Props) {
+export function AgentPanel({ agents, dispatchTelemetry, isFullscreen, onToggleFullscreen, panelHeight, onPanelHeightChange }: Props) {
   const colors = useColors()
   const agentPanelDefaultOpen = usePreferencesStore((s) => s.agentPanelDefaultOpen)
   const agentDetailPopup = usePreferencesStore((s) => s.agentDetailPopup)
@@ -51,6 +54,12 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
   const panelRef = useRef<HTMLDivElement>(null)
 
   const visible = sortAgents(agents.filter(isAgentVisible))
+
+  // Derive per-agent nesting depth from flat dispatch telemetry.
+  const agentDepths = React.useMemo(
+    () => selectAgentDepths(dispatchTelemetry || []),
+    [dispatchTelemetry],
+  )
 
   // When agents transition from none→some, apply the user's default
   // preference (open or collapsed). When they go back to none, reset
@@ -406,6 +415,8 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
               const isExpanded = agentExpanded.get(agent.name) || false
               const suffix = getStatusSuffix(agent)
               const { dispatches, dispIdx, slicedMsgs: loadedMsgs, isLoading } = resolveDispatchData(agent)
+              const nestDepth = agentDepths.get(agent.name) ?? 0
+              const nestIndent = nestDepth > 1 ? (nestDepth - 1) * 16 : 0
 
               return (
                 <div key={agent.name}>
@@ -418,6 +429,7 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
                       height: 22,
                       cursor: 'pointer',
                       userSelect: 'none',
+                      paddingLeft: nestIndent || undefined,
                     }}
                   >
                     {/* Colored label */}

@@ -15,6 +15,29 @@ export interface DispatchInfo {
   startTime?: number
 }
 
+/**
+ * Flat dispatch telemetry entry recorded from engine_dispatch_start/end.
+ * Keyed by dispatchSessionId (unique per dispatch instance). The depth and
+ * parentDispatchId fields enable tree derivation in selectors without
+ * storing the tree structure itself.
+ */
+export interface DispatchTelemetryEntry {
+  dispatchAgent: string
+  dispatchSessionId: string
+  dispatchModel: string
+  dispatchTask: string
+  dispatchDepth: number
+  dispatchParentId: string
+  /** Stable unique id for this dispatch instance. Set from engine dispatchId field. */
+  dispatchId: string
+  /** Set once engine_dispatch_end arrives. The conversation id the dispatched agent used. */
+  conversationId?: string
+  /** Set once engine_dispatch_end arrives. */
+  exitCode?: number
+  elapsed?: number
+  cost?: number
+}
+
 // ─── Resource subsystem types (D-007) ───
 
 export interface ResourceItem {
@@ -198,6 +221,12 @@ export interface ConversationInstance {
   statusFields: StatusFields | null
   /** Path to the active plan file (null = not in plan mode / no plan yet) */
   planFilePath: string | null
+  /**
+   * Flat dispatch telemetry entries recorded from engine_dispatch_start/end
+   * events. Keyed by dispatchSessionId. Consumers derive the dispatch tree
+   * via selectors (selectDispatchTree) from this flat data.
+   */
+  dispatchTelemetry: DispatchTelemetryEntry[]
   /** Set after rewind — the conversation ID chain before rewind. Used to inject
    *  prior-conversation context on the next prompt. Cleared after first send. */
   forkedFromConversationIds: string[] | null

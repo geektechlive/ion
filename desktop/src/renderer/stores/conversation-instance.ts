@@ -58,6 +58,7 @@ export function emptyConversationInstance(
     agentStates: [],
     statusFields: null,
     planFilePath: null,
+    dispatchTelemetry: [],
     forkedFromConversationIds: null,
     ...overrides,
   }

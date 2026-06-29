@@ -463,6 +463,32 @@ export function handleEngineEvent(
       } as NormalizedEvent)
       break
 
+    case 'engine_dispatch_start':
+      // Forward dispatch start telemetry to the renderer so the store can
+      // record depth/parentDispatchId for nested dispatch tree rendering.
+      ctx.emit('event', tabId, {
+        type: 'dispatch_start',
+        dispatchAgent: event.dispatchAgent || '',
+        dispatchTask: event.dispatchTask || '',
+        dispatchModel: event.dispatchModel || '',
+        dispatchSessionId: event.dispatchSessionId || '',
+        dispatchDepth: event.dispatchDepth || 0,
+        dispatchParentId: event.dispatchParentId || '',
+      } as NormalizedEvent)
+      break
+
+    case 'engine_dispatch_end':
+      ctx.emit('event', tabId, {
+        type: 'dispatch_end',
+        dispatchAgent: event.dispatchAgent || '',
+        dispatchExitCode: event.dispatchExitCode ?? 0,
+        dispatchElapsed: event.dispatchElapsed ?? 0,
+        dispatchCost: event.dispatchCost ?? 0,
+        dispatchDepth: event.dispatchDepth || 0,
+        dispatchParentId: event.dispatchParentId || '',
+      } as NormalizedEvent)
+      break
+
     case 'engine_harness_message':
       // Extension harness display message (e.g. welcome banner). Emit as
       // normalized harness_message so event-slice.ts can apply dedup logic

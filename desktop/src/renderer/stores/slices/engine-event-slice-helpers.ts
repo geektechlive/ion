@@ -130,3 +130,47 @@ export function withRunningAgentsErrored(
   updated.set(tabId, { ...pane, instances })
   return updated
 }
+
+// ─── Dispatch telemetry helpers ───
+// Used by event-slice.ts to record engine_dispatch_start/end into instance
+// state without bloating the main slice file.
+
+import type { DispatchTelemetryEntry } from '../../../shared/types-engine'
+import type { NormalizedEvent } from '../../../shared/types-events'
+
+/** Build a DispatchTelemetryEntry from a dispatch_start NormalizedEvent. */
+export function buildDispatchStartEntry(event: NormalizedEvent & { type: 'dispatch_start' }): DispatchTelemetryEntry {
+  return {
+    dispatchAgent: event.dispatchAgent || '',
+    dispatchSessionId: event.dispatchSessionId || '',
+    dispatchModel: event.dispatchModel || '',
+    dispatchTask: event.dispatchTask || '',
+    dispatchDepth: event.dispatchDepth || 0,
+    dispatchParentId: event.dispatchParentId || '',
+    dispatchId: event.dispatchId || '',
+  }
+}
+
+/**
+ * Apply dispatch_end fields to the matching entry in the telemetry array.
+ * Matches by exact dispatchId — avoids false positives when two agents at
+ * the same depth fire concurrently. Returns the updated array if a match
+ * was found, or null if no match.
+ */
+export function applyDispatchEnd(
+  existing: DispatchTelemetryEntry[],
+  event: NormalizedEvent & { type: 'dispatch_end' },
+): DispatchTelemetryEntry[] | null {
+  const id = event.dispatchId || ''
+  const idx = existing.findIndex((e) => e.dispatchId === id)
+  if (idx < 0) return null
+  const copy = existing.slice()
+  copy[idx] = {
+    ...copy[idx],
+    exitCode: event.dispatchExitCode ?? 0,
+    elapsed: event.dispatchElapsed ?? 0,
+    cost: event.dispatchCost ?? 0,
+    conversationId: event.dispatchConversationId,
+  }
+  return copy
+}

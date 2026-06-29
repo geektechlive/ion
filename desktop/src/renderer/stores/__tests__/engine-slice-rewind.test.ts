@@ -78,7 +78,7 @@ function makeInstance(
     agentStates: [],
     statusFields: null,
     planFilePath: null,
-    forkedFromConversationIds: null,
+    forkedFromConversationIds: null, dispatchTelemetry: [],
   }
 }
 

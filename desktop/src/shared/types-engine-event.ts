@@ -230,18 +230,21 @@ export type EngineEvent =
     }
   // engine_dispatch_start is emitted on the parent session's event stream when
   // an extension-initiated dispatch begins. Carries the agent name, task, model,
-  // and child session ID. Observation-only — harnesses can use this and
-  // engine_dispatch_end to persist dispatch records or surface dispatch status.
+  // child session ID, and nesting depth/parent. Observation-only — harnesses can
+  // use this and engine_dispatch_end to persist dispatch records or surface
+  // dispatch status (including nested hierarchy).
   | {
       type: 'engine_dispatch_start'
       dispatchAgent: string
       dispatchTask: string
       dispatchModel: string
       dispatchSessionId: string
+      dispatchDepth?: number
+      dispatchParentId?: string
     }
   // engine_dispatch_end is emitted when an extension-initiated dispatch completes
   // (success, error, or recall). Carries telemetry: exit code, elapsed time,
-  // cost, tokens, and tool count.
+  // cost, tokens, tool count, and nesting depth/parent.
   | {
       type: 'engine_dispatch_end'
       dispatchAgent: string
@@ -251,6 +254,8 @@ export type EngineEvent =
       dispatchInputTokens: number
       dispatchOutputTokens: number
       dispatchToolCount: number
+      dispatchDepth?: number
+      dispatchParentId?: string
     }
   // engine_dispatch_activity streams a running dispatched (sub-)agent's
   // intra-turn activity — a tool call starting, a tool result returning, or a

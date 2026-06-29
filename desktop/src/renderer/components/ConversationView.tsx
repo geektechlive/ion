@@ -29,6 +29,7 @@ const EMPTY_ARRAY: any[] = []
 const EMPTY_NOTIFICATIONS: any[] = []
 const EMPTY_MESSAGES: any[] = []
 const EMPTY_AGENTS: any[] = []
+const EMPTY_TELEMETRY: import('../../shared/types-engine').DispatchTelemetryEntry[] = []
 
 const INITIAL_RENDER_CAP = 100
 const PAGE_SIZE = 100
@@ -71,10 +72,13 @@ export function ConversationView({ tabId }: ConversationViewProps) {
     const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
     return inst?.messages ?? EMPTY_MESSAGES
   })
-  const agentStates = useSessionStore(s => {
+  const { agentStates, dispatchTelemetry } = useSessionStore(s => {
     const p = s.conversationPanes.get(tabId)
     const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
-    return inst?.agentStates ?? EMPTY_AGENTS
+    return {
+      agentStates: inst?.agentStates ?? EMPTY_AGENTS,
+      dispatchTelemetry: inst?.dispatchTelemetry ?? EMPTY_TELEMETRY,
+    }
   })
   const workingMessage = useSessionStore(s => {
     const p = s.conversationPanes.get(tabId)
@@ -82,15 +86,9 @@ export function ConversationView({ tabId }: ConversationViewProps) {
     return k ? (s.engineWorkingMessages.get(k) || '') : ''
   })
   const tabStatus = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.status)
-  // PermissionDenied is stored PER ENGINE INSTANCE on `instance.permissionDenied`.
-  // Engine sub-tabs (instances) are independent sub-conversations, so storing
-  // the denial on the parent tab would show the same card on every
-  // sibling sub-tab. The card is scoped to whichever instance produced
-  // it; switching to a sibling without a pending denial shows no card.
-  //
-  // Parent-tab pill bubbling: getWaitingState() in TabStripShared.ts
-  // folds across instances for engine tabs. iOS receives the active
-  // instance's denial via the snapshot path (see main/remote/snapshot.ts).
+  // PermissionDenied stored per engine instance (see TabStripShared
+  // getWaitingState for cross-instance folding, main/remote/snapshot.ts
+  // for the iOS path).
   const permissionDenied = useSessionStore(s => {
     const p = s.conversationPanes.get(tabId)
     const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
@@ -572,6 +570,7 @@ export function ConversationView({ tabId }: ConversationViewProps) {
       <div style={{ flex: agentPanelFullscreen ? 1 : undefined, overflow: agentPanelFullscreen ? 'auto' : undefined, minHeight: 0 }}>
         <AgentPanel
           agents={agentStates}
+          dispatchTelemetry={dispatchTelemetry}
           isFullscreen={agentPanelFullscreen}
           onToggleFullscreen={() => setAgentPanelFullscreen(!agentPanelFullscreen)}
           panelHeight={key ? agentPanelHeights.get(key) : undefined}

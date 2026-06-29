@@ -226,6 +226,11 @@ export type NormalizedEvent =
   | { type: 'extension_respawned'; extensionName: string; attemptNumber: number }
   | { type: 'extension_dead_permanent'; extensionName: string; attemptNumber: number }
   | { type: 'events_dropped'; count: number }
+  // Dispatch telemetry (n-tier nested dispatch). Emitted by the control plane
+  // from engine_dispatch_start/end so the renderer can record dispatch depth
+  // and parent linkage for tree rendering in the AgentPanel.
+  | { type: 'dispatch_start'; dispatchAgent: string; dispatchTask: string; dispatchModel: string; dispatchSessionId: string; dispatchDepth: number; dispatchParentId: string; dispatchId: string }
+  | { type: 'dispatch_end'; dispatchAgent: string; dispatchExitCode: number; dispatchElapsed: number; dispatchCost: number; dispatchDepth: number; dispatchParentId: string; dispatchId: string; dispatchConversationId?: string }
   // Cross-cutting events (WI-001): previously handled via raw IPC.ENGINE_EVENT,
   // now routed through the normalized stream so the renderer has a single
   // subscription. These are desktop-internal variants with no Go struct backing;

@@ -11,6 +11,7 @@ import { maybeScheduleDoneMove } from './event-slice-done-move'
 import { maybeScheduleRunningMove } from './event-slice-running-move'
 import { handleExtensionSurfaceEvent } from './event-slice-extension-surface'
 import { handlePlanModeEvent } from './event-slice-plan-mode'
+import { buildDispatchStartEntry, applyDispatchEnd } from './engine-event-slice-helpers'
 import { maybeApplyPlanModeGroupMove } from './event-slice-plan-mode-move'
 import { handleTaskEvent } from './event-slice-task'
 import { handleErrorAction } from './event-slice-error'
@@ -439,6 +440,20 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               engineNotifications = ctx.engineNotifications
               engineDialogs = ctx.engineDialogs
               engineModelFallbacks = ctx.engineModelFallbacks
+              break
+            }
+
+            case 'dispatch_start': {
+              if (!inst0) break
+              instPatch.dispatchTelemetry = [...(inst0.dispatchTelemetry || []), buildDispatchStartEntry(event as any)]
+              instTouched = true
+              break
+            }
+
+            case 'dispatch_end': {
+              if (!inst0) break
+              const updated = applyDispatchEnd([...(inst0.dispatchTelemetry || [])], event as any)
+              if (updated) { instPatch.dispatchTelemetry = updated; instTouched = true }
               break
             }
 

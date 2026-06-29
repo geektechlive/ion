@@ -577,6 +577,7 @@ export function buildPopulatedInstance(
     // path on every extension-hosted tab restore and forced the next plan-mode
     // prompt to allocate a fresh slug — orphaning the conversation's real plan.
     planFilePath: inst.planFilePath ?? null,
+    dispatchTelemetry: [],
     forkedFromConversationIds: inst.forkedFromConversationIds ? [...inst.forkedFromConversationIds] : null,
   }
 }

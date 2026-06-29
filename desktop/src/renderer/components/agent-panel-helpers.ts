@@ -1,5 +1,5 @@
 import type { AgentStateUpdate } from '../../shared/types'
-import type { DispatchInfo } from '../../shared/types-engine'
+import type { DispatchInfo, DispatchTelemetryEntry } from '../../shared/types-engine'
 
 // Re-export so existing renderer imports keep working.
 export type { DispatchInfo }
@@ -110,4 +110,40 @@ export function formatDuration(secs: number): string {
   const h = Math.floor(secs / 3600)
   const m = Math.floor((secs % 3600) / 60)
   return `${h}h ${m}m`
+}
+
+/**
+ * Derive the dispatch nesting depth for each agent from flat telemetry entries.
+ * Returns a Map from agent name to its dispatch depth (0 = root/unknown).
+ * Used by AgentPanel to indent nested dispatches under their parent.
+ */
+export function selectAgentDepths(telemetry: DispatchTelemetryEntry[]): Map<string, number> {
+  const depths = new Map<string, number>()
+  for (const entry of telemetry) {
+    // Use the latest (highest) depth seen for each agent name.
+    const existing = depths.get(entry.dispatchAgent)
+    if (existing === undefined || entry.dispatchDepth > existing) {
+      depths.set(entry.dispatchAgent, entry.dispatchDepth)
+    }
+  }
+  return depths
+}
+
+/**
+ * Derive the parent agent name for each agent from flat telemetry entries.
+ * Returns a Map from agent name to its parent agent name.
+ * Used by AgentPanel to group nested dispatches under their parent.
+ */
+export function selectAgentParents(telemetry: DispatchTelemetryEntry[]): Map<string, string> {
+  const parents = new Map<string, string>()
+  for (const entry of telemetry) {
+    if (entry.dispatchParentId) {
+      // Find the parent entry by its dispatchSessionId.
+      const parentEntry = telemetry.find((e) => e.dispatchSessionId === entry.dispatchParentId)
+      if (parentEntry) {
+        parents.set(entry.dispatchAgent, parentEntry.dispatchAgent)
+      }
+    }
+  }
+  return parents
 }
