@@ -11,6 +11,7 @@ import { cleanOrphanedWorktrees } from './git-runner'
 import { focusState } from './git/focus-state'
 import { startConversationCleanup } from './conversation-cleanup'
 import { tabsFileForBackend, sessionChainsFileForBackend, sessionLabelsFileForBackend } from './settings-store'
+import { ensureEngineDaemon } from './engine-bootstrap'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -42,6 +43,20 @@ export function setupAppLifecycle(): void {
     }
 
     await requestPermissions()
+
+    // Ensure the engine daemon is installed, current, and running before
+    // creating the window. The bootstrap is idempotent: writes/refreshes the
+    // LaunchAgent plist, copies the binary if version-mismatched, runs
+    // install-assets, and kickstarts the daemon. On non-macOS this is a no-op.
+    await ensureEngineDaemon()
+
+    // Connect to the engine daemon. The bridge retries with backoff if the
+    // daemon is still starting after a fresh kickstart.
+    try {
+      await engineBridge.connect()
+    } catch (err: any) {
+      log(`Engine connect failed (will retry on first IPC): ${err.message}`)
+    }
 
     installContentSecurityPolicy()
 
@@ -164,13 +179,14 @@ export function setupAppLifecycle(): void {
   })
 
   process.on('SIGUSR1', () => {
-    log('SIGUSR1 received — draining active work before quit')
+    log('SIGUSR1 received, draining active work before quit')
     const timeout = setTimeout(async () => {
-      log('Drain timeout (5min) — force quitting')
+      log('Drain timeout (5min), force quitting')
       await flushRendererTabs()
       state.forceQuit = true
       terminalManager.destroyAll()
-      engineBridge.stopAll()
+      // Bootout the daemon so launchd does not restart it after we exit.
+      await engineBridge.shutdownAndWait().catch(() => {})
       sessionPlane.shutdown()
       globalShortcut.unregisterAll()
       if (state.tray) { state.tray.destroy(); state.tray = null }
@@ -181,11 +197,12 @@ export function setupAppLifecycle(): void {
 
     sessionPlane.drain(() => bashProcesses.size > 0).then(async () => {
       clearTimeout(timeout)
-      log('All agents finished — quitting')
+      log('All agents finished, quitting')
       await flushRendererTabs()
       state.forceQuit = true
       terminalManager.destroyAll()
-      engineBridge.stopAll()
+      // Bootout the daemon so launchd does not restart it after we exit.
+      await engineBridge.shutdownAndWait().catch(() => {})
       sessionPlane.shutdown()
       globalShortcut.unregisterAll()
       if (state.tray) { state.tray.destroy(); state.tray = null }

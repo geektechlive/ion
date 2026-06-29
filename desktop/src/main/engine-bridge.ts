@@ -1,12 +1,11 @@
 import { EventEmitter } from 'events'
 import { createConnection, Socket } from 'net'
-import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 import { log as _log, debug as _debug, warn as _warn, error as _error } from './logger'
-import { spawnEngineServer } from './engine-bridge-spawn'
 import { startSession as startSessionImpl, reRegisterSessions as reRegisterSessionsImpl } from './engine-bridge-start-session'
 import { sendReconcileState as sendReconcileStateImpl, sendQuerySessionStatus as sendQuerySessionStatusImpl } from './engine-bridge-state-sync'
+import { stopAll as stopAllImpl, shutdownAndWait as shutdownAndWaitImpl } from './engine-bridge-lifecycle'
 import { buildSendPromptMessage, buildSendPromptLogLine } from './engine-bridge-prompts'
 import * as conv from './engine-bridge-conversations'
 import type { EngineConfig, EngineEvent, ImageAttachmentPayload, DiscoveredCommand } from '../shared/types'
@@ -18,8 +17,7 @@ function warn(msg: string): void { _warn(TAG, msg) }
 function error(msg: string): void { _error(TAG, msg) }
 
 const ION_HOME = join(homedir(), '.ion')
-const SOCKET_PATH = join(ION_HOME, 'desktop.sock')
-const PID_PATH = join(ION_HOME, 'desktop.pid')
+const SOCKET_PATH = join(ION_HOME, 'engine.sock')
 
 /**
  * When ION_DESKTOP_ENGINE_SOCKET is set to "host:port", the bridge connects
@@ -37,15 +35,15 @@ export const IS_REMOTE = REMOTE_SOCKET.includes(':')
  *  - 'event' (key, EngineEvent) -- forwarded from engine server
  */
 export class EngineBridge extends EventEmitter {
-  private conn: Socket | null = null
+  conn: Socket | null = null
   private buffer = ''
-  private connected = false
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  connected = false
+  reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempts = 0
   private requestCallbacks = new Map<string, (result: any) => void>()
   private requestCounter = 0
   private connectPromise: Promise<void> | null = null
-  private reconnectDisabled = false
+  reconnectDisabled = false
   private _drainScheduled = false
   // Package-internal (used by engine-bridge-start-session.ts and other siblings).
   activeSessions = new Map<string, { config: EngineConfig; conversationId?: string }>()
@@ -53,6 +51,7 @@ export class EngineBridge extends EventEmitter {
   private keyAliases = new Map<string, string>()
   /** Tracks last `engine_status` receipt per key for stale-sweep polling. */
   lastEngineStatusAt = new Map<string, number>()
+  private consecutiveTimeouts = 0
 
   constructor() {
     super()
@@ -74,22 +73,25 @@ export class EngineBridge extends EventEmitter {
   }
 
   private async _doConnect(): Promise<void> {
-    // Try connecting to existing server
+    // Try connecting to the daemon socket directly. The engine is a launchd
+    // daemon; the desktop never spawns it. If the socket is not reachable,
+    // retry with backoff (launchd may still be starting the daemon after
+    // bootstrap/kickstart).
     try {
       await this._connectSocket()
       return
     } catch {
-      // Server not running, start it (unless remote mode)
+      // Socket not ready yet
     }
 
-    // In remote mode we never auto-start — just retry.
+    // In remote mode we never auto-start, just throw.
     if (IS_REMOTE) {
       throw new Error(`Remote engine at ${REMOTE_SOCKET} is not reachable`)
     }
 
-    await this._startServer()
-
-    // Retry connection with backoff — engine may need a moment after install
+    // Retry with backoff. The daemon should already be running via launchd;
+    // these retries cover the window between launchctl kickstart and the
+    // engine binding the socket.
     const delays = [500, 1000, 2000, 4000]
     for (let i = 0; i < delays.length; i++) {
       await new Promise<void>((resolve) => setTimeout(resolve, delays[i]))
@@ -98,11 +100,15 @@ export class EngineBridge extends EventEmitter {
         return
       } catch {
         if (i < delays.length - 1) {
-          log(`Engine not ready after ${delays[i]}ms, retrying...`)
+          log(`Engine daemon not ready after ${delays[i]}ms, retrying...`)
         }
       }
     }
-    throw new Error('Failed to connect to engine after startup')
+    throw new Error(
+      `Engine daemon not reachable at ${SOCKET_PATH}. ` +
+      'Ensure the Ion Engine LaunchAgent is installed and running ' +
+      '(launchctl print gui/${UID}/com.ion.engine).',
+    )
   }
 
   private _connectSocket(): Promise<void> {
@@ -163,11 +169,12 @@ export class EngineBridge extends EventEmitter {
     })
   }
 
-  private async _startServer(): Promise<void> {
-    // Binary discovery + child-spawn logic lives in engine-bridge-spawn.ts
-    // so this file stays under the 600-line cap. The split is purely
-    // mechanical; nothing about the contract changes.
-    spawnEngineServer(SOCKET_PATH, PID_PATH)
+  private _onRequestTimeout(): void {
+    this.consecutiveTimeouts++
+    if (this.consecutiveTimeouts >= 2 && this.conn) {
+      warn(`${this.consecutiveTimeouts} consecutive timeouts — connection likely dead, forcing reconnect`)
+      this.conn.destroy()
+    }
   }
 
   private _scheduleReconnect(): void {
@@ -255,6 +262,8 @@ export class EngineBridge extends EventEmitter {
   }
 
   private _handleMessage(line: string): void {
+    this.consecutiveTimeouts = 0
+
     let msg: any
     try {
       msg = JSON.parse(line)
@@ -335,11 +344,13 @@ export class EngineBridge extends EventEmitter {
       const timer = setTimeout(() => {
         warn(`request timed out: requestId=${requestId} cmd=${msg.cmd}`)
         this.requestCallbacks.delete(requestId)
+        this._onRequestTimeout()
         resolve({ ok: false, error: 'Request timed out' })
       }, 30000)
 
       this.requestCallbacks.set(requestId, (result) => {
         clearTimeout(timer)
+        this.consecutiveTimeouts = 0
         resolve({ ok: result.ok, error: result.error })
       })
 
@@ -356,11 +367,13 @@ export class EngineBridge extends EventEmitter {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.requestCallbacks.delete(requestId)
+        this._onRequestTimeout()
         resolve({ ok: false, error: 'Request timed out' })
       }, 30000)
 
       this.requestCallbacks.set(requestId, (result) => {
         clearTimeout(timer)
+        this.consecutiveTimeouts = 0
         resolve({ ok: result.ok, error: result.error, data: result.data })
       })
 
@@ -528,65 +541,9 @@ export class EngineBridge extends EventEmitter {
     this._send({ cmd: 'stop_by_prefix', prefix })
   }
 
-  async stopAll(): Promise<void> {
-    // Don't send shutdown -- just disconnect. Engine server keeps running for other clients.
-    if (this.conn && !this.conn.destroyed) {
-      this.conn.destroy()
-    }
-    this.connected = false
-    this.conn = null
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-  }
-
-  /** Send shutdown command to engine server, causing it to exit. */
-  shutdown(): void {
-    this._send({ cmd: 'shutdown' })
-  }
-
-  /** Kill the engine process and wait for socket to disappear. */
-  async shutdownAndWait(timeoutMs = 3000): Promise<void> {
-    // Prevent auto-reconnect from spawning a new engine
-    this.reconnectDisabled = true
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-
-    // Try graceful shutdown via socket first
-    this._send({ cmd: 'shutdown' })
-
-    // Also kill via PID lock file (reliable even if socket is broken)
-    const pidLockFile = `${PID_PATH}.lock`
-    try {
-      if (existsSync(pidLockFile)) {
-        const pid = parseInt(readFileSync(pidLockFile, 'utf-8').trim(), 10)
-        if (pid > 0) {
-          process.kill(pid, 'SIGTERM')
-        }
-      }
-    } catch {}
-
-    // Wait for socket file to disappear (engine removes it on stop)
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      if (!existsSync(SOCKET_PATH)) break
-      await new Promise(r => setTimeout(r, 50))
-    }
-
-    // Disconnect our side
-    if (this.conn && !this.conn.destroyed) {
-      this.conn.destroy()
-    }
-    this.connected = false
-    this.conn = null
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
-  }
+  async stopAll(): Promise<void> { return stopAllImpl(this) }
+  shutdown(): void { this._send({ cmd: 'shutdown' }) }
+  async shutdownAndWait(timeoutMs = 3000): Promise<void> { return shutdownAndWaitImpl(this, timeoutMs) }
 
   isRunning(key: string): boolean {
     // Can't synchronously check -- return true if connected

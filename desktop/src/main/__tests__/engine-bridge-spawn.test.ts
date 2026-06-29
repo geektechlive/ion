@@ -1,36 +1,37 @@
 /**
- * engine-bridge-spawn — engine child process environment tests
+ * engine-bridge, connect-only contract.
  *
- * A GUI-launched macOS app inherits the launchd-truncated PATH
- * (/usr/bin:/bin:/usr/sbin:/sbin). Before this fix, spawnEngineServer
- * passed the raw process.env to the engine child, so the engine — and
- * every agent Bash tool / MCP server / extension subprocess it spawns —
- * could not see Homebrew/nvm/asdf binaries or anything on the user's
- * real PATH.
- *
- * spawnEngineServer now spawns the engine with getCliEnv(), which
- * resolves the full login-shell PATH (already used by the desktop's own
- * terminal and ipc/bash) and overlays the engine's ION_SOCKET_PATH /
- * ION_PID_PATH vars.
- *
- * These tests pin:
- *   - The spawned child's env.PATH equals the resolved login-shell PATH
- *     (NOT the truncated process.env.PATH). This goes red on the
- *     pre-fix code, which passed process.env verbatim.
- *   - The engine's socket/pid env vars are still overlaid onto the env.
+ * The desktop no longer spawns the engine. It connects to a launchd-owned
+ * daemon at ~/.ion/engine.sock. These tests pin:
+ *   1. The bridge has no _startServer method (the spawn pathway is deleted).
+ *   2. The bridge module does not import engine-bridge-spawn.
+ *   3. _doConnect retries without invoking any spawn function.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
-const RESOLVED_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
-
-vi.mock('child_process', () => ({
-  spawn: vi.fn(() => ({ pid: 4242 })),
-  execSync: vi.fn(() => ''),
+// Mock transitive dependencies so importing the bridge does not pull in
+// electron, net, fs, etc.
+vi.mock('net', () => ({
+  createConnection: vi.fn(() => {
+    const ee = {
+      on: vi.fn((_ev: string, cb: (...args: any[]) => void) => {
+        if (_ev === 'error') setTimeout(() => cb(new Error('ECONNREFUSED')), 0)
+        return ee
+      }),
+      write: vi.fn(),
+      destroy: vi.fn(),
+      destroyed: false,
+    }
+    return ee
+  }),
 }))
-// Make the first binary candidate "exist" so spawn is reached.
 vi.mock('fs', () => ({
-  existsSync: vi.fn(() => true),
+  existsSync: vi.fn(() => false),
+  readFileSync: vi.fn(() => ''),
+}))
+vi.mock('child_process', () => ({
+  execSync: vi.fn(),
 }))
 vi.mock('../logger', () => ({
   log: vi.fn(),
@@ -38,51 +39,61 @@ vi.mock('../logger', () => ({
   warn: vi.fn(),
   error: vi.fn(),
 }))
-// getCliEnv resolves the login-shell PATH; mock it to a deterministic value
-// and assert spawnEngineServer threads its output (plus the overlaid extras)
-// into the child env.
-vi.mock('../cli-env', () => ({
-  getCliEnv: vi.fn((extra?: Record<string, string>) => ({
-    ...process.env,
-    PATH: RESOLVED_PATH,
-    ...extra,
-  })),
+vi.mock('../engine-bridge-start-session', () => ({
+  startSession: vi.fn(),
+  reRegisterSessions: vi.fn(),
 }))
+vi.mock('../engine-bridge-state-sync', () => ({
+  sendReconcileState: vi.fn(),
+  sendQuerySessionStatus: vi.fn(),
+}))
+vi.mock('../engine-bridge-prompts', () => ({
+  buildSendPromptMessage: vi.fn(() => ({})),
+  buildSendPromptLogLine: vi.fn(() => ''),
+}))
+vi.mock('../engine-bridge-conversations', () => ({}))
 
-import { spawn } from 'child_process'
-import { spawnEngineServer } from '../engine-bridge-spawn'
-import { getCliEnv } from '../cli-env'
+import { EngineBridge } from '../engine-bridge'
 
-describe('spawnEngineServer environment', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
+describe('EngineBridge connect-only contract', () => {
+  it('does not have a _startServer method', () => {
+    const bridge = new EngineBridge()
+    // The private _startServer was the spawn pathway. It must not exist.
+    expect((bridge as any)._startServer).toBeUndefined()
   })
 
-  it('spawns the engine with the resolved login-shell PATH, not process.env', () => {
-    spawnEngineServer('/tmp/sock', '/tmp/pid')
-
-    expect(spawn).toHaveBeenCalledTimes(1)
-    const spawnArgs = vi.mocked(spawn).mock.calls[0]
-    const opts = spawnArgs[2] as { env?: Record<string, string> }
-    expect(opts.env?.PATH).toBe(RESOLVED_PATH)
+  it('does not import or reference spawnEngineServer', () => {
+    // Read the source file to confirm no spawn import exists. This is a
+    // meta-test: if someone re-adds the import, this fails.
+    const fs = require('fs')
+    const path = require('path')
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'engine-bridge.ts'),
+      'utf-8',
+    )
+    expect(src).not.toContain('spawnEngineServer')
+    expect(src).not.toContain('engine-bridge-spawn')
   })
 
-  it('overlays the engine socket/pid vars onto the resolved env', () => {
-    spawnEngineServer('/tmp/my.sock', '/tmp/my.pid')
-
-    const opts = vi.mocked(spawn).mock.calls[0][2] as {
-      env?: Record<string, string>
-    }
-    expect(opts.env?.ION_SOCKET_PATH).toBe('/tmp/my.sock')
-    expect(opts.env?.ION_PID_PATH).toBe('/tmp/my.pid')
+  it('connects to engine.sock (daemon socket), not desktop.sock', () => {
+    const fs = require('fs')
+    const path = require('path')
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'engine-bridge.ts'),
+      'utf-8',
+    )
+    expect(src).toContain("'engine.sock'")
+    expect(src).not.toContain("'desktop.sock'")
   })
 
-  it('passes the socket/pid vars to getCliEnv as the overlay', () => {
-    spawnEngineServer('/tmp/s.sock', '/tmp/p.pid')
-
-    expect(getCliEnv).toHaveBeenCalledWith({
-      ION_SOCKET_PATH: '/tmp/s.sock',
-      ION_PID_PATH: '/tmp/p.pid',
-    })
+  it('shutdownAndWait uses launchctl bootout instead of PID kill', () => {
+    const fs = require('fs')
+    const path = require('path')
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'engine-bridge-lifecycle.ts'),
+      'utf-8',
+    )
+    expect(src).toContain('launchctl bootout')
+    expect(src).not.toContain('process.kill(pid')
   })
 })

@@ -46,6 +46,11 @@ export interface State {
   resourceViewerGeometry: { x: number; y: number; w: number; h: number }
   agentDetailGeometry: { x: number; y: number; w: number; h: number }
   tabsReady: boolean
+  /** True while useTabRestoration's restore loop is running. The persist subscriber
+   * skips saves during this window to avoid the ~25 GUARD rejections that occur when
+   * each per-tab setState triggers a partial-state save before all tabs are loaded.
+   * Cleared after tabsReady=true. */
+  rehydrating: boolean
   initProgress: string | null
   backend: 'api' | 'cli'
   worktreeUncommittedMap: Map<string, boolean>

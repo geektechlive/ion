@@ -58,6 +58,7 @@ const initialState = {
   resourceViewerGeometry: { x: 80, y: 100, w: 720, h: 420 },
   agentDetailGeometry: { x: 60, y: 80, w: 600, h: 500 },
   tabsReady: false,
+  rehydrating: false,
   initProgress: null,
   backend: 'api' as const,
   worktreeUncommittedMap: new Map(),

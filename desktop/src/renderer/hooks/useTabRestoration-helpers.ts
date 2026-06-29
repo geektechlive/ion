@@ -74,3 +74,62 @@ export function readConversationInstances(tab: PersistedTab): PersistedConversat
   return tab.conversationPane?.instances ?? []
 }
 
+// ─── Staggered eager session-start ordering (daemon-model compatibility) ─────
+//
+// The engine is a shared launchd daemon (not a fresh per-desktop child). On
+// restore the desktop must NOT fire all ensureEngineSession calls at once: the
+// simultaneous burst overwhelms the daemon's dispatch goroutine and event
+// queue, causing result drops and 30s timeouts. These two helpers encode the
+// well-behaved-client contract — active tab first (what the user sees), then
+// the rest, one session start in flight at a time. They are pure/structural so
+// the ordering and the sequential (no-burst) guarantee can be pinned without
+// driving the whole restoration effect.
+
+/** A restored tab id paired with its index into the persisted tabs array. */
+export interface RestoredTabRef {
+  tabId: string
+  index: number
+}
+
+/**
+ * Order eager-session-start candidates: the active tab first, then the
+ * remaining candidates in their original order. Stable (preserves input order
+ * within each group). Pure — does not start anything.
+ *
+ * `activeIdx` is `saved.activeTabIndex ?? -1`; when it does not match any
+ * candidate, the input order is preserved unchanged.
+ */
+export function orderSessionCandidates<T extends RestoredTabRef>(
+  candidates: T[],
+  activeIdx: number,
+): T[] {
+  return [
+    ...candidates.filter(({ index }) => index === activeIdx),
+    ...candidates.filter(({ index }) => index !== activeIdx),
+  ]
+}
+
+/**
+ * Start sessions one at a time, awaiting each before starting the next. This
+ * is the no-burst guarantee: at any instant at most one `start` call is in
+ * flight. Errors from an individual start are swallowed (logged by the caller's
+ * starter) so one failure does not abort the remaining serialized starts.
+ *
+ * `start` is invoked once per item, in the given order, and must resolve (or
+ * reject) before the next item is started.
+ */
+export async function startSessionsSequentially<T>(
+  items: T[],
+  start: (item: T) => Promise<void>,
+): Promise<void> {
+  for (const item of items) {
+    try {
+      await start(item)
+    } catch {
+      // Individual-start failures are handled inside `start`; never abort the
+      // remaining serialized starts.
+    }
+  }
+}
+
+
