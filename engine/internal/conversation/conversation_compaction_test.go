@@ -314,6 +314,61 @@ func TestEstimateTokens_ImageBlock(t *testing.T) {
 	}
 }
 
+// TestEstimateTokens_ImageBlockIgnoresBase64ByteLength is the regression for the
+// over-estimation bug (conversation 1782596686130-e4df0482fa34): a single ~1MB
+// base64 image was counted as ~300K tokens because EstimateTokens divided its
+// byte length by 3.5, inflating a 55K-token context to 1.08M and firing
+// proactive compaction on a tiny conversation. The estimate for an image block
+// must be bounded by the fixed per-image cost, NOT scale with base64 size.
+func TestEstimateTokens_ImageBlockIgnoresBase64ByteLength(t *testing.T) {
+	// ~1MB of base64 image data. Byte-length/3.5 would be ~300K tokens.
+	bigImage := []types.LlmContentBlock{
+		{Type: "image", Source: &types.ImageSource{Type: "base64", MediaType: "image/png", Data: strings.Repeat("A", 1_000_000)}},
+	}
+	got := EstimateTokens(bigImage)
+	// Must be close to the fixed per-image estimate, never the byte-length
+	// catastrophe. Allow a small margin for the block's non-source metadata.
+	if got > ImageBlockTokenEstimate+2000 {
+		t.Fatalf("image estimate scaled with base64 size: got %d, want ≈%d (byte-length bug)", got, ImageBlockTokenEstimate)
+	}
+	if got < ImageBlockTokenEstimate {
+		t.Fatalf("image estimate below the fixed per-image floor: got %d, want ≥%d", got, ImageBlockTokenEstimate)
+	}
+
+	// A 10x larger image must NOT produce a materially larger estimate — the
+	// estimate is fixed-cost, not byte-driven.
+	biggerImage := []types.LlmContentBlock{
+		{Type: "image", Source: &types.ImageSource{Type: "base64", MediaType: "image/png", Data: strings.Repeat("A", 10_000_000)}},
+	}
+	gotBigger := EstimateTokens(biggerImage)
+	if gotBigger != got {
+		t.Fatalf("image estimate must not scale with byte length: 1MB=%d 10MB=%d", got, gotBigger)
+	}
+}
+
+// TestEstimateTokens_ImageBlockDiskShape pins the same image-aware behavior for
+// content that round-tripped through JSON (loaded from disk), where blocks
+// arrive as []any of map[string]any rather than the typed []LlmContentBlock.
+func TestEstimateTokens_ImageBlockDiskShape(t *testing.T) {
+	diskBlocks := []any{
+		map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": "image/png",
+				"data":       strings.Repeat("A", 1_000_000),
+			},
+		},
+	}
+	got := EstimateTokens(diskBlocks)
+	if got > ImageBlockTokenEstimate+2000 {
+		t.Fatalf("disk-shape image estimate scaled with base64 size: got %d, want ≈%d", got, ImageBlockTokenEstimate)
+	}
+	if got < ImageBlockTokenEstimate {
+		t.Fatalf("disk-shape image estimate below floor: got %d, want ≥%d", got, ImageBlockTokenEstimate)
+	}
+}
+
 func TestEstimateTokens_MessageArray(t *testing.T) {
 	msgs := []types.LlmMessage{
 		{Role: "user", Content: "hello world"},
@@ -322,6 +377,27 @@ func TestEstimateTokens_MessageArray(t *testing.T) {
 	result := EstimateTokens(msgs)
 	if result <= 0 {
 		t.Fatalf("expected positive estimate, got %d", result)
+	}
+}
+
+// TestEstimateTokens_MessageArrayImageAware pins that the whole-conversation
+// estimate (the []LlmMessage path used by the heuristic, post-compaction, and
+// session-memory call sites) is image-aware: a message holding a ~1MB base64
+// image must not inflate the conversation total by its byte length. This is the
+// same root cause as the per-block test, exercised at the slice-of-messages
+// entry point.
+func TestEstimateTokens_MessageArrayImageAware(t *testing.T) {
+	msgs := []types.LlmMessage{
+		{Role: "user", Content: "describe this screenshot"},
+		{Role: "user", Content: []types.LlmContentBlock{
+			{Type: "image", Source: &types.ImageSource{Type: "base64", MediaType: "image/png", Data: strings.Repeat("A", 1_000_000)}},
+		}},
+	}
+	got := EstimateTokens(msgs)
+	// Text ("describe this screenshot" ≈ a few tokens) + one fixed-cost image +
+	// small metadata. Must be nowhere near the ~285K the byte-length bug produced.
+	if got > ImageBlockTokenEstimate+3000 {
+		t.Fatalf("conversation estimate scaled with image bytes: got %d, want ≈%d", got, ImageBlockTokenEstimate)
 	}
 }
 
