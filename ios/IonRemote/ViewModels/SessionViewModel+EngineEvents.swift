@@ -43,40 +43,39 @@ extension SessionViewModel {
 
     @MainActor
     func handleEnginePlanModeChanged(tabId: String, instanceId: String?, planModeEnabled: Bool, planFilePath: String?, planSlug: String?) {
-        // Insert a plan-lifecycle divider each time the engine enters plan
-        // mode. Mirrors the desktop's event-slice-plan-mode.ts handler.
-        // planModeEnabled=false is a proposal (ExitPlanMode) and is
-        // intentionally ignored — the desktop handles the approval flow.
+        // Plan-mode ENTRY no longer draws a divider. Entry happens before the
+        // model has written the plan file, so a marker here would be
+        // mispositioned (before any narrative) and its link would not resolve
+        // (the file does not exist yet). The divider is now driven by
+        // engine_plan_file_written (the actual write) — see
+        // handleEnginePlanFileWritten. iOS keeps no plan-mode state of its own
+        // here today, so this is an observe-only no-op; the guard documents the
+        // proposal (enabled=false) case explicitly.
         guard planModeEnabled else { return }
+        _ = (planFilePath, planSlug, instanceId, tabId)
+    }
+
+    @MainActor
+    func handleEnginePlanFileWritten(tabId: String, instanceId: String?, operation: String, planFilePath: String?, planSlug: String?) {
+        // The engine confirmed a Write/Edit landed on the canonical plan file.
+        // This is the accurate point to insert the plan-lifecycle divider: the
+        // file now exists with content, so the marker is correctly positioned
+        // (right after the model's narrative + the write) and the slug link
+        // resolves. The engine carries the created-vs-updated discriminator
+        // (operation) because only it can observe the file's prior state.
         let slug = planSlug ?? ""
         let time = Date()
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
         let timeStr = formatter.string(from: time)
-        // Created-vs-updated decision (mirrors the desktop). The engine emits
-        // engine_plan_mode_changed{enabled:true} both when a plan is first
-        // created (model calls EnterPlanMode) AND when a run starts while the
-        // session is already in plan mode (a subsequent turn writing the SAME
-        // plan). The FIRST divider for a given planFilePath in this instance's
-        // scrollback is "Plan created"; a SUBSEQUENT divider for the same path
-        // is "Plan updated" — it's the same plan being written again. We scan
-        // the instance's messages for an existing system divider carrying the
-        // same planFilePath. Single instance per tab post-#256, so reading
-        // .first matches the rest of this file's accessors. Empty path →
-        // cannot match → falls back to "Plan created" (pathological; the
-        // engine now always carries the path for engine-hosted tabs).
-        let path = planFilePath ?? ""
-        let alreadyHasDivider = !path.isEmpty
-            && (conversationInstances[tabId]?.first?
-                .messages
-                .contains(where: { $0.role == .system && $0.planFilePath == path }) ?? false)
-        let label = alreadyHasDivider ? "Plan updated" : "Plan created"
+        let label = operation == "updated" ? "Plan updated" : "Plan created"
         let content = slug.isEmpty
             ? "── \(label) at \(timeStr) ──"
             : "── \(label) at \(timeStr) · \(slug) ──"
         var msg = Message(id: UUID().uuidString, role: .system, content: content, timestamp: time.timeIntervalSince1970 * 1000)
         // Carry the plan path so the divider row can make the slug a tappable
         // link that opens the plan preview. Empty path stays nil (no link).
+        let path = planFilePath ?? ""
         msg.planFilePath = path.isEmpty ? nil : path
         mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.messages.append(msg) }
     }

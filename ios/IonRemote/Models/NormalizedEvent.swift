@@ -129,6 +129,13 @@ enum RemoteEvent: Sendable {
     /// is a proposal — the actual exit is gated by the user-approval
     /// chokepoint on the desktop (the "Implement" button).
     case enginePlanModeChanged(tabId: String, instanceId: String?, planModeEnabled: Bool, planFilePath: String?, planSlug: String?)
+    /// State event: a Write/Edit landed on the canonical plan file during plan
+    /// mode. This is the accurate trigger for the plan-lifecycle divider — the
+    /// file now exists with content, so the marker is correctly positioned and
+    /// its link resolves. `operation` is "created" (first content) or "updated"
+    /// (a revision). Distinct from enginePlanModeChanged, which only reflects
+    /// plan-mode entry/exit and no longer drives the divider.
+    case enginePlanFileWritten(tabId: String, instanceId: String?, operation: String, planFilePath: String?, planSlug: String?)
     /// Workflow event from the engine: the model has proposed a plan-mode
     /// transition (currently only kind="exit"). iOS uses this to render
     /// plan-proposal cards — the desktop is the authoritative consumer
@@ -439,6 +446,7 @@ enum RemoteEvent: Sendable {
         case engineModelOverride = "desktop_model_override"
         case engineProfiles = "desktop_engine_profiles"
         case enginePlanModeChanged = "desktop_plan_mode_changed"
+        case enginePlanFileWritten = "desktop_plan_file_written"
         case enginePlanProposal = "desktop_plan_proposal"
         case enginePlanModeAutoExit = "desktop_plan_mode_auto_exit"
         case engineEarlyStopDecisionRequest = "desktop_early_stop_decision_request"
@@ -516,6 +524,9 @@ enum RemoteEvent: Sendable {
         case customName, customIcon, updatedAt, remoteDisplayUpdatedAt
         // engine_plan_mode_changed — state event for plan-mode entry/exit.
         case planModeEnabled
+        // engine_plan_file_written — the model wrote the plan file. Mirrors
+        // EngineEvent.PlanWriteOperation's JSON tag ("created"/"updated").
+        case planWriteOperation
         // engine_steer_injected — mid-turn steer drain confirmation.
         // Mirrors EngineEvent.SteerMessageLength's JSON tag.
         case steerMessageLength

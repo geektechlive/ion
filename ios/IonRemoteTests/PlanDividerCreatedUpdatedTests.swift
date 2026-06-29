@@ -23,66 +23,59 @@ final class PlanDividerCreatedUpdatedTests: XCTestCase {
 
     func testFirstEmitIsPlanCreatedWithPath() {
         let vm = SessionViewModel()
-        vm.handleEnginePlanModeChanged(
+        vm.handleEnginePlanFileWritten(
             tabId: "t1",
             instanceId: nil,
-            planModeEnabled: true,
+            operation: "created",
             planFilePath: "/tmp/happy-rabbit.md",
             planSlug: "happy-rabbit"
         )
         let divider = lastSystemDivider(vm, "t1")
         XCTAssertNotNil(divider)
-        XCTAssertTrue(divider!.content.hasPrefix("── Plan created at "), "first divider must be 'Plan created'")
+        XCTAssertTrue(divider!.content.hasPrefix("── Plan created at "), "created op must render 'Plan created'")
         XCTAssertTrue(divider!.content.contains("happy-rabbit"), "slug must appear")
         XCTAssertEqual(divider!.planFilePath, "/tmp/happy-rabbit.md", "divider must carry planFilePath for the link")
     }
 
-    func testSecondEmitSamePathIsPlanUpdatedWithPath() {
+    func testUpdatedOperationIsPlanUpdatedWithPath() {
         let vm = SessionViewModel()
         // First write: created.
-        vm.handleEnginePlanModeChanged(
-            tabId: "t1", instanceId: nil, planModeEnabled: true,
+        vm.handleEnginePlanFileWritten(
+            tabId: "t1", instanceId: nil, operation: "created",
             planFilePath: "/tmp/happy-rabbit.md", planSlug: "happy-rabbit"
         )
-        // Second write of the SAME plan: must be "Plan updated".
-        vm.handleEnginePlanModeChanged(
-            tabId: "t1", instanceId: nil, planModeEnabled: true,
+        // Second write of the SAME plan: engine reports operation=updated.
+        vm.handleEnginePlanFileWritten(
+            tabId: "t1", instanceId: nil, operation: "updated",
             planFilePath: "/tmp/happy-rabbit.md", planSlug: "happy-rabbit"
         )
         let msgs = vm.conversationInstances["t1"]?.first?.messages ?? []
         let dividers = msgs.filter { $0.role == .system }
-        XCTAssertEqual(dividers.count, 2, "both dividers land — created then updated")
+        XCTAssertEqual(dividers.count, 2, "both writes produce a divider")
         XCTAssertTrue(dividers[0].content.hasPrefix("── Plan created at "))
-        XCTAssertTrue(dividers[1].content.hasPrefix("── Plan updated at "), "second divider for same path must be 'Plan updated'")
+        XCTAssertTrue(dividers[1].content.hasPrefix("── Plan updated at "), "updated op must render 'Plan updated'")
         XCTAssertTrue(dividers[1].content.contains("happy-rabbit"))
         XCTAssertEqual(dividers[1].planFilePath, "/tmp/happy-rabbit.md", "updated divider must carry planFilePath too")
     }
 
-    func testDifferentPathIsPlanCreated() {
+    func testUnknownOperationDefaultsToCreated() {
         let vm = SessionViewModel()
-        vm.handleEnginePlanModeChanged(
-            tabId: "t1", instanceId: nil, planModeEnabled: true,
-            planFilePath: "/tmp/plan-1.md", planSlug: "plan-1"
-        )
-        vm.handleEnginePlanModeChanged(
-            tabId: "t1", instanceId: nil, planModeEnabled: true,
-            planFilePath: "/tmp/plan-2.md", planSlug: "plan-2"
-        )
-        let dividers = (vm.conversationInstances["t1"]?.first?.messages ?? []).filter { $0.role == .system }
-        XCTAssertEqual(dividers.count, 2)
-        // A different path is a genuinely new plan → both read "Plan created".
-        XCTAssertTrue(dividers[1].content.hasPrefix("── Plan created at "))
-        XCTAssertTrue(dividers[1].content.contains("plan-2"))
-        XCTAssertEqual(dividers[1].planFilePath, "/tmp/plan-2.md")
-    }
-
-    func testDisabledEmitInsertsNoDivider() {
-        let vm = SessionViewModel()
-        vm.handleEnginePlanModeChanged(
-            tabId: "t1", instanceId: nil, planModeEnabled: false,
+        vm.handleEnginePlanFileWritten(
+            tabId: "t1", instanceId: nil, operation: "",
             planFilePath: "/tmp/plan.md", planSlug: "plan"
         )
-        XCTAssertNil(lastSystemDivider(vm, "t1"), "enabled:false is a proposal — no divider")
+        let divider = lastSystemDivider(vm, "t1")
+        XCTAssertTrue(divider!.content.hasPrefix("── Plan created at "))
+    }
+
+    func testPlanModeChangedDoesNotInsertDivider() {
+        let vm = SessionViewModel()
+        // Plan-mode ENTRY no longer draws a divider — the write event does.
+        vm.handleEnginePlanModeChanged(
+            tabId: "t1", instanceId: nil, planModeEnabled: true,
+            planFilePath: "/tmp/plan.md", planSlug: "plan"
+        )
+        XCTAssertNil(lastSystemDivider(vm, "t1"), "plan-mode entry must not insert a divider")
     }
 
     // MARK: - PlanDividerLabel link parsing

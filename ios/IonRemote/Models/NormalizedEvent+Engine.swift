@@ -239,6 +239,15 @@ extension RemoteEvent {
             try container.encodeIfPresent(planSlug, forKey: .planSlug)
             return true
 
+        case .enginePlanFileWritten(let tabId, let instanceId, let operation, let planFilePath, let planSlug):
+            try container.encode(TypeKey.enginePlanFileWritten, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(operation, forKey: .planWriteOperation)
+            try container.encodeIfPresent(planFilePath, forKey: .planFilePath)
+            try container.encodeIfPresent(planSlug, forKey: .planSlug)
+            return true
+
         case .enginePlanProposal(let tabId, let instanceId, let kind, let planFilePath, let planSlug):
             try container.encode(TypeKey.enginePlanProposal, forKey: .type)
             try container.encode(tabId, forKey: .tabId)

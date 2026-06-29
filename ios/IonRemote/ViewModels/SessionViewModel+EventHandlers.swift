@@ -300,6 +300,9 @@ extension SessionViewModel {
         case .enginePlanModeChanged(let tabId, let instanceId, let planModeEnabled, let planFilePath, let planSlug):
             handleEnginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planFilePath: planFilePath, planSlug: planSlug)
 
+        case .enginePlanFileWritten(let tabId, let instanceId, let operation, let planFilePath, let planSlug):
+            handleEnginePlanFileWritten(tabId: tabId, instanceId: instanceId, operation: operation, planFilePath: planFilePath, planSlug: planSlug)
+
         case .agentConversationHistory(let agentName, let conversationId, let messages):
             handleAgentConversationHistory(agentName: agentName, conversationId: conversationId, messages: messages)
 

@@ -191,6 +191,8 @@ extension DiagnosticLog {
 
         case .enginePlanModeChanged(let tabId, let instId, let enabled, let path, let slug):
             log("EVENT: enginePlanModeChanged tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") enabled=\(enabled) path=\(path?.suffix(40) ?? "nil") slug=\(slug ?? "nil")")
+        case .enginePlanFileWritten(let tabId, let instId, let op, let path, let slug):
+            log("EVENT: enginePlanFileWritten tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") op=\(op) path=\(path?.suffix(40) ?? "nil") slug=\(slug ?? "nil")")
 
         case .enginePlanProposal(let tabId, let instId, let kind, let path, _):
             // Workflow event from the engine — iOS does not act on this

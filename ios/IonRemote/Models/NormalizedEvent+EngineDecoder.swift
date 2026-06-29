@@ -221,6 +221,19 @@ extension RemoteEvent {
             let planSlug = try container.decodeIfPresent(String.self, forKey: .planSlug)
             return .enginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planFilePath: planFilePath, planSlug: planSlug)
 
+        case .enginePlanFileWritten:
+            // State event: a Write/Edit landed on the canonical plan file. iOS
+            // inserts the plan-lifecycle divider from THIS event (the actual
+            // write), not from plan-mode entry — so the marker is correctly
+            // positioned and its link resolves. operation discriminates
+            // "created" vs "updated"; planFilePath/planSlug mirror the Go event.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let operation = try container.decodeIfPresent(String.self, forKey: .planWriteOperation) ?? "created"
+            let planFilePath = try container.decodeIfPresent(String.self, forKey: .planFilePath)
+            let planSlug = try container.decodeIfPresent(String.self, forKey: .planSlug)
+            return .enginePlanFileWritten(tabId: tabId, instanceId: instanceId, operation: operation, planFilePath: planFilePath, planSlug: planSlug)
+
         case .enginePlanProposal:
             // Workflow event: the model has proposed a plan-mode transition.
             // iOS does not act on this event — the desktop is the authoritative

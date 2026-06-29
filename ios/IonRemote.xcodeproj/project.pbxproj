@@ -217,6 +217,7 @@
 		D1B2C3D4E5F60001AB000001 /* InputBarAbortGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1B2C3D4E5F60001AB000002 /* InputBarAbortGateTests.swift */; };
 		MSGADDFRESH00000000000001 /* MessageAddedFreshConversationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MSGADDFRESH00000000000002 /* MessageAddedFreshConversationTests.swift */; };
 		PLANDIVIDER0000000000001 /* PlanDividerCreatedUpdatedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLANDIVIDER0000000000002 /* PlanDividerCreatedUpdatedTests.swift */; };
+		MARKERRELOAD00000000000001 /* MarkerReloadDecodeGroupingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MARKERRELOAD00000000000002 /* MarkerReloadDecodeGroupingTests.swift */; };
 		OPTINSERT00000000000001 /* OptimisticInsertTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = OPTINSERT00000000000002 /* OptimisticInsertTests.swift */; };
 		SLSHPILL0000000000000001 /* SlashPillOptimisticTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SLSHPILL0000000000000002 /* SlashPillOptimisticTests.swift */; };
 		PLANCARDGATETEST00000001 /* PlanCardGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLANCARDGATETEST00000002 /* PlanCardGateTests.swift */; };
@@ -487,6 +488,7 @@
 		D1B2C3D4E5F60001AB000002 /* InputBarAbortGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputBarAbortGateTests.swift; sourceTree = "<group>"; };
 		MSGADDFRESH00000000000002 /* MessageAddedFreshConversationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageAddedFreshConversationTests.swift; sourceTree = "<group>"; };
 		PLANDIVIDER0000000000002 /* PlanDividerCreatedUpdatedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanDividerCreatedUpdatedTests.swift; sourceTree = "<group>"; };
+		MARKERRELOAD00000000000002 /* MarkerReloadDecodeGroupingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkerReloadDecodeGroupingTests.swift; sourceTree = "<group>"; };
 		OPTINSERT00000000000002 /* OptimisticInsertTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OptimisticInsertTests.swift; sourceTree = "<group>"; };
 		SLSHPILL0000000000000002 /* SlashPillOptimisticTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashPillOptimisticTests.swift; sourceTree = "<group>"; };
 		PLANCARDGATETEST00000002 /* PlanCardGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanCardGateTests.swift; sourceTree = "<group>"; };
@@ -828,6 +830,7 @@
 				D1B2C3D4E5F60001AB000002 /* InputBarAbortGateTests.swift */,
 				MSGADDFRESH00000000000002 /* MessageAddedFreshConversationTests.swift */,
 				PLANDIVIDER0000000000002 /* PlanDividerCreatedUpdatedTests.swift */,
+				MARKERRELOAD00000000000002 /* MarkerReloadDecodeGroupingTests.swift */,
 				OPTINSERT00000000000002 /* OptimisticInsertTests.swift */,
 				SLSHPILL0000000000000002 /* SlashPillOptimisticTests.swift */,
 				PLANCARDGATETEST00000002 /* PlanCardGateTests.swift */,
@@ -1270,6 +1273,7 @@
 				D1B2C3D4E5F60001AB000001 /* InputBarAbortGateTests.swift in Sources */,
 				MSGADDFRESH00000000000001 /* MessageAddedFreshConversationTests.swift in Sources */,
 				PLANDIVIDER0000000000001 /* PlanDividerCreatedUpdatedTests.swift in Sources */,
+				MARKERRELOAD00000000000001 /* MarkerReloadDecodeGroupingTests.swift in Sources */,
 				OPTINSERT00000000000001 /* OptimisticInsertTests.swift in Sources */,
 				SLSHPILL0000000000000001 /* SlashPillOptimisticTests.swift in Sources */,
 				PLANCARDGATETEST00000001 /* PlanCardGateTests.swift in Sources */,
