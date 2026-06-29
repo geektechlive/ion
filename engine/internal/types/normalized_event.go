@@ -23,12 +23,19 @@ const (
 	EventPlanModeChanged   = "plan_mode_changed"
 	EventPlanProposal      = "plan_proposal"
 	EventPlanModeAutoExit  = "plan_mode_auto_exit"
-	EventStreamReset       = "stream_reset"
-	EventCompacting        = "compacting"
-	EventToolStalled       = "tool_stalled"
-	EventSteerInjected     = "steer_injected"
-	EventModelFallback     = "model_fallback"
-	EventRunStalled        = "run_stalled"
+	// EventPlanFileWritten is emitted the moment a Write/Edit successfully
+	// lands on the canonical plan file during plan mode. It is distinct from
+	// EventPlanModeChanged (which fires on plan-mode *entry*, before any file
+	// exists): this event fires only after the plan file actually exists on
+	// disk with content, so consumers can render a "plan created / updated"
+	// marker at the true point in the conversation and a link that resolves.
+	EventPlanFileWritten = "plan_file_written"
+	EventStreamReset     = "stream_reset"
+	EventCompacting      = "compacting"
+	EventToolStalled     = "tool_stalled"
+	EventSteerInjected   = "steer_injected"
+	EventModelFallback   = "model_fallback"
+	EventRunStalled      = "run_stalled"
 	// EventPlanContent is emitted in response to a get_plan_content command.
 	// It carries a bounded byte-range window of a plan file so remote clients
 	// can page through large plans without filesystem access to the engine host.
@@ -169,6 +176,8 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &PlanProposalEvent{}
 	case EventPlanModeAutoExit:
 		target = &PlanModeAutoExitEvent{}
+	case EventPlanFileWritten:
+		target = &PlanFileWrittenEvent{}
 	case EventStreamReset:
 		target = &StreamResetEvent{}
 	case EventCompacting:
@@ -379,6 +388,40 @@ type PlanModeChangedEvent struct {
 }
 
 func (PlanModeChangedEvent) eventType() string { return EventPlanModeChanged }
+
+// PlanFileWrittenEvent signals that a Write/Edit successfully landed on the
+// canonical plan file during plan mode. Unlike PlanModeChangedEvent — which
+// fires on plan-mode *entry*, before the model has written anything — this
+// event fires only after the plan file actually exists on disk with content.
+//
+// Consumers use it to render the "plan created / plan updated" conversation
+// marker at the accurate point in the transcript (right after the write that
+// produced or changed the plan), with a link that resolves because the file
+// now exists. Emitting the marker on plan-mode entry instead would place it
+// before any narrative and link to a file that does not yet exist.
+//
+// Operation discriminates the write:
+//   - "created" — the plan file did not exist (or was empty) before this
+//     write. The first time content lands in a plan file for the session.
+//   - "updated" — the plan file already had content before this write. A
+//     subsequent revision of an existing plan.
+//
+// The engine is the only layer that can observe this distinction reliably (it
+// stat's the file immediately before the write executes), so it carries the
+// discriminator rather than forcing each consumer to reconstruct it.
+type PlanFileWrittenEvent struct {
+	// Operation is "created" or "updated". See the type doc.
+	Operation string `json:"operation"`
+	// PlanFilePath is the absolute filesystem path of the plan file that was
+	// written. Always the canonical run plan file (stray plan-shaped targets
+	// are redirected to it before the write executes).
+	PlanFilePath string `json:"planFilePath,omitempty"`
+	// PlanSlug is the human-readable identifier portion of the plan file path
+	// (basename minus ".md"). See PlanModeChangedEvent for the legacy-hex note.
+	PlanSlug string `json:"planSlug,omitempty"`
+}
+
+func (PlanFileWrittenEvent) eventType() string { return EventPlanFileWritten }
 
 // PlanProposalEvent is a workflow-level signal emitted when the model proposes
 // a plan-mode transition that requires user approval. It is distinct from

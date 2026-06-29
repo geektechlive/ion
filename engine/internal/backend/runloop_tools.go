@@ -231,11 +231,17 @@ func (b *ApiBackend) executeTools(
 			// warning that the Write tool-result append below depends on.
 			var planWriteOverwrite bool
 			var planWriteRedirectNotice string
+			var planWriteToCanonical bool
+			var planFileHadContentBefore bool
 			{
-				var handled bool
-				if handled, planWriteOverwrite, planWriteRedirectNotice = applyPlanModeWriteGate(run, block, results, i, cwd, b.emit); handled {
+				gateRes := applyPlanModeWriteGate(run, block, results, i, cwd, b.emit)
+				if gateRes.handled {
 					return nil
 				}
+				planWriteOverwrite = gateRes.planWriteOverwrite
+				planWriteRedirectNotice = gateRes.redirectNotice
+				planWriteToCanonical = gateRes.planWriteToCanonical
+				planFileHadContentBefore = gateRes.planFileHadContentBefore
 				if applyPlanModeBashGate(run, block, results, i, b.emit) {
 					return nil
 				}
@@ -471,6 +477,41 @@ func (b *ApiBackend) executeTools(
 			// so it cannot leak onto another concurrent tool block's result.
 			if planWriteRedirectNotice != "" && !results[i].IsError {
 				results[i].Content += "\n\n" + planWriteRedirectNotice
+			}
+
+			// Emit the plan-file-written marker AFTER a successful Write/Edit
+			// to the canonical plan file. This is the accurate trigger for the
+			// "plan created / updated" conversation marker: the file now exists
+			// on disk with content, so the marker lands at the true point in
+			// the transcript and any link to the plan resolves. The
+			// created-vs-updated discriminator comes from the file's prior
+			// state captured pre-execution by the gate (planFileHadContentBefore).
+			// Plan-mode entry no longer drives this marker — entry happens
+			// before any file exists. Skipped on error (the write failed, so
+			// nothing changed on disk).
+			if planWriteToCanonical && !results[i].IsError {
+				op := "created"
+				if planFileHadContentBefore {
+					op = "updated"
+				}
+				utils.Info("PlanMode", fmt.Sprintf("run=%s plan_file_written op=%s plan_file=%s", run.requestID, op, run.planFilePath))
+				b.emit(run, types.NormalizedEvent{Data: &types.PlanFileWrittenEvent{
+					Operation:    op,
+					PlanFilePath: run.planFilePath,
+					PlanSlug:     types.PlanSlugFromPath(run.planFilePath),
+				}})
+				// Persist a plan marker so the "plan created / updated" marker
+				// survives reload (PlanFileWrittenEvent is not persisted).
+				if run.conv != nil && run.conv.Entries != nil {
+					conversation.AppendEntry(run.conv, conversation.EntryPlanMarker, conversation.PlanMarkerData{
+						Operation:    op,
+						PlanFilePath: run.planFilePath,
+						PlanSlug:     types.PlanSlugFromPath(run.planFilePath),
+					})
+					if err := conversation.Save(run.conv, ""); err != nil {
+						utils.Log("ApiBackend", fmt.Sprintf("plan_marker: failed to save: %s", err.Error()))
+					}
+				}
 			}
 
 			// Fire file_changed hook for write/edit tools

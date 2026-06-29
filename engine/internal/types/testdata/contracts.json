@@ -75,6 +75,11 @@
       "toolInput",
       "toolName"
     ],
+    "plan_file_written": [
+      "operation",
+      "planFilePath",
+      "planSlug"
+    ],
     "plan_mode_auto_exit": [
       "planFilePath",
       "planSlug",
@@ -279,6 +284,7 @@
     "planModeEnabled",
     "planProposalKind",
     "planSlug",
+    "planWriteOperation",
     "push",
     "pushBody",
     "pushTitle",

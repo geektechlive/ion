@@ -37,6 +37,27 @@ import (
 // The Write gate additionally reports `planWriteOverwrite` (latched
 // for the post-execution warning that executeTools appends to the
 // Write result after the tool actually runs).
+//
+// It also reports `planWriteToCanonical` (this Write/Edit targets the
+// canonical plan file, so a successful execution should emit the
+// engine_plan_file_written marker) and `planFileHadContentBefore` (the
+// plan file already existed with content immediately before this write —
+// the created-vs-updated discriminator the marker carries). Both are
+// computed pre-execution because that is the only point the engine can
+// observe the file's prior state; the post-execution site emits the marker
+// using them once the write has actually succeeded.
+
+// planWriteGateResult bundles the gate's reports to the per-tool dispatch
+// loop. handled follows the "caller should return nil" idiom; the other
+// fields drive the post-execution overwrite warning and the
+// engine_plan_file_written marker emission.
+type planWriteGateResult struct {
+	handled                  bool
+	planWriteOverwrite       bool
+	redirectNotice           string
+	planWriteToCanonical     bool
+	planFileHadContentBefore bool
+}
 
 // applyPlanModeWriteGate enforces the plan-mode invariant that the
 // canonical plan file is the only writable file. The decision is
@@ -83,13 +104,26 @@ func applyPlanModeWriteGate(
 	i int,
 	cwd string,
 	emit func(*activeRun, types.NormalizedEvent),
-) (handled bool, planWriteOverwrite bool, redirectNotice string) {
+) planWriteGateResult {
 	if !run.planMode || (block.Name != "Write" && block.Name != "Edit") {
-		return false, false, ""
+		return planWriteGateResult{}
 	}
 	targetPath, ok := block.Input["file_path"].(string)
 	if !ok {
-		return false, false, ""
+		return planWriteGateResult{}
+	}
+	// planFileHadContent reports whether the canonical plan file already
+	// exists with content immediately before this write — the precise
+	// created-vs-updated discriminator for the engine_plan_file_written
+	// marker. Computed here (pre-execution) because that is the only point
+	// the engine can observe the file's prior state. Any non-empty file
+	// counts as "had content"; a missing or zero-byte file is "created".
+	planFileHadContent := func() bool {
+		if run.planFilePath == "" {
+			return false
+		}
+		info, err := os.Stat(run.planFilePath)
+		return err == nil && info.Size() > 0
 	}
 	if filepath.Clean(targetPath) != filepath.Clean(run.planFilePath) {
 		// The model targeted something other than the canonical plan
@@ -101,6 +135,8 @@ func applyPlanModeWriteGate(
 		// hard block.
 		if run.planFilePath != "" && isPlanShapedPath(targetPath, cwd) {
 			utils.Info("PlanMode", fmt.Sprintf("run=%s redirected_plan_write target=%s canonical=%s", run.requestID, targetPath, run.planFilePath))
+			// Capture prior state BEFORE the redirected write executes.
+			hadContent := planFileHadContent()
 			// Rewrite the executor-visible input in place.
 			block.Input["file_path"] = run.planFilePath
 			notice := fmt.Sprintf(
@@ -111,12 +147,13 @@ func applyPlanModeWriteGate(
 			// Fall through to normal execution against the rewritten path.
 			// Re-run the overwrite latch against the canonical file so a
 			// redirected Write over an existing plan still warns.
-			if block.Name == "Write" {
-				if info, err := os.Stat(run.planFilePath); err == nil && info.Size() > 50 {
-					return false, true, notice
-				}
+			overwrite := block.Name == "Write" && hadContent
+			return planWriteGateResult{
+				redirectNotice:           notice,
+				planWriteOverwrite:       overwrite,
+				planWriteToCanonical:     true,
+				planFileHadContentBefore: hadContent,
 			}
-			return false, false, notice
 		}
 		utils.Info("PlanMode", fmt.Sprintf("run=%s blocked=%s target=%s plan_file=%s", run.requestID, block.Name, targetPath, run.planFilePath))
 		msg := fmt.Sprintf("Plan mode: cannot write to %s. Only the plan file (%s) is writable.", targetPath, run.planFilePath)
@@ -130,15 +167,17 @@ func applyPlanModeWriteGate(
 			Content: msg,
 			IsError: true,
 		}})
-		return true, false, ""
+		return planWriteGateResult{handled: true}
 	}
-	// Track whether Write is overwriting existing plan content.
-	if block.Name == "Write" {
-		if info, err := os.Stat(run.planFilePath); err == nil && info.Size() > 50 {
-			return false, true, ""
-		}
+	// Direct write/edit to the canonical plan file. Capture prior state for
+	// the created-vs-updated marker and the overwrite warning.
+	hadContent := planFileHadContent()
+	overwrite := block.Name == "Write" && hadContent
+	return planWriteGateResult{
+		planWriteOverwrite:       overwrite,
+		planWriteToCanonical:     true,
+		planFileHadContentBefore: hadContent,
 	}
-	return false, false, ""
 }
 
 // applyPlanModeBashGate enforces the plan-mode Bash allowlist. When

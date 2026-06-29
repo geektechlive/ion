@@ -58,6 +58,14 @@ func (b *ApiBackend) drainSteer(run *activeRun, conv *conversation.Conversation)
 	select {
 	case steerMsg := <-run.steerCh:
 		conversation.AddUserMessage(conv, steerMsg)
+		// Persist a steer marker immediately after the injected user message so
+		// the steer marker survives reload (SteerInjectedEvent is not persisted).
+		// Appended before the existing Save so it rides the same write.
+		if conv.Entries != nil {
+			conversation.AppendEntry(conv, conversation.EntrySteerMarker, conversation.SteerMarkerData{
+				MessageLength: len(steerMsg),
+			})
+		}
 		if err := conversation.Save(conv, ""); err != nil {
 			utils.Log("ApiBackend", fmt.Sprintf(
 				"failed to save conversation after steer injection: runID=%s err=%s",

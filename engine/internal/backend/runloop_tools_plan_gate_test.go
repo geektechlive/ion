@@ -763,3 +763,102 @@ func TestPlanGate_EmptyPlanFilePathNoRedirect(t *testing.T) {
 		t.Error("no file should have been created when planFilePath is empty")
 	}
 }
+
+// findPlanFileWritten returns the first PlanFileWrittenEvent in the emitted
+// slice, or nil when none was emitted.
+func findPlanFileWritten(emitted []types.NormalizedEvent) *types.PlanFileWrittenEvent {
+	for _, ev := range emitted {
+		if e, ok := ev.Data.(*types.PlanFileWrittenEvent); ok {
+			return e
+		}
+	}
+	return nil
+}
+
+// TestPlanFileWritten_CreatedOnFirstWrite pins that a successful Write to a
+// plan file that does NOT yet exist emits PlanFileWrittenEvent{Operation:
+// "created"} with the path + slug. This is the accurate divider trigger:
+// the marker fires on the actual write, not on plan-mode entry.
+func TestPlanFileWritten_CreatedOnFirstWrite(t *testing.T) {
+	planFile := filepath.Join(t.TempDir(), "happy-rabbit.md")
+	// File does NOT exist yet — this is a "created" write.
+	b, run, emitted := planGateHelper(t, true, planFile)
+
+	blocks := []types.LlmContentBlock{{
+		Name:  "Write",
+		ID:    "tc-create",
+		Input: map[string]interface{}{"file_path": planFile, "content": "# the plan\n\nstep 1"},
+	}}
+	results, err := b.executeTools(context.Background(), run, blocks, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].IsError {
+		t.Fatalf("write should succeed: %s", results[0].Content)
+	}
+	ev := findPlanFileWritten(*emitted)
+	if ev == nil {
+		t.Fatal("expected a PlanFileWrittenEvent after a successful plan-file write")
+	}
+	if ev.Operation != "created" {
+		t.Errorf("Operation = %q, want created (file did not exist before the write)", ev.Operation)
+	}
+	if ev.PlanFilePath != planFile {
+		t.Errorf("PlanFilePath = %q, want %q", ev.PlanFilePath, planFile)
+	}
+	if ev.PlanSlug != "happy-rabbit" {
+		t.Errorf("PlanSlug = %q, want happy-rabbit", ev.PlanSlug)
+	}
+}
+
+// TestPlanFileWritten_UpdatedWhenFileHasContent pins that a successful Write to
+// a plan file that ALREADY has content emits Operation:"updated".
+func TestPlanFileWritten_UpdatedWhenFileHasContent(t *testing.T) {
+	planFile := filepath.Join(t.TempDir(), "frosty-finch.md")
+	if err := os.WriteFile(planFile, []byte("# existing plan\n\nlots of prior content here"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	b, run, emitted := planGateHelper(t, true, planFile)
+
+	blocks := []types.LlmContentBlock{{
+		Name:  "Write",
+		ID:    "tc-update",
+		Input: map[string]interface{}{"file_path": planFile, "content": "# revised plan\n\nstep 1 and 2"},
+	}}
+	results, err := b.executeTools(context.Background(), run, blocks, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].IsError {
+		t.Fatalf("write should succeed: %s", results[0].Content)
+	}
+	ev := findPlanFileWritten(*emitted)
+	if ev == nil {
+		t.Fatal("expected a PlanFileWrittenEvent after a successful plan-file write")
+	}
+	if ev.Operation != "updated" {
+		t.Errorf("Operation = %q, want updated (file had content before the write)", ev.Operation)
+	}
+}
+
+// TestPlanFileWritten_NotEmittedOnEntry pins that NO PlanFileWrittenEvent is
+// emitted for a non-write action in plan mode (it is the WRITE, not plan-mode
+// state, that triggers the marker). A blocked write to a non-plan path must
+// also not emit the marker.
+func TestPlanFileWritten_NotEmittedOnBlockedWrite(t *testing.T) {
+	planFile := filepath.Join(t.TempDir(), "plan.md")
+	otherFile := filepath.Join(t.TempDir(), "src", "main.go")
+	b, run, emitted := planGateHelper(t, true, planFile)
+
+	blocks := []types.LlmContentBlock{{
+		Name:  "Write",
+		ID:    "tc-blocked",
+		Input: map[string]interface{}{"file_path": otherFile, "content": "package main"},
+	}}
+	if _, err := b.executeTools(context.Background(), run, blocks, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if ev := findPlanFileWritten(*emitted); ev != nil {
+		t.Errorf("no PlanFileWrittenEvent should be emitted for a blocked non-plan write, got %+v", ev)
+	}
+}

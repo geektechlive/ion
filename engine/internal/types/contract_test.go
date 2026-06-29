@@ -61,6 +61,7 @@ func normalizedEventVariants() map[string]NormalizedEventData {
 		EventUsage:              &UsageEvent{},
 		EventPermissionRequest:  &PermissionRequestEvent{},
 		EventPlanModeChanged:    &PlanModeChangedEvent{},
+		EventPlanFileWritten:    &PlanFileWrittenEvent{},
 		EventPlanProposal:       &PlanProposalEvent{},
 		EventPlanModeAutoExit:   &PlanModeAutoExitEvent{},
 		EventStreamReset:        &StreamResetEvent{},

@@ -143,6 +143,14 @@ type EngineEvent struct {
 	// for the legacy-hex round-trip note.
 	PlanModeSlug string `json:"planSlug,omitempty"`
 
+	// engine_plan_file_written — emitted when a Write/Edit successfully lands
+	// on the canonical plan file during plan mode. PlanModeFilePath
+	// (json:"planFilePath") and PlanModeSlug (json:"planSlug") are reused for
+	// the path + slug. PlanWriteOperation discriminates "created" (first
+	// content in the plan file) from "updated" (a revision of existing
+	// content). See PlanFileWrittenEvent for the full contract.
+	PlanWriteOperation string `json:"planWriteOperation,omitempty"`
+
 	// engine_plan_proposal — workflow-level signal emitted when the model
 	// proposes a plan-mode transition that requires user approval. Distinct
 	// from engine_plan_mode_changed, which fires only on confirmed *state*

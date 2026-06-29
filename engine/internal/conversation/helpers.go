@@ -127,6 +127,38 @@ func asCompactionData(data any) *CompactionData {
 	return nil
 }
 
+func asPlanMarkerData(data any) *PlanMarkerData {
+	switch d := data.(type) {
+	case PlanMarkerData:
+		return &d
+	case *PlanMarkerData:
+		return d
+	case map[string]any:
+		b, _ := json.Marshal(d)
+		var pd PlanMarkerData
+		if json.Unmarshal(b, &pd) == nil {
+			return &pd
+		}
+	}
+	return nil
+}
+
+func asSteerMarkerData(data any) *SteerMarkerData {
+	switch d := data.(type) {
+	case SteerMarkerData:
+		return &d
+	case *SteerMarkerData:
+		return d
+	case map[string]any:
+		b, _ := json.Marshal(d)
+		var sd SteerMarkerData
+		if json.Unmarshal(b, &sd) == nil {
+			return &sd
+		}
+	}
+	return nil
+}
+
 func asAgentDispatchData(data any) *AgentDispatchData {
 	switch d := data.(type) {
 	case AgentDispatchData:

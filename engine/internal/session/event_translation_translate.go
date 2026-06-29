@@ -125,6 +125,22 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 			PlanModeSlug:     slug,
 		}
 
+	case *types.PlanFileWrittenEvent:
+		// Emitted when a Write/Edit landed on the canonical plan file. Same
+		// slug-fallback semantics as PlanModeChangedEvent so consumers always
+		// receive a populated display string. The Operation discriminator
+		// ("created"/"updated") tells consumers which marker to render.
+		slug := e.PlanSlug
+		if slug == "" {
+			slug = types.PlanSlugFromPath(e.PlanFilePath)
+		}
+		return types.EngineEvent{
+			Type:               "engine_plan_file_written",
+			PlanWriteOperation: e.Operation,
+			PlanModeFilePath:   e.PlanFilePath,
+			PlanModeSlug:       slug,
+		}
+
 	case *types.PlanProposalEvent:
 		// PlanProposalEvent is the workflow-level counterpart to
 		// PlanModeChangedEvent: it fires when the model *proposes* a

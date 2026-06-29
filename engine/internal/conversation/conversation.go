@@ -27,6 +27,14 @@ const (
 	EntryLabel         SessionEntryType = "label"
 	EntryCustom        SessionEntryType = "custom"
 	EntryAgentDispatch SessionEntryType = "agent_dispatch"
+	// EntryPlanMarker records a plan-file-written event so the "plan created /
+	// updated" marker survives reload; it renders live via PlanFileWrittenEvent,
+	// which is not persisted.
+	EntryPlanMarker SessionEntryType = "plan_marker"
+	// EntrySteerMarker records a steer-injection event so the steer marker
+	// survives reload; it renders live via SteerInjectedEvent, which is not
+	// persisted.
+	EntrySteerMarker SessionEntryType = "steer_marker"
 )
 
 // MessageData holds a chat message entry.
@@ -80,6 +88,22 @@ type CompactionData struct {
 type LabelData struct {
 	TargetID string  `json:"targetId"`
 	Label    *string `json:"label"`
+}
+
+// PlanMarkerData records a plan file written event for persistence and replay.
+// It mirrors the live PlanFileWrittenEvent so flattenEntries can replay a
+// "plan created / updated" marker on historical reload.
+type PlanMarkerData struct {
+	Operation    string `json:"operation"` // "created" | "updated"
+	PlanFilePath string `json:"planFilePath"`
+	PlanSlug     string `json:"planSlug"`
+}
+
+// SteerMarkerData records a steer injection event for persistence and replay.
+// It mirrors the live SteerInjectedEvent so flattenEntries can replay a steer
+// marker on historical reload.
+type SteerMarkerData struct {
+	MessageLength int `json:"messageLength"`
 }
 
 // ModelChangeData records a model switch.
