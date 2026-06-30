@@ -213,6 +213,17 @@ This applies equally to warnings (model fallback, deprecation notices), advisori
 - **Engine API surface should be generous.** Every configurable behavior should be exposed: as an `engine.json` config field, as a per-prompt `ClientCommand` override, and (where applicable) as an SDK context method. External consumers want every hook we can imagine.
 - **Desktop and iOS are not gatekeepers.** They consume the engine; they do not define its surface. When reviewing engine changes, do not ask "does desktop use this?" — ask "would an external consumer want this?"
 
+### Consuming harness updates ship with the engine change
+
+The framing above ("engine surface ships ahead of its consumers") governs *whether the engine may add surface with no in-repo caller* — it always may. It does **not** excuse leaving a *known, on-machine* consumer unwired when that consumer is the source of the bug or the destined user of the feature.
+
+When an engine/SDK change is driven by, or destined for, a specific harness that exists on the machine, the plan includes that harness's upgrade and ships it in the same change set (at the harness's own scope seam):
+
+- For the **in-repo `ion-meta` extension** (it ships with the engine to end users), the `ion-meta` update is part of the same plan and lands in this repo alongside the engine/SDK change.
+- For **out-of-repo harnesses** (the private `ion-dev` engine-development harness, `chief-of-staff`, or any other extension installed under `~/.ion/extensions/`), the upgrade is still in scope and is implemented and committed in that harness's own working tree. See the operator's global `~/.ion/AGENTS.md` § "Harnesses and extensions are in scope" for the full statement.
+
+The anti-pattern is shipping the engine mechanism and stopping — leaving the reporting/consuming harness unwired so the reported bug remains unfixed in practice. SDK source-of-truth note: edit the SDK in this repo at `engine/extensions/sdk/ion-sdk/`; never the installed copy at `~/.ion/extensions/sdk/`.
+
 ## Cross-platform parity (desktop ↔ iOS)
 
 > **Scope of this table.** The parity rules below apply when a feature *exists* on both desktop and iOS today and a change to one demands a change to the other. They do not require every new engine feature to ship simultaneously on desktop and iOS — engine surface ships ahead of reference implementations by design (see § "Engine consumers"). Use this section as a sync checklist for already-paired surfaces, not as a coverage mandate for new ones.
