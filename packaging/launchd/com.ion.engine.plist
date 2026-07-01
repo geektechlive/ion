@@ -16,6 +16,18 @@
     exits 0 and launchd does NOT restart.
   - Quit All (from the desktop) should use 'launchctl bootout' to stop the
     engine and prevent restart until the next desktop launch.
+
+  Memory ceiling — intentionally NOT set here.
+    The engine is a single daemon that hosts every session, so unbounded heap
+    growth risks the OS memory-pressure killer (macOS jetsam / Linux OOM)
+    SIGKILLing the whole process and taking all sessions down at once. The
+    ceiling that prevents this is enforced IN-PROCESS via GOMEMLIMIT (a SOFT
+    limit: the Go GC gets more aggressive as the heap approaches it), applied at
+    serve startup — see engine/cmd/ion/memlimit.go. It is deliberately NOT a
+    launchd HardResourceLimits cap: a hard RLIMIT_AS would turn graceful GC
+    back-pressure into a hard allocation failure (a crash), which is strictly
+    worse than the soft limit. Operators tune it via the GOMEMLIMIT env var or
+    the engine.json `memoryLimitMb` field; launchd carries no memory key.
 -->
 <plist version="1.0">
 <dict>
