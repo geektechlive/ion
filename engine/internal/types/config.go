@@ -148,6 +148,24 @@ type EngineRuntimeConfig struct {
 	// escape hatch exists only for the rare consumer that genuinely wants an
 	// agent to be able to re-dispatch its own name; leave it false otherwise.
 	AllowSelfDispatch bool `json:"allowSelfDispatch,omitempty"`
+
+	// MemoryLimitMB is an optional soft ceiling (in MiB) for the engine daemon's
+	// Go heap, applied at serve startup via runtime/debug.SetMemoryLimit. It is a
+	// SOFT limit: as the heap approaches it the garbage collector becomes far more
+	// aggressive, trading CPU to hold resident memory below the level where the OS
+	// memory-pressure killer (macOS jetsam / Linux OOM) would SIGKILL the whole
+	// process — taking every hosted session down at once. It is NOT a hard cap and
+	// does not cause allocation failures.
+	//
+	// Precedence at startup (see cmd/ion/memlimit.go):
+	//   1. The GOMEMLIMIT environment variable, if set — honored natively by the Go
+	//      runtime; the engine never overrides an operator's explicit env choice.
+	//   2. This field, when > 0.
+	//   3. A conservative fraction of host physical RAM (engine-derived default).
+	//
+	// Zero/absent ⇒ the engine derives the default. This is per-daemon config read
+	// once from engine.json at serve startup, alongside Limits/Timeouts/Webhooks.
+	MemoryLimitMB int `json:"memoryLimitMb,omitempty"`
 }
 
 // GetWorkspace returns the Workspace config block, or nil for a nil receiver

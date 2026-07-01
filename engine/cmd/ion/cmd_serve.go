@@ -44,6 +44,14 @@ func cmdServe() {
 	utils.Log("main", fmt.Sprintf("config loaded: backend=%s model=%s providers=%d mcp=%d",
 		cfg.Backend, cfg.DefaultModel, len(cfg.Providers), len(cfg.McpServers)))
 
+	// Apply a soft heap ceiling (GOMEMLIMIT) so the GC holds resident memory below
+	// the level where the OS memory-pressure killer (macOS jetsam / Linux OOM) would
+	// SIGKILL this single daemon and take every hosted session down at once. The
+	// returned limit is reported by the memory monitor started below. This is a soft
+	// limit (GC pressure), never a hard cap, and it never overrides an operator's
+	// explicit GOMEMLIMIT env var. See cmd/ion/memlimit.go.
+	memLimitBytes := applyMemoryLimit(cfg)
+
 	network.InitNetwork(cfg.Network)
 
 	// Load models config (tiers, provider auto-detect) and register
@@ -190,6 +198,15 @@ func cmdServe() {
 			beat(exitPath())
 		}
 	}()
+
+	// Memory-pressure monitor: periodically logs heap footprint against the soft
+	// ceiling and the live session count, escalating to ERROR near the high-water
+	// mark. Closes the observability blind spot — before this, nothing recorded
+	// memory pressure approaching the level where the OS kills the daemon. The
+	// session-count closure avoids a cmd→internal/server import concern.
+	startMemoryMonitor(memLimitBytes, func() int {
+		return len(srv.SessionManager().ListSessions())
+	})
 	if runtime.GOOS == "windows" {
 		fmt.Printf("Listening: tcp://%s\n", sock)
 	} else {
