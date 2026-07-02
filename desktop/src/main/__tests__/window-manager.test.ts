@@ -1,0 +1,131 @@
+/**
+ * window-manager — overlay window level regression
+ *
+ * Asserts that createWindow() sets the window level to 'modal-panel', not
+ * 'screen-saver'. 'screen-saver' (CGWindowLevel 2000) sits above macOS TCC
+ * and permission dialogs (~1000), hiding them behind the overlay in tall mode.
+ * 'modal-panel' keeps the overlay above normal apps but below system dialogs.
+ *
+ * If this test fails after a change to window-manager.ts, the window level
+ * was raised back to 'screen-saver' (or higher). Do not suppress — fix it.
+ */
+
+import { vi, describe, it, expect, beforeEach } from 'vitest'
+
+// ─── Shared mock state (hoisted so factory closures can capture it) ───────────
+
+const { mockSetAlwaysOnTop, mockSetVisibleOnAllWorkspaces, mockWindowInstance } = vi.hoisted(() => {
+  const mockSetAlwaysOnTop = vi.fn()
+  const mockSetVisibleOnAllWorkspaces = vi.fn()
+
+  const mockWindowInstance = {
+    setAlwaysOnTop: mockSetAlwaysOnTop,
+    setVisibleOnAllWorkspaces: mockSetVisibleOnAllWorkspaces,
+    webContents: {
+      on: vi.fn(),
+      setWindowOpenHandler: vi.fn(),
+      focus: vi.fn(),
+    },
+    once: vi.fn(),
+    on: vi.fn(),
+    loadURL: vi.fn(),
+    loadFile: vi.fn(),
+    show: vi.fn(),
+    hide: vi.fn(),
+    isVisible: vi.fn().mockReturnValue(false),
+    isDestroyed: vi.fn().mockReturnValue(false),
+  }
+
+  return { mockSetAlwaysOnTop, mockSetVisibleOnAllWorkspaces, mockWindowInstance }
+})
+
+vi.mock('electron', () => {
+  // BrowserWindow must be a real constructor function so `new BrowserWindow()`
+  // works. The constructor ignores its arguments and returns the shared mock
+  // instance, which carries the spy methods we assert on.
+  function BrowserWindow() {
+    return mockWindowInstance
+  }
+  BrowserWindow.getAllWindows = vi.fn().mockReturnValue([])
+
+  return {
+    app: {
+      getPath: vi.fn().mockReturnValue('/tmp'),
+      on: vi.fn(),
+    },
+    BrowserWindow,
+    screen: {
+      getCursorScreenPoint: vi.fn().mockReturnValue({ x: 0, y: 0 }),
+      getDisplayNearestPoint: vi.fn().mockReturnValue({
+        id: 1,
+        workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+      }),
+    },
+    session: {
+      defaultSession: {
+        webRequest: { onHeadersReceived: vi.fn() },
+      },
+    },
+    globalShortcut: { unregisterAll: vi.fn() },
+    Menu: { buildFromTemplate: vi.fn() },
+    nativeImage: { createFromPath: vi.fn().mockReturnValue({ setTemplateImage: vi.fn() }) },
+    Tray: vi.fn().mockImplementation(function () {
+      return { setToolTip: vi.fn(), setContextMenu: vi.fn(), isDestroyed: vi.fn().mockReturnValue(false), destroy: vi.fn() }
+    }),
+    dialog: { showMessageBoxSync: vi.fn().mockReturnValue(2) },
+    ipcMain: { on: vi.fn(), handle: vi.fn() },
+  }
+})
+
+vi.mock('../state', () => ({
+  state: { mainWindow: null, tray: null, toggleSequence: 0, forceQuit: false },
+  SPACES_DEBUG: false,
+  sessionPlane: { hasRunningTabs: vi.fn().mockReturnValue(false), shutdown: vi.fn() },
+  engineBridge: { shutdownAndWait: vi.fn().mockResolvedValue(undefined) },
+}))
+
+vi.mock('../logger', () => ({
+  log: vi.fn(),
+  flushLogs: vi.fn(),
+}))
+
+vi.mock('../broadcast', () => ({ broadcast: vi.fn() }))
+
+vi.mock('../terminal-manager-instance', () => ({
+  terminalManager: { destroyAll: vi.fn() },
+}))
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe('window-manager createWindow()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('calls setAlwaysOnTop with modal-panel, not screen-saver', async () => {
+    const { createWindow } = await import('../window-manager')
+    createWindow()
+
+    expect(mockSetAlwaysOnTop).toHaveBeenCalled()
+
+    // The level is the second positional argument.
+    const levelArg = mockSetAlwaysOnTop.mock.calls[0][1]
+    expect(levelArg).toBe('modal-panel')
+  })
+
+  it('does NOT use screen-saver level (regression guard)', async () => {
+    const { createWindow } = await import('../window-manager')
+    createWindow()
+
+    const usedScreenSaver = mockSetAlwaysOnTop.mock.calls.some((args) => args[1] === 'screen-saver')
+    expect(usedScreenSaver).toBe(false)
+  })
+
+  it('always passes true as the first argument to setAlwaysOnTop', async () => {
+    const { createWindow } = await import('../window-manager')
+    createWindow()
+
+    const enabledArg = mockSetAlwaysOnTop.mock.calls[0][0]
+    expect(enabledArg).toBe(true)
+  })
+})
