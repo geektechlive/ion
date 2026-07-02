@@ -641,6 +641,50 @@ Request an immediate `engine_session_status` emission for a session. The status 
 
 ---
 
+### get_context_breakdown
+
+Request an on-demand context breakdown for a session. The engine reconstructs the full assembly pipeline (system prompt + tools + conversation messages) outside any active run and emits `engine_context_breakdown` on the event stream.
+
+**Recompute model.** This command fires the same assembly pipeline that `send_prompt` runs before every prompt: it loads the conversation from disk, injects context files, extension context, git context, and session memory into `RunOptions`, then calls `BuildContextBreakdown`. The result always reflects the current on-disk state — it is never cached or persisted.
+
+**Fresh conversations.** When the session has not sent its first prompt yet, the conversation file may not exist. The engine falls back to an empty conversation, so the breakdown shows system prompt + tools with zero conversation tokens. This is the accurate pre-first-prompt view.
+
+**CliBackend.** When the session is wired to a CliBackend (no API provider), the token counter falls back to local BPE / char4 estimation. The breakdown is still emitted.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `cmd` | `"get_context_breakdown"` | yes | Command discriminator |
+| `key` | string | yes | Session key |
+| `requestId` | string | no | Correlates with ServerResult |
+
+```json
+{"cmd":"get_context_breakdown","key":"abc-123","requestId":"r31"}
+```
+
+**Response:** `ServerResult` with `ok: true` (empty). The breakdown arrives as an `engine_context_breakdown` event on the stream. If no session exists for the key, the command is a no-op (Warn log fires engine-side).
+
+**Payload fields (`ContextBreakdownPayload`).**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `categories` | array | Per-category token rows. Each row has `name`, `kind`, `tokens`, `tier` ("exact"/"local"/"approximate"), and optional `path`. |
+| `contextWindow` | number | Maximum token budget for the model. |
+| `totalTokens` | number | Sum of all category token counts. |
+| `apiReportedTotal` | number? | Provider-reported input token count. Zero until after-first-turn reconciliation. |
+| `unaccounted` | number? | `apiReportedTotal - totalTokens`. Non-zero after reconciliation. |
+| `cacheReadTokens` | number? | Provider-reported cache-read tokens. Annotation only — NOT included in `totalTokens`. |
+| `cacheCreationTokens` | number? | Provider-reported cache-creation tokens. Annotation only — NOT included in `totalTokens`. |
+| `model` | string | Model identifier used for tokenization. |
+| `aggregateCostUsd` | number? | Sum of this session's LLM cost **plus every descendant dispatch session's cost**, walked on demand from the conversation tree. Absent for sessions with no dispatches or no cost yet. See "Aggregate cost model" below. |
+
+**Aggregate cost model.** `aggregateCostUsd` is recomputed on every `get_context_breakdown` request — no accumulator, no persistence. The engine reads each session's persisted `totalCost` from its `.llm.jsonl` header, then recursively follows `AgentDispatchData.ConversationIDs` entries in the parent's `.tree.jsonl` to collect every descendant dispatch session. In-flight background dispatches (not yet written to `.tree.jsonl`) are also included via the live dispatch registry, as of their last cost flush. Each conversation ID is counted at most once (cycle/dup guard). A mid-turn child may undercount by its unflushed turn — this self-heals on the next drawer-open after the child's next flush.
+
+Two cost numbers in the Status Drawer are intentionally distinct: the Context section shows the **top-level session cost only** (`StatusFields.totalCostUsd`), while the Session section shows the **end-to-end aggregate** (`aggregateCostUsd`). When there are no descendant dispatches, the two are equal.
+
+**iOS companion.** iOS sends `desktop_request_context_breakdown { tabId }` to the desktop on drawer open. The desktop's `command-handler.ts` forwards a `get_context_breakdown` to the engine for that tab. The resulting `engine_context_breakdown` is forwarded to iOS as `desktop_context_breakdown` by `event-wiring.ts`, which populates `inst.contextBreakdown` and re-renders the Status Drawer. This is the on-demand recompute model: no persistence, no stale cache — every drawer open triggers a fresh computation.
+
+---
+
 ### delete_stored_sessions
 
 Remove stale conversation files from disk. All filter fields are optional with sane defaults.
