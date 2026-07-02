@@ -263,8 +263,15 @@ extension SessionViewModel {
 
         // No-op: iOS does not render these events yet. Decoding them
         // prevents the 123 decode-errors/session diagnostic finding.
-        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall, .engineDispatchStart:
+        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall:
             break
+
+        // Dispatch telemetry: iOS projects depth/parentId fields for parity
+        // but does not render nested dispatch UI itself (desktop owns that).
+        case .engineDispatchStart(_, _, let depth, let parentId, let dispatchId):
+            DiagnosticLog.log("ENGINE: dispatch_start depth=\(depth) parentId=\(parentId.prefix(16)) id=\(dispatchId.prefix(16))")
+        case .engineDispatchEnd(_, _, let agent, let depth, let parentId, let exitCode, let elapsed, let dispatchId, _):
+            DiagnosticLog.log("ENGINE: dispatch_end agent=\(agent) depth=\(depth) parentId=\(parentId.prefix(16)) exit=\(exitCode) elapsed=\(String(format: "%.2f", elapsed))s id=\(dispatchId.prefix(16))")
 
         case .engineDispatchActivity(_, _, let agentId, let conversationId, let kind, let seq, let toolName, let toolId, let textDelta, let isError, let ts):
             handleDispatchActivity(dispatchAgentId: agentId, conversationId: conversationId, kind: kind, seq: seq, ts: ts, toolName: toolName, toolId: toolId, textDelta: textDelta, isError: isError)

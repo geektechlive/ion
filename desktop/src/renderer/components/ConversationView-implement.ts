@@ -70,6 +70,53 @@ export async function runHandleImplement(
     planFilePath || undefined,
   )
 
+  // clearContext branch: destroy the engine session so the implementation run
+  // starts clean. This clears the conversation, the plan-mode system prompt,
+  // and the restricted tool list. The prior conversation ID is archived into
+  // historicalSessionIds so the user can still navigate back to it, and is
+  // recorded as the parent of the next session so the engine writes the
+  // correct on-disk parentId linkage. The active instance is tagged
+  // pendingCutReason: 'clear' so the session ledger records the cut reason.
+  // Mirrors the proven branch formerly in usePermissionDeniedHandlers.onImplement.
+  //
+  // Note: the implement divider was already inserted above (addEngineSystemMessage),
+  // so this branch only performs the session reset + archive bookkeeping.
+  if (clearContext) {
+    console.log(`[ConversationView] handleImplement: tab=${tabId.slice(0, 8)} clearing context — resetTabSession + archive conversationId`)
+    window.ion.resetTabSession(tabId)
+    useSessionStore.setState((s) => {
+      const conversationPanes = commitInstance(s.conversationPanes, tabId, (inst) => ({
+        ...inst,
+        // Consumed once by the session_init append site to tag the next minted id.
+        pendingCutReason: 'clear' as const,
+        permissionQueue: [],
+        permissionDenied: null,
+      }))
+      return {
+        conversationPanes,
+        tabs: s.tabs.map((t) =>
+          t.id === tabId
+            ? {
+                ...t,
+                historicalSessionIds: [
+                  ...t.historicalSessionIds,
+                  ...(t.conversationId && !t.historicalSessionIds.includes(t.conversationId)
+                    ? [t.conversationId] : []),
+                ],
+                // Parent of the next conversation, so the engine writes it as the
+                // new conversation's on-disk parentId. Consumed once at next start.
+                pendingParentConversationId: t.conversationId,
+                conversationId: null,
+                lastResult: null,
+                currentActivity: '',
+                queuedPrompts: [],
+              }
+            : t
+        ),
+      }
+    })
+  }
+
   // Flip the AUTHORITATIVE permission mode to 'auto' for this tab. The
   // permission mode lives in different places per tab type — on the active
   // conversation instance for engine tabs, on the parent `tab.permissionMode`
@@ -85,8 +132,8 @@ export async function runHandleImplement(
   // send-slice.ts), flipping the engine back into plan mode milliseconds after
   // we turned it off — so the implement run executed in plan mode. Routing
   // through the store action fixes both tab types and removes the divergence
-  // from the iOS implement path (usePermissionDeniedHandlers.onImplement), which
-  // already uses setPermissionMode('auto', 'plan_approved').
+  // from the iOS implement path (handlers/implement-plan.ts), which
+  // already uses setPermissionMode('auto') via handleSetPermissionMode.
   //
   // setPermissionMode operates on the store's activeTabId. The Implement button
   // only renders on the active conversation's permission-denied card, so the

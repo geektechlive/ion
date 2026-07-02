@@ -87,6 +87,7 @@ const mockSetPermissionMode = vi.fn()
 const mockEngineSetPlanMode = vi.fn()
 const mockSteer = vi.fn()
 const mockReadPlan = vi.fn(async () => ({ content: '# plan body' }))
+const mockResetTabSession = vi.fn()
 ;(globalThis as any).window = {
   ion: {
     prompt: mockPrompt,
@@ -94,6 +95,7 @@ const mockReadPlan = vi.fn(async () => ({ content: '# plan body' }))
     engineSetPlanMode: mockEngineSetPlanMode,
     steer: mockSteer,
     readPlan: mockReadPlan,
+    resetTabSession: mockResetTabSession,
   },
   crypto: { randomUUID: () => 'uuid-1234' },
 }
@@ -249,5 +251,77 @@ describe('runHandleImplement — plan-mode flip (plain tab)', () => {
     expect(mockPrompt).toHaveBeenCalledTimes(1)
     const args = mockPrompt.mock.calls[0] as unknown as any[]
     expect(args[2].implementationPhase).toBe(true)
+  })
+})
+
+describe('runHandleImplement — clearContext branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPrompt.mockResolvedValue(undefined)
+    mockReadPlan.mockResolvedValue({ content: '# plan body' })
+  })
+
+  it('clearContext=true resets the session, archives the conversationId, and tags the cut', async () => {
+    // A tab mid-plan with a live conversation. clearContext must cut it.
+    const tab = makeTab({ conversationId: 'conv-old', historicalSessionIds: [] })
+    const { state } = buildHarness(tab, { permissionMode: 'plan', planFilePath: '/plans/test.md' })
+
+    await runHandleImplement(
+      {
+        tabId: 'tab-1',
+        clearPermissionDenied: () => {},
+        submit: state.submit,
+        tabPlanFilePath: '/plans/test.md',
+        permissionDenied: null,
+      },
+      true,
+    )
+
+    // The engine session was torn down via the reset IPC.
+    expect(mockResetTabSession).toHaveBeenCalledTimes(1)
+    expect(mockResetTabSession).toHaveBeenCalledWith('tab-1')
+
+    const resolvedTab = state.tabs.find((t: TabState) => t.id === 'tab-1')!
+    // conversationId is cut to null; the prior id is archived and recorded as parent.
+    expect(resolvedTab.conversationId).toBeNull()
+    expect(resolvedTab.historicalSessionIds).toContain('conv-old')
+    expect(resolvedTab.pendingParentConversationId).toBe('conv-old')
+
+    // The active instance carries the 'clear' cut reason so the session ledger
+    // tags the next minted id.
+    const pane = state.conversationPanes.get('tab-1')!
+    const inst = pane.instances.find((i: any) => i.id === pane.activeInstanceId) ?? pane.instances[0]
+    expect(inst.pendingCutReason).toBe('clear')
+
+    // Still submits the implement prompt with implementationPhase.
+    expect(mockPrompt).toHaveBeenCalledTimes(1)
+    const args = mockPrompt.mock.calls[0] as unknown as any[]
+    expect(args[2].implementationPhase).toBe(true)
+  })
+
+  it('clearContext=false (default Implement) preserves the conversation — no reset', async () => {
+    const tab = makeTab({ conversationId: 'conv-keep', historicalSessionIds: [] })
+    const { state } = buildHarness(tab, { permissionMode: 'plan', planFilePath: '/plans/test.md' })
+
+    await runHandleImplement(
+      {
+        tabId: 'tab-1',
+        clearPermissionDenied: () => {},
+        submit: state.submit,
+        tabPlanFilePath: '/plans/test.md',
+        permissionDenied: null,
+      },
+      false,
+    )
+
+    // No session teardown; conversation is preserved across the plan→implement boundary.
+    expect(mockResetTabSession).not.toHaveBeenCalled()
+    const resolvedTab = state.tabs.find((t: TabState) => t.id === 'tab-1')!
+    expect(resolvedTab.conversationId).toBe('conv-keep')
+    expect(resolvedTab.historicalSessionIds).not.toContain('conv-keep')
+
+    const pane = state.conversationPanes.get('tab-1')!
+    const inst = pane.instances.find((i: any) => i.id === pane.activeInstanceId) ?? pane.instances[0]
+    expect(inst.pendingCutReason).toBeUndefined()
   })
 })

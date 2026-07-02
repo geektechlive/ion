@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 /**
  * Regression: the engine-state status-bar slot ("[running]" /
- * "[waiting for N background agent(s)]") must render from the signals that are
+ * "[waiting for N agent(s)]") must render from the signals that are
  * actually populated in the renderer — `tab.status` for the orchestrator's own
  * run-state and `useActiveEngineAgentRunningCount()` for the dispatched
- * background-agent count — NOT from `inst.statusFields`, which the renderer
+ * agent count — NOT from `inst.statusFields`, which the renderer
  * never populates.
  *
  * Pre-fix, `StatusBarEngineState` did `const status = useActiveEngineStatusFields()`
  * then `if (!status) return null`. Because `inst.statusFields` is always null in
  * the renderer, the slot rendered nothing on EVERY tab — the yellow
- * "waiting for N background agent(s)" text never appeared. The idle+running-agent
+ * "waiting for N agent(s)" text never appeared. The idle+running-agent
  * case below is the regression assertion: it is red on the pre-fix code (slot
  * returns null) and green after the fix.
  *
@@ -104,22 +104,22 @@ function renderHTML(): string {
 describe('StatusBarEngineState — derives from tab.status + agentRunningCount', () => {
   beforeEach(reset)
 
-  it('PLAIN tab, idle orchestrator, 1 running agent → "[waiting for 1 background agent]" (REGRESSION)', () => {
+  it('PLAIN tab, idle orchestrator, 1 running agent → "[waiting for 1 agent]" (REGRESSION)', () => {
     setActiveTab({ id: 'tab1', engineProfileId: null, status: 'idle' })
     setPaneAgents('tab1', ['running', 'done'])
-    expect(renderHTML()).toContain('[waiting for 1 background agent]')
+    expect(renderHTML()).toContain('[waiting for 1 agent]')
   })
 
   it('PLAIN tab, idle orchestrator, 2 running agents → pluralized "agents"', () => {
     setActiveTab({ id: 'tab1', engineProfileId: null, status: 'idle' })
     setPaneAgents('tab1', ['running', 'running'])
-    expect(renderHTML()).toContain('[waiting for 2 background agents]')
+    expect(renderHTML()).toContain('[waiting for 2 agents]')
   })
 
   it('EXTENSION tab, idle orchestrator, 1 running agent → renders waiting text (parity)', () => {
     setActiveTab({ id: 'tab1', engineProfileId: 'test-profile', status: 'idle' })
     setPaneAgents('tab1', ['running'])
-    expect(renderHTML()).toContain('[waiting for 1 background agent]')
+    expect(renderHTML()).toContain('[waiting for 1 agent]')
   })
 
   it('running orchestrator + running agents → "[running]", no waiting text (priority cascade)', () => {

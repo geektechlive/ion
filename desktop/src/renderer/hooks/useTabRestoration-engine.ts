@@ -13,8 +13,8 @@ import { restoredConversationStatus } from './useTabRestoration-status'
  * Return true if the persisted message list contains a completed-plan marker.
  *
  * A plan is considered completed when the scrollback includes an
- * "── Implementing plan at …" divider (written by handleImplement /
- * usePermissionDeniedHandlers when the user clicks Implement) OR the last
+ * "── Implementing plan at …" divider (written by runHandleImplement
+ * in ConversationView-implement.ts when the user clicks Implement) OR the last
  * "── Plan created" divider is followed only by system messages, indicating
  * the model auto-exited and the approval card has not yet been actioned.
  *
@@ -577,7 +577,9 @@ export function buildPopulatedInstance(
     // path on every extension-hosted tab restore and forced the next plan-mode
     // prompt to allocate a fresh slug — orphaning the conversation's real plan.
     planFilePath: inst.planFilePath ?? null,
-    dispatchTelemetry: [],
+    // Restore persisted dispatch telemetry so telemetry-only children (and the
+    // nesting depth derived from them) survive reload. Absent on pre-fix files.
+    dispatchTelemetry: inst.dispatchTelemetry ? [...inst.dispatchTelemetry] : [],
     forkedFromConversationIds: inst.forkedFromConversationIds ? [...inst.forkedFromConversationIds] : null,
   }
 }

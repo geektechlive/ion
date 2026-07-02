@@ -34,17 +34,21 @@ export function useActiveEngineStatusFields(): StatusFields | null {
 }
 
 /**
- * Number of dispatched background agents currently in the `running`
+ * Number of dispatched agents currently in the `running`
  * state for the active conversation instance. Used by the engine state slot
- * to render the yellow "waiting for N background agent(s)" pulse when
+ * to render the yellow "waiting for N agent(s)" pulse when
  * the orchestrator itself is idle but child agents are still working.
  *
- * TAB-TYPE-AGNOSTIC: the `Agent` tool dispatches background sub-agents
+ * TAB-TYPE-AGNOSTIC: the `Agent` tool dispatches sub-agents
  * regardless of whether a harness is loaded, so a plain conversation can have
  * running children too. This reads `inst.agentStates` (the same agnostic data
  * `anyEngineInstanceHasRunningChildren` in TabStripShared.ts reads), so the
  * "awaiting children" pulse fires for plain tabs as well — consistent with the
  * close guard that now blocks closing any tab with running children.
+ *
+ * Counts every running dispatched-agent pill, foreground or background alike;
+ * the Agent tool dispatches children foreground, so the label this feeds does
+ * not assert "background".
  *
  * Returns 0 when there is no active instance or no running children.
  */

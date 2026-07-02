@@ -78,7 +78,7 @@ extension RemoteEvent {
             let messageLength = try container.decode(Int.self, forKey: .steerMessageLength)
             return .engineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
 
-        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall, .engineDispatchStart:
+        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             switch type {
@@ -86,9 +86,28 @@ extension RemoteEvent {
             case .engineToolComplete: return .engineToolComplete(tabId: tabId, instanceId: instanceId)
             case .engineScheduleFired: return .engineScheduleFired(tabId: tabId, instanceId: instanceId)
             case .engineLlmCall: return .engineLlmCall(tabId: tabId, instanceId: instanceId)
-            case .engineDispatchStart: return .engineDispatchStart(tabId: tabId, instanceId: instanceId)
             default: return nil
             }
+
+        case .engineDispatchStart:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let depth = try container.decodeIfPresent(Int.self, forKey: .dispatchDepth) ?? 0
+            let parentId = try container.decodeIfPresent(String.self, forKey: .dispatchParentId) ?? ""
+            let dispatchId = try container.decodeIfPresent(String.self, forKey: .dispatchId) ?? ""
+            return .engineDispatchStart(tabId: tabId, instanceId: instanceId, dispatchDepth: depth, dispatchParentId: parentId, dispatchId: dispatchId)
+
+        case .engineDispatchEnd:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let agent = try container.decodeIfPresent(String.self, forKey: .dispatchAgent) ?? ""
+            let depth = try container.decodeIfPresent(Int.self, forKey: .dispatchDepth) ?? 0
+            let parentId = try container.decodeIfPresent(String.self, forKey: .dispatchParentId) ?? ""
+            let exitCode = try container.decodeIfPresent(Int.self, forKey: .dispatchExitCode) ?? 0
+            let elapsed = try container.decodeIfPresent(Double.self, forKey: .dispatchElapsed) ?? 0
+            let dispatchId = try container.decodeIfPresent(String.self, forKey: .dispatchId) ?? ""
+            let conversationId = try container.decodeIfPresent(String.self, forKey: .dispatchConversationId)
+            return .engineDispatchEnd(tabId: tabId, instanceId: instanceId, dispatchAgent: agent, dispatchDepth: depth, dispatchParentId: parentId, exitCode: exitCode, elapsed: elapsed, dispatchId: dispatchId, conversationId: conversationId)
 
         case .engineDispatchActivity:
             let tabId = try container.decode(String.self, forKey: .tabId)

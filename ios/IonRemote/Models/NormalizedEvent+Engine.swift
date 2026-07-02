@@ -102,10 +102,25 @@ extension RemoteEvent {
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
             return true
-        case .engineDispatchStart(let tabId, let instanceId):
+        case .engineDispatchStart(let tabId, let instanceId, let depth, let parentId, let dispatchId):
             try container.encode(TypeKey.engineDispatchStart, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(depth, forKey: .dispatchDepth)
+            try container.encode(parentId, forKey: .dispatchParentId)
+            try container.encode(dispatchId, forKey: .dispatchId)
+            return true
+        case .engineDispatchEnd(let tabId, let instanceId, let agent, let depth, let parentId, let exitCode, let elapsed, let dispatchId, let conversationId):
+            try container.encode(TypeKey.engineDispatchEnd, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(agent, forKey: .dispatchAgent)
+            try container.encode(depth, forKey: .dispatchDepth)
+            try container.encode(parentId, forKey: .dispatchParentId)
+            try container.encode(exitCode, forKey: .dispatchExitCode)
+            try container.encode(elapsed, forKey: .dispatchElapsed)
+            try container.encode(dispatchId, forKey: .dispatchId)
+            try container.encodeIfPresent(conversationId, forKey: .dispatchConversationId)
             return true
         case .engineDispatchActivity(let tabId, let instanceId, let agentId, let conversationId, let kind, let seq, let toolName, let toolId, let textDelta, let isError, let ts):
             try container.encode(TypeKey.engineDispatchActivity, forKey: .type)

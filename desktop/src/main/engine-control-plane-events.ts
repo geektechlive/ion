@@ -357,7 +357,8 @@ export function handleEngineEvent(
       // The model has proposed a plan-mode transition (currently only
       // kind="exit" — the model called ExitPlanMode). This is a workflow
       // event, NOT a state transition: the actual mode change is deferred
-      // to the user-approval chokepoint in usePermissionDeniedHandlers.
+      // to the user-approval chokepoint in runHandleImplement (renderer)
+      // and handleImplementPlan (iOS path, main process).
       // The desktop forwards the event to the renderer as the authoritative
       // signal that an approval card should render; the permission_denial
       // path on engine_status remains the fallback card-render trigger so
@@ -466,8 +467,12 @@ export function handleEngineEvent(
     case 'engine_dispatch_start':
       // Forward dispatch start telemetry to the renderer so the store can
       // record depth/parentDispatchId for nested dispatch tree rendering.
+      // dispatchId is required so buildDispatchStartEntry produces a
+      // DispatchTelemetryEntry with a real id — without it the snapshot ships
+      // '' to iOS and tier-3 child join (dispatchParentId == dispatchId) collapses.
       ctx.emit('event', tabId, {
         type: 'dispatch_start',
+        dispatchId: event.dispatchId || '',
         dispatchAgent: event.dispatchAgent || '',
         dispatchTask: event.dispatchTask || '',
         dispatchModel: event.dispatchModel || '',
@@ -478,14 +483,20 @@ export function handleEngineEvent(
       break
 
     case 'engine_dispatch_end':
+      // dispatchId matches the corresponding dispatch_start so applyDispatchEnd
+      // can update the correct DispatchTelemetryEntry (exact id match, not
+      // heuristic). dispatchConversationId is read by the slice helper to set
+      // the entry's conversationId and is forwarded to iOS via the snapshot.
       ctx.emit('event', tabId, {
         type: 'dispatch_end',
+        dispatchId: event.dispatchId || '',
         dispatchAgent: event.dispatchAgent || '',
         dispatchExitCode: event.dispatchExitCode ?? 0,
         dispatchElapsed: event.dispatchElapsed ?? 0,
         dispatchCost: event.dispatchCost ?? 0,
         dispatchDepth: event.dispatchDepth || 0,
         dispatchParentId: event.dispatchParentId || '',
+        dispatchConversationId: event.dispatchConversationId || '',
       } as NormalizedEvent)
       break
 

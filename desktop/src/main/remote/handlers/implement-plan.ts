@@ -14,8 +14,8 @@ function log(msg: string): void {
  * Handles implement_plan from iOS.
  *
  * iOS sends this command instead of building a prompt string. The desktop
- * runs the same implement pipeline that the renderer's onImplement
- * (usePermissionDeniedHandlers.ts) runs — no plan body crosses the wire.
+ * runs the same implement pipeline that the renderer's runHandleImplement
+ * (ConversationView-implement.ts) runs — no plan body crosses the wire.
  *
  * Pipeline steps (mirrors onImplement exactly):
  *   1. Resolve planFilePath from the renderer store (instance.planFilePath
@@ -42,7 +42,7 @@ export async function handleImplementPlan(
   const { tabId, questionId, instanceId, clearContext = false } = cmd
   log(`handleImplementPlan: tabId=${tabId.slice(0, 8)} questionId=${questionId.slice(0, 12)} clearContext=${clearContext}`)
 
-  // Step 1: Resolve planFilePath — same two-source lookup as onImplement lines 122-131.
+  // Step 1: Resolve planFilePath — same two-source lookup as runHandleImplement.
   let planFilePath: string | null = null
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
@@ -79,7 +79,7 @@ export async function handleImplementPlan(
   }
   log(`handleImplementPlan: planFilePath=${planFilePath ?? '<none>'}`)
 
-  // Step 2: Read plan content from disk (mirrors onImplement lines 134-142).
+  // Step 2: Read plan content from disk (mirrors runHandleImplement).
   let planContent: string | null = null
   if (planFilePath && existsSync(planFilePath)) {
     try {
@@ -89,10 +89,10 @@ export async function handleImplementPlan(
     }
   }
 
-  // Step 3: Set permission mode → auto (same as onImplement line 102).
+  // Step 3: Set permission mode → auto (same as runHandleImplement).
   await handleSetPermissionMode({ type: 'desktop_set_permission_mode', tabId, mode: 'auto' })
 
-  // Step 4: Renderer-side model switch + group auto-move (onImplement lines 105-118).
+  // Step 4: Renderer-side model switch + group auto-move (mirrors runHandleImplement).
   // These are prefs-driven so we read them from the renderer stores.
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
@@ -124,7 +124,7 @@ export async function handleImplementPlan(
   }
 
   // Step 5: clearContext branch — reset engine session before implementing.
-  // Matches onImplement lines 150-194. The main-process resetTabSession call
+  // Matches the runHandleImplement clearContext branch. The main-process resetTabSession call
   // must happen before the renderer state mutation so the engine session is
   // already gone when the store clears conversationId.
   if (clearContext) {
@@ -132,7 +132,7 @@ export async function handleImplementPlan(
   }
 
   // Step 6: Renderer store mutations — insert divider, clear plan state.
-  // Mirrors onImplement lines 159-233. Both clearContext branches handled here.
+  // Mirrors runHandleImplement. Both clearContext branches handled here.
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
     const clearCtxJs = clearContext ? 'true' : 'false'
@@ -247,7 +247,7 @@ export async function handleImplementPlan(
     }
   } catch {}
 
-  // Step 8: Build prompt + attachment — same as onImplement lines 253-264.
+  // Step 8: Build prompt + attachment — same as runHandleImplement.
   // The plan body is resolved desktop-side; no plan text was in the command.
   const implementPrompt = planContent
     ? `Implement the following plan:\n\n${planContent}`

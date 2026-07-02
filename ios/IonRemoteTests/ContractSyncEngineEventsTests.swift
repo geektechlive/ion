@@ -838,14 +838,52 @@ final class ContractSyncEngineEventsTests: XCTestCase {
 
     func testEngineDispatchStartDecode() throws {
         let json = """
-        {"type":"desktop_dispatch_start","tabId":"t1","instanceId":"i1"}
+        {"type":"desktop_dispatch_start","tabId":"t1","instanceId":"i1","dispatchDepth":2,"dispatchParentId":"parent-123","dispatchId":"id-abc"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .engineDispatchStart(let tabId, let instanceId) = event {
+        if case .engineDispatchStart(let tabId, let instanceId, let depth, let parentId, let dispatchId) = event {
             XCTAssertEqual(tabId, "t1")
             XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(depth, 2)
+            XCTAssertEqual(parentId, "parent-123")
+            XCTAssertEqual(dispatchId, "id-abc")
         } else {
             XCTFail("Expected engineDispatchStart")
+        }
+    }
+
+    func testEngineDispatchEndDecode() throws {
+        let json = """
+        {"type":"desktop_dispatch_end","tabId":"t1","instanceId":"i1","dispatchAgent":"agent-a","dispatchDepth":1,"dispatchParentId":"","dispatchExitCode":0,"dispatchElapsed":3.5,"dispatchId":"id-xyz","dispatchConversationId":"conv-1"}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineDispatchEnd(let tabId, let instanceId, let agent, let depth, let parentId, let exitCode, let elapsed, let dispatchId, let conversationId) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(agent, "agent-a")
+            XCTAssertEqual(depth, 1)
+            XCTAssertEqual(parentId, "")
+            XCTAssertEqual(exitCode, 0)
+            XCTAssertEqual(elapsed, 3.5, accuracy: 0.01)
+            XCTAssertEqual(dispatchId, "id-xyz")
+            XCTAssertEqual(conversationId, "conv-1")
+        } else {
+            XCTFail("Expected engineDispatchEnd")
+        }
+    }
+
+    func testEngineDispatchEndDecodeNoConversationId() throws {
+        // dispatchConversationId is optional — absent on dispatches that don't
+        // create a child conversation (e.g. tool-only dispatches).
+        let json = """
+        {"type":"desktop_dispatch_end","tabId":"t1","dispatchAgent":"a","dispatchDepth":0,"dispatchParentId":"","dispatchExitCode":1,"dispatchElapsed":0.5,"dispatchId":"id-gamma"}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineDispatchEnd(_, _, _, _, _, _, _, let dispatchId, let conversationId) = event {
+            XCTAssertEqual(dispatchId, "id-gamma")
+            XCTAssertNil(conversationId)
+        } else {
+            XCTFail("Expected engineDispatchEnd (no conversationId)")
         }
     }
 

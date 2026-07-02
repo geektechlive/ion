@@ -241,6 +241,10 @@ export type EngineEvent =
       dispatchSessionId: string
       dispatchDepth?: number
       dispatchParentId?: string
+      // Unique ID for this dispatch invocation. Consumers match dispatch_start
+      // with dispatch_end and join a child's dispatchParentId to its parent's
+      // dispatchId to reconstruct the dispatch tree.
+      dispatchId?: string
     }
   // engine_dispatch_end is emitted when an extension-initiated dispatch completes
   // (success, error, or recall). Carries telemetry: exit code, elapsed time,
@@ -256,6 +260,11 @@ export type EngineEvent =
       dispatchToolCount: number
       dispatchDepth?: number
       dispatchParentId?: string
+      // Matches the dispatchId on the corresponding engine_dispatch_start.
+      dispatchId?: string
+      // The conversation ID the dispatched agent used. Set at end-time once
+      // the child session has a real conversation ID.
+      dispatchConversationId?: string
     }
   // engine_dispatch_activity streams a running dispatched (sub-)agent's
   // intra-turn activity — a tool call starting, a tool result returning, or a

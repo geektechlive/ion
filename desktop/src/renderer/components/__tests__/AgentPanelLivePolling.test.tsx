@@ -63,6 +63,22 @@ vi.mock('../conversation', () => ({
   ThinkingBlock: () => null,
 }))
 
+// The popup path renders messages through the real Transcript, which uses
+// TranscriptRows + tool-helpers.groupMessages (NOT the barrel above). Stub those
+// so the popup transcript content is assertable as plain text.
+vi.mock('../conversation/tool-helpers', () => ({
+  groupMessages: (msgs: Array<{ id: string; content: string }>) =>
+    msgs.map((m) => ({ kind: 'user' as const, message: m })),
+}))
+vi.mock('../conversation/TranscriptRows', () => ({
+  TranscriptRows: ({ grouped }: { grouped: Array<{ message: { content: string } }> }) =>
+    React.createElement(
+      'div',
+      null,
+      grouped.map((g, i) => React.createElement('div', { key: i }, g.message?.content ?? '')),
+    ),
+}))
+
 import { AgentPanel } from '../AgentPanel'
 import type { AgentStateUpdate } from '../../../shared/types'
 

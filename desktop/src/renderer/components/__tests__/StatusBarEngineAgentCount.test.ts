@@ -1,7 +1,7 @@
 /**
  * HR-1 regression: `useActiveEngineAgentRunningCount` is TAB-TYPE-AGNOSTIC.
  *
- * The "waiting for N background agent(s)" pulse must fire for a PLAIN
+ * The "waiting for N agent(s)" pulse must fire for a PLAIN
  * conversation that dispatched sub-agents, not just for extension-hosted
  * tabs — the Agent tool dispatches sub-agents regardless of harness, and the
  * close guard (tab-slice.ts) now blocks closing any tab with running children.

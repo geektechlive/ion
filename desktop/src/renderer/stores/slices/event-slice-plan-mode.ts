@@ -40,7 +40,7 @@ export function handlePlanModeEvent(ctx: PlanModeCtx, event: any): boolean {
       // Enabled:false from a model-initiated ExitPlanMode is a
       // *proposal* awaiting user approval, so we do NOT flip the
       // dropdown to auto here. The user-approval chokepoint in
-      // usePermissionDeniedHandlers.onImplement is responsible for
+      // runHandleImplement (ConversationView-implement.ts) is responsible for
       // the mode flip back to 'auto'. The engine no longer emits
       // false for the ExitPlanMode case, but this branch still
       // guards against any future emitter.
@@ -169,8 +169,8 @@ export function handlePlanModeEvent(ctx: PlanModeCtx, event: any): boolean {
       // pill/group/snapshot all read auto. Recover here: a proposal means the
       // instance should read 'plan' until the user approves. This matches the
       // entry-arm write exactly (instance, never the parent tab — WI-002) and
-      // does not conflict with the user-approval chokepoint: onImplement is the
-      // ONLY thing that flips back to 'auto' (usePermissionDeniedHandlers.ts),
+      // does not conflict with the user-approval chokepoint: runHandleImplement is
+      // the ONLY thing that flips back to 'auto' (ConversationView-implement.ts),
       // and a proposal never flips to auto. Skip when already 'plan' (the entry
       // event was delivered normally) to avoid a redundant write.
       const currentMode =

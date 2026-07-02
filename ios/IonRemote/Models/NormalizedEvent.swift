@@ -92,7 +92,11 @@ enum RemoteEvent: Sendable {
     case engineSteerInjected(tabId: String, instanceId: String?, messageLength: Int)
     case engineScheduleFired(tabId: String, instanceId: String?)
     case engineLlmCall(tabId: String, instanceId: String?)
-    case engineDispatchStart(tabId: String, instanceId: String?)
+    case engineDispatchStart(tabId: String, instanceId: String?, dispatchDepth: Int, dispatchParentId: String, dispatchId: String)
+    /// engine_dispatch_end -- emitted when an extension-initiated dispatch completes.
+    /// Carries telemetry (exit code, elapsed, cost) and nesting identity
+    /// (dispatchDepth, dispatchParentId) for tree rendering.
+    case engineDispatchEnd(tabId: String, instanceId: String?, dispatchAgent: String, dispatchDepth: Int, dispatchParentId: String, exitCode: Int, elapsed: Double, dispatchId: String, conversationId: String?)
     /// engine_dispatch_activity — a running dispatched (sub-)agent's intra-turn
     /// transcript delta (tool start/end, streamed text). Folded into the
     /// per-dispatch transcript cache keyed by dispatchAgentId (NOT conversationId);
@@ -427,6 +431,7 @@ enum RemoteEvent: Sendable {
         case engineScheduleFired = "desktop_schedule_fired"
         case engineLlmCall = "desktop_llm_call"
         case engineDispatchStart = "desktop_dispatch_start"
+        case engineDispatchEnd = "desktop_dispatch_end"
         case engineDispatchActivity = "desktop_dispatch_activity"
         case engineError = "desktop_engine_error"
         case engineNotify = "desktop_notify"
@@ -635,6 +640,10 @@ enum RemoteEvent: Sendable {
         // complete with Go + desktop.
         case dispatchAgentId, dispatchConversationId, dispatchActivityKind
         case dispatchSeq, dispatchTextDelta, dispatchToolIsError, dispatchActivityTs
+        // --- engine_dispatch_start / engine_dispatch_end nesting fields ---
+        case dispatchAgent, dispatchDepth, dispatchParentId
+        case dispatchExitCode, dispatchElapsed
+        case dispatchId
         // --- desktop_request_resend / desktop_resend_unavailable payload ---
         // desktop_resend_unavailable payload — the start seq of the evicted range.
         case fromSeq

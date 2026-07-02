@@ -31,6 +31,17 @@ export function getDispatches(agent: AgentStateUpdate): DispatchInfo[] {
   return []
 }
 
+/**
+ * The stable key under which per-agent UI state (expand/select/popup) is stored
+ * in AgentPanel. Uses the MOST RECENT dispatch's id so two dispatches of the
+ * same agent name remain distinct rows with independent state. Falls back to
+ * the agent name for agents with no dispatch (extension-roster rows, pre-fix
+ * persisted state).
+ */
+export function dispatchKey(agent: AgentStateUpdate): string {
+  return getDispatches(agent).at(-1)?.id ?? agent.name
+}
+
 const AGENT_COLORS: Record<string, string> = {
   'cloud-architect': '#b4325a',
   'security-officer': '#c88c1e',
@@ -58,6 +69,25 @@ export function getAgentColor(agent: AgentStateUpdate): string {
   if (color) return color
   if (AGENT_COLORS[agent.name]) return AGENT_COLORS[agent.name]
   return hashColor(meta(agent, 'type', agent.name))
+}
+
+/**
+ * Whether an agent is a root-level dispatch (a direct child of the
+ * orchestrator) versus a nested dispatch (a specialist dispatched by another
+ * dispatched agent). The main conversation panel shows only root-level agents
+ * so a lead's specialists appear inside the lead's dispatch preview, not the
+ * main conversation row.
+ *
+ * Attribution is stamped onto the agent-state metadata at dispatch time
+ * (dispatch_agent.go): `dispatchDepth` (1=direct child, 2=grandchild, ...) and
+ * `dispatchParentId` (the parent dispatch's id; empty for orchestrator-direct
+ * dispatches). Back-compat: extension-roster pills and pre-fix persisted state
+ * carry no attribution (depth 0, empty parent) and are treated as root-level.
+ */
+export function isRootLevelAgent(agent: AgentStateUpdate): boolean {
+  const depth = meta<number>(agent, 'dispatchDepth', 0)
+  const parentId = meta<string>(agent, 'dispatchParentId', '')
+  return depth <= 1 || parentId === ''
 }
 
 export function isAgentVisible(agent: AgentStateUpdate): boolean {
@@ -113,37 +143,60 @@ export function formatDuration(secs: number): string {
 }
 
 /**
- * Derive the dispatch nesting depth for each agent from flat telemetry entries.
- * Returns a Map from agent name to its dispatch depth (0 = root/unknown).
- * Used by AgentPanel to indent nested dispatches under their parent.
+ * Derive the dispatch nesting depth for each dispatch from flat telemetry
+ * entries. Returns a Map from dispatchId to its dispatch depth (0 = root).
+ * Keyed by dispatchId (unique per dispatch instance) so two dispatches of the
+ * same agent name do not collapse onto one another — AgentPanel looks up each
+ * agent's own dispatch id, not its name, to indent nested dispatches.
  */
 export function selectAgentDepths(telemetry: DispatchTelemetryEntry[]): Map<string, number> {
   const depths = new Map<string, number>()
   for (const entry of telemetry) {
-    // Use the latest (highest) depth seen for each agent name.
-    const existing = depths.get(entry.dispatchAgent)
-    if (existing === undefined || entry.dispatchDepth > existing) {
-      depths.set(entry.dispatchAgent, entry.dispatchDepth)
-    }
+    depths.set(entry.dispatchId, entry.dispatchDepth)
   }
   return depths
 }
 
 /**
- * Derive the parent agent name for each agent from flat telemetry entries.
- * Returns a Map from agent name to its parent agent name.
- * Used by AgentPanel to group nested dispatches under their parent.
+ * Return direct children of a given dispatch, keyed by dispatchId.
+ * A child is any entry whose dispatchParentId equals the given dispatchId.
  */
-export function selectAgentParents(telemetry: DispatchTelemetryEntry[]): Map<string, string> {
-  const parents = new Map<string, string>()
-  for (const entry of telemetry) {
-    if (entry.dispatchParentId) {
-      // Find the parent entry by its dispatchSessionId.
-      const parentEntry = telemetry.find((e) => e.dispatchSessionId === entry.dispatchParentId)
-      if (parentEntry) {
-        parents.set(entry.dispatchAgent, parentEntry.dispatchAgent)
-      }
-    }
-  }
-  return parents
+export function childrenOfDispatch(
+  telemetry: DispatchTelemetryEntry[],
+  dispatchId: string,
+): DispatchTelemetryEntry[] {
+  return telemetry.filter((e) => e.dispatchParentId === dispatchId)
 }
+
+/**
+ * Return the agent-state pills that are direct children of a given dispatch:
+ * any agent whose `dispatchParentId` metadata equals `parentDispatchId`.
+ *
+ * This is the DURABLE counterpart to `childrenOfDispatch` (which filters the
+ * one-shot `dispatchTelemetry` stream). Agent-state pills carry the same
+ * nesting attribution (`dispatchParentId`, `dispatchDepth`, `dispatches[]`)
+ * and are re-emitted on every `engine_agent_state` heartbeat snapshot, so a
+ * consumer that attaches AFTER a dispatch completed (or reopens the tab) can
+ * still reconstruct the dispatch tree from them — whereas `dispatchTelemetry`
+ * is gone by then. The dispatch-preview panel sources its nested children from
+ * here so a child renders regardless of attach timing. An empty
+ * `parentDispatchId` matches nothing (root-level pills are not "children").
+ */
+export function childAgentsOf(
+  agents: AgentStateUpdate[],
+  parentDispatchId: string,
+): AgentStateUpdate[] {
+  if (!parentDispatchId) return []
+  return agents.filter((a) => meta<string>(a, 'dispatchParentId', '') === parentDispatchId)
+}
+
+/**
+ * Return root-level dispatches (entries with no parent).
+ * Root entries have an empty or missing dispatchParentId.
+ */
+export function rootDispatches(
+  telemetry: DispatchTelemetryEntry[],
+): DispatchTelemetryEntry[] {
+  return telemetry.filter((e) => !e.dispatchParentId)
+}
+

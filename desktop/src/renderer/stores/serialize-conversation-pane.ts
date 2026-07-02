@@ -220,6 +220,12 @@ export function serializeConversationPane(
         ...(a.metadata ? { metadata: a.metadata } : {}),
       }))
     }
+    // Persist flat dispatch telemetry alongside agentStates so telemetry-only
+    // children (dispatches that never produced an agent-state pill) survive
+    // reload. Without this, the nesting depth for restored dispatches is lost.
+    if (inst.dispatchTelemetry && inst.dispatchTelemetry.length > 0) {
+      out.dispatchTelemetry = inst.dispatchTelemetry
+    }
     if (inst.planFilePath) out.planFilePath = inst.planFilePath
     if (inst.forkedFromConversationIds && inst.forkedFromConversationIds.length > 0) {
       out.forkedFromConversationIds = inst.forkedFromConversationIds

@@ -1,3 +1,4 @@
+// @file-size-exception: contract sync test suite — each shared type needs its own decode + field-set test
 import XCTest
 @testable import IonRemote
 
@@ -583,6 +584,34 @@ final class ContractSyncTests: XCTestCase {
         XCTAssert(
             unhandled.isEmpty,
             "Go ProviderEntry has fields not tracked in Swift test: \(unhandled.sorted())"
+        )
+    }
+
+    // MARK: - EngineEvent dispatch field coverage
+
+    /// Pins that dispatchId and dispatchConversationId are present in the Go
+    /// EngineEvent manifest and that the Swift decoder handles them on
+    /// engineDispatchStart / engineDispatchEnd. Any future Go field added to
+    /// dispatch events that Swift doesn't decode will surface here.
+    func testEngineDispatchFieldsInManifest() throws {
+        let manifest = try loadManifest()
+        let goEventFields = Set(manifest.engineEvent)
+
+        // Fields consumed by engineDispatchStart / engineDispatchEnd on iOS.
+        let swiftConsumed: Set<String> = [
+            "dispatchId",
+            "dispatchConversationId",
+            "dispatchAgent",
+            "dispatchDepth",
+            "dispatchParentId",
+            "dispatchExitCode",
+            "dispatchElapsed",
+        ]
+
+        let missingFromGo = swiftConsumed.subtracting(goEventFields)
+        XCTAssert(
+            missingFromGo.isEmpty,
+            "EngineEvent manifest is missing dispatch fields consumed by iOS: \(missingFromGo.sorted())"
         )
     }
 
