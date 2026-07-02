@@ -75,10 +75,30 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
 
   const inner = (
     <div className="group/turn relative">
-      {/* Extended-thinking row — the turn's top group, above the tool row. */}
+      {/* Extended-thinking row — top of the turn, above assistant text. */}
       {thinking && <ThinkingBlock message={thinking} skipMotion={skipMotion} />}
 
-      {/* Collapsible activity panel */}
+      {/* Assistant text (always visible, rendered sequentially) */}
+      {assistantMessages.length > 0 && (
+        <div className="relative">
+          {assistantMessages.map((msg) => (
+            <AssistantMessage
+              key={msg.id}
+              message={msg}
+              skipMotion={skipMotion}
+              actions={<span />}
+            />
+          ))}
+          {/* Unified copy button on hover over the turn block */}
+          {concatenatedText && (
+            <div className="absolute bottom-0 right-0 opacity-0 group-hover/turn:opacity-100 transition-opacity duration-100">
+              <CopyButton text={concatenatedText} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Collapsible activity panel — rendered below assistant text */}
       {activityHeader}
 
       <AnimatePresence initial={false}>
@@ -100,26 +120,6 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Assistant text (always visible, rendered sequentially) */}
-      {assistantMessages.length > 0 && (
-        <div className="relative">
-          {assistantMessages.map((msg) => (
-            <AssistantMessage
-              key={msg.id}
-              message={msg}
-              skipMotion={skipMotion}
-              actions={<span />}
-            />
-          ))}
-          {/* Unified copy button on hover over the turn block */}
-          {concatenatedText && (
-            <div className="absolute bottom-0 right-0 opacity-0 group-hover/turn:opacity-100 transition-opacity duration-100">
-              <CopyButton text={concatenatedText} />
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 
