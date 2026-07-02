@@ -159,26 +159,24 @@ export function handlePlanModeEvent(ctx: PlanModeCtx, event: any): boolean {
         ctx.instTouched = true
         console.log(`[plan_proposal] tab=${ctx.tabId.slice(0, 8)} synthesized ExitPlanMode permissionDenied from proposal (card trigger) planFilePath=${path ?? '<none>'}`)
       }
-      // Layer 2 (Bug #1 defense-in-depth): a kind="exit" proposal is definitive
-      // proof the session was in plan mode awaiting approval. The entry event
-      // (engine_plan_mode_changed{enabled:true}) that normally establishes
-      // instance plan mode can be lost in the engine's session router when a
-      // status query transiently clears the run's requestID mid-flight (the
-      // dropped-event defect fixed engine-side in run_key_binding.go). If that
-      // happened, the instance is still at its 'auto' creation default and the
-      // pill/group/snapshot all read auto. Recover here: a proposal means the
-      // instance should read 'plan' until the user approves. This matches the
-      // entry-arm write exactly (instance, never the parent tab — WI-002) and
-      // does not conflict with the user-approval chokepoint: runHandleImplement is
-      // the ONLY thing that flips back to 'auto' (ConversationView-implement.ts),
-      // and a proposal never flips to auto. Skip when already 'plan' (the entry
-      // event was delivered normally) to avoid a redundant write.
+      // Layer 2 (Bug #1 regression DETECTOR): a kind="exit" proposal is
+      // definitive proof the session was in plan mode awaiting approval. The
+      // entry event (engine_plan_mode_changed{enabled:true}) that normally
+      // establishes instance plan mode could be lost in the engine's session
+      // router when a status query transiently cleared the run's requestID
+      // mid-flight. That dropped-event defect is now FIXED engine-side (the
+      // run_key_binding routing fix), so this branch is no longer a recovery
+      // mechanism — it must NOT silently mutate permissionMode. Instead it is a
+      // pure observability assertion: if a kind="exit" proposal ever arrives on
+      // an instance that is not already in plan mode, that is a regression in
+      // the engine's entry-event delivery and we surface it as a warning rather
+      // than papering over it with an auto-correction. Auto-correcting here
+      // would mask the very defect the engine fix was meant to eliminate.
+      // Skip when already 'plan' (the entry event was delivered normally).
       const currentMode =
         ('permissionMode' in ctx.instPatch ? ctx.instPatch.permissionMode : ctx.inst0?.permissionMode) ?? 'auto'
       if (kind === 'exit' && currentMode !== 'plan') {
-        ctx.instPatch.permissionMode = 'plan'
-        ctx.instTouched = true
-        console.log(`[plan_proposal] tab=${ctx.tabId.slice(0, 8)} recovered instance permissionMode→plan from proposal (entry event may have been dropped)`)
+        console.warn(`[plan_proposal] tab=${ctx.tabId.slice(0, 8)} a kind=exit proposal arrived with instance permissionMode=${currentMode} (expected plan) — the engine_plan_mode_changed entry event may have been dropped; the run_key_binding routing fix should prevent this. NOT auto-correcting.`)
       }
       return true
     }

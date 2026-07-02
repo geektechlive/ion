@@ -300,53 +300,89 @@ describe('event-slice — engine_plan_proposal as card trigger (Bug #2)', () => 
   })
 })
 
-describe('event-slice — engine_plan_proposal recovers instance plan mode (Bug #1 Layer 2)', () => {
-  it('sets instance permissionMode to plan when the entry event was dropped (mode was auto)', () => {
-    // Simulate the dropped-entry-event scenario: the instance is still at the
-    // 'auto' creation default because engine_plan_mode_changed{enabled:true}
-    // never reached the renderer. A kind="exit" proposal must recover plan mode.
-    const { state, slice } = buildHarness()
-    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
-    inst0.permissionMode = 'auto'
-    inst0.permissionDenied = null
+describe('event-slice — engine_plan_proposal Layer 2 is an observability assertion (Bug #1)', () => {
+  // The engine dropped-entry-event defect is now fixed (run_key_binding routing
+  // fix). Layer 2 was downgraded from a silent recovery mutation to a pure
+  // regression DETECTOR: on a kind="exit" proposal that arrives when the
+  // instance is not already in plan mode, it warns and does NOT auto-correct.
 
-    slice.handleNormalizedEvent!('tab1', {
-      type: 'engine_plan_proposal' as any,
-      planProposalKind: 'exit',
-      planFilePath: '/tmp/plan.md',
-    } as any)
+  it('warns and does NOT mutate permissionMode when the instance is at auto (regression detector, no silent correction)', () => {
+    // Critical regression test: on the OLD silent-mutation code this would flip
+    // permissionMode to 'plan'. On the new observability code the mode STAYS
+    // 'auto' and a warning is emitted instead. Auto-correcting here would mask
+    // the very engine defect the routing fix was meant to eliminate.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { state, slice } = buildHarness()
+      const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+      inst0.permissionMode = 'auto'
+      inst0.permissionDenied = null
 
-    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('plan')
+      slice.handleNormalizedEvent!('tab1', {
+        type: 'engine_plan_proposal' as any,
+        planProposalKind: 'exit',
+        planFilePath: '/tmp/plan.md',
+      } as any)
+
+      // No silent correction: the instance stays exactly where it was.
+      expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('auto')
+      // The regression is surfaced as a warning.
+      expect(warnSpy).toHaveBeenCalled()
+      const warned = warnSpy.mock.calls.some(
+        (c) => typeof c[0] === 'string' && c[0].includes('permissionMode=auto') && c[0].includes('NOT auto-correcting'),
+      )
+      expect(warned).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
-  it('does NOT flip an instance that is already plan (no redundant write needed) and never flips to auto', () => {
-    const { state, slice } = buildHarness()
-    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
-    inst0.permissionMode = 'plan'
-    inst0.permissionDenied = null
+  it('does NOT warn and does NOT mutate when the instance is already at plan (entry event delivered normally)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { state, slice } = buildHarness()
+      const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+      inst0.permissionMode = 'plan'
+      inst0.permissionDenied = null
 
-    slice.handleNormalizedEvent!('tab1', {
-      type: 'engine_plan_proposal' as any,
-      planProposalKind: 'exit',
-      planFilePath: '/tmp/plan.md',
-    } as any)
+      slice.handleNormalizedEvent!('tab1', {
+        type: 'engine_plan_proposal' as any,
+        planProposalKind: 'exit',
+        planFilePath: '/tmp/plan.md',
+      } as any)
 
-    // Stays plan — a proposal NEVER flips to auto (that is onImplement's job).
-    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('plan')
+      // Stays plan (no mutation) and no regression warning is emitted.
+      expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('plan')
+      const warnedLayer2 = warnSpy.mock.calls.some(
+        (c) => typeof c[0] === 'string' && c[0].includes('NOT auto-correcting'),
+      )
+      expect(warnedLayer2).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
-  it('does NOT recover mode for a non-exit proposal kind', () => {
-    const { state, slice } = buildHarness()
-    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
-    inst0.permissionMode = 'auto'
+  it('does NOT warn or mutate for a non-exit proposal kind', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { state, slice } = buildHarness()
+      const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+      inst0.permissionMode = 'auto'
 
-    slice.handleNormalizedEvent!('tab1', {
-      type: 'engine_plan_proposal' as any,
-      planProposalKind: 'something_else',
-      planFilePath: '/tmp/plan.md',
-    } as any)
+      slice.handleNormalizedEvent!('tab1', {
+        type: 'engine_plan_proposal' as any,
+        planProposalKind: 'something_else',
+        planFilePath: '/tmp/plan.md',
+      } as any)
 
-    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('auto')
+      expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('auto')
+      const warnedLayer2 = warnSpy.mock.calls.some(
+        (c) => typeof c[0] === 'string' && c[0].includes('NOT auto-correcting'),
+      )
+      expect(warnedLayer2).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 })
 

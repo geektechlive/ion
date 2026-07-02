@@ -1,11 +1,23 @@
-// @file-size-exception: single translation layer EngineEvent→NormalizedEvent
-// covering every engine_* wire type. Splitting by event category would produce
-// 5-10 files that cannot be tested independently (they share the switch arms
-// and the TabEntry/EventEmitterContext closure). Consolidation is the lesser evil.
-import type { EngineBridge } from './engine-bridge'
-import type { EngineEvent, NormalizedEvent, TabStatus, EnrichedError, EngineConfig } from '../shared/types'
+// Translation layer EngineEvent→NormalizedEvent covering every engine_* wire
+// type. The switch below routes each engine_* event to a NormalizedEvent (or a
+// side-effecting handler). To keep every file under the 600-line cap, the
+// domain-clustered arms are extracted into sibling files that share the
+// TabEntry / EventEmitterContext types (defined in
+// engine-control-plane-events-types.ts and re-exported here):
+//   - engine-control-plane-thinking.ts   (thinking channel)
+//   - engine-control-plane-plan.ts       (plan-mode lifecycle)
+//   - engine-control-plane-dispatch.ts   (dispatch / agent-state telemetry)
+//   - engine-control-plane-extension.ts  (extension lifecycle / harness / misc)
+// This file retains the tool/text/message/error/permission/notify/dialog/
+// elicitation/export/compaction/stall/steer arms plus handleStatusEvent and
+// handleDeadEvent.
+import type { EngineEvent, NormalizedEvent, EnrichedError, EngineConfig } from '../shared/types'
 import { log as _log, debug as _debug, warn as _warn, error as _error } from './logger'
 import { handleExportEvent } from './engine-export-handler'
+import { handleThinkingEvent } from './engine-control-plane-thinking'
+import { handlePlanEvent } from './engine-control-plane-plan'
+import { handleDispatchEvent } from './engine-control-plane-dispatch'
+import { handleExtensionEvent } from './engine-control-plane-extension'
 import { conversationExists } from './session-meta'
 
 const TAG = 'SessionPlane'
@@ -14,120 +26,12 @@ function debug(msg: string): void { _debug(TAG, msg) }
 function warn(msg: string): void { _warn(TAG, msg) }
 function error(msg: string): void { _error(TAG, msg) }
 
-export interface TabEntry {
-  tabId: string
-  status: TabStatus
-  activeRequestId: string | null
-  conversationId: string | null
-  engineSessionStarted: boolean
-  lastActivityAt: number
-  promptCount: number
-  /**
-   * Number of prompts submitted since the last freshness checkpoint.
-   *
-   * A "checkpoint" is any event that semantically restores the tab to
-   * "fresh blank session" status for the purpose of the slash-command
-   * plan→auto auto-switch guard (`isFirstPromptForTab` in slash-classify.ts).
-   * Two events advance this checkpoint:
-   *
-   *   1. `resetTabSession` — full session reset (stops the engine session,
-   *      drops the conversation id). Zeros `promptCount` too.
-   *   2. `notifyConversationCleared` — `/clear` succeeded. The engine
-   *      session and conversation id intentionally stay alive (it's a
-   *      checkpoint, not a session restart), but the LLM-visible history
-   *      has been wiped, so the next slash command should be treated as
-   *      the first prompt of a blank conversation. `promptCount` is
-   *      preserved in that case because it remains a useful "total prompts
-   *      this app boot" counter for logging.
-   *
-   * Why a separate field rather than reusing `promptCount`: callers of
-   * `getTabStatus` may still want the total prompt count (e.g. logging),
-   * so we keep both. The guard consults this checkpoint-relative counter
-   * exclusively.
-   */
-  promptCountSinceCheckpoint: number
-  /**
-   * Set `true` by `notifyConversationCleared`, cleared by `submitPrompt`.
-   *
-   * This flag disambiguates two states that look identical to the
-   * `promptCountSinceCheckpoint` counter alone:
-   *
-   *   A. Tab just cleared (`/clear` fired) — `promptCountSinceCheckpoint`
-   *      is 0, but the renderer still sends its stale `conversationId` as
-   *      `runOptions.sessionId`. The guard should treat this as fresh.
-   *   B. Tab restored from disk (app restart) — `promptCountSinceCheckpoint`
-   *      is 0, and the renderer sends the restored `conversationId` as
-   *      `runOptions.sessionId`. The guard should treat this as resumed.
-   *
-   * Without this flag the guard cannot tell A from B — both have
-   * `promptCountSinceCheckpoint === 0` and `runOptionsSessionId` set.
-   * With the flag: A has `clearedSinceLastPrompt === true`, so the guard
-   * returns "fresh" and the plan→auto switch fires. B has the flag
-   * `false` (never set after a restore), so the guard returns "not fresh".
-   */
-  clearedSinceLastPrompt: boolean
-  /**
-   * Set `true` only when the tab's tracked `conversationId` came from
-   * RESUMING A SAVED conversation — a caller-supplied id on restore
-   * (`seedConversationId`, or `ensureSession` with `opts.conversationId`
-   * provided). Left `false` when the engine MINTED a fresh id at eager
-   * start for a brand-new session (the `ensureSession` capture of
-   * `result.conversationId` when the tab had no prior/supplied id).
-   *
-   * This disambiguates a THIRD scenario that `clearedSinceLastPrompt` and
-   * the bare presence of `runOptions.sessionId` cannot tell apart from a
-   * restored conversation (scenario B above):
-   *
-   *   C. Brand-new session that eagerly started — `promptCountSinceCheckpoint`
-   *      is 0, no conversation file exists on disk yet, but the engine
-   *      pre-minted a `conversationId` that `ensureSession` captured onto
-   *      `tab.conversationId`. The renderer then sends that minted id as
-   *      `runOptions.sessionId`, so to the freshness guard it looks
-   *      IDENTICAL to scenario B (count 0 + sessionId set) — yet it is
-   *      genuinely fresh. The `isFirstPromptForTab` guard must treat C as
-   *      fresh (so a first-prompt slash command flips plan→auto) while
-   *      still treating B as resumed.
-   *
-   * The guard therefore keys "resumed ⇒ not fresh" off THIS flag, not off
-   * the mere presence of `runOptionsSessionId` (which is set in both B and
-   * C). B sets this flag `true` (caller supplied the saved id); C leaves it
-   * `false` (engine minted the id).
-   */
-  resumedSavedConversation: boolean
-  permissionMode: 'auto' | 'plan'
-  approvedTools: string[]
-  startedAt: number
-  toolCallCount: number
-  sawPermissionRequest: boolean
-  /**
-   * Signature of the proposal denial (ExitPlanMode / AskUserQuestion) most
-   * recently surfaced to the renderer via a synthesized task_complete.
-   *
-   * The engine RE-PUBLISHES its retained `lastPermissionDenials` on every
-   * heartbeat idle (engine `manager_heartbeat.go`) so a reattaching consumer
-   * sees the pending proposal. A settled ('completed' / 'idle') tab therefore
-   * receives the SAME ExitPlanMode denial on every cost-only heartbeat tick.
-   *
-   * Without dedup, exempting proposal-bearing idles from the duplicate-skip
-   * guard (so the first proposal is never dropped — Bug #2) would re-synthesize
-   * a task_complete on every heartbeat and could resurrect a card the user
-   * already dismissed. This signature records what was last surfaced so the
-   * proposal pass-through fires ONCE per distinct proposal: the first delivery
-   * surfaces it; identical heartbeat echoes are skipped; a genuinely new
-   * proposal (different tool / plan path / run) re-fires.
-   *
-   * Reset to null on a real run start (state='running') and on session
-   * reset/clear, so the next proposal after new work always re-surfaces.
-   */
-  lastSurfacedProposalSig: string | null
-}
-
-export interface EventEmitterContext {
-  bridge: EngineBridge
-  emit: (eventName: string, ...args: unknown[]) => void
-  setStatus: (tabId: string, newStatus: TabStatus) => void
-  checkDrain: () => void
-}
+// TabEntry and EventEmitterContext are defined in the sibling types module
+// (extracted to keep this file and its domain-split siblings under the
+// 600-line cap). Re-exported here so existing import sites that reach them
+// through this module keep resolving unchanged.
+export type { TabEntry, EventEmitterContext } from './engine-control-plane-events-types'
+import type { TabEntry, EventEmitterContext } from './engine-control-plane-events-types'
 
 export function handleEngineEvent(
   ctx: EventEmitterContext,
@@ -302,72 +206,10 @@ export function handleEngineEvent(
       break
 
     case 'engine_plan_mode_changed':
-      log(`plan_mode_changed: tabId=${tabId} enabled=${event.planModeEnabled}`)
-      // Only Enabled:true is authoritative — model-initiated EnterPlanMode
-      // confirms the session has entered plan mode and the snapshot must
-      // reflect that. Enabled:false is intentionally NOT synced here: the
-      // engine no longer emits it for ExitPlanMode (model proposal only),
-      // and the user-approval gate in the renderer's onImplement handler
-      // is the single chokepoint for the mode flip back to 'auto'. If a
-      // false event ever arrives (e.g. from a future engine path) we still
-      // forward it to the renderer but do not mutate permissionMode here.
-      if (event.planModeEnabled) {
-        if (tab.permissionMode !== 'plan') {
-          tab.permissionMode = 'plan'
-          log(`plan_mode_changed: tabId=${tabId} engine flipped to plan, syncing tab.permissionMode`)
-        }
-      } else {
-        log(`plan_mode_changed: tabId=${tabId} enabled=false ignored (mode flip deferred to user-approval chokepoint)`)
-      }
-      ctx.emit('event', tabId, event as any)
-      break
-
     case 'engine_plan_file_written':
-      // A Write/Edit landed on the canonical plan file. This is the accurate
-      // trigger for the "plan created / updated" conversation marker — the
-      // file now exists with content, so the marker is correctly positioned
-      // and any link resolves. Forward to the renderer reducer, which inserts
-      // the divider (event-slice-plan-mode.ts). Distinct from
-      // engine_plan_mode_changed, which only flips plan-mode state.
-      log(
-        `plan_file_written: tabId=${tabId} op=${event.planWriteOperation} planFilePath=${event.planFilePath ?? ''} planSlug=${event.planSlug ?? ''}`,
-      )
-      ctx.emit('event', tabId, event as any)
-      break
-
     case 'engine_plan_mode_auto_exit':
-      // Engine synthesized an ExitPlanMode at end-of-turn. Emit as a
-      // NormalizedEvent so the single reducer (event-slice.ts) can clear
-      // the active instance's permissionMode. The parent tab.permissionMode
-      // is NOT written here — the sticky-parent invariant requires that only
-      // the active instance carries plan mode for extension-hosted tabs.
-      log(`plan_mode_auto_exit: tabId=${tabId} stopReason=${event.stopReason}`)
-      ctx.emit('event', tabId, {
-        type: 'plan_mode_auto_exit',
-        stopReason: event.stopReason || '',
-        planFilePath: event.planFilePath,
-        planSlug: event.planSlug,
-        reason: event.reason,
-        sessionId: event.sessionId,
-        runId: event.runId,
-      } as NormalizedEvent)
-      break
-
     case 'engine_plan_proposal':
-      // The model has proposed a plan-mode transition (currently only
-      // kind="exit" — the model called ExitPlanMode). This is a workflow
-      // event, NOT a state transition: the actual mode change is deferred
-      // to the user-approval chokepoint in runHandleImplement (renderer)
-      // and handleImplementPlan (iOS path, main process).
-      // The desktop forwards the event to the renderer as the authoritative
-      // signal that an approval card should render; the permission_denial
-      // path on engine_status remains the fallback card-render trigger so
-      // existing logic keeps working during the migration. See
-      // docs/architecture/adr/003-state-events-vs-workflow-events.md.
-      log(
-        `plan_proposal: tabId=${tabId} kind=${event.planProposalKind} planFilePath=${event.planFilePath ?? ''} planSlug=${event.planSlug ?? ''}`,
-      )
-      ctx.emit('event', tabId, event as any)
+      handlePlanEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_stream_reset':
@@ -429,143 +271,24 @@ export function handleEngineEvent(
       break
 
     case 'engine_thinking_block_start':
-      // Extended thinking (issue #158), plain-conversation path. The model
-      // began a reasoning block. Translate to the normalized-stream
-      // `thinking_block_start` so event-slice.ts opens a `role: 'thinking'`
-      // row. Boundaries always arrive when reasoning happened; the per-token
-      // delta may be suppressed engine-side (summary-only path). Mirrors the
-      // extension-hosted path in engine-event-slice.ts.
-      log(`thinking_block_start: tabId=${tabId}`)
-      ctx.emit('event', tabId, { type: 'thinking_block_start' } as NormalizedEvent)
-      break
-
     case 'engine_thinking_delta':
-      // Incremental reasoning text — peer of engine_text_delta for the
-      // thinking channel. Only arrives when the engine's ThinkingConfig
-      // .StreamDeltas is on (boundaries always flow regardless). Translate to
-      // the normalized `thinking_delta` so the renderer appends it to the open
-      // thinking row.
-      log(`thinking_delta: tabId=${tabId} len=${event.thinkingText?.length ?? 0}`)
-      ctx.emit('event', tabId, {
-        type: 'thinking_delta',
-        text: event.thinkingText,
-      } as NormalizedEvent)
-      break
-
     case 'engine_thinking_block_end':
-      // The reasoning block finished. Carries a summary (elapsed seconds,
-      // token estimate, redacted flag) so the renderer can show "💭 Thought
-      // for Ns" even when deltas were suppressed. Translate to the normalized
-      // `thinking_block_end` so event-slice.ts seals the active thinking row.
-      log(
-        `thinking_block_end: tabId=${tabId} elapsed=${event.thinkingElapsedSeconds ?? '?'}s ` +
-        `tokens=${event.thinkingTotalTokens ?? '?'} redacted=${!!event.thinkingRedacted}`,
-      )
-      ctx.emit('event', tabId, {
-        type: 'thinking_block_end',
-        totalTokens: event.thinkingTotalTokens,
-        elapsedSeconds: event.thinkingElapsedSeconds,
-        redacted: event.thinkingRedacted,
-      } as NormalizedEvent)
+      handleThinkingEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_agent_state':
-      // Emit as normalized agent_state so the single reducer can update
-      // the active instance's agentStates in event-slice.ts. Previously
-      // only engine-event-slice.ts handled this via the raw stream.
-      ctx.emit('event', tabId, {
-        type: 'agent_state',
-        agents: event.agents || [],
-      } as NormalizedEvent)
-      break
-
     case 'engine_dispatch_start':
-      // Forward dispatch start telemetry to the renderer so the store can
-      // record depth/parentDispatchId for nested dispatch tree rendering.
-      // dispatchId is required so buildDispatchStartEntry produces a
-      // DispatchTelemetryEntry with a real id — without it the snapshot ships
-      // '' to iOS and tier-3 child join (dispatchParentId == dispatchId) collapses.
-      ctx.emit('event', tabId, {
-        type: 'dispatch_start',
-        dispatchId: event.dispatchId || '',
-        dispatchAgent: event.dispatchAgent || '',
-        dispatchTask: event.dispatchTask || '',
-        dispatchModel: event.dispatchModel || '',
-        dispatchSessionId: event.dispatchSessionId || '',
-        dispatchDepth: event.dispatchDepth || 0,
-        dispatchParentId: event.dispatchParentId || '',
-      } as NormalizedEvent)
-      break
-
     case 'engine_dispatch_end':
-      // dispatchId matches the corresponding dispatch_start so applyDispatchEnd
-      // can update the correct DispatchTelemetryEntry (exact id match, not
-      // heuristic). dispatchConversationId is read by the slice helper to set
-      // the entry's conversationId and is forwarded to iOS via the snapshot.
-      ctx.emit('event', tabId, {
-        type: 'dispatch_end',
-        dispatchId: event.dispatchId || '',
-        dispatchAgent: event.dispatchAgent || '',
-        dispatchExitCode: event.dispatchExitCode ?? 0,
-        dispatchElapsed: event.dispatchElapsed ?? 0,
-        dispatchCost: event.dispatchCost ?? 0,
-        dispatchDepth: event.dispatchDepth || 0,
-        dispatchParentId: event.dispatchParentId || '',
-        dispatchConversationId: event.dispatchConversationId || '',
-      } as NormalizedEvent)
+      handleDispatchEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_harness_message':
-      // Extension harness display message (e.g. welcome banner). Emit as
-      // normalized harness_message so event-slice.ts can apply dedup logic
-      // and append to the active instance's messages.
-      ctx.emit('event', tabId, {
-        type: 'harness_message',
-        message: event.message || '',
-        dedupKey: (event.metadata as any)?.dedupKey || undefined,
-        source: event.source,
-      } as NormalizedEvent)
-      break
-
     case 'engine_extension_died':
-      ctx.emit('event', tabId, {
-        type: 'extension_died',
-        extensionName: event.extensionName || '',
-      } as NormalizedEvent)
-      break
-
     case 'engine_extension_respawned':
-      ctx.emit('event', tabId, {
-        type: 'extension_respawned',
-        extensionName: event.extensionName || '',
-        attemptNumber: event.attemptNumber || 0,
-      } as NormalizedEvent)
-      break
-
     case 'engine_extension_dead_permanent':
-      ctx.emit('event', tabId, {
-        type: 'extension_dead_permanent',
-        extensionName: event.extensionName || '',
-        attemptNumber: event.attemptNumber || 0,
-      } as NormalizedEvent)
-      break
-
     case 'engine_events_dropped':
-      ctx.emit('event', tabId, {
-        type: 'events_dropped',
-        count: event.count || 0,
-      } as NormalizedEvent)
-      break
-
     case 'engine_model_fallback':
-      // Model fallback workflow signal. Emit as normalized model_fallback
-      // so event-slice.ts can set the engineModelFallbacks indicator.
-      ctx.emit('event', tabId, {
-        type: 'model_fallback',
-        requestedModel: event.fallbackRequestedModel || '',
-        fallbackModel: event.fallbackModel || '',
-        reason: event.fallbackReason || '',
-      } as NormalizedEvent)
+      handleExtensionEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_early_stop_decision_request':
@@ -582,12 +305,7 @@ export function handleEngineEvent(
       break
 
     case 'engine_intercept':
-      // Fire-and-forget signal: bubble up via ctx.emit so event-wiring.ts's
-      // wireSessionPlaneEvents can call handleInterceptEvent without creating
-      // a circular import through state.ts. The event carries the raw payload
-      // and tabId; the wiring layer in event-wiring.ts does the routing.
-      log(`intercept: tabId=${tabId} level=${event.interceptLevel} title=${event.interceptTitle}`)
-      ctx.emit('engine_intercept', tabId, event)
+      handleExtensionEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_export':

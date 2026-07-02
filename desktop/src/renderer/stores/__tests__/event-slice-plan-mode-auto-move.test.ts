@@ -136,18 +136,26 @@ describe('event-slice — plan-mode auto-group-move via engine event', () => {
     expect(moveTabToGroup).not.toHaveBeenCalled()
   })
 
-  it('case 3: moves tab on engine_plan_proposal (kind=exit, instance auto → plan recovery)', () => {
-    // engine_plan_proposal kind="exit" is the Bug #1 defense-in-depth path: the
-    // entry event was dropped, so the instance is still 'auto'. The plan-mode handler
-    // recovers permissionMode→'plan'; the post-commit block must then move the tab.
-    const { slice, moveTabToGroup } = buildHarness({ status: 'running', groupId: 'group-inprogress', groupPinned: false }, 'auto')
-    slice.handleNormalizedEvent!('tab1', {
-      type: 'engine_plan_proposal',
-      planProposalKind: 'exit',
-      planFilePath: '/tmp/plan.md',
-      planSlug: 'test-plan',
-    } as any)
-    expect(moveTabToGroup).toHaveBeenCalledWith('tab1', 'group-planning')
+  it('case 3: does NOT move tab on engine_plan_proposal (kind=exit) — Layer 2 no longer mutates', () => {
+    // engine_plan_proposal kind="exit" was formerly a Bug #1 defense-in-depth
+    // recovery that flipped the 'auto' instance to 'plan' (and thereby triggered
+    // an auto-group-move). That silent mutation is gone: the engine dropped-entry
+    // defect is fixed (run_key_binding routing fix) and Layer 2 is now a pure
+    // observability assertion. With no permissionMode mutation there is no
+    // post-commit plan-mode group move.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { slice, moveTabToGroup } = buildHarness({ status: 'running', groupId: 'group-inprogress', groupPinned: false }, 'auto')
+      slice.handleNormalizedEvent!('tab1', {
+        type: 'engine_plan_proposal',
+        planProposalKind: 'exit',
+        planFilePath: '/tmp/plan.md',
+        planSlug: 'test-plan',
+      } as any)
+      expect(moveTabToGroup).not.toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 
   it('case 4: idle tab is NOT moved when engine_plan_mode_changed fires', () => {
