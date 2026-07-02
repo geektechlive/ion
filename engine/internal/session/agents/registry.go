@@ -3,9 +3,11 @@
 package agents
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/dsswift/ion/engine/internal/types"
+	"github.com/dsswift/ion/engine/internal/utils"
 )
 
 // Registry manages agent handles, specs, and state pills for a single session.
@@ -145,11 +147,34 @@ func (r *Registry) AllSpecNames() []string {
 // entire check-then-act to prevent duplicate entries from concurrent
 // dispatches of the same specialist. Returns true if an existing entry was
 // updated, false if a new entry was appended.
+//
+// CAUTION: name-keyed matching means two concurrent dispatches of the same
+// agent name will collide on one slot. Use AppendOrUpdateByID for dispatch
+// paths that need per-instance isolation (each dispatch gets its own slot
+// keyed by its unique dispatch ID).
 func (r *Registry) AppendOrUpdate(state types.AgentStateUpdate, updater func(*types.AgentStateUpdate)) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.states {
 		if r.states[i].Name == state.Name {
+			updater(&r.states[i])
+			return true
+		}
+	}
+	r.states = append(r.states, state)
+	return false
+}
+
+// AppendOrUpdateByID atomically finds an existing state by its unique ID
+// and applies the updater, or appends a new entry if no match exists.
+// Unlike AppendOrUpdate (name-keyed), this gives each concurrent dispatch
+// of the same agent name its own slot, so UpdateStateByID always lands on
+// the correct instance. Returns true if an existing entry was updated.
+func (r *Registry) AppendOrUpdateByID(state types.AgentStateUpdate, updater func(*types.AgentStateUpdate)) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.states {
+		if r.states[i].ID == state.ID {
 			updater(&r.states[i])
 			return true
 		}
@@ -165,21 +190,25 @@ func (r *Registry) AppendState(state types.AgentStateUpdate) {
 	r.states = append(r.states, state)
 }
 
-// UpdateState finds a state by name and applies the updater function.
-// When multiple entries share the same name (e.g., extension roster +
-// engine-managed), the first match wins.
+// UpdateState finds all states with the given name and applies the updater
+// to each. Multiple entries may share the same name when concurrent
+// dispatches of the same agent each get their own ID-keyed slot.
+// The abort path relies on this to cancel every running instance of a name.
 func (r *Registry) UpdateState(name string, updater func(*types.AgentStateUpdate)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.states {
 		if r.states[i].Name == name {
 			updater(&r.states[i])
-			return
 		}
 	}
 }
 
 // UpdateStateByID finds a state by its unique ID and applies the updater.
+// Logs a warning if no slot matches, which indicates the terminal update
+// for a dispatch landed nowhere (the root cause of phantom "running"
+// agent states that made the desktop show "waiting for N background agents"
+// indefinitely).
 func (r *Registry) UpdateStateByID(id string, updater func(*types.AgentStateUpdate)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -189,6 +218,9 @@ func (r *Registry) UpdateStateByID(id string, updater func(*types.AgentStateUpda
 			return
 		}
 	}
+	utils.Warn("AgentRegistry", fmt.Sprintf(
+		"UpdateStateByID: no slot found for id=%q (terminal update landed nowhere, agent may appear stuck as running)", id,
+	))
 }
 
 // FindStateIndex returns the index of the first state with the given name,

@@ -80,13 +80,13 @@ func (m *Manager) rehydrateDispatchState(s *engineSession, key string) {
 			metadata["dispatches"] = []interface{}{dispatchEntry}
 		}
 
-		s.agents.AppendOrUpdate(types.AgentStateUpdate{
+		s.agents.AppendOrUpdateByID(types.AgentStateUpdate{
 			Name:     d.AgentName,
 			ID:       d.AgentID,
 			Status:   d.Status,
 			Metadata: metadata,
 		}, func(existing *types.AgentStateUpdate) {
-			existing.ID = d.AgentID
+			existing.Name = d.AgentName
 			existing.Status = d.Status
 			if existing.Metadata == nil {
 				existing.Metadata = map[string]interface{}{}

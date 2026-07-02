@@ -336,3 +336,182 @@ func TestRegistry_LookupExtDisplayName(t *testing.T) {
 		}
 	})
 }
+
+// --- AppendOrUpdateByID ---
+
+// TestRegistry_AppendOrUpdateByID_ConcurrentSameName is the regression test for
+// the phantom "running" agent bug: two concurrent dispatches of the same agent
+// name (e.g. "engine-dev") with DIFFERENT dispatch IDs must each get their own
+// slot, so UpdateStateByID lands on the correct instance when each dispatch's
+// agent_end fires. Under the old name-keyed AppendOrUpdate, the second dispatch
+// overwrote the first's ID, making the first's terminal UpdateStateByID miss
+// entirely. The snapshot kept one slot stuck as "running" forever, causing the
+// desktop "waiting for N background agents" indicator to never clear.
+//
+// This test MUST fail on name-keyed code (AppendOrUpdate) and pass on ID-keyed
+// code (AppendOrUpdateByID). The red-then-green verification is documented in
+// the commit message.
+func TestRegistry_AppendOrUpdateByID_ConcurrentSameName(t *testing.T) {
+	r := NewRegistry()
+
+	// Two dispatches of "engine-dev" with different IDs, both running.
+	r.AppendOrUpdateByID(types.AgentStateUpdate{
+		Name:   "engine-dev",
+		ID:     "dispatch-A",
+		Status: "running",
+		Metadata: map[string]interface{}{
+			"task": "implement feature X",
+		},
+	}, func(existing *types.AgentStateUpdate) {
+		existing.Name = "engine-dev"
+		existing.Status = "running"
+	})
+
+	r.AppendOrUpdateByID(types.AgentStateUpdate{
+		Name:   "engine-dev",
+		ID:     "dispatch-B",
+		Status: "running",
+		Metadata: map[string]interface{}{
+			"task": "implement feature Y",
+		},
+	}, func(existing *types.AgentStateUpdate) {
+		existing.Name = "engine-dev"
+		existing.Status = "running"
+	})
+
+	// Must have TWO slots, not one.
+	snap := r.MergedSnapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 slots for concurrent same-name dispatches, got %d", len(snap))
+	}
+
+	// Both should be running.
+	runningCount := 0
+	for _, s := range snap {
+		if s.Status == "running" {
+			runningCount++
+		}
+	}
+	if runningCount != 2 {
+		t.Fatalf("expected 2 running, got %d", runningCount)
+	}
+
+	// Dispatch A finishes: UpdateStateByID(A, done).
+	r.UpdateStateByID("dispatch-A", func(state *types.AgentStateUpdate) {
+		state.Status = "done"
+	})
+
+	snap = r.MergedSnapshot()
+	// A should be done, B should still be running.
+	var aFound, bFound bool
+	for _, s := range snap {
+		if s.ID == "dispatch-A" {
+			aFound = true
+			if s.Status != "done" {
+				t.Errorf("dispatch-A status = %q, want done", s.Status)
+			}
+		}
+		if s.ID == "dispatch-B" {
+			bFound = true
+			if s.Status != "running" {
+				t.Errorf("dispatch-B status = %q, want running", s.Status)
+			}
+		}
+	}
+	if !aFound {
+		t.Error("dispatch-A not found in snapshot after UpdateStateByID")
+	}
+	if !bFound {
+		t.Error("dispatch-B not found in snapshot after UpdateStateByID")
+	}
+
+	// Dispatch B finishes: UpdateStateByID(B, done).
+	r.UpdateStateByID("dispatch-B", func(state *types.AgentStateUpdate) {
+		state.Status = "done"
+	})
+
+	snap = r.MergedSnapshot()
+	runningCount = 0
+	for _, s := range snap {
+		if s.Status == "running" {
+			runningCount++
+		}
+	}
+	if runningCount != 0 {
+		t.Errorf("expected 0 running after both done, got %d (phantom running bug)", runningCount)
+	}
+}
+
+// TestRegistry_AppendOrUpdateByID_SingleDispatchLifecycle verifies the simple
+// case: a single dispatch start -> done leaves zero running agents.
+func TestRegistry_AppendOrUpdateByID_SingleDispatchLifecycle(t *testing.T) {
+	r := NewRegistry()
+
+	r.AppendOrUpdateByID(types.AgentStateUpdate{
+		Name:   "docs-lead",
+		ID:     "dispatch-D1",
+		Status: "running",
+		Metadata: map[string]interface{}{
+			"task": "update docs",
+		},
+	}, func(existing *types.AgentStateUpdate) {
+		existing.Name = "docs-lead"
+		existing.Status = "running"
+	})
+
+	snap := r.MergedSnapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 slot, got %d", len(snap))
+	}
+	if snap[0].Status != "running" {
+		t.Errorf("status = %q, want running", snap[0].Status)
+	}
+
+	// Finish the dispatch.
+	r.UpdateStateByID("dispatch-D1", func(state *types.AgentStateUpdate) {
+		state.Status = "done"
+	})
+
+	snap = r.MergedSnapshot()
+	runningCount := 0
+	for _, s := range snap {
+		if s.Status == "running" {
+			runningCount++
+		}
+	}
+	if runningCount != 0 {
+		t.Errorf("expected 0 running after done, got %d", runningCount)
+	}
+}
+
+// TestRegistry_UpdateState_AllMatches verifies that UpdateState applies the
+// updater to ALL entries with the given name (not just the first), which is
+// necessary for the abort path when multiple ID-keyed slots share a name.
+func TestRegistry_UpdateState_AllMatches(t *testing.T) {
+	r := NewRegistry()
+
+	// Two slots with the same name (ID-keyed dispatch path).
+	r.AppendOrUpdateByID(types.AgentStateUpdate{
+		Name:   "engine-dev",
+		ID:     "dispatch-A",
+		Status: "running",
+	}, func(existing *types.AgentStateUpdate) {})
+
+	r.AppendOrUpdateByID(types.AgentStateUpdate{
+		Name:   "engine-dev",
+		ID:     "dispatch-B",
+		Status: "running",
+	}, func(existing *types.AgentStateUpdate) {})
+
+	// UpdateState by name should hit both.
+	r.UpdateState("engine-dev", func(state *types.AgentStateUpdate) {
+		state.Status = "cancelled"
+	})
+
+	snap := r.MergedSnapshot()
+	for _, s := range snap {
+		if s.Name == "engine-dev" && s.Status != "cancelled" {
+			t.Errorf("slot id=%s status=%q, want cancelled (abort must cancel all)", s.ID, s.Status)
+		}
+	}
+}

@@ -133,10 +133,12 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 
 		start := time.Now()
 
-		// Atomically update an existing specialist entry or append a new
-		// one. Using AppendOrUpdate prevents the TOCTOU race where two
-		// concurrent dispatches of the same specialist both see "not found"
-		// and both append, creating duplicate rows.
+		// Atomically find an existing state by dispatch ID or append a new
+		// slot. Using AppendOrUpdateByID gives each concurrent dispatch of
+		// the same agent name its own slot, so UpdateStateByID always lands
+		// on the correct instance's terminal update. The old name-keyed
+		// AppendOrUpdate caused the second dispatch to overwrite the first's
+		// ID, making the first's agent_end update miss entirely.
 		newDispatch := map[string]interface{}{
 			"id":        agentID,
 			"task":      prompt,
@@ -144,7 +146,7 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			"status":    "running",
 			"startTime": start.Unix(),
 		}
-		reused := s.agents.AppendOrUpdate(types.AgentStateUpdate{
+		reused := s.agents.AppendOrUpdateByID(types.AgentStateUpdate{
 			Name:   agentName,
 			ID:     agentID,
 			Status: "running",
@@ -159,11 +161,12 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 				"dispatches":  []interface{}{newDispatch},
 			},
 		}, func(existing *types.AgentStateUpdate) {
-			existing.ID = agentID
+			existing.Name = agentName
 			existing.Status = "running"
 			if existing.Metadata == nil {
 				existing.Metadata = map[string]interface{}{}
 			}
+			existing.Metadata["displayName"] = displayName
 			existing.Metadata["task"] = prompt
 			existing.Metadata["model"] = childModel
 			existing.Metadata["startTime"] = start.Unix()
