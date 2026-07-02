@@ -198,9 +198,18 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
                   var st = sf.state;
                   instRunning = st === 'running' || st === 'connecting' || st === 'starting';
                 }
-                // Per-instance running-agent-count. Folds across the
-                // instance's agentStates field to expose "how many
-                // dispatched background agents are still running" to iOS.
+                // Per-instance running-agent-count. Folds across both the
+                // instance's agentStates field AND statusFields.backgroundAgents
+                // to expose "how many dispatched background agents are still
+                // running" to iOS. Takes the MAX (not sum) of both sources
+                // because they observe the same underlying agents from two
+                // vantage points — agentStates for extension-hosted orchestrators,
+                // backgroundAgents for plain-conversation dispatches where
+                // agentStates remains empty.
+                // Keep in sync with effectiveRunningChildrenCount in
+                // TabStripShared.ts — this IIFE cannot import that helper
+                // (runs in renderer global scope via executeJavaScript; see the
+                // tabHasExtensions inline-mirror precedent at lines 26-35).
                 // Drives the yellow "awaiting children" pulse on the iOS
                 // sub-tab pill and footer, mirroring the desktop's
                 // agentCountByInstance derivation in EngineTabStrip.
@@ -210,11 +219,14 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
                 // can be honored.
                 var instRunningAgents = 0;
                 var ags = inst.agentStates;
+                var fromAgentStates = 0;
                 if (ags && Array.isArray(ags)) {
                   for (var ai = 0; ai < ags.length; ai++) {
-                    if (ags[ai] && ags[ai].status === 'running') instRunningAgents++;
+                    if (ags[ai] && ags[ai].status === 'running') fromAgentStates++;
                   }
                 }
+                var fromBackgroundAgents = (inst.statusFields && inst.statusFields.backgroundAgents) || 0;
+                instRunningAgents = Math.max(fromAgentStates, fromBackgroundAgents);
                 // Per-instance model-fallback indicator. Projects the
                 // renderer's engineModelFallbacks map onto each instance
                 // so iOS can render a matching ⚠ glyph on its

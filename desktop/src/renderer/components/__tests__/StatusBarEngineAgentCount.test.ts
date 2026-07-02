@@ -35,6 +35,22 @@ vi.mock('zustand/shallow', () => ({
   useShallow: (fn: unknown) => fn,
 }))
 
+// StatusBarEngineHelpers now imports effectiveRunningChildrenCount from
+// TabStripShared, which transitively imports @phosphor-icons/react and
+// preferences.ts (both touch the DOM at module-load time in a browser
+// environment). Mock them so this node-pure test doesn't fail with
+// "document is not defined".
+vi.mock('@phosphor-icons/react', () => ({
+  Diamond: () => null, Square: () => null, StarFour: () => null,
+  Triangle: () => null, Heart: () => null, Hexagon: () => null,
+  Lightning: () => null, Terminal: () => null,
+  DeviceMobile: () => null, Monitor: () => null, Gear: () => null,
+}))
+
+vi.mock('../../preferences', () => ({
+  usePreferencesStore: { getState: () => ({ uiZoom: 1, gitOpsMode: 'standard' }) },
+}))
+
 import { useActiveEngineAgentRunningCount } from '../StatusBarEngineHelpers'
 
 function reset() {
@@ -58,6 +74,14 @@ function setPaneAgents(tabId: string, statuses: string[]) {
 function setPaneAgentsFull(tabId: string, agents: { name: string; id: string; status: string }[]) {
   state.conversationPanes.set(tabId, {
     instances: [{ id: 'main', label: 'main', statusFields: null, agentStates: agents }],
+    activeInstanceId: 'main',
+  })
+}
+
+/** Set only statusFields.backgroundAgents (agentStates stays empty — plain dispatch). */
+function setPaneBackgroundAgents(tabId: string, count: number) {
+  state.conversationPanes.set(tabId, {
+    instances: [{ id: 'main', label: 'main', statusFields: { backgroundAgents: count }, agentStates: [] }],
     activeInstanceId: 'main',
   })
 }
@@ -98,5 +122,15 @@ describe('useActiveEngineAgentRunningCount — tab-type-agnostic (HR-1)', () => 
       { name: 'engine-dev', id: 'dispatch-B', status: 'done' },
     ])
     expect(useActiveEngineAgentRunningCount()).toBe(0)
+  })
+
+  it('returns backgroundAgents count when agentStates is empty (plain-conversation dispatch)', () => {
+    // Regression for the solid-green-idle bug: a plain orchestrator conversation
+    // idle with background agents. agentStates is empty; backgroundAgents carries
+    // the live count. The old agentStates-only fold returned 0 here; this must
+    // go RED if effectiveRunningChildrenCount is reverted.
+    setActiveTab({ id: 'tab1', engineProfileId: null })
+    setPaneBackgroundAgents('tab1', 3)
+    expect(useActiveEngineAgentRunningCount()).toBe(3)
   })
 })

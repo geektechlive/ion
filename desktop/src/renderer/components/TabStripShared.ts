@@ -4,7 +4,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
 import type { useColors } from '../theme'
 import type { TabState } from '../../shared/types'
-import type { ConversationPane } from '../../shared/types-engine'
+import type { ConversationPane, StatusFields } from '../../shared/types-engine'
 import { activeInstance } from '../stores/conversation-instance'
 import { tabHasExtensions } from '../../shared/tab-predicates'
 import { computeAnchoredPosition } from './tabstrip-anchored-position'
@@ -369,13 +369,52 @@ export function isAnyEngineInstanceRunning(tabId: string): boolean {
 }
 
 /**
+ * Canonical running-children count for a single conversation instance.
+ *
+ * Two data sources can report running background agents for the same
+ * instance — we take the MAX, not the sum, because both vantage points
+ * observe the same underlying agents:
+ *
+ *   • `inst.agentStates` — per-agent entries emitted by the engine for
+ *     extension-hosted (orchestrator) conversations.
+ *   • `inst.statusFields.backgroundAgents` — a scalar count the engine
+ *     emits for plain-conversation dispatches where individual agent
+ *     states are not surfaced via `agentStates`.
+ *
+ * Taking the max prevents double-counting when both fields are populated
+ * simultaneously while still catching the backgroundAgents-only case
+ * (plain conversations) that the agentStates-only fold missed.
+ *
+ * TAB-TYPE-AGNOSTIC: a plain conversation with background agents
+ * qualifies too. The fix makes the "awaiting children" aspirational
+ * comments in this file true in practice.
+ */
+export function effectiveRunningChildrenCount(inst: {
+  agentStates: ReadonlyArray<{ status: string }>
+  statusFields?: Pick<StatusFields, 'backgroundAgents'> | null
+}): number {
+  let fromAgentStates = 0
+  for (const a of inst.agentStates) {
+    if (a.status === 'running') fromAgentStates++
+  }
+  const fromBackgroundAgents = inst.statusFields?.backgroundAgents ?? 0
+  return Math.max(fromAgentStates, fromBackgroundAgents)
+}
+
+/**
  * Check whether any engine instance under a tab has running dispatched
  * background agents. Sibling to `isAnyEngineInstanceRunning` — folds
  * across `conversationPanes` instances and reads per-instance entries from
- * `engineAgentStates`. This is the data source for the "awaiting
- * children" yellow pulsing dot on the parent tab pill and for the
- * action-layer guard in `closeTab` that hard-blocks tab close while
- * background agents are still executing.
+ * both `inst.agentStates` and `inst.statusFields.backgroundAgents` via
+ * the canonical `effectiveRunningChildrenCount` helper.
+ *
+ * This is the data source for the "awaiting children" yellow pulsing dot
+ * on the parent tab pill and for the action-layer guard in `closeTab`
+ * that hard-blocks tab close while background agents are still executing.
+ *
+ * TAB-TYPE-AGNOSTIC: a plain conversation with background agents qualifies
+ * too — `inst.statusFields.backgroundAgents` carries the count for plain
+ * dispatches where `inst.agentStates` remains empty.
  *
  * NOTE: Reads from `useSessionStore.getState()` — not reactive on its
  * own. Callers in React components must subscribe to
@@ -387,9 +426,7 @@ export function anyEngineInstanceHasRunningChildren(tabId: string): boolean {
   const pane = s.conversationPanes.get(tabId)
   if (!pane || pane.instances.length === 0) return false
   for (const inst of pane.instances) {
-    for (const a of inst.agentStates) {
-      if (a.status === 'running') return true
-    }
+    if (effectiveRunningChildrenCount(inst) > 0) return true
   }
   return false
 }

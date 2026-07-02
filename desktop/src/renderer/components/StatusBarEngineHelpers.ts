@@ -2,6 +2,7 @@ import { useShallow } from 'zustand/shallow'
 import { useSessionStore } from '../stores/sessionStore'
 import type { StatusFields } from '../../shared/types'
 import { tabHasExtensions } from '../../shared/tab-predicates'
+import { effectiveRunningChildrenCount } from './TabStripShared'
 
 /**
  * Resolve the currently-active engine instance's `StatusFields` snapshot.
@@ -41,14 +42,11 @@ export function useActiveEngineStatusFields(): StatusFields | null {
  *
  * TAB-TYPE-AGNOSTIC: the `Agent` tool dispatches sub-agents
  * regardless of whether a harness is loaded, so a plain conversation can have
- * running children too. This reads `inst.agentStates` (the same agnostic data
- * `anyEngineInstanceHasRunningChildren` in TabStripShared.ts reads), so the
- * "awaiting children" pulse fires for plain tabs as well — consistent with the
- * close guard that now blocks closing any tab with running children.
- *
- * Counts every running dispatched-agent pill, foreground or background alike;
- * the Agent tool dispatches children foreground, so the label this feeds does
- * not assert "background".
+ * running children too. Uses `effectiveRunningChildrenCount` (imported from
+ * TabStripShared.ts) — the canonical helper that folds both `inst.agentStates`
+ * and `inst.statusFields.backgroundAgents` via max, so the "awaiting children"
+ * pulse fires for plain tabs dispatching background agents as well — consistent
+ * with the close guard that now blocks closing any tab with running children.
  *
  * Returns 0 when there is no active instance or no running children.
  */
@@ -59,10 +57,8 @@ export function useActiveEngineAgentRunningCount(): number {
     const pane = s.conversationPanes.get(s.activeTabId)
     const instanceId = pane?.activeInstanceId
     if (!instanceId) return 0
-    const inst = pane.instances.find((i) => i.id === instanceId)
+    const inst = pane.instances.find((i: any) => i.id === instanceId)
     if (!inst) return 0
-    let count = 0
-    for (const a of inst.agentStates) if (a.status === 'running') count++
-    return count
+    return effectiveRunningChildrenCount(inst)
   })
 }
