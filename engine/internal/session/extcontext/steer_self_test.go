@@ -64,6 +64,7 @@ func (a *steerSelfAccessor) ExtConfig() *extension.ExtensionConfig    { return n
 func (a *steerSelfAccessor) ProcRegistry() *extension.ProcessRegistry { return nil }
 func (a *steerSelfAccessor) NewChildBackend() backend.RunBackend      { return backend.NewApiBackend() }
 func (a *steerSelfAccessor) BumpParentProgress()                      {}
+func (a *steerSelfAccessor) EmitDispatchCountStatus(_ string)         {}
 func (a *steerSelfAccessor) EngineConfig() *types.EngineRuntimeConfig { return nil }
 func (a *steerSelfAccessor) ResolveTier(name string) string           { return name }
 func (a *steerSelfAccessor) PermissionCheck(toolName string, input map[string]interface{}) (string, string) {

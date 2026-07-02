@@ -55,6 +55,23 @@ func BuildChildAgentSpawner(
 		// Map the AgentSpawner parameters to DispatchAgentOpts.
 		// Foreground (Background=false) matches the Agent tool's synchronous
 		// contract: the tool blocks until the child completes.
+		//
+		// Log the working directory the child spawner threads into the nested
+		// dispatch (ProjectPath below) so grandchild cwd resolution is
+		// observable. childDepth/childDispatchId identify the spawning child.
+		utils.Debug("Dispatch", fmt.Sprintf(
+			"child spawner dispatch: name=%q projectPath=%q dispatchId=%s depth=%d session=%s",
+			name, cwd, childDispatchId, childDepth, sa.SessionKey(),
+		))
+		//
+		// AllowedSubAgents is intentionally left unset on this path. The
+		// engine's built-in Agent tool has no per-call source for "which
+		// agents may this child dispatch" -- that is harness roster knowledge
+		// the engine cannot synthesize. Fabricating one would be wrong, so the
+		// allowlist layer stays inert here and only the self-dispatch rail
+		// (enforced in checkDispatchEligibility regardless of the allowlist)
+		// applies. A harness that dispatches via ctx.DispatchAgent sets
+		// AllowedSubAgents per call and gets full allowlist enforcement.
 		result, err := dispatchFn(extension.DispatchAgentOpts{
 			Name:        name,
 			Task:        prompt,

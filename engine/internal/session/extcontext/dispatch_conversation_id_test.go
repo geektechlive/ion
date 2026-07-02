@@ -106,7 +106,8 @@ func (a *convIDRecordingAccessor) conversationIDs() []interface{} {
 	return nil
 }
 
-func (a *convIDRecordingAccessor) BumpParentProgress() {}
+func (a *convIDRecordingAccessor) BumpParentProgress()              {}
+func (a *convIDRecordingAccessor) EmitDispatchCountStatus(_ string) {}
 
 func (a *convIDRecordingAccessor) SessionKey() string                       { return "convid-test-session" }
 func (a *convIDRecordingAccessor) ConversationID() string                   { return "" }

@@ -47,6 +47,7 @@ func (a *agentDiscoveryTestAccessor) ExtConfig() *extension.ExtensionConfig    {
 func (a *agentDiscoveryTestAccessor) ProcRegistry() *extension.ProcessRegistry { return nil }
 func (a *agentDiscoveryTestAccessor) NewChildBackend() backend.RunBackend      { return nil }
 func (a *agentDiscoveryTestAccessor) BumpParentProgress()                      {}
+func (a *agentDiscoveryTestAccessor) EmitDispatchCountStatus(_ string)         {}
 func (a *agentDiscoveryTestAccessor) EngineConfig() *types.EngineRuntimeConfig { return nil }
 func (a *agentDiscoveryTestAccessor) ResolveTier(_ string) string              { return "" }
 func (a *agentDiscoveryTestAccessor) PermissionCheck(_ string, _ map[string]interface{}) (string, string) {

@@ -64,6 +64,15 @@ type SessionAccessor interface {
 	// ApiBackend.BumpRunProgress and the run-progress watchdog for the full
 	// rationale (the 1782012033034-37d617d3d9ab incident).
 	BumpParentProgress()
+
+	// EmitDispatchCountStatus re-samples the live dispatch count from the
+	// registry and emits a fresh engine_status with the correct
+	// BackgroundAgents value. Call this immediately after
+	// registry.Deregister so the parent session clears its "waiting on
+	// background agent" state. reason is a free-form observability label
+	// (e.g. "dispatch_deregister"). No-op when the session or registry is
+	// not available.
+	EmitDispatchCountStatus(reason string)
 	EngineConfig() *types.EngineRuntimeConfig
 	ResolveTier(name string) string
 	PermissionCheck(toolName string, input map[string]interface{}) (decision string, reason string)

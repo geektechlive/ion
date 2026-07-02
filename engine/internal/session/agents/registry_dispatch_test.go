@@ -471,3 +471,176 @@ func names(states []types.AgentStateUpdate) []string {
 	}
 	return out
 }
+
+// --- Roster-shadows-dispatch regression (empty agent pop-up) ---
+
+// TestMergedSnapshot_RosterDispatchCarriesDispatchesArray pins the exact bug
+// behind the "agent pop-up shows no dispatch information" report
+// (conversation 1782775464107-cbe6a7f214d4): an always-visible extension
+// roster row (dev-lead) and a single engine dispatch of the same name both
+// exist; the merged snapshot must collapse to ONE dev-lead row that carries
+// the dispatch's dispatches[] array. The desktop AgentPanel renders the
+// pop-up from agent.metadata.dispatches (getDispatches), so if the roster row
+// shadows the dispatch row, dispatches[] is absent and the pop-up renders
+// empty. This test fails if the supersede/grouping projection regresses such
+// that the dispatch's dispatches[] array does not reach the surviving row.
+func TestMergedSnapshot_RosterDispatchCarriesDispatchesArray(t *testing.T) {
+	r := NewRegistry()
+
+	// Extension roster: dev-lead is always-visible and carries NO dispatches[].
+	r.CacheExtStates([]types.AgentStateUpdate{
+		{Name: "project-lead", Status: "idle", Metadata: map[string]interface{}{
+			"displayName": "Project Lead",
+			"visibility":  "always",
+		}},
+		{Name: "dev-lead", Status: "idle", Metadata: map[string]interface{}{
+			"displayName": "Dev Lead",
+			"visibility":  "always",
+		}},
+	})
+
+	// Engine dispatch: a single done dev-lead carrying a one-element
+	// dispatches[] array (the shape dispatch_agent.go writes at dispatch start
+	// and persistTerminalDispatches/rehydrateDispatchState restore).
+	r.AppendState(types.AgentStateUpdate{
+		Name:   "dev-lead",
+		ID:     "dispatch-dev-lead-1782778504707-cebebc7a0f4d",
+		Status: "done",
+		Metadata: map[string]interface{}{
+			"displayName": "Dev Lead",
+			"visibility":  "sticky",
+			"invited":     true,
+			"task":        "READ-ONLY verification pass",
+			"model":       "claude-opus-4-6",
+			"elapsed":     105.04,
+			"dispatches": []interface{}{
+				map[string]interface{}{
+					"id":             "dispatch-dev-lead-1782778504707-cebebc7a0f4d",
+					"task":           "READ-ONLY verification pass",
+					"model":          "claude-opus-4-6",
+					"status":         "done",
+					"elapsed":        105.04,
+					"conversationId": "1782778504707-736328111013",
+				},
+			},
+		},
+	})
+
+	merged := r.MergedSnapshot()
+
+	// Exactly one dev-lead row survives (roster row superseded by the dispatch
+	// row); project-lead passes through. No duplicate dev-lead.
+	var devLead *types.AgentStateUpdate
+	devLeadCount := 0
+	for i := range merged {
+		if merged[i].Name == "dev-lead" {
+			devLead = &merged[i]
+			devLeadCount++
+		}
+	}
+	if devLeadCount != 1 {
+		t.Fatalf("expected exactly 1 dev-lead row, got %d: %v", devLeadCount, names(merged))
+	}
+
+	// The surviving dev-lead must carry the dispatch's dispatches[] array.
+	// This is the field the desktop pop-up renders from; an empty/absent array
+	// is the reported "no dispatch information" symptom.
+	dispatches, ok := devLead.Metadata["dispatches"].([]interface{})
+	if !ok {
+		t.Fatalf("dev-lead row has no dispatches[] array (pop-up would render empty); metadata=%v", devLead.Metadata)
+	}
+	if len(dispatches) != 1 {
+		t.Fatalf("expected dispatches[] length 1, got %d: %v", len(dispatches), dispatches)
+	}
+
+	// The single dispatch entry must carry the correct stable id so the pop-up
+	// can load the right child conversation.
+	entry, ok := dispatches[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("dispatch entry is not a map: %v", dispatches[0])
+	}
+	if entry["id"] != "dispatch-dev-lead-1782778504707-cebebc7a0f4d" {
+		t.Errorf("expected dispatch id preserved, got %v", entry["id"])
+	}
+	if entry["conversationId"] != "1782778504707-736328111013" {
+		t.Errorf("expected dispatch conversationId preserved, got %v", entry["conversationId"])
+	}
+
+	// The surviving row keeps the dispatch's terminal status and task (engine
+	// row wins over the idle roster row).
+	if devLead.Status != "done" {
+		t.Errorf("expected dev-lead status=done (engine row wins), got %s", devLead.Status)
+	}
+	if devLead.Metadata["task"] != "READ-ONLY verification pass" {
+		t.Errorf("expected dispatch task preserved, got %v", devLead.Metadata["task"])
+	}
+}
+
+// TestProjectionLoggingHelpers pins the predicates that gate the projection's
+// observability logging (MergedSnapshot / groupByName). isDispatchBearing and
+// dispatchesLen decide whether the "pop-up would render empty" debug line
+// fires: a row that carries a dispatch task but a zero-length dispatches[] is
+// the exact pathological shape that the log must flag. Pinning the predicates
+// keeps that signal correct independent of the log string.
+func TestProjectionLoggingHelpers(t *testing.T) {
+	t.Run("isDispatchBearing", func(t *testing.T) {
+		cases := []struct {
+			name string
+			meta map[string]interface{}
+			want bool
+		}{
+			{"nil metadata", nil, false},
+			{"no task", map[string]interface{}{"displayName": "Dev Lead"}, false},
+			{"empty task", map[string]interface{}{"task": ""}, false},
+			{"non-string task", map[string]interface{}{"task": 42}, false},
+			{"has task", map[string]interface{}{"task": "do the thing"}, true},
+		}
+		for _, tc := range cases {
+			if got := isDispatchBearing(tc.meta); got != tc.want {
+				t.Errorf("%s: isDispatchBearing = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	})
+
+	t.Run("dispatchesLen", func(t *testing.T) {
+		cases := []struct {
+			name string
+			meta map[string]interface{}
+			want int
+		}{
+			{"nil metadata", nil, 0},
+			{"absent", map[string]interface{}{"task": "x"}, 0},
+			{"wrong type", map[string]interface{}{"dispatches": "not-an-array"}, 0},
+			{"empty array", map[string]interface{}{"dispatches": []interface{}{}}, 0},
+			{"one entry", map[string]interface{}{"dispatches": []interface{}{
+				map[string]interface{}{"id": "d1"},
+			}}, 1},
+			{"two entries", map[string]interface{}{"dispatches": []interface{}{
+				map[string]interface{}{"id": "d1"},
+				map[string]interface{}{"id": "d2"},
+			}}, 2},
+		}
+		for _, tc := range cases {
+			if got := dispatchesLen(tc.meta); got != tc.want {
+				t.Errorf("%s: dispatchesLen = %d, want %d", tc.name, got, tc.want)
+			}
+		}
+	})
+
+	// The combined predicate that the logging keys on: a dispatch-bearing row
+	// with a zero-length dispatches[] is the empty-pop-up signature.
+	t.Run("empty-pop-up signature", func(t *testing.T) {
+		meta := map[string]interface{}{"task": "verify", "displayName": "Dev Lead"}
+		if !isDispatchBearing(meta) || dispatchesLen(meta) != 0 {
+			t.Fatalf("roster-shadowed dispatch row should match the empty-pop-up signature: bearing=%v len=%d",
+				isDispatchBearing(meta), dispatchesLen(meta))
+		}
+		// A healthy dispatch row must NOT match the signature.
+		healthy := map[string]interface{}{"task": "verify", "dispatches": []interface{}{
+			map[string]interface{}{"id": "d1"},
+		}}
+		if isDispatchBearing(healthy) && dispatchesLen(healthy) == 0 {
+			t.Fatal("healthy dispatch row should not match the empty-pop-up signature")
+		}
+	})
+}

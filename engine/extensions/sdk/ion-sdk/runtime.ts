@@ -241,7 +241,8 @@ function buildContext(ctxData: any): IonContext {
     async dispatchAgent(opts: DispatchAgentOpts): Promise<DispatchAgentResult> {
       const {
         onEvent, onComplete, onError, onRecall,
-        onToolStart, onToolEnd, onToolError, onUsage, onTextDelta,
+        onToolStart, onToolEnd, onToolError, onUsage, onTextDelta, onPlanProposal,
+        onChildQuestion,
         ...rpcOpts
       } = opts
 
@@ -254,6 +255,20 @@ function buildContext(ctxData: any): IonContext {
         ['dispatch_tool_error', onToolError],
         ['dispatch_usage', onUsage],
         ['dispatch_text_delta', onTextDelta],
+        ['dispatch_plan_proposal', onPlanProposal],
+        // dispatch_child_question is special: the engine blocks the child run
+        // until we answer. The handler resolves onChildQuestion and sends the
+        // answer back via ext/answer_dispatch_question (the engine's pending
+        // channel keyed by dispatchId+requestId then unblocks the child).
+        ['dispatch_child_question', onChildQuestion ? async (info: any) => {
+          const result = await onChildQuestion(info)
+          await request('ext/answer_dispatch_question', {
+            dispatchId: info.dispatchId,
+            requestId: info.requestId,
+            answer: result?.answer,
+            cancelled: result?.cancelled ?? false,
+          })
+        } : undefined],
       ]
 
       // Pre-register lifecycle handlers keyed by agent name so they're
@@ -314,6 +329,9 @@ function buildContext(ctxData: any): IonContext {
     async steerDispatch(dispatchId: string, message: string): Promise<SteerDispatchResult> {
       const result = await request('ext/steer_dispatch', { dispatchId, message })
       return { delivered: !!result?.delivered, outcome: result?.outcome ?? 'not_found' }
+    },
+    async answerDispatchQuestion(dispatchId: string, requestId: string, answer: string | undefined, cancelled: boolean): Promise<void> {
+      await request('ext/answer_dispatch_question', { dispatchId, requestId, answer, cancelled })
     },
     async steerSelf(message: string): Promise<SteerDispatchResult> {
       // Deliver `message` to the run that owns this context. The engine picks

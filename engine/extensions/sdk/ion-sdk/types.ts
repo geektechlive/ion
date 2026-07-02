@@ -94,6 +94,81 @@ export interface DispatchAgentOpts {
    * and accumulated text so far.
    */
   onTextDelta?: (info: DispatchTextDeltaInfo) => void
+
+  // --- Plan mode ---
+
+  /**
+   * When true, starts the child session in plan mode. The child receives a
+   * plan-mode-filtered tool set and the ExitPlanMode sentinel tool. When the
+   * child calls ExitPlanMode, the run terminates with the plan file path in
+   * the result (DispatchAgentResult.planFilePath, planExited=true).
+   */
+  planMode?: boolean
+
+  /**
+   * Overrides the plan file path for the child session. When empty and
+   * planMode is true, the engine allocates a fresh plan file with a
+   * word-slug name (the default behavior for any plan-mode session).
+   */
+  planFilePath?: string
+
+  /**
+   * Overrides the set of allowed tools during plan mode for the child
+   * session. When nil/empty and planMode is true, the engine uses the
+   * default plan-mode tool set.
+   */
+  planModeTools?: string[]
+
+  /**
+   * Restricts the child session's tool set for the entire dispatch (not just
+   * plan mode). When non-empty, the child runs with exactly this allowlist;
+   * when empty the child inherits the engine's default tool set (no
+   * restriction). Use it to scope a dispatched agent to a narrow remit.
+   * Distinct from planModeTools, which applies only while in plan mode.
+   */
+  allowedTools?: string[]
+
+  /**
+   * The set of agent names this dispatch's agent is permitted to dispatch in
+   * turn. The engine enforces it as an allowlist: when non-empty, a nested
+   * dispatch whose name is not a member is rejected. When empty/unset the
+   * allowlist layer is inert -- but the engine's self-dispatch rail (an agent
+   * may not dispatch its own name) still applies regardless. The harness owns
+   * this: it knows its agent graph (e.g. a lead's parent-derived children) and
+   * passes the permitted set per dispatch.
+   */
+  allowedSubAgents?: string[]
+
+  /**
+   * Ordered list of alternative model IDs the child run's retry loop walks
+   * when the primary model is overloaded (typically the tail of a resolved
+   * tier chain). When empty, the child relies only on the engine's default
+   * model for the unresolvable-model case.
+   */
+  fallbackChain?: string[]
+
+  /**
+   * Overrides the human-readable label shown on the dispatched agent's pill.
+   * When empty, the engine resolves a display name from the matched agent
+   * spec's description, then the extension roster, then the agent name.
+   */
+  displayName?: string
+
+  /**
+   * Fires when the dispatched agent calls ExitPlanMode, proposing a plan
+   * for approval. Observational: the plan proposal event is always
+   * forwarded to the parent session via onEvent regardless of whether this
+   * callback is set.
+   */
+  onPlanProposal?: (info: DispatchPlanProposalInfo) => void
+
+  /**
+   * Fires when a dispatched child calls AskUserQuestion. The dispatcher
+   * receives the question, answers it, and the child run CONTINUES.
+   * Return { answer: string } to resume the child; { cancelled: true }
+   * to let the child terminate; omit for default termination behavior.
+   */
+  onChildQuestion?: (info: DispatchChildQuestionInfo) => Promise<DispatchChildQuestionAnswer>
 }
 
 export interface DispatchAgentResult {
@@ -107,6 +182,19 @@ export interface DispatchAgentResult {
   /** Engine-assigned unique identifier for this dispatch instance. Collision-safe. */
   dispatchId?: string
   sessionId?: string
+  /**
+   * The absolute path of the plan file written by the child session. Non-empty
+   * only when the child was in plan mode and wrote a plan (regardless of whether
+   * it called ExitPlanMode).
+   */
+  planFilePath?: string
+  /**
+   * True when the child called ExitPlanMode (the run terminated because the
+   * model proposed a plan for approval). When false and planFilePath is
+   * non-empty, the child was in plan mode but finished without proposing
+   * (e.g. hit max turns or was recalled).
+   */
+  planExited?: boolean
 }
 
 /** Describes a failed background dispatch. Delivered via {@link DispatchAgentOpts.onError}. */
@@ -193,6 +281,61 @@ export interface DispatchTextDeltaInfo {
   delta: string
   /** All text accumulated so far across the dispatch. */
   accumulated: string
+}
+
+/**
+ * Payload for {@link DispatchAgentOpts.onPlanProposal}.
+ *
+ * Mirrors the Go DispatchPlanProposalInfo struct (sdk_types.go). Fires when
+ * the dispatched agent calls ExitPlanMode, signalling that a plan has been
+ * written and is ready for orchestrator review or surfacing to the user.
+ */
+export interface DispatchPlanProposalInfo {
+  /** Canonical agent name (the name field from DispatchAgentOpts). */
+  name: string
+  /** Engine-assigned dispatch ID for this dispatch instance. */
+  agentId: string
+  /** Absolute filesystem path of the plan markdown file. */
+  planFilePath: string
+  /** Human-readable slug portion of the plan file path (basename without extension). */
+  planSlug: string
+  /**
+   * True when the caller explicitly set planMode=true on the dispatch opts.
+   * False when the child agent self-initiated plan mode (called EnterPlanMode
+   * without being told to).
+   */
+  planRequested: boolean
+}
+
+/**
+ * Payload for {@link DispatchAgentOpts.onChildQuestion}.
+ *
+ * Mirrors the Go DispatchChildQuestionInfo struct (sdk_types.go). Carries the
+ * question raised by a dispatched child via AskUserQuestion. The dispatcher
+ * answers it (resuming the child) or escalates/declines.
+ */
+export interface DispatchChildQuestionInfo {
+  /** Canonical agent name (the name field from DispatchAgentOpts). */
+  name: string
+  /** Engine-assigned dispatch ID for this dispatch instance. */
+  dispatchId: string
+  /** The text from the child's AskUserQuestion call. */
+  question: string
+  /** Dispatch nesting depth of the child (1 = direct child of orchestrator). */
+  depth: number
+}
+
+/**
+ * Return value of {@link DispatchAgentOpts.onChildQuestion}.
+ *
+ * Return `{ answer }` to resume the child with that answer injected as the
+ * AskUserQuestion tool result. Return `{ cancelled: true }` to let the child
+ * run terminate. Returning an empty object resumes the child with a
+ * best-judgment placeholder.
+ */
+export interface DispatchChildQuestionAnswer {
+  answer?: string
+  cancelled?: boolean
 }
 
 export interface DiscoverAgentsOpts {
@@ -525,6 +668,19 @@ export interface IonContext {
    * @returns A result describing the delivery outcome.
    */
   steerDispatch(dispatchId: string, message: string): Promise<SteerDispatchResult>
+  /**
+   * Answer a pending child dispatch question raised via AskUserQuestion.
+   * Normally called by the SDK runtime on the dispatcher's behalf after the
+   * `onChildQuestion` callback resolves; harnesses implementing custom
+   * dispatch wiring may call it directly.
+   *
+   * @param dispatchId - The dispatch ID of the child that asked.
+   * @param requestId  - The engine-assigned id echoed from the question event.
+   * @param answer     - The answer to inject as the child's tool result, or
+   *                     undefined to let the engine use a best-judgment placeholder.
+   * @param cancelled  - When true, the child run terminates instead of resuming.
+   */
+  answerDispatchQuestion(dispatchId: string, requestId: string, answer: string | undefined, cancelled: boolean): Promise<void>
   /**
    * Deliver a message to the run that OWNS this context, letting the engine
    * pick the mechanism based on that run's live state:

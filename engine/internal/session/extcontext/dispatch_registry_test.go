@@ -242,6 +242,51 @@ func TestDispatchRegistry_ActiveNames(t *testing.T) {
 	}
 }
 
+// TestDispatchRegistry_ActiveIDs verifies that ActiveIDs returns the set of
+// live dispatch IDs — the ID-keyed peer of ActiveNames that handleRunExit uses
+// to preserve nested-dispatch agent-state slots by ID. Crucially, two
+// dispatches sharing a name yield TWO distinct IDs (the case ActiveNames
+// collapses to one), so ID-keyed retention can preserve each instance
+// individually.
+func TestDispatchRegistry_ActiveIDs(t *testing.T) {
+	r := NewDispatchRegistry()
+
+	// Empty registry returns empty map.
+	if ids := r.ActiveIDs(); len(ids) != 0 {
+		t.Fatalf("ActiveIDs on empty registry = %v, want empty", ids)
+	}
+
+	// Two same-name dispatches with distinct IDs.
+	r.RegisterWithID("dispatch-engine-dev-aaa", "engine-dev", func() {}, nil, "sess-1", "", 0)
+	r.RegisterWithID("dispatch-engine-dev-bbb", "engine-dev", func() {}, nil, "sess-1", "", 0)
+
+	ids := r.ActiveIDs()
+	if len(ids) != 2 {
+		t.Fatalf("ActiveIDs after 2 same-name registers = %d, want 2 (distinct IDs)", len(ids))
+	}
+	if !ids["dispatch-engine-dev-aaa"] || !ids["dispatch-engine-dev-bbb"] {
+		t.Errorf("ActiveIDs missing expected IDs: %v", ids)
+	}
+	// ActiveNames collapses the same two to one name — confirm the contrast
+	// that motivates ID-keyed retention.
+	if got := len(r.ActiveNames()); got != 1 {
+		t.Errorf("ActiveNames = %d, want 1 (same name collapses); ActiveIDs must stay 2", got)
+	}
+
+	// Deregister one ID — ActiveIDs reflects the removal precisely.
+	r.Deregister("dispatch-engine-dev-aaa")
+	ids = r.ActiveIDs()
+	if len(ids) != 1 {
+		t.Fatalf("ActiveIDs after deregister = %d, want 1", len(ids))
+	}
+	if !ids["dispatch-engine-dev-bbb"] {
+		t.Errorf("ActiveIDs should contain dispatch-engine-dev-bbb, got %v", ids)
+	}
+	if ids["dispatch-engine-dev-aaa"] {
+		t.Error("ActiveIDs should not contain deregistered dispatch-engine-dev-aaa")
+	}
+}
+
 // --- Parallel-safe dispatch registry tests ---
 
 // TestDispatchRegistry_ParallelSameNameKeepsBoth verifies that two

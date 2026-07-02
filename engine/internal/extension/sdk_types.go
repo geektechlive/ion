@@ -1,6 +1,8 @@
 package extension
 
 import (
+	"context"
+
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -365,6 +367,55 @@ type DispatchAgentOpts struct {
 	// uses the default plan-mode tool set.
 	PlanModeTools []string `json:"planModeTools,omitempty"`
 
+	// AllowedTools restricts the child session's tool set for the entire
+	// dispatch (not just plan mode). When non-empty, the child runs with
+	// exactly this allowlist; when nil/empty the child inherits the engine's
+	// default tool set (no restriction). This lets a caller scope a
+	// dispatched agent to a narrow remit -- e.g. the orchestrator's Agent
+	// tool passes a matched agent spec's Tools through here so a specialist
+	// only sees the tools its spec declares. Distinct from PlanModeTools,
+	// which applies only while the child is in plan mode.
+	AllowedTools []string `json:"allowedTools,omitempty"`
+
+	// AllowedSubAgents is the set of agent names this dispatch's agent is
+	// permitted to dispatch in turn. The engine enforces it as an allowlist:
+	// when non-empty, a nested dispatch whose name is not a member is rejected
+	// with ErrSubAgentNotAllowed. When nil/empty the allowlist layer is inert
+	// (no restriction) -- but the engine's self-dispatch rail still applies
+	// regardless. The harness owns this opinion: it knows its agent graph
+	// (e.g. a lead's parent-derived children) and passes the permitted set per
+	// dispatch. The engine has no opinion on agent tiers or naming; it only
+	// enforces membership. Additive and non-breaking: callers that don't set
+	// it get the prior behavior (self-rail only).
+	AllowedSubAgents []string `json:"allowedSubAgents,omitempty"`
+
+	// FallbackChain is an ordered list of alternative model IDs the child
+	// run's retry loop walks when the primary model is overloaded. Typically
+	// the tail of a resolved tier chain (e.g. resolving a "standard" tier
+	// alias yields a concrete model plus its declared fallbacks). When empty,
+	// the child has no explicit fallback list and relies only on the engine's
+	// DefaultModel threading for the unresolvable-model case. Additive and
+	// non-breaking: callers that don't set it get the prior behavior.
+	FallbackChain []string `json:"fallbackChain,omitempty"`
+
+	// DisplayName overrides the human-readable label shown on the dispatched
+	// agent's pill. When empty, the engine resolves a display name from the
+	// matched agent spec's Description, then the extension roster, then falls
+	// back to the agent name. The orchestrator's Agent tool sets this to the
+	// call-site description (or a prompt-derived label) so the LLM's intent
+	// for the pill label is honored. Additive and non-breaking.
+	DisplayName string `json:"displayName,omitempty"`
+
+	// ParentCtx, when non-nil, is the cancellation context the dispatch's
+	// in-process wait derives from instead of the session cancellation root.
+	// The orchestrator's Agent tool passes the per-tool-call context here so
+	// cancelling that call (run abort, tool deadline) cancels the foreground
+	// dispatch and returns promptly. Because the tool-call context is itself
+	// derived from the session, a session-level abort still cascades. When
+	// nil the dispatch falls back to the session root (the prior behavior for
+	// extension-initiated dispatches). Not serialized -- in-process only.
+	ParentCtx context.Context `json:"-"`
+
 	// OnEvent is called for each engine event emitted by the child session.
 	// Not serialized -- set via the host when dispatching from an extension.
 	OnEvent func(ev types.EngineEvent) `json:"-"`
@@ -417,6 +468,20 @@ type DispatchAgentOpts struct {
 	// OnEvent regardless of whether this callback is set. Use it to react
 	// to proposals (e.g. log, notify, update state) without suppressing them.
 	OnPlanProposal func(info DispatchPlanProposalInfo) `json:"-"`
+
+	// OnChildQuestion fires when a dispatched child calls AskUserQuestion.
+	// The dispatcher receives the question and must either answer it (by
+	// returning a non-empty answer string) or escalate it (by returning
+	// an escalation marker that the harness interprets as "ask my parent").
+	// When this callback is nil, the child's AskUserQuestion falls through
+	// to the standard terminate-the-run path. When set, the child blocks
+	// until the callback returns or the session is torn down.
+	//
+	// The callback is called in a goroutine so it may block. It must
+	// return within the session's lifetime. Return (answer, false, nil) to
+	// answer and resume the child; (_, true, nil) to cancel the child's
+	// question (run terminates); (_, _, err) on error (run terminates).
+	OnChildQuestion func(info DispatchChildQuestionInfo) (answer string, cancelled bool, err error) `json:"-"`
 }
 
 // DispatchAgentResult holds the outcome of a dispatched agent.
@@ -566,6 +631,19 @@ type DispatchPlanProposalInfo struct {
 	// on the dispatch opts. False when the child agent self-initiated
 	// plan mode (called EnterPlanMode without being told to).
 	PlanRequested bool `json:"planRequested"`
+}
+
+// DispatchChildQuestionInfo carries the question raised by a dispatched child
+// via AskUserQuestion. Surfaced to the dispatcher via OnChildQuestion.
+type DispatchChildQuestionInfo struct {
+	// Name is the dispatched agent's name.
+	Name string `json:"name"`
+	// DispatchID is the dispatch's unique identifier.
+	DispatchID string `json:"dispatchId"`
+	// Question is the text from the child's AskUserQuestion call.
+	Question string `json:"question"`
+	// Depth is the dispatch nesting depth of the child (1 = direct child of orchestrator).
+	Depth int `json:"depth"`
 }
 
 // DiscoverAgentsOpts configures which directories to scan for agent definitions

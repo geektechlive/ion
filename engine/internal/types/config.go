@@ -138,6 +138,16 @@ type EngineRuntimeConfig struct {
 	// (unlike MaxTurns <=0 = unlimited) because unbounded recursion is a
 	// resource hazard with no legitimate use case.
 	MaxDispatchDepth int `json:"maxDispatchDepth,omitempty"`
+
+	// AllowSelfDispatch disables the self-dispatch rail when true. The rail
+	// (default: OFF, i.e. self-dispatch blocked) prevents a dispatched agent
+	// from dispatching an agent of its OWN name -- recursive self-cloning that
+	// burns the dispatch-depth budget with no legitimate use case, the same
+	// resource-hazard category as unbounded recursion. The orchestrator
+	// (depth 0) has no agent identity and is never subject to the rail. This
+	// escape hatch exists only for the rare consumer that genuinely wants an
+	// agent to be able to re-dispatch its own name; leave it false otherwise.
+	AllowSelfDispatch bool `json:"allowSelfDispatch,omitempty"`
 }
 
 // GetWorkspace returns the Workspace config block, or nil for a nil receiver

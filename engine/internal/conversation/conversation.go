@@ -124,6 +124,15 @@ type AgentDispatchData struct {
 	ConversationID  string                   `json:"conversationId,omitempty"`
 	ConversationIDs []string                 `json:"conversationIds,omitempty"`
 	Dispatches      []map[string]interface{} `json:"dispatches,omitempty"`
+	// DispatchDepth is the nesting depth of this dispatch from the root run
+	// (0 for a top-level dispatch, 1 for its child, etc.). Persisted so the
+	// depth attribution survives an engine restart and can be rehydrated onto
+	// the agent-state row.
+	DispatchDepth int `json:"dispatchDepth,omitempty"`
+	// DispatchParentID is the dispatch id of the agent that spawned this one
+	// (empty for a top-level dispatch). Persisted so the parent linkage
+	// survives an engine restart and can be rehydrated onto the agent-state row.
+	DispatchParentID string `json:"dispatchParentId,omitempty"`
 }
 
 // SessionEntry is a single node in the conversation tree.

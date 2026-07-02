@@ -3,7 +3,6 @@ package session
 import (
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/providers"
-	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
@@ -60,37 +59,6 @@ func (m *Manager) newChildBackend() backend.RunBackend {
 	default:
 		return backend.NewApiBackend()
 	}
-}
-
-// startChildRun dispatches a child run with an optional RunConfig, choosing
-// StartRunWithConfig when the concrete backend type supports it. This is
-// the parallel of extcontext.startChild for callers inside the session
-// package (currently prompt_agent_spawner.go) that need to thread per-run
-// config — most importantly DefaultModel — into the child run so the
-// runloop's existing fallback at runloop.go:57 can fire when the child's
-// requested model doesn't resolve to a provider.
-//
-// When cfg is nil the function degrades to plain StartRun, preserving the
-// pre-existing behaviour for callers that don't need per-run config.
-//
-// Detection is by interface assertion (configurableBackend) rather than
-// concrete type switch so that test stubs can opt in by implementing
-// StartRunWithConfig — the production *ApiBackend and *HybridBackend both
-// satisfy the interface.
-type configurableBackend interface {
-	StartRunWithConfig(requestID string, options types.RunOptions, cfg *backend.RunConfig)
-}
-
-func startChildRun(child backend.RunBackend, reqID string, runOpts types.RunOptions, cfg *backend.RunConfig) {
-	if cfg != nil {
-		if cb, ok := child.(configurableBackend); ok {
-			cb.StartRunWithConfig(reqID, runOpts, cfg)
-			return
-		}
-	}
-	// CliBackend, generic test stubs, or any backend that doesn't carry
-	// RunConfig fall through to the plain interface method.
-	child.StartRun(reqID, runOpts)
 }
 
 // progressBumpable is satisfied by any backend that exposes the run-progress

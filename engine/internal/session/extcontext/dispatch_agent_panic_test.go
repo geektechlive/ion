@@ -57,6 +57,7 @@ func (p *panicTestAccessor) ExtConfig() *extension.ExtensionConfig    { return n
 func (p *panicTestAccessor) ProcRegistry() *extension.ProcessRegistry { return nil }
 func (p *panicTestAccessor) NewChildBackend() backend.RunBackend      { return nil }
 func (p *panicTestAccessor) BumpParentProgress()                      {}
+func (p *panicTestAccessor) EmitDispatchCountStatus(_ string)         {}
 func (p *panicTestAccessor) EngineConfig() *types.EngineRuntimeConfig { return nil }
 func (p *panicTestAccessor) ResolveTier(_ string) string              { return "" }
 func (p *panicTestAccessor) PermissionCheck(_ string, _ map[string]interface{}) (string, string) {

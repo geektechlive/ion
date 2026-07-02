@@ -55,6 +55,13 @@ function setPaneAgents(tabId: string, statuses: string[]) {
   })
 }
 
+function setPaneAgentsFull(tabId: string, agents: { name: string; id: string; status: string }[]) {
+  state.conversationPanes.set(tabId, {
+    instances: [{ id: 'main', label: 'main', statusFields: null, agentStates: agents }],
+    activeInstanceId: 'main',
+  })
+}
+
 describe('useActiveEngineAgentRunningCount — tab-type-agnostic (HR-1)', () => {
   beforeEach(reset)
 
@@ -78,6 +85,18 @@ describe('useActiveEngineAgentRunningCount — tab-type-agnostic (HR-1)', () => 
 
   it('returns 0 when there is no active instance', () => {
     setActiveTab({ id: 'tab1', engineProfileId: null })
+    expect(useActiveEngineAgentRunningCount()).toBe(0)
+  })
+
+  it('returns 0 when two same-name agents (distinct IDs) are both done', () => {
+    // Regression: corrected engine snapshot gives each concurrent dispatch its
+    // own slot keyed by dispatch ID. Two "engine-dev" dispatches that both
+    // finished must yield running count 0, not a phantom stuck-running entry.
+    setActiveTab({ id: 'tab1', engineProfileId: 'test-profile' })
+    setPaneAgentsFull('tab1', [
+      { name: 'engine-dev', id: 'dispatch-A', status: 'done' },
+      { name: 'engine-dev', id: 'dispatch-B', status: 'done' },
+    ])
     expect(useActiveEngineAgentRunningCount()).toBe(0)
   })
 })

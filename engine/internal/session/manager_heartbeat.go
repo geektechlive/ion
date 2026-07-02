@@ -172,9 +172,13 @@ func (m *Manager) emitStatusSnapshot(key, reason string) {
 	lastWindow := s.lastContextWindow
 	lastModel := s.lastModel
 	lastCost := s.lastTotalCost
+	bgCount := 0
+	if s.dispatchRegistry != nil {
+		bgCount = len(s.dispatchRegistry.ActiveIDs())
+	}
 	m.mu.Unlock()
 
-	utils.Log("Session", fmt.Sprintf("status_snapshot_emitted key=%s state=%s reason=%s pendingDenials=%d model=%s contextPct=%d", key, sessionState, reason, len(pendingDenials), lastModel, lastPct))
+	utils.Log("Session", fmt.Sprintf("status_snapshot_emitted key=%s state=%s reason=%s pendingDenials=%d model=%s contextPct=%d backgroundAgents=%d", key, sessionState, reason, len(pendingDenials), lastModel, lastPct, bgCount))
 	m.emit(key, types.EngineEvent{
 		Type: "engine_status",
 		Fields: &types.StatusFields{
@@ -184,6 +188,7 @@ func (m *Manager) emitStatusSnapshot(key, reason string) {
 			Model:             lastModel,
 			TotalCostUsd:      lastCost,
 			PermissionDenials: pendingDenials,
+			BackgroundAgents:  bgCount,
 		},
 	})
 }

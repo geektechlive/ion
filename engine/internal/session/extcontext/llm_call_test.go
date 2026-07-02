@@ -74,6 +74,7 @@ func (a *llmCallTestAccessor) ExtConfig() *extension.ExtensionConfig    { return
 func (a *llmCallTestAccessor) ProcRegistry() *extension.ProcessRegistry { return nil }
 func (a *llmCallTestAccessor) NewChildBackend() backend.RunBackend      { return nil }
 func (a *llmCallTestAccessor) BumpParentProgress()                      {}
+func (a *llmCallTestAccessor) EmitDispatchCountStatus(_ string)         {}
 func (a *llmCallTestAccessor) EngineConfig() *types.EngineRuntimeConfig { return nil }
 func (a *llmCallTestAccessor) ResolveTier(_ string) string              { return "" }
 func (a *llmCallTestAccessor) PermissionCheck(_ string, _ map[string]interface{}) (string, string) {

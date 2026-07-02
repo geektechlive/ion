@@ -344,4 +344,20 @@ type RunConfig struct {
 	// Zero means "use built-in default" (conversation.DefaultMaxToolResultChars).
 	// Per-run RunOptions.MaxToolResultChars takes precedence when non-zero.
 	MaxToolResultChars int
+
+	// ChildElicitFn, when non-nil, marks this run as a dispatched child and
+	// provides an elicitation callback for AskUserQuestion. When a dispatched
+	// child calls AskUserQuestion, the runloop calls this function instead of
+	// terminating the run. The function blocks until the dispatcher answers or
+	// the session is torn down. This is the "AskUserQuestion symmetrization"
+	// described in the hierarchical-dispatch plan: a dispatched child's question
+	// blocks-and-resumes like an elicitation to its dispatcher, making behavior
+	// uniform regardless of which primitive the child used.
+	//
+	// The string parameter is the question text from the AskUserQuestion tool
+	// input. The function returns (answer string, cancelled bool, err error).
+	// When cancelled=true or err!=nil, the run terminates as a recall/error.
+	// When cancelled=false and err=nil, the returned answer is injected as the
+	// AskUserQuestion tool result, and the child run CONTINUES (does not terminate).
+	ChildElicitFn func(question string) (answer string, cancelled bool, err error)
 }

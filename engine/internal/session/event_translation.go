@@ -343,12 +343,22 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 		// persistence. Also preserve running states that correspond to active
 		// background dispatches — those agents are legitimately still running.
 		// Only clear running states that are stale (no live dispatch backing them).
+		//
+		// Preservation keys on BOTH the live dispatch IDs and names. The ID set
+		// covers engine-managed dispatch slots at every depth (the agent-state
+		// store keys those slots by their unique dispatch ID, and a nested
+		// depth-2+ dispatch's name collapses under name-only keying, so it would
+		// be swept and its terminal UpdateStateByID would land nowhere — the
+		// "agent stuck running" defect). The name set covers extension-roster
+		// rows that carry no engine dispatch ID. bgCount is the count of live
+		// dispatch instances (by ID), not distinct names.
 		if s.dispatchRegistry != nil {
+			activeIDs := s.dispatchRegistry.ActiveIDs()
 			activeNames := s.dispatchRegistry.ActiveNames()
-			bgCount = len(activeNames)
-			if bgCount > 0 {
-				utils.Log("Session", fmt.Sprintf("handleRunExit: preserving %d background dispatch agent(s): %v", bgCount, activeNames))
-				s.agents.ClearRunningStatesExcept(activeNames)
+			bgCount = len(activeIDs)
+			if len(activeIDs) > 0 || len(activeNames) > 0 {
+				utils.Log("Session", fmt.Sprintf("handleRunExit: preserving %d live dispatch(es) by id=%v name=%v", bgCount, activeIDs, activeNames))
+				s.agents.ClearRunningStatesExceptIDsOrNames(activeIDs, activeNames)
 			} else {
 				s.agents.ClearRunningStates()
 			}
@@ -419,39 +429,30 @@ func (m *Manager) handleRunExit(runID string, code *int, signal *string, session
 	// Clear any stale working message before transitioning to idle
 	m.emit(key, types.EngineEvent{Type: "engine_working_message", EventMessage: ""})
 
-	// Carry last-known context/cost state into the idle status so the
-	// footer doesn't reset to 0% between runs.
-	m.mu.RLock()
-	var idlePct, idleCW int
-	var idleModel string
-	var idleCost float64
-	var idleSessionID string
-	if s, ok := m.sessions[key]; ok {
-		idlePct = s.lastContextPct
-		idleCW = s.lastContextWindow
-		idleModel = s.lastModel
-		idleCost = s.lastTotalCost
-		// Client-facing session id is always Ion's stable conversationID —
-		// never the backend-reported sessionID (which is claude's UUID for
-		// the CLI backend). This keeps the run-exit status consistent with
-		// every other client-facing surface (buildSessionStatusMirror,
-		// ListSessions, the StartSession idle status), all of which report
-		// conversationID. For the API backend the two are equal anyway.
-		idleSessionID = s.conversationID
-	}
-	m.mu.RUnlock()
-
 	// When background dispatches are still running, include the count so
 	// clients can keep the tab status active and interrupt button visible
 	// even though the parent LLM turn has ended.
-	idleFields := &types.StatusFields{
-		Label: key, State: "idle", SessionID: idleSessionID,
-		ContextPercent: idlePct, ContextWindow: idleCW,
-		Model: idleModel, TotalCostUsd: idleCost,
-		BackgroundAgents: bgCount,
+	//
+	// buildIdleStatusFields reads the retained context/cost state (pct, cw,
+	// model, cost, sessionID) under m.mu and stamps bgCount directly. The
+	// same helper is used by emitDispatchCountStatus so both emission sites
+	// carry identical fields — preventing drift between the run-exit snapshot
+	// and the post-deregister correction.
+	m.mu.RLock()
+	var exitSession *engineSession
+	if s2, ok := m.sessions[key]; ok {
+		exitSession = s2
 	}
+	m.mu.RUnlock()
+
 	if bgCount > 0 {
 		utils.Log("Session", fmt.Sprintf("handleRunExit: emitting idle with backgroundAgents=%d key=%s", bgCount, key))
+	}
+	var idleFields *types.StatusFields
+	if exitSession != nil {
+		idleFields = m.buildIdleStatusFields(exitSession, key, bgCount)
+	} else {
+		idleFields = &types.StatusFields{Label: key, State: "idle", BackgroundAgents: bgCount}
 	}
 	m.emit(key, types.EngineEvent{
 		Type:   "engine_status",

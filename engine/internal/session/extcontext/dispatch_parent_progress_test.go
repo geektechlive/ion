@@ -25,6 +25,7 @@ type bumpCountingAccessor struct {
 }
 
 func (a *bumpCountingAccessor) BumpParentProgress() { a.bumpCount.Add(1) }
+func (a *bumpCountingAccessor) EmitDispatchCountStatus(_ string) {}
 
 func (a *bumpCountingAccessor) NewChildBackend() backend.RunBackend { return a.child }
 func (a *bumpCountingAccessor) RootContext() context.Context {

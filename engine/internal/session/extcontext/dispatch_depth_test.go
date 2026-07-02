@@ -62,6 +62,7 @@ func (a *depthTestAccessor) NewChildBackend() backend.RunBackend {
 	return b
 }
 func (a *depthTestAccessor) BumpParentProgress()                         {}
+func (a *depthTestAccessor) EmitDispatchCountStatus(_ string)            {}
 func (a *depthTestAccessor) EngineConfig() *types.EngineRuntimeConfig    { return a.config }
 func (a *depthTestAccessor) ResolveTier(name string) string              { return name }
 func (a *depthTestAccessor) PermissionCheck(toolName string, input map[string]interface{}) (string, string) {
@@ -446,5 +447,126 @@ func TestNestedDispatch_ChildRunIDSet(t *testing.T) {
 		// for a unit test. The important thing is it was registered and
 		// ChildRunID was set during its brief lifetime.
 		t.Skip("dispatch completed before registry check (expected in unit test with no provider)")
+	}
+}
+
+// ---------- Depth threading consistency (issue #4 re-verify) ----------
+
+// TestDepthThreading_SameTierChildrenIdenticalGrandchildDepth pins the
+// invariant that two genuine same-tier children (both dispatched from the
+// same parent at the same currentDepth) compute identical childDepth for
+// their grandchildren. The runtime symptom that motivated the re-verify
+// (conversation 1782773996889-94a670c498d7, one dev-lead at childDepth=3
+// blocked and another at childDepth=2 allowed) was diagnosed as a
+// duplicate-dispatch artifact: the two dev-leads ran at different actual
+// depths because one was a stale duplicate dispatched from a deeper parent.
+// The depth threading itself is single-sourced (childDepth := currentDepth+1
+// at dispatch_agent.go:58) and consistent across all three child-context
+// paths (OnToolCall, BuildChildAgentSpawner, loadChildExtension).
+//
+// This test ensures the invariant holds: given two dispatch functions built
+// at the same currentDepth, both produce the same childDepth in their
+// emitted telemetry.
+func TestDepthThreading_SameTierChildrenIdenticalGrandchildDepth(t *testing.T) {
+	// Build two dispatch functions at the same depth (simulating two genuine
+	// same-tier children, e.g. two dev-leads dispatched by the same orchestrator).
+	acc1 := &depthTestAccessor{config: &types.EngineRuntimeConfig{MaxDispatchDepth: 5}}
+	acc2 := &depthTestAccessor{config: &types.EngineRuntimeConfig{MaxDispatchDepth: 5}}
+
+	dispatchFn1 := BuildDispatchAgentFunc(acc1, nil, 1, "parent-1")
+	dispatchFn2 := BuildDispatchAgentFunc(acc2, nil, 1, "parent-2")
+
+	// Both dispatches will fail (no provider) but emit dispatch_start with depth.
+	_, _ = dispatchFn1(extension.DispatchAgentOpts{Name: "child-a", Task: "work"})
+	_, _ = dispatchFn2(extension.DispatchAgentOpts{Name: "child-b", Task: "work"})
+
+	// Extract the childDepth from dispatch_start events.
+	var depth1, depth2 int
+	var found1, found2 bool
+	for _, ev := range acc1.emittedEvents() {
+		if ev.Type == "engine_dispatch_start" {
+			depth1 = ev.DispatchDepth
+			found1 = true
+			break
+		}
+	}
+	for _, ev := range acc2.emittedEvents() {
+		if ev.Type == "engine_dispatch_start" {
+			depth2 = ev.DispatchDepth
+			found2 = true
+			break
+		}
+	}
+
+	if !found1 || !found2 {
+		t.Fatal("expected engine_dispatch_start from both dispatches")
+	}
+
+	if depth1 != depth2 {
+		t.Errorf("same-tier children produced different grandchild depths: %d vs %d (depth threading bug)", depth1, depth2)
+	}
+	if depth1 != 2 {
+		t.Errorf("expected grandchild depth=2 (parent at depth=1), got %d", depth1)
+	}
+}
+
+// ---------- Foreground dispatch registration (issue #2) ----------
+
+// TestForegroundDispatch_RegisteredDuringRun verifies that a foreground
+// (Background=false) dispatch IS registered in the dispatch registry during
+// the run and deregistered after. This test must FAIL on the pre-fix code
+// (which only registered background dispatches) and PASS after.
+//
+// Red-then-green: to confirm the test catches the bug, revert the foreground
+// registration block in dispatch_agent.go (the RegisterWithID + SetChildRunID
+// before the foreground runChild call) and re-run. The test goes red because
+// TotalRegistrations() stays at 0 for a foreground dispatch.
+func TestForegroundDispatch_RegisteredDuringRun(t *testing.T) {
+	registry := NewDispatchRegistry()
+	acc := &depthTestAccessor{
+		config: &types.EngineRuntimeConfig{MaxDispatchDepth: 5},
+	}
+
+	if registry.TotalRegistrations() != 0 {
+		t.Fatal("expected 0 total registrations on fresh registry")
+	}
+
+	dispatchFn := BuildDispatchAgentFunc(acc, registry, 0, "")
+
+	// Run a foreground dispatch. It will fail (no provider) but the
+	// register+deregister cycle should complete.
+	_, _ = dispatchFn(extension.DispatchAgentOpts{
+		Name: "fg-agent",
+		Task: "foreground task",
+	})
+
+	// After completion, registry must be empty (deregistered).
+	if registry.Count() != 0 {
+		t.Errorf("registry count after foreground dispatch = %d, want 0", registry.Count())
+	}
+
+	// The definitive assertion: TotalRegistrations must be 1. Without the
+	// foreground registration fix, RegisterWithID is never called for a
+	// foreground dispatch, so TotalRegistrations stays at 0.
+	if got := registry.TotalRegistrations(); got != 1 {
+		t.Errorf("TotalRegistrations after foreground dispatch = %d, want 1 (foreground path must register)", got)
+	}
+
+	// Verify telemetry was emitted (proves the dispatch ran past depth guard).
+	events := acc.emittedEvents()
+	var foundStart, foundEnd bool
+	for _, ev := range events {
+		if ev.Type == "engine_dispatch_start" && ev.DispatchAgent == "fg-agent" {
+			foundStart = true
+		}
+		if ev.Type == "engine_dispatch_end" && ev.DispatchAgent == "fg-agent" {
+			foundEnd = true
+		}
+	}
+	if !foundStart {
+		t.Error("expected engine_dispatch_start for fg-agent")
+	}
+	if !foundEnd {
+		t.Error("expected engine_dispatch_end for fg-agent")
 	}
 }

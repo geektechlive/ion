@@ -57,6 +57,7 @@ func (a *idTestAccessor) UpdateAgentStateByID(id string, updater func(*types.Age
 
 func (a *idTestAccessor) EmitAgentSnapshot(_ string) {}
 func (a *idTestAccessor) BumpParentProgress()        {}
+func (a *idTestAccessor) EmitDispatchCountStatus(_ string) {}
 
 func (a *idTestAccessor) NewChildBackend() backend.RunBackend { return a.child }
 func (a *idTestAccessor) RootContext() context.Context        { return context.Background() }

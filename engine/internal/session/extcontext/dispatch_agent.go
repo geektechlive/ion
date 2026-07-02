@@ -31,6 +31,9 @@ const DefaultMaxDispatchDepth = 3
 // typed error so it can distinguish depth rejection from other failures.
 var ErrDispatchDepthExceeded = errors.New("dispatch depth exceeded")
 
+// ErrSelfDispatch and ErrSubAgentNotAllowed (the eligibility-guard errors)
+// are defined in dispatch_eligibility.go alongside the guard that returns them.
+
 // resolveMaxDispatchDepth returns the effective depth cap for a dispatch,
 // preferring the per-dispatch override, then the engine config, then the
 // built-in default.
@@ -75,6 +78,16 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 			opts.Name, childDepth, effectiveCap, currentDispatchId, sa.SessionKey(),
 		))
 
+		// --- Eligibility guard ---
+		// Enforce the self-dispatch rail (an agent may not dispatch its own
+		// name) and the DISPATCHER's carry-forward AllowedSubAgents allowlist
+		// (resolved from currentDispatchId in the registry). Skipped at depth 0
+		// (the orchestrator has no dispatcher entry). Logic lives in
+		// dispatch_eligibility.go to keep this file under the 800-line cap.
+		if err := checkDispatchEligibility(sa, registry, currentDispatchId, opts.Name); err != nil {
+			return nil, err
+		}
+
 		start := time.Now()
 
 		utils.Log("Dispatch", fmt.Sprintf(
@@ -90,8 +103,10 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 			}
 		}
 		projectPath := opts.ProjectPath
+		projectPathSource := "opts" // logged below; both branches observable
 		if projectPath == "" {
 			projectPath = sa.WorkingDirectory()
+			projectPathSource = "fallback"
 		}
 
 		// --- Agent state management ---
@@ -101,6 +116,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 		agentID := fmt.Sprintf("dispatch-%s-%d-%s", opts.Name, start.UnixMilli(), conversation.NewConvSuffix())
 		agentName := opts.Name
 		key := sa.SessionKey()
+		logDispatchWorkdir(agentName, projectPath, projectPathSource, agentID, childDepth, key)
 
 		// Look up the spec to get a display name
 		displayName := agentName
@@ -113,6 +129,12 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 			if dn := sa.LookupExtDisplayName(agentName); dn != "" {
 				displayName = dn
 			}
+		}
+		// Caller override: when the dispatcher supplied an explicit display
+		// name (e.g. the orchestrator's Agent tool passes the call-site
+		// description), honor it over the spec/roster resolution above.
+		if opts.DisplayName != "" {
+			displayName = opts.DisplayName
 		}
 
 		newDispatch := map[string]interface{}{
@@ -135,6 +157,17 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 				"model":       model,
 				"startTime":   start.Unix(),
 				"dispatches":  []interface{}{newDispatch},
+				// Nesting attribution so consumers can isolate nested
+				// dispatches from root-level ones. childDepth is this agent's
+				// depth (1=direct child of orchestrator, 2=grandchild, ...);
+				// currentDispatchId is the parent dispatch's id (empty when the
+				// orchestrator dispatched directly). The desktop/iOS main panels
+				// filter to root-level agents (depth<=1) so a lead's specialists
+				// appear only inside the lead's dispatch preview, not the main
+				// conversation row. Mirrors the dispatchDepth/dispatchParentId
+				// already carried on engine_dispatch_start telemetry below.
+				"dispatchDepth":    childDepth,
+				"dispatchParentId": currentDispatchId,
 			},
 		})
 		sa.EmitAgentSnapshot("dispatch_start")
@@ -224,6 +257,18 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 		// engine Agent tool (see dispatch_child_spawner.go for rationale).
 		childCfg.AgentSpawner = BuildChildAgentSpawner(sa, registry, childDepth, agentID)
 
+		// Wire ChildElicitFn so a dispatched child's AskUserQuestion blocks
+		// and surfaces to the dispatcher via OnChildQuestion instead of
+		// terminating the child run. When OnChildQuestion is nil the field is
+		// left unset and the runloop falls through to the standard
+		// terminate-the-run path.
+		if opts.OnChildQuestion != nil {
+			if childCfg == nil {
+				childCfg = &backend.RunConfig{}
+			}
+			childCfg.ChildElicitFn = buildChildElicitFn(opts.OnChildQuestion, opts.Name, agentID, childDepth)
+		}
+
 		// Shared mutable state for the event handler closure.
 		var totalCost float64
 		var totalInputTokens, totalOutputTokens int
@@ -277,7 +322,18 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 		// context cancel is the in-process half (it unblocks any
 		// goroutine selecting on ctx.Done() here, e.g. background recall
 		// wiring), keeping dispatch consistent with the unified tree.
-		ctx, cancelFn := context.WithCancel(sa.RootContext())
+		//
+		// Parent selection: when the caller supplied opts.ParentCtx (the
+		// orchestrator's Agent tool passes its per-tool-call context), derive
+		// from it so cancelling that call cancels this dispatch. The tool-call
+		// context is itself derived from the session, so a session abort still
+		// cascades. When nil, fall back to the session cancellation root --
+		// the prior behavior for extension-initiated dispatches.
+		dispatchParentCtx := sa.RootContext()
+		if opts.ParentCtx != nil {
+			dispatchParentCtx = opts.ParentCtx
+		}
+		ctx, cancelFn := context.WithCancel(dispatchParentCtx)
 		var recalled bool
 		var recallReason string
 
@@ -438,36 +494,9 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 			childErr = err
 		})
 
-		runOpts := types.RunOptions{
-			Prompt:      opts.Task,
-			Model:       model,
-			ProjectPath: projectPath,
-			// Derive the child run from the session cancellation root so a
-			// session abort cascades to in-process child runs (ApiBackend).
-			// Process-backed children (CliBackend) are additionally reaped
-			// by PID kill in the manager's abortAllDescendants; threading
-			// the parent here makes the in-process backends consistent with
-			// the unified tree rather than orphaned on Background.
-			ParentCtx: sa.RootContext(),
-		}
-		if opts.SystemPrompt != "" {
-			runOpts.AppendSystemPrompt = opts.SystemPrompt
-		}
-		if opts.SessionID != "" {
-			runOpts.SessionID = opts.SessionID
-		}
-		if opts.MaxTurns > 0 {
-			runOpts.MaxTurns = opts.MaxTurns
-		}
-		if opts.PlanMode {
-			runOpts.PlanMode = true
-			if opts.PlanFilePath != "" {
-				runOpts.PlanFilePath = opts.PlanFilePath
-			}
-			if len(opts.PlanModeTools) > 0 {
-				runOpts.PlanModeTools = opts.PlanModeTools
-			}
-		}
+		// Assemble the child run options. Extracted to buildDispatchRunOptions
+		// (dispatch_runopts.go) to keep this file under the 800-line cap.
+		runOpts := buildDispatchRunOptions(&opts, model, projectPath, dispatchParentCtx)
 
 		key = sa.SessionKey()
 		// The child run id must be unique per dispatch INSTANCE. Derive it from
@@ -531,9 +560,15 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 				childExtHost.Dispose()
 			}
 
-			// Deregister from the dispatch registry (background dispatches only).
-			if opts.Background && registry != nil {
+			// Deregister from the dispatch registry (both foreground and background).
+			if registry != nil {
 				registry.Deregister(agentID)
+				// Re-emit engine_status with the updated BackgroundAgents count so
+				// the parent session clears its "waiting on background agent" state.
+				// handleRunExit sampled bgCount BEFORE Deregister ran; nothing
+				// re-emits after, leaving a stale BackgroundAgents:1 (or N) as the
+				// last value the client sees. This call is the correction.
+				sa.EmitDispatchCountStatus("dispatch_deregister")
 			}
 
 			// Build the result.
@@ -643,16 +678,12 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 		}
 
 		if opts.Background {
-			// Register in the dispatch registry for recall support.
-			if registry != nil {
-				registry.RegisterWithID(agentID, opts.Name, func() {
-					recallReason = "recall_agent"
-					cancelFn()
-				}, child, key, currentDispatchId, childDepth)
-				// Store the child run ID so SteerByID can reach the child's
-				// activeRun in the child backend's activeRuns map.
-				registry.SetChildRunID(agentID, childReqID)
-			}
+			// Register in the dispatch registry for recall support, child-run
+			// steering, and the carry-forward allowlist. See registerDispatch.
+			registerDispatch(registry, agentID, opts.Name, func() {
+				recallReason = "recall_agent"
+				cancelFn()
+			}, child, key, currentDispatchId, childDepth, childReqID, opts.AllowedSubAgents)
 
 			// Launch the child in a goroutine and return a stub immediately.
 			//
@@ -728,6 +759,13 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 		}
 
 		// Foreground (synchronous) dispatch.
+		// Register in the dispatch registry so foreground dispatches are
+		// recallable, counted, and steerable, matching background behavior.
+		registerDispatch(registry, agentID, opts.Name, func() {
+			recallReason = "recall_agent"
+			cancelFn()
+		}, child, key, currentDispatchId, childDepth, childReqID, opts.AllowedSubAgents)
+
 		defer cancelFn() // clean up the context
 		result := runChild()
 
@@ -741,3 +779,21 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 // fireLifecycleCallbacks and truncate live in dispatch_lifecycle_callbacks.go,
 // and loadChildExtension and startChild live in dispatch_child_setup.go (all
 // same package) to keep this file under the 800-line cap.
+
+// buildChildElicitFn adapts an OnChildQuestion dispatcher callback into the
+// backend.RunConfig.ChildElicitFn shape the runloop calls. When the child
+// run's AskUserQuestion fires, the runloop invokes the returned function with
+// the question text; this wraps it in a DispatchChildQuestionInfo stamped with
+// the dispatch's name, id, and depth, then forwards to the dispatcher. Kept as
+// a package-level function (rather than an inline closure) so the wiring is
+// directly unit-testable without standing up a full child run.
+func buildChildElicitFn(fn func(extension.DispatchChildQuestionInfo) (string, bool, error), name, dispatchID string, depth int) func(string) (string, bool, error) {
+	return func(question string) (string, bool, error) {
+		return fn(extension.DispatchChildQuestionInfo{
+			Name:       name,
+			DispatchID: dispatchID,
+			Question:   question,
+			Depth:      depth,
+		})
+	}
+}

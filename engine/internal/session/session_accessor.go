@@ -122,6 +122,14 @@ func (a *sessionAccessor) NewChildBackend() backend.RunBackend { return a.m.newC
 // has no active run or the backend cannot bump progress (CLI / test stubs).
 func (a *sessionAccessor) BumpParentProgress() { a.m.bumpParentProgress(a.s) }
 
+// EmitDispatchCountStatus re-samples the live dispatch count from the session's
+// registry and emits a corrected engine_status + engine_agent_state snapshot.
+// Delegates to Manager.emitDispatchCountStatus. No-op when the session has no
+// dispatch registry (handled inside emitDispatchCountStatus).
+func (a *sessionAccessor) EmitDispatchCountStatus(reason string) {
+	a.m.emitDispatchCountStatus(a.s, reason)
+}
+
 func (a *sessionAccessor) EngineConfig() *types.EngineRuntimeConfig { return a.m.config }
 
 func (a *sessionAccessor) ResolveTier(name string) string { return modelconfig.ResolveTier(name) }

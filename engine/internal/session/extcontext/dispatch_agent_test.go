@@ -420,6 +420,81 @@ func TestFireLifecycleCallbacks_TaskCompleteUpdatesCost(t *testing.T) {
 	}
 }
 
+// TestFireLifecycleCallbacks_PlanProposal verifies that a PlanProposalEvent
+// fires OnPlanProposal with the expected DispatchPlanProposalInfo fields.
+// This is the currently zero-coverage path in dispatch_lifecycle_callbacks.go
+// (the PlanProposalEvent case at lines 98-107).
+func TestFireLifecycleCallbacks_PlanProposal(t *testing.T) {
+	var gotInfo extension.DispatchPlanProposalInfo
+	var fired bool
+
+	opts := &extension.DispatchAgentOpts{
+		Name:     "plan-test-agent",
+		PlanMode: true,
+		OnPlanProposal: func(info extension.DispatchPlanProposalInfo) {
+			fired = true
+			gotInfo = info
+		},
+	}
+
+	toolNames := make(map[string]string)
+	toolCount := 0
+	accumulatedText := ""
+	cumIn, cumOut := 0, 0
+	cumCost := 0.0
+
+	ev := types.NormalizedEvent{Data: &types.PlanProposalEvent{
+		PlanFilePath: "/tmp/plans/fix-the-bug.md",
+		PlanSlug:     "fix-the-bug",
+	}}
+
+	fireLifecycleCallbacks(opts, ev, "agent-id-xyz", toolNames, &toolCount, &accumulatedText,
+		&cumIn, &cumOut, &cumCost)
+
+	if !fired {
+		t.Fatal("OnPlanProposal was not called")
+	}
+	if gotInfo.Name != "plan-test-agent" {
+		t.Errorf("Name = %q, want %q", gotInfo.Name, "plan-test-agent")
+	}
+	if gotInfo.AgentID != "agent-id-xyz" {
+		t.Errorf("AgentID = %q, want %q", gotInfo.AgentID, "agent-id-xyz")
+	}
+	if gotInfo.PlanFilePath != "/tmp/plans/fix-the-bug.md" {
+		t.Errorf("PlanFilePath = %q, want %q", gotInfo.PlanFilePath, "/tmp/plans/fix-the-bug.md")
+	}
+	if gotInfo.PlanSlug != "fix-the-bug" {
+		t.Errorf("PlanSlug = %q, want %q", gotInfo.PlanSlug, "fix-the-bug")
+	}
+	if !gotInfo.PlanRequested {
+		t.Errorf("PlanRequested = false, want true (opts.PlanMode was true)")
+	}
+}
+
+// TestFireLifecycleCallbacks_PlanProposal_NilCallback verifies that a
+// PlanProposalEvent with no OnPlanProposal handler does not panic.
+func TestFireLifecycleCallbacks_PlanProposal_NilCallback(t *testing.T) {
+	opts := &extension.DispatchAgentOpts{
+		Name: "plan-test-agent",
+		// OnPlanProposal intentionally nil
+	}
+
+	toolNames := make(map[string]string)
+	toolCount := 0
+	accumulatedText := ""
+	cumIn, cumOut := 0, 0
+	cumCost := 0.0
+
+	ev := types.NormalizedEvent{Data: &types.PlanProposalEvent{
+		PlanFilePath: "/tmp/plans/my-plan.md",
+		PlanSlug:     "my-plan",
+	}}
+
+	// Should not panic.
+	fireLifecycleCallbacks(opts, ev, "agent-id-abc", toolNames, &toolCount, &accumulatedText,
+		&cumIn, &cumOut, &cumCost)
+}
+
 // TestFireLifecycleCallbacks_ConcurrentNoRace is the regression test for the
 // engine crash in conversation 1782699086966-a04524cbffe4: a three-tier
 // dispatch running parallel tool calls hard-killed the engine with

@@ -25,8 +25,9 @@ import (
 //
 // All exported methods are safe for concurrent use.
 type DispatchRegistry struct {
-	mu         sync.Mutex
-	dispatches map[string]*activeDispatch
+	mu                 sync.Mutex
+	dispatches         map[string]*activeDispatch
+	totalRegistrations int // total lifetime RegisterWithID calls (audit/test)
 }
 
 // activeDispatch holds the bookkeeping state for a single in-flight
@@ -68,6 +69,15 @@ type activeDispatch struct {
 	// Depth is the nesting depth of this dispatch. 1 = direct child of
 	// orchestrator, 2 = grandchild, etc.
 	Depth int
+
+	// AllowedSubAgents is the set of agent names THIS dispatch's agent is
+	// permitted to dispatch in turn. It is a carry-forward constraint: it is
+	// checked when this agent later dispatches a child (the eligibility guard
+	// resolves it from the child's currentDispatchId, i.e. THIS dispatch's id,
+	// and requires the grandchild's name to be a member). Empty means no
+	// allowlist restriction on this agent's nested dispatches. Set via
+	// SetAllowedSubAgents after registration.
+	AllowedSubAgents []string
 }
 
 // NewDispatchRegistry returns an empty, ready-to-use registry.
@@ -92,6 +102,8 @@ func (r *DispatchRegistry) Register(name string, cancel func(), child backend.Ru
 func (r *DispatchRegistry) RegisterWithID(id, name string, cancel func(), child backend.RunBackend, sessionID string, parentID string, depth int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	r.totalRegistrations++
 
 	if _, exists := r.dispatches[id]; exists {
 		utils.Warn("DispatchRegistry", fmt.Sprintf(
@@ -134,6 +146,40 @@ func (r *DispatchRegistry) SetChildRunID(id, childRunID string) {
 	))
 }
 
+// SetAllowedSubAgents records the set of agent names the dispatch identified
+// by id is permitted to dispatch in turn. Called after registration once the
+// dispatch's allowlist is known. No-op if the dispatch id is not found.
+func (r *DispatchRegistry) SetAllowedSubAgents(id string, allowed []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.dispatches[id]
+	if !ok {
+		utils.Debug("DispatchRegistry", fmt.Sprintf(
+			"SetAllowedSubAgents: id=%q not found (no-op)", id,
+		))
+		return
+	}
+	d.AllowedSubAgents = allowed
+	utils.Debug("DispatchRegistry", fmt.Sprintf(
+		"SetAllowedSubAgents: id=%q allowed=%v", id, allowed,
+	))
+}
+
+// AllowedSubAgentsForID returns the allowlist recorded for the dispatch
+// identified by id, and whether the dispatch exists. A registered dispatch
+// with no allowlist returns (nil, true) -- the caller treats an empty/nil
+// allowlist as "no restriction". A missing dispatch returns (nil, false).
+func (r *DispatchRegistry) AllowedSubAgentsForID(id string) ([]string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.dispatches[id]
+	if !ok {
+		utils.Debug("DispatchRegistry", fmt.Sprintf("AllowedSubAgentsForID: id=%q not found", id))
+		return nil, false
+	}
+	return d.AllowedSubAgents, true
+}
+
 // Deregister removes a dispatch entry by ID. It is safe to call with an
 // ID that does not exist (the call is a no-op). Deregister does NOT
 // invoke the dispatch's Cancel function, use Recall if cancellation is
@@ -171,6 +217,26 @@ func (r *DispatchRegistry) Get(id string) (*activeDispatch, bool) {
 		"Get: id=%q name=%q session=%s depth=%d parentID=%q", id, d.Name, d.SessionID, d.Depth, d.ParentID,
 	))
 	return d, true
+}
+
+// NameForID returns the registered agent name for a dispatch ID. This is the
+// authoritative way to resolve a dispatcher's own agent name from its
+// dispatch ID -- the dispatch-eligibility guard uses it to enforce the
+// self-dispatch rail (an agent may not dispatch an agent of its own name).
+// Returns ("", false) when the id is not registered. Do NOT derive the name
+// by string-splitting the "dispatch-<name>-<millis>-<suffix>" id: agent names
+// can contain hyphens, so the registry is the only precise source.
+func (r *DispatchRegistry) NameForID(id string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	d, ok := r.dispatches[id]
+	if !ok {
+		utils.Debug("DispatchRegistry", fmt.Sprintf("NameForID: id=%q not found", id))
+		return "", false
+	}
+	utils.Debug("DispatchRegistry", fmt.Sprintf("NameForID: id=%q name=%q", id, d.Name))
+	return d.Name, true
 }
 
 // Recall cancels an active background dispatch by name and removes it
@@ -361,6 +427,16 @@ func (r *DispatchRegistry) Count() int {
 	return len(r.dispatches)
 }
 
+// TotalRegistrations returns the lifetime count of RegisterWithID calls.
+// Useful for verifying that a dispatch path (foreground or background)
+// actually registered in the registry, even after deregistration has
+// cleared the entry from the active map.
+func (r *DispatchRegistry) TotalRegistrations() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.totalRegistrations
+}
+
 // ActiveNames returns the set of currently-active dispatch agent names.
 // Used by handleRunExit to decide which running agent states to preserve
 // (background agents still running) vs. clear (stale orphans). When
@@ -373,6 +449,28 @@ func (r *DispatchRegistry) ActiveNames() map[string]bool {
 		names[d.Name] = true
 	}
 	return names
+}
+
+// ActiveIDs returns the set of currently-active dispatch IDs — the same
+// per-dispatch unique IDs that RegisterWithID stores and that the agent-state
+// store keys its slots on (AppendOrUpdateByID / UpdateStateByID). This is the
+// ID-keyed peer of ActiveNames.
+//
+// handleRunExit uses it to decide, by dispatch ID, which running agent-state
+// slots to preserve. Name-keyed preservation (ActiveNames) collapses every
+// dispatch sharing a name to one key, so a nested (depth-2+) dispatch whose
+// name is not in the keep-set at clear time has its still-running slot swept;
+// its later terminal UpdateStateByID then lands on nothing and the agent is
+// stuck "running". Keying preservation on the dispatch ID — the same identity
+// the lifecycle already addresses slots by — closes that gap at every depth.
+func (r *DispatchRegistry) ActiveIDs() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ids := make(map[string]bool, len(r.dispatches))
+	for id := range r.dispatches {
+		ids[id] = true
+	}
+	return ids
 }
 
 // SteerDispatchOutcome is a string-typed enum describing how a

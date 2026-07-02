@@ -334,6 +334,7 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 					data, _ := json.Marshal(info)
 					h.sendNotification("dispatch_plan_proposal", data)
 				}
+				req.Params.OnChildQuestion = h.makeOnChildQuestion(agentName)
 
 				// Dispatch in a goroutine; respond immediately with stub.
 				go func() {
@@ -349,6 +350,9 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 				}()
 			} else {
 				// Foreground dispatch: run in goroutine, send response when done.
+				// Wire OnChildQuestion so foreground child questions block-and-resume.
+				agentName := req.Params.Name
+				req.Params.OnChildQuestion = h.makeOnChildQuestion(agentName)
 				go func() {
 					result, err := ctx.DispatchAgent(req.Params)
 					if err != nil {
@@ -458,6 +462,9 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			}{Response: resp, Cancelled: cancelled})
 			h.sendResponse(id, json.RawMessage(data), nil)
 		}()
+
+	case "ext/answer_dispatch_question":
+		h.handleAnswerDispatchQuestion(id, raw)
 
 	case "ext/send_prompt":
 		var req struct {

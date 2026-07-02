@@ -4,30 +4,41 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/modelconfig"
-	"github.com/dsswift/ion/engine/internal/session/agents"
 	"github.com/dsswift/ion/engine/internal/session/extcontext"
 	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
-// wireAgentSpawner installs the AgentSpawner closure on runCfg. The spawner
-// runs a child backend synchronously, observes parent context cancellation,
-// and updates s.agents with progress so the harness can render an agent
-// pill.
+// wireAgentSpawner installs the AgentSpawner closure on runCfg for the
+// orchestrator's (depth-0) run. When the orchestrator's LLM invokes the Agent
+// tool, this closure resolves the requested specialist (firing
+// before_agent_start for the unnamed case and capability_match via
+// resolveAgentSpec), resolves the child model and tier chain, then delegates
+// the actual dispatch to the single shared dispatch mechanism
+// (extcontext.BuildDispatchAgentFunc) at depth 0.
 //
-// The spawner also fires agent_start / agent_end on the parent session's
-// extension group, so user-installed observers can pair start+end events
-// without resorting to tool_start/tool_end watchdog tricks on the Agent
-// tool. Hooks fire on the parent host (not the child) because they are
-// documented as "Observe only": the parent observes its children's
-// lifecycle. Firing on the parent matches the same direction of travel as
-// the engine_agent_state snapshots emitted on capturedKey.
+// Convergence: before this, wireAgentSpawner hand-rolled its own child-backend
+// run loop that diverged from the extension dispatch path
+// (BuildDispatchAgentFunc / BuildChildAgentSpawner). The bespoke path omitted
+// four behaviors the dispatch path has: it never wired an AgentSpawner onto the
+// child RunConfig (so an orchestrator-dispatched agent could not itself
+// dispatch a sub-agent via the Agent tool), never emitted
+// engine_dispatch_start/end telemetry (so the desktop dispatch-preview popup
+// found no nested children), never stamped dispatchDepth/dispatchParentId on
+// the agent pill, and never registered in the DispatchRegistry. Routing through
+// BuildDispatchAgentFunc gives the orchestrator path all four for free and
+// leaves one dispatch implementation instead of two that drift.
+//
+// agent_start / agent_end still fire on the parent extension group, the agent
+// pill still appears, and live transcript activity is still forwarded — all of
+// that now comes from inside BuildDispatchAgentFunc rather than being
+// duplicated here. Hooks fire on the parent host (not the child) because they
+// are documented as "Observe only": the parent observes its children's
+// lifecycle.
 func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel string, extGroup *extension.ExtensionGroup, runCfg *backend.RunConfig) {
 	capturedModel := parentModel
 	capturedKey := key
@@ -70,16 +81,17 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			// the name was aspirational, not required.
 		}
 
-		// Naming: the engine generates a unique ID per dispatch for internal
-		// tracking (state updates, abort, child request routing). The Name
-		// field uses the spec name when matched so extensions can correlate
-		// with their roster. Extensions own naming policy; the engine
-		// provides the mechanism.
+		// Naming: when a spec matched, the Name field is the spec name so
+		// extensions and the shared dispatch path can correlate with the
+		// roster. When unnamed, derive a stable per-dispatch name from the
+		// session's agent counter. The shared dispatch mechanism
+		// (BuildDispatchAgentFunc, invoked below) mints its own collision-safe
+		// internal dispatch ID; this name is only the human/roster-facing
+		// label. We still advance s.agentCounter so the unnamed label is
+		// unique across dispatches in this session.
 		s.agentCounter++
-		agentID := fmt.Sprintf("agent-%d", s.agentCounter)
-		agentName := agentID
+		agentName := fmt.Sprintf("agent-%d", s.agentCounter)
 		if specMatched {
-			agentID = fmt.Sprintf("%s-%d", spec.Name, s.agentCounter)
 			agentName = spec.Name
 		}
 
@@ -131,319 +143,78 @@ func (m *Manager) wireAgentSpawner(s *engineSession, key string, parentModel str
 			return ""
 		}(), capturedModel, childModel, agentName))
 
-		start := time.Now()
-
-		// Atomically find an existing state by dispatch ID or append a new
-		// slot. Using AppendOrUpdateByID gives each concurrent dispatch of
-		// the same agent name its own slot, so UpdateStateByID always lands
-		// on the correct instance's terminal update. The old name-keyed
-		// AppendOrUpdate caused the second dispatch to overwrite the first's
-		// ID, making the first's agent_end update miss entirely.
-		newDispatch := map[string]interface{}{
-			"id":        agentID,
-			"task":      prompt,
-			"model":     childModel,
-			"status":    "running",
-			"startTime": start.Unix(),
+		// Delegate the actual dispatch to the single shared dispatch
+		// mechanism (extcontext.BuildDispatchAgentFunc). The orchestrator's
+		// Agent tool and an extension's ctx.DispatchAgent now run the SAME
+		// code path: spawner wiring (so a dispatched agent can itself dispatch
+		// via the Agent tool), engine_dispatch_start/end telemetry (so the
+		// desktop dispatch-preview popup can render nested children),
+		// dispatchDepth/dispatchParentId attribution on the agent pill, and
+		// DispatchRegistry registration. Before this convergence wireAgentSpawner
+		// hand-rolled the child run and omitted all four, which is why an
+		// orchestrator-dispatched agent could not dispatch a sub-agent and no
+		// nested children ever appeared in the preview.
+		//
+		// Depth 0 / empty parent id: the orchestrator IS the depth-0 root, so
+		// its direct dispatches are depth 1 with no parent dispatch. The
+		// returned spawner's grandchildren inherit depth+1, enforced by the
+		// depth guard inside BuildDispatchAgentFunc.
+		//
+		// Foreground (Background=false): the Agent tool blocks until the child
+		// completes, matching its synchronous contract. Identical to how
+		// BuildChildAgentSpawner delegates (dispatch_child_spawner.go).
+		//
+		// SystemPrompt is passed via DispatchAgentOpts.SystemPrompt, which
+		// BuildDispatchAgentFunc applies as AppendSystemPrompt -- the matched
+		// spec's persona augments the base system prompt rather than replacing
+		// it. This matches the CLI-hook agent-spec path (prompt_cli_hooks.go)
+		// and is the engine-consistent behavior.
+		acc := &sessionAccessor{m: m, s: s, key: capturedKey}
+		dispatchFn := extcontext.BuildDispatchAgentFunc(acc, s.dispatchRegistry, 0, "")
+		dispatchOpts := extension.DispatchAgentOpts{
+			Name:          agentName,
+			Task:          prompt,
+			Model:         childModel,
+			ProjectPath:   cwd,
+			DisplayName:   displayName,
+			FallbackChain: childFallbacks,
+			// Thread the per-tool-call context so cancelling the Agent tool
+			// call (run abort, tool deadline) cancels this foreground dispatch
+			// and returns promptly. The tool-call context derives from the
+			// session, so session-level aborts still cascade.
+			ParentCtx:  ctx,
+			Background: false,
 		}
-		reused := s.agents.AppendOrUpdateByID(types.AgentStateUpdate{
-			Name:   agentName,
-			ID:     agentID,
-			Status: "running",
-			Metadata: map[string]interface{}{
-				"displayName": displayName,
-				"type":        "agent",
-				"visibility":  "sticky",
-				"invited":     true,
-				"task":        prompt,
-				"model":       childModel,
-				"startTime":   start.Unix(),
-				"dispatches":  []interface{}{newDispatch},
-			},
-		}, func(existing *types.AgentStateUpdate) {
-			existing.Name = agentName
-			existing.Status = "running"
-			if existing.Metadata == nil {
-				existing.Metadata = map[string]interface{}{}
-			}
-			existing.Metadata["displayName"] = displayName
-			existing.Metadata["task"] = prompt
-			existing.Metadata["model"] = childModel
-			existing.Metadata["startTime"] = start.Unix()
-			existing.Metadata["lastWork"] = ""
-			delete(existing.Metadata, "elapsed")
-			// Append new dispatch entry to the structured dispatches array.
-			existingDispatches, _ := existing.Metadata["dispatches"].([]interface{})
-			existing.Metadata["dispatches"] = append(existingDispatches, newDispatch)
-		})
-		snapshot := s.agents.MergedSnapshot()
-
-		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_start name=%s id=%s reuse=%v", capturedKey, len(snapshot), agentName, agentID, reused))
-		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
-
-		// Fire agent_start on the parent extension group so user observers
-		// can pair start+end. Observe-only: errors logged inside the group
-		// dispatcher, never propagate. Guard mirrors fireBeforeAgentStart
-		// in prompt_extensions.go.
-		if capturedExtGroup != nil && !capturedExtGroup.IsEmpty() {
-			utils.Log("Session", fmt.Sprintf("firing agent_start key=%s name=%s id=%s task_len=%d", capturedKey, agentName, agentID, len(prompt)))
-			startCtx := m.newExtContext(s, capturedKey)
-			capturedExtGroup.FireAgentStart(startCtx, extension.AgentInfo{
-				Name: agentName,
-				Task: prompt,
-			})
-		} else {
-			utils.Debug("Session", fmt.Sprintf("agent_start skipped: no extensions key=%s name=%s", capturedKey, agentName))
-		}
-
-		child := m.newChildBackend()
-		var result string
-		var childErr error
-		var childDone sync.WaitGroup
-		childDone.Add(1)
-
-		// Live progress forwarding: accumulate child text chunks and tool
-		// calls, then throttle-emit lastWork updates so the agent pill shows
-		// real-time activity instead of a static "responding...".
-		var (
-			childConvID  string
-			progressMu   sync.Mutex
-			textAccum    string
-			lastEmitTime time.Time
-		)
-		const progressInterval = 2 * time.Second
-		const maxSnippetLen = 100
-
-		emitProgress := func(work string) {
-			if len(work) > maxSnippetLen {
-				work = work[:maxSnippetLen]
-			}
-			s.agents.UpdateStateByID(agentID, func(state *types.AgentStateUpdate) {
-				if state.Metadata == nil {
-					state.Metadata = map[string]interface{}{}
-				}
-				state.Metadata["lastWork"] = work
-			})
-			snap := s.agents.MergedSnapshot()
-			utils.Debug("Session", fmt.Sprintf("agent_progress id=%s name=%s key=%s work=%q", agentID, agentName, capturedKey, work))
-			m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snap})
-		}
-
-		// Live intra-turn transcript forwarding for the Agent-tool spawn path —
-		// the mirror of the extension-dispatch path in dispatch_agent.go. The
-		// emitter pushes the child's tool calls, tool results, and streamed text
-		// as engine_dispatch_activity events so consumers can stream the live
-		// sub-agent transcript without waiting for completion. Both spawn paths
-		// MUST emit these deltas; instrumenting only one leaves the other's
-		// dispatches frozen after the first tool. Closed below so a trailing
-		// partial text run is flushed.
-		activity := extcontext.NewDispatchActivityEmitter(
-			func(ev types.EngineEvent) { m.emit(capturedKey, ev) },
-			agentID, agentName,
-		)
-
-		child.OnNormalized(func(_ string, ev types.NormalizedEvent) {
-			// Report child liveness to the parent run's progress watchdog.
-			// The parent run is parked in the deadline-exempt Agent tool call
-			// and emits no progress of its own; a genuine child event proves
-			// the dispatch is alive. Mirrors the dispatch_agent.go wiring. See
-			// Manager.bumpParentProgress.
-			m.bumpParentProgress(s)
-
-			switch e := ev.Data.(type) {
-			case *types.SessionInitEvent:
-				// Capture the child conversation id the moment the child run
-				// initializes (well before TaskCompleteEvent) so the live
-				// activity deltas carry the reconcile key and clients can load
-				// the growing transcript while the agent is still running.
-				if e.SessionID != "" {
-					if childConvID == "" {
-						childConvID = e.SessionID
-					}
-					activity.SetConversationID(e.SessionID)
-				}
-
-			case *types.TaskCompleteEvent:
-				result = e.Result
-				childConvID = e.SessionID
-
-			case *types.TextChunkEvent:
-				// Push streamed text to the live transcript (coalesced).
-				activity.AccumulateText(e.Text)
-				progressMu.Lock()
-				textAccum += e.Text
-				now := time.Now()
-				shouldEmit := now.Sub(lastEmitTime) >= progressInterval
-				snippet := textAccum
-				if shouldEmit {
-					lastEmitTime = now
-					// Keep only the tail for display
-					if len(snippet) > maxSnippetLen {
-						snippet = snippet[len(snippet)-maxSnippetLen:]
-					}
-				}
-				progressMu.Unlock()
-				if shouldEmit {
-					emitProgress(snippet)
-				}
-
-			case *types.ToolCallEvent:
-				// Push the tool-call start to the live transcript.
-				activity.HandleToolStart(e.ToolName, e.ToolID)
-				progressMu.Lock()
-				lastEmitTime = time.Now()
-				textAccum = "" // Reset text accumulator on new tool call
-				progressMu.Unlock()
-				emitProgress(fmt.Sprintf("Using %s...", e.ToolName))
-
-			case *types.ToolResultEvent:
-				// Push the tool-result completion to the live transcript
-				// (status-only; reconcile carries the full result body).
-				activity.HandleToolEnd(e.ToolID, e.IsError)
-
-			default:
-				utils.Debug("Session", fmt.Sprintf("child event not forwarded: agentID=%s type=%T", agentID, ev.Data))
-			}
-		})
-		child.OnExit(func(_ string, _ *int, _ *string, _ string) {
-			childDone.Done()
-		})
-		child.OnError(func(_ string, err error) {
-			childErr = err
-		})
-
-		childRequestID := fmt.Sprintf("%s-%s", capturedKey, agentID)
-		runOpts := types.RunOptions{
-			Prompt:      prompt,
-			Model:       childModel,
-			ProjectPath: cwd,
-			// Mark this as a subagent run so the early-stop continuation
-			// gate skips it by default. Sub-agents have tight remits and
-			// should not be poked to keep working. The harness can still
-			// force-on by setting EarlyStopEnabled to &true on the
-			// returned RunOptions before StartRun (not the typical
-			// dispatch path, but supported).
-			IsSubagent: true,
-		}
-		runOpts.FallbackChain = childFallbacks
 		if specMatched {
 			if spec.SystemPrompt != "" {
-				runOpts.SystemPrompt = spec.SystemPrompt
+				dispatchOpts.SystemPrompt = spec.SystemPrompt
 			}
 			if len(spec.Tools) > 0 {
-				runOpts.AllowedTools = spec.Tools
+				dispatchOpts.AllowedTools = spec.Tools
 			}
 		}
 
-		// Thread the engine's DefaultModel into the child run so the
-		// existing fallback at runloop.go fires when the child's model
-		// (e.g. a tier alias like "standard" that wasn't configured in
-		// models.json) doesn't resolve to a provider. Without this,
-		// children start with cfg=nil and the runloop's fallback guard
-		// short-circuits — the child hard-fails with "no provider found".
-		// Always pass a child RunConfig, even when DefaultModel is empty;
-		// the runloop guard at line 57 still short-circuits in that case
-		// and the existing no_provider_found error wins. This is the
-		// chosen behaviour — see plan §2 "Default-also-missing case".
-		var childDefaultModel string
-		if m.config != nil {
-			childDefaultModel = m.config.DefaultModel
+		result, err := dispatchFn(dispatchOpts)
+		// If the per-tool-call context was cancelled, surface the cancellation
+		// to the run loop rather than a successful "recalled" result. The
+		// shared dispatch path treats ParentCtx cancellation as a recall and
+		// returns (result, nil); for the Agent tool, a cancelled call must
+		// report context.Canceled so the run loop sees the abort. Checked first
+		// so cancellation wins over any partial output.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			utils.Debug("Session", fmt.Sprintf("agent spawner cancelled: name=%s err=%v", agentName, ctxErr))
+			return "", ctxErr
 		}
-		utils.Log("Session", fmt.Sprintf("child run config: defaultModelThreaded=%q source=spawner sessionKey=%s requestedModel=%q", childDefaultModel, capturedKey, childModel))
-		childRunCfg := &backend.RunConfig{DefaultModel: childDefaultModel}
-		startChildRun(child, childRequestID, runOpts, childRunCfg)
-
-		// Wait for child to finish OR parent context to cancel.
-		doneCh := make(chan struct{})
-		go func() {
-			childDone.Wait()
-			close(doneCh)
-		}()
-
-		cancelled := false
-		select {
-		case <-doneCh:
-		case <-ctx.Done():
-			cancelled = true
-			child.Cancel(childRequestID)
-			<-doneCh
+		if err != nil {
+			utils.Debug("Session", fmt.Sprintf("agent spawner returning error: name=%s err=%v", agentName, err))
+			return "", err
 		}
-
-		// Flush any trailing buffered transcript text and stop the activity
-		// emitter's coalesce timer now that the child is done.
-		activity.Close()
-
-		elapsed := time.Since(start).Seconds()
-
-		var terminalStatus string
-		s.agents.UpdateStateByID(agentID, func(state *types.AgentStateUpdate) {
-			if state.Metadata == nil {
-				state.Metadata = map[string]interface{}{}
-			}
-			if cancelled {
-				state.Status = "cancelled"
-			} else if childErr != nil {
-				state.Status = "error"
-				state.Metadata["lastWork"] = childErr.Error()
-			} else {
-				state.Status = "done"
-				if len(result) > 100 {
-					state.Metadata["lastWork"] = result[:100]
-				} else {
-					state.Metadata["lastWork"] = result
-				}
-			}
-			terminalStatus = state.Status
-			state.Metadata["elapsed"] = elapsed
-			// Accumulate conversation IDs across dispatches so the
-			// desktop can load the full history for this specialist.
-			if childConvID != "" {
-				existing, _ := state.Metadata["conversationIds"].([]interface{})
-				alreadyPresent := false
-				for _, v := range existing {
-					if s, ok := v.(string); ok && s == childConvID {
-						alreadyPresent = true
-						break
-					}
-				}
-				if !alreadyPresent {
-					state.Metadata["conversationIds"] = append(existing, childConvID)
-				}
-				// Keep single-value key for backward compatibility
-				state.Metadata["conversationId"] = childConvID
-			}
-			// Update the current dispatch entry in the structured dispatches array.
-			agents.UpdateDispatchEntry(state.Metadata, agentID, state.Status, elapsed, childConvID)
-		})
-		snapshot2 := s.agents.MergedSnapshot()
-
-		utils.Log("Session", fmt.Sprintf("agent_terminated name=%s id=%s status=%s reason=spawner_exit key=%s elapsed=%.2fs", agentName, agentID, terminalStatus, capturedKey, elapsed))
-		utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=agent_end name=%s id=%s", capturedKey, len(snapshot2), agentName, agentID))
-		m.emit(capturedKey, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot2})
-
-		// Fire agent_end on the parent extension group. Must fire on every
-		// terminal path (success, error, cancelled) so observers can pair
-		// it 1:1 with agent_start; firing it here -- before the cancellation
-		// early-return below -- preserves that invariant.
-		if capturedExtGroup != nil && !capturedExtGroup.IsEmpty() {
-			utils.Log("Session", fmt.Sprintf("firing agent_end key=%s name=%s status=%s elapsed=%.2fs", capturedKey, agentName, terminalStatus, elapsed))
-			endCtx := m.newExtContext(s, capturedKey)
-			capturedExtGroup.FireAgentEnd(endCtx, extension.AgentInfo{
-				Name: agentName,
-				Task: prompt,
-			})
-		} else {
-			utils.Debug("Session", fmt.Sprintf("agent_end skipped: no extensions key=%s name=%s", capturedKey, agentName))
+		if result == nil {
+			utils.Debug("Session", fmt.Sprintf("agent spawner returning empty: name=%s", agentName))
+			return "", nil
 		}
-
-		utils.Debug("Session", fmt.Sprintf("agent spawner returning: name=%s id=%s cancelled=%v err=%v resultLen=%d", agentName, agentID, cancelled, childErr, len(result)))
-
-		if cancelled {
-			return "", ctx.Err()
-		}
-		if childErr != nil {
-			return "", childErr
-		}
-		return result, nil
+		utils.Debug("Session", fmt.Sprintf("agent spawner returning: name=%s exitCode=%d resultLen=%d", agentName, result.ExitCode, len(result.Output)))
+		return result.Output, nil
 	}
 }
+

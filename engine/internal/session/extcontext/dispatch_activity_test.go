@@ -80,7 +80,8 @@ func (a *activityRecordingAccessor) UpdateAgentStateByID(id string, updater func
 
 func (a *activityRecordingAccessor) EmitAgentSnapshot(_ string) {}
 
-func (a *activityRecordingAccessor) BumpParentProgress() {}
+func (a *activityRecordingAccessor) BumpParentProgress()              {}
+func (a *activityRecordingAccessor) EmitDispatchCountStatus(_ string) {}
 
 func (a *activityRecordingAccessor) SessionKey() string                       { return "activity-test-session" }
 func (a *activityRecordingAccessor) ConversationID() string                   { return "" }
