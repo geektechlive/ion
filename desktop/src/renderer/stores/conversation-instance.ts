@@ -59,6 +59,7 @@ export function emptyConversationInstance(
     statusFields: null,
     planFilePath: null,
     dispatchTelemetry: [],
+    contextBreakdown: null,
     forkedFromConversationIds: null,
     ...overrides,
   }

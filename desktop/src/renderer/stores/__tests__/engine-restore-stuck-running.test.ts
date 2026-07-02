@@ -65,6 +65,7 @@ function makeInstance(id: string) {
     conversationIds: [], draftInput: '', agentStates: [],
     statusFields: null, planFilePath: null, thinkingEffort: 'off', sealed: false,
     lastMessagePreview: null,
+    dispatchTelemetry: [], forkedFromConversationIds: null, contextBreakdown: null,
   }
 }
 

@@ -19,6 +19,13 @@ export interface ModelEntry {
   thinkingMode?: string
   /** Effort levels this model accepts, e.g. ["low","medium","high"]. Empty ⇒ thinking control hidden. */
   thinkingEfforts?: string[]
+  /**
+   * BPE encoding identifier for the local tiktoken tokenizer. Used by the
+   * context-breakdown builder to resolve Tier `local` counts offline.
+   * Values: "o200k_base" (GPT-4o / Claude-family), "cl100k_base" (legacy).
+   * Absent for models with no local encoder mapping.
+   */
+  tokenizer?: string
   isCustom?: boolean
 }
 

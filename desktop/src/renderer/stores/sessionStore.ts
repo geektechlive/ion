@@ -42,6 +42,8 @@ const initialState = {
   isExpanded: false,
   staticInfo: null,
   gitPanelOpen: false,
+  statusDrawerOpen: false,
+  statusDrawerDispatchId: null,
   terminalOpenTabIds: new Set<string>(),
   terminalPendingCommands: new Map<string, string>(),
   terminalPanes: new Map<string, TerminalPaneState>(),

@@ -2,6 +2,7 @@ import React, { useEffect, useCallback, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Paperclip, Camera, Lightning } from '@phosphor-icons/react'
 import { GitPanel } from './components/GitPanel'
+import { StatusDrawer } from './components/StatusDrawer'
 import { TabStrip } from './components/TabStrip'
 import { ConversationView } from './components/ConversationView'
 import { InputBar, useBashModeStore } from './components/InputBar'
@@ -121,6 +122,7 @@ export default function App() {
   const isTerminalTall = useSessionStore((s) => s.terminalTallTabId === s.activeTabId)
   const isTerminalBigScreen = useSessionStore((s) => s.terminalBigScreenTabId === s.activeTabId)
   const gitPanelOpen = useSessionStore((s) => s.gitPanelOpen)
+  const statusDrawerOpen = useSessionStore((s) => s.statusDrawerOpen)
   const activeTabId = useSessionStore((s) => s.activeTabId)
   const tabsReady = useSessionStore((s) => s.tabsReady)
   const activeTab = useSessionStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
@@ -164,6 +166,20 @@ export default function App() {
       useSessionStore.getState().createScratchFile(dir)
     }
   }, [editorOpen, activeTab ? editorDirForTab(activeTab) : undefined])
+
+  // Fire get_context_breakdown when the status drawer opens so the breakdown
+  // panel always shows current data — even for idle or freshly-loaded historical
+  // conversations that have not sent a prompt yet. The engine emits
+  // engine_context_breakdown on its event bus; the existing context_breakdown
+  // handler in event-wiring.ts populates activeInstance.contextBreakdown and
+  // the drawer re-renders synchronously.
+  useEffect(() => {
+    if (!statusDrawerOpen || !activeTabId || activeTabId === '') return
+    window.ion.engineGetContextBreakdown(activeTabId).catch(() => {
+      // Fire-and-forget. Failure is non-fatal: the drawer renders whatever
+      // cached breakdown it has (possibly none for brand-new sessions).
+    })
+  }, [statusDrawerOpen, activeTabId])
 
   // Layout dimensions — three width tiers based on expandedUI + ultraWide
   //   ultraWide OFF: collapsed 460 / expanded 700
@@ -425,6 +441,27 @@ export default function App() {
                 }}
               >
                 <GitPanel />
+              </motion.div>
+            )}
+          </AnimatePresence>
+          {/* Status Drawer — right-side panel, toggled by ⓘ in StatusBar */}
+          <AnimatePresence>
+            {tabsReady && statusDrawerOpen && (
+              <motion.div
+                data-ion-ui
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                transition={TRANSITION}
+                style={{
+                  position: 'absolute',
+                  left: '100%',
+                  bottom: 60,
+                  marginLeft: gitPanelOpen ? 296 : 8,
+                  zIndex: 26,
+                }}
+              >
+                <StatusDrawer />
               </motion.div>
             )}
           </AnimatePresence>

@@ -275,6 +275,36 @@ export function wireEngineBridgeEvents(): void {
       })
     }
 
+    // engine_context_breakdown: per-category token breakdown built during
+    // prompt assembly. Broadcast to the renderer as a normalized event so
+    // store slices can cache the latest breakdown per instance, and forward
+    // to iOS as desktop_context_breakdown for the Status Drawer.
+    if (event.type === 'engine_context_breakdown' && event.contextBreakdown) {
+      const tabIdForBD = tabIdFromKey(key)
+      broadcastNormalized(tabIdForBD, {
+        type: 'context_breakdown',
+        categories: event.contextBreakdown.categories ?? [],
+        contextWindow: event.contextBreakdown.contextWindow,
+        totalTokens: event.contextBreakdown.totalTokens,
+        apiReportedTotal: event.contextBreakdown.apiReportedTotal,
+        unaccounted: event.contextBreakdown.unaccounted,
+        cacheReadTokens: event.contextBreakdown.cacheReadTokens,
+        cacheCreationTokens: event.contextBreakdown.cacheCreationTokens,
+        model: event.contextBreakdown.model ?? '',
+      })
+      if (state.remoteTransport) {
+        const tabIdBD = key.split(':')[0]
+        const instanceIdBD = key.split(':')[1] || null
+        state.remoteTransport.send({
+          type: 'desktop_context_breakdown',
+          tabId: tabIdBD,
+          instanceId: instanceIdBD,
+          contextBreakdown: event.contextBreakdown,
+        })
+        log(`engine_context_breakdown: forwarded to iOS key=${key} categories=${event.contextBreakdown.categories?.length ?? 0} total=${event.contextBreakdown.totalTokens}`)
+      }
+    }
+
     // Trace agent_state so we can correlate engine→desktop→iOS flow when
     // diagnosing stuck-row, stale-snapshot, or missing-conversation reports.
     // Pairs with the engine's `agent_snapshot_emitted` utils.Log line.

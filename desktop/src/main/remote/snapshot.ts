@@ -315,6 +315,24 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
               convFingerprint: convFingerprint,
               pillColor: t.pillColor || null,
               pillIcon: t.pillIcon || null,
+              // ─── Cold-start parity: cost + token fields ───────────────────
+              // Projected from the active-instance statusFields and lastResult
+              // so iOS has accurate cost/token data on cold open without
+              // waiting for a live engine_status event. These match the fields
+              // RemoteTabState added in the snapshot-parity fix.
+              //
+              // totalCostUsd: prefer the live cumulative from statusFields;
+              //   fall back to the final task_complete cost from lastResult.
+              //   Omitted when neither is present (never-run tabs).
+              totalCostUsd: (function() {
+                var liveCost = activeInst && activeInst.statusFields && typeof activeInst.statusFields.totalCostUsd === 'number' ? activeInst.statusFields.totalCostUsd : undefined;
+                if (liveCost !== undefined) return liveCost;
+                return t.lastResult && typeof t.lastResult.totalCostUsd === 'number' ? t.lastResult.totalCostUsd : undefined;
+              })(),
+              inputTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.input_tokens === 'number') ? t.lastResult.usage.input_tokens : undefined,
+              outputTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.output_tokens === 'number') ? t.lastResult.usage.output_tokens : undefined,
+              cacheReadTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.cache_read_input_tokens === 'number') ? t.lastResult.usage.cache_read_input_tokens : undefined,
+              cacheCreationTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.cache_creation_input_tokens === 'number') ? t.lastResult.usage.cache_creation_input_tokens : undefined,
             };
           });
           return { tabs: tabs, resourceManifest: resourceManifest };

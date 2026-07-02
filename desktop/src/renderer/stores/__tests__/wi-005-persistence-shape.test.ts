@@ -80,6 +80,7 @@ function makeInstance(overrides: Partial<ConversationInstance & ConversationRef>
     statusFields: null,
     planFilePath: null,
     forkedFromConversationIds: null,
+    contextBreakdown: null,
     ...overrides,
   } as any
 }

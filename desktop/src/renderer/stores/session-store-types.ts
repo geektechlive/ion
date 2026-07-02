@@ -31,6 +31,20 @@ export interface State {
   isExpanded: boolean
   staticInfo: StaticInfo | null
   gitPanelOpen: boolean
+  /**
+   * Whether the Status Drawer (right-side panel) is open. Toggled by the ⓘ
+   * button in StatusBar's right cluster. When open alongside other panels
+   * (git, file explorer) the Status Drawer renders at a higher z-index and
+   * coexists — they are not mutually exclusive.
+   */
+  statusDrawerOpen: boolean
+  /**
+   * When set, the Status Drawer opens the AgentDetailPanel for this
+   * dispatch ID on mount, reconstructing the breadcrumb stack by walking
+   * dispatchParentId up through durable agentStates. Cleared when the
+   * Status Drawer is closed or the panel navigates away.
+   */
+  statusDrawerDispatchId: string | null
   terminalOpenTabIds: Set<string>
   terminalPendingCommands: Map<string, string>
   terminalPanes: Map<string, TerminalPaneState>
@@ -141,6 +155,16 @@ export interface State {
   decOpenFloatingPanelCount: () => void
   toggleGitPanel: () => void
   closeGitPanel: () => void
+  /** Toggle the Status Drawer (the ⓘ right-side panel). */
+  toggleStatusDrawer: () => void
+  /** Close the Status Drawer and clear the pending dispatch deep-link. */
+  closeStatusDrawer: () => void
+  /**
+   * Open the Status Drawer and pre-select a specific dispatch for deep-link
+   * navigation. The drawer reconstructs the ancestor breadcrumb stack from
+   * durable agentStates (dispatchParentId walk) before presenting the panel.
+   */
+  openDispatchPreview: (dispatchId: string) => void
   toggleTerminal: (tabId: string) => void
   runInTerminal: (tabId: string, cmd: string) => void
   consumeTerminalPendingCommand: (key: string) => string | undefined

@@ -14,6 +14,7 @@ import type {
   ResourceItem,
   ResourceDelta,
   EngineCommandListing,
+  ContextBreakdownPayload,
 } from './types-engine'
 import type { Message } from './types-session'
 
@@ -347,4 +348,18 @@ export type EngineEvent =
       interceptMessage: string
       interceptSource?: string
       interceptMetadata?: Record<string, unknown>
+    }
+  // ─── engine_context_breakdown ───
+  //
+  // Per-category token breakdown for the active run. Emitted once after
+  // prompt assembly and again after the first usage-event reconciliation
+  // (apiReportedTotal and unaccounted are populated on the second emit).
+  // Advisory telemetry — the engine attaches no UI semantics; clients
+  // render it as they see fit. Tier encodes how the count was obtained:
+  //   "exact"       — provider native count-tokens endpoint (online)
+  //   "local"       — tiktoken BPE, no network (OpenAI + offline path)
+  //   "approximate" — char/4 heuristic, last resort
+  | {
+      type: 'engine_context_breakdown'
+      contextBreakdown: ContextBreakdownPayload
     }

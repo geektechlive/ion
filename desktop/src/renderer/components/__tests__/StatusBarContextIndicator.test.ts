@@ -1,30 +1,25 @@
 /**
- * Tests for the StatusBarContextIndicator's local percent recomputation.
+ * Tests for the StatusBarContextIndicator's local percent recomputation,
+ * plus the B3/B4 idle+reload fallback paths.
  *
  * The component's job is to render a percent + tooltip showing how much
- * of the conversation's context window is used. The bug fixed in
- * plan cosy-pacing-bee.md (and Commit 3 of this branch) is that the
- * indicator was dividing engine-reported `contextTokens` by the
- * *picker-selected* model's nominal window, producing a 100% reading
- * whenever the picker disagreed with the engine (e.g. an Opus-running
- * conversation displayed under a Sonnet picker selection: 498k / 200k).
+ * of the conversation's context window is used.
  *
- * The fix anchors the denominator to the engine's reported
- * `contextWindow` (now plumbed onto the tab state) and only falls back
- * to the picker model's window when the engine has not yet answered.
+ * B3 fix: when contextTokens is null (idle/reload), the component falls back
+ * to inst.statusFields.contextPercent / contextWindow instead of showing 0%
+ * (the structurally-dead tab.contextPercent / tab.contextWindow dead-field path).
  *
- * We test the pure math in isolation by reproducing the component's
- * formula here. The React rendering is intentionally not tested — the
- * formula is the contract, the rendering is incidental.
+ * B4 fix: contextWindow is now persisted in session-store-persistence.ts so
+ * the denominator survives reload without requiring a new engine run.
+ *
+ * We test the pure math and selector logic in isolation. React rendering is
+ * intentionally not tested — the formula is the contract.
  */
 
 import { describe, it, expect } from 'vitest'
 
 // Mirrors the formula in StatusBarContextIndicator.tsx. Kept in lockstep
-// with that component; any change there must update both. The fix is
-// pinned by the test name "uses engine window over picker window"
-// below — if a future refactor regresses to dividing by the picker
-// window, that test fails immediately.
+// with that component; any change there must update both.
 function resolvePercentAndTokens(input: {
   contextTokens: number | null
   contextPercent: number | null
@@ -40,12 +35,27 @@ function resolvePercentAndTokens(input: {
   return { pct, tokens }
 }
 
+// Mirrors the StatusBarContextIndicator selector logic for idle/reload.
+// When contextTokens (liveTokens) is null, contextPercent should come from
+// statusFields.contextPercent — not from the structurally-dead tab.contextPercent.
+function resolveIdlePercentFromStatusFields(input: {
+  liveTokens: number | null
+  sfPercent: number | null
+  sfWindow: number | null
+  liveWindow: number | null
+  pickerWindow: number
+}): { pct: number | null; effectiveWindow: number | null } {
+  const contextPercent = input.liveTokens !== null ? null : input.sfPercent
+  const engineContextWindow = input.liveWindow ?? input.sfWindow
+  const windowSize = engineContextWindow ?? input.pickerWindow
+  const pct = input.liveTokens != null
+    ? Math.min(100, Math.round((input.liveTokens / windowSize) * 100))
+    : contextPercent
+  return { pct, effectiveWindow: engineContextWindow }
+}
+
 describe('StatusBarContextIndicator math', () => {
   it('uses engine window over picker window (regression for sturdy-wishing-tide bug)', () => {
-    // The exact scenario from conv 1780569626357-83f24099a9d8:
-    // engine ran on opus-4-7 (1M window), reported 497742 input tokens,
-    // user has Sonnet 4.6 (200K) selected in the picker. Pre-fix this
-    // rendered 100% / 498k / 200k. Post-fix: 50% / 498k / 1.0M.
     const out = resolvePercentAndTokens({
       contextTokens: 497742,
       contextPercent: 50,
@@ -57,10 +67,6 @@ describe('StatusBarContextIndicator math', () => {
   })
 
   it('falls back to picker window when engine has not yet reported (cold-start tab)', () => {
-    // Fresh tab with no engine response yet. The indicator must still
-    // render *something* — falling back to the picker model's window is
-    // the documented intent. Once the engine answers (next test) the
-    // window switches.
     const out = resolvePercentAndTokens({
       contextTokens: 50_000,
       contextPercent: null,
@@ -72,9 +78,6 @@ describe('StatusBarContextIndicator math', () => {
   })
 
   it('prefers engine percent when contextTokens is null', () => {
-    // This is the path iOS already had correct: when the engine has
-    // supplied a pre-computed percent but the local tokens count is
-    // null, use the engine's percent verbatim.
     const out = resolvePercentAndTokens({
       contextTokens: null,
       contextPercent: 42,
@@ -85,8 +88,6 @@ describe('StatusBarContextIndicator math', () => {
   })
 
   it('returns null when both engine percent and contextTokens are null', () => {
-    // Brand-new tab, no data at all. The indicator hides itself rather
-    // than rendering a misleading 0%.
     const out = resolvePercentAndTokens({
       contextTokens: null,
       contextPercent: null,
@@ -97,12 +98,6 @@ describe('StatusBarContextIndicator math', () => {
   })
 
   it('caps the displayed percent at 100 even on transient mismatch', () => {
-    // Defence-in-depth: if a stale contextTokens somehow points at a
-    // smaller engine window during the cold-start race, the display cap
-    // protects against showing 250%. The underlying state should never
-    // produce this in steady-state — the normalized engine_status handler in
-    // event-slice.ts updates contextWindow on every status tick
-    // — but the cap pins the UI invariant.
     const out = resolvePercentAndTokens({
       contextTokens: 500_000,
       contextPercent: null,
@@ -113,17 +108,12 @@ describe('StatusBarContextIndicator math', () => {
   })
 
   it('picker change between turns does NOT change the displayed percent', () => {
-    // Before the picker change: opus running, 497K tokens reported.
     const before = resolvePercentAndTokens({
       contextTokens: 497742,
       contextPercent: 50,
       engineContextWindow: 1_000_000,
       pickerWindow: 1_000_000,
     })
-    // After the picker change (Sonnet selected, but the engine has not
-    // yet run a turn on Sonnet so contextTokens / engineContextWindow
-    // still reflect opus). The picker change must NOT shift the display
-    // — that's the regression we're guarding against.
     const after = resolvePercentAndTokens({
       contextTokens: 497742,
       contextPercent: 50,
@@ -134,3 +124,70 @@ describe('StatusBarContextIndicator math', () => {
     expect(after.tokens).toBe(before.tokens)
   })
 })
+
+describe('B3 — idle indicator shows persisted context% via statusFields fallback', () => {
+  it('shows statusFields contextPercent when idle (contextTokens null) — fails on dead-tab-field path', () => {
+    // The old code read tab.contextPercent which is never written at runtime.
+    // The fix reads inst.statusFields.contextPercent when contextTokens is null.
+    const out = resolveIdlePercentFromStatusFields({
+      liveTokens: null,         // idle: no live token count
+      sfPercent: 63,            // engine heartbeat reported 63% on last idle
+      sfWindow: 200_000,
+      liveWindow: null,
+      pickerWindow: 200_000,
+    })
+    // Must show 63%, not 0% (dead-tab-field path would return null/0)
+    expect(out.pct).toBe(63)
+    expect(out.effectiveWindow).toBe(200_000)
+  })
+
+  it('during live run: ignores statusFields and uses liveTokens', () => {
+    // When a run is in progress (liveTokens set), the selector zeroes out
+    // contextPercent (liveTokens != null path), then computes pct from liveTokens.
+    // liveTokens=100k / window=200k = 50%. The stale sfPercent (63) must NOT appear.
+    const out = resolveIdlePercentFromStatusFields({
+      liveTokens: 100_000,
+      sfPercent: 63,            // stale status from previous turn
+      sfWindow: 200_000,
+      liveWindow: 200_000,
+      pickerWindow: 200_000,
+    })
+    // 100k / 200k = 50%, not the stale 63% from statusFields
+    expect(out.pct).toBe(50)
+    expect(out.pct).not.toBe(63) // proves statusFields.contextPercent was not used
+  })
+})
+
+describe('B4 — reload shows persisted contextWindow denominator', () => {
+  it('uses persisted contextWindow (sfWindow) when liveWindow is null after reload', () => {
+    // After reload: liveTokens and liveWindow are null (no run yet this session).
+    // sfWindow comes from statusFields which is seeded by the engine on resume.
+    // Before B4, contextWindow was not persisted so sfWindow was also null,
+    // forcing fallback to the picker model window — potentially wrong model.
+    const out = resolveIdlePercentFromStatusFields({
+      liveTokens: null,
+      sfPercent: 45,
+      sfWindow: 1_000_000,      // Opus was the running model; persisted
+      liveWindow: null,         // no live breakdown yet
+      pickerWindow: 200_000,    // user has Sonnet selected in picker
+    })
+    expect(out.pct).toBe(45)
+    // Effective window must be the persisted Opus window, not the picker window
+    expect(out.effectiveWindow).toBe(1_000_000)
+  })
+
+  it('without persisted window: falls back to picker (old behavior, now avoidable with B4)', () => {
+    // Regression guard: without B4 the effectiveWindow would be the picker window.
+    // This test documents the fallback is still correct when no persisted window exists.
+    const out = resolveIdlePercentFromStatusFields({
+      liveTokens: null,
+      sfPercent: null,
+      sfWindow: null,
+      liveWindow: null,
+      pickerWindow: 200_000,
+    })
+    expect(out.pct).toBeNull()  // no percent at all → indicator hides
+    expect(out.effectiveWindow).toBeNull()
+  })
+})
+

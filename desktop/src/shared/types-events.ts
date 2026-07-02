@@ -250,3 +250,9 @@ export type NormalizedEvent =
   // dispatchAgentId/conversationId; it must never append to the main conversation
   // message stream. INCREMENTAL/append-by-key — see agent-dispatch-activity.ts.
   | { type: 'dispatch_activity'; dispatchAgentId: string; dispatchConversationId: string; dispatchActivityKind: 'text' | 'tool_start' | 'tool_end'; dispatchSeq: number; toolName?: string; toolId?: string; dispatchTextDelta?: string; dispatchToolIsError?: boolean; dispatchActivityTs?: number }
+  // context_breakdown — per-category token breakdown from engine_context_breakdown.
+  // Emitted after prompt assembly; reconciled (apiReportedTotal/unaccounted) after
+  // the first usage event. Desktop-internal: translated from the engine wire in
+  // event-wiring.ts and stored on the active instance (event-slice.ts case
+  // 'context_breakdown') so the Status Drawer can render it synchronously.
+  | { type: 'context_breakdown'; categories: import('./types-engine').ContextBreakdownCategory[]; contextWindow: number; totalTokens: number; apiReportedTotal?: number; unaccounted?: number; cacheReadTokens?: number; cacheCreationTokens?: number; model: string }

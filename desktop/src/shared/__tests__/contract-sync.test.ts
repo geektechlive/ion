@@ -112,6 +112,18 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   extension_respawned: ['attemptNumber', 'extensionName'],
   extension_dead_permanent: ['attemptNumber', 'extensionName'],
   events_dropped: ['count'],
+  // Per-category token breakdown. Emitted after prompt assembly and again
+  // after first usage-event reconciliation. Tier encodes the resolution path.
+  context_breakdown: [
+    'apiReportedTotal',
+    'cacheCreationTokens',
+    'cacheReadTokens',
+    'categories',
+    'contextWindow',
+    'model',
+    'totalTokens',
+    'unaccounted',
+  ],
 }
 
 // ─── TS SharedTypes field map ───
@@ -184,6 +196,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'supportsThinking',
     'thinkingEfforts',
     'thinkingMode',
+    'tokenizer',
   ],
   ProviderEntry: [
     'apiKeyRef',
@@ -196,6 +209,20 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
   // The desktop's prompt pipeline reads this off the wire to populate a
   // routing-hint cache keyed by session — see desktop/src/main/prompt-pipeline.ts.
   EngineCommandListing: ['description', 'name'],
+  // Per-category token breakdown category row (one entry per category in
+  // ContextBreakdownPayload.categories). Mirrors Go's ContextBreakdownCategory.
+  ContextBreakdownCategory: ['kind', 'name', 'path', 'tier', 'tokens'],
+  // Wire payload for engine_context_breakdown. Mirrors Go's ContextBreakdownPayload.
+  ContextBreakdownPayload: [
+    'apiReportedTotal',
+    'cacheCreationTokens',
+    'cacheReadTokens',
+    'categories',
+    'contextWindow',
+    'model',
+    'totalTokens',
+    'unaccounted',
+  ],
   // Wire shape for content blocks carried inside LlmMessage payloads.
   // The compact_boundary variant (gentle-knitting-cup plan) added the
   // optional summary / trigger / messages* / clearedBlocks / tokensBefore

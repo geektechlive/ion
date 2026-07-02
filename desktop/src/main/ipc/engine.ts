@@ -81,6 +81,15 @@ export function registerEngineIpc(): void {
     engineBridge.stopSession(key)
   })
 
+  ipcMain.handle(IPC.ENGINE_GET_CONTEXT_BREAKDOWN, (_event, { key }: { key: string }) => {
+    log(`IPC ENGINE_GET_CONTEXT_BREAKDOWN: key=${key}`)
+    // Fire-and-forget. The engine emits engine_context_breakdown on its event
+    // bus; the existing event-wiring handler translates it to context_breakdown
+    // and broadcasts to the renderer. The IPC reply is empty — the caller
+    // observes the result through the engine event stream.
+    engineBridge._send({ cmd: 'get_context_breakdown', key })
+  })
+
   ipcMain.handle(IPC.ENGINE_REMAP_SESSION, (_event, { oldKey, newKey }: { oldKey: string; newKey: string }) => {
     log(`IPC ENGINE_REMAP_SESSION: ${oldKey} -> ${newKey}`)
     engineBridge.remapSession(oldKey, newKey)

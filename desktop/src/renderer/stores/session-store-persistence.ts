@@ -74,6 +74,11 @@ function persistTabs(useSessionStore: Store): void {
         ...(t.groupPinned ? { groupPinned: true } : {}),
         ...(t.queuedPrompts.length > 0 ? { queuedPrompts: t.queuedPrompts } : {}),
         ...(t.contextTokens ? { contextTokens: t.contextTokens } : {}),
+        // Persist contextWindow alongside contextTokens so the status-bar
+        // denominator is correct after reload (B4). Without this the indicator
+        // recomputes pct as N / picker-model-window, which diverges whenever the
+        // model the engine ran differs from the user's picker selection.
+        ...(t.contextWindow ? { contextWindow: t.contextWindow } : {}),
         ...(t.lastMessagePreview ? { lastMessagePreview: t.lastMessagePreview } : {}),
         ...(t.lastEventAt ? { lastEventAt: t.lastEventAt } : {}),
         ...(t.isTerminalOnly ? { isTerminalOnly: true } : {}),

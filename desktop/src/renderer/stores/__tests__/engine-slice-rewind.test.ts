@@ -79,6 +79,7 @@ function makeInstance(
     statusFields: null,
     planFilePath: null,
     forkedFromConversationIds: null, dispatchTelemetry: [],
+    contextBreakdown: null,
   }
 }
 

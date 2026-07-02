@@ -45,6 +45,7 @@ function makeInstance(id: string) {
     sessionModel: null, permissionMode: 'auto', permissionDenied: null,
     permissionQueue: [], elicitationQueue: [], conversationIds: [], draftInput: '', agentStates: [],
     statusFields: null, planFilePath: null, forkedFromConversationIds: null,
+    contextBreakdown: null,
   }
 }
 

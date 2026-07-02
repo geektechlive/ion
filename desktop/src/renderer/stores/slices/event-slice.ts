@@ -1,3 +1,5 @@
+// @file-size-exception: event-slice.ts is the single-path normalized event reducer.
+// Grew by 16 lines to add context_breakdown caching (plan modest-leaping-waffle).
 import type { TabStatus, Message } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
@@ -43,7 +45,7 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
         // `updated`.
         const inst0 = activeInstance(s.conversationPanes, tabId)
         let messages: Message[] = inst0 ? inst0.messages.slice() : []
-        const instPatch: Partial<import('../../../shared/types-engine').ConversationInstance> = {}
+        let instPatch: Partial<import('../../../shared/types-engine').ConversationInstance> = {}
         let instTouched = false
         // permissionQueue lives on the instance now; seed the working copy
         // from the instance and write back through instPatch when it changes.
@@ -410,8 +412,7 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
             case 'extension_died':
             case 'extension_respawned':
             case 'extension_dead_permanent':
-            case 'events_dropped': {
-              // Extension-surface arms extracted to event-slice-extension-surface.ts
+            case 'events_dropped': {              // Extension-surface arms extracted to event-slice-extension-surface.ts
               // (Fix 1: keep this reducer under the size cap). The handler mutates
               // a shared context (messages + engine* side-effect maps + the tab
               // `updated` patch + instPatch/instTouched) exactly as the inline
@@ -432,6 +433,7 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               }
               handleExtensionSurfaceEvent(ctx, event)
               messages = ctx.messages
+              instPatch = ctx.instPatch
               instTouched = ctx.instTouched
               engineWorkingMessages = ctx.engineWorkingMessages
               engineNotifications = ctx.engineNotifications
@@ -459,6 +461,33 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               // can see the engine is still alive but not making progress.
               updated.currentActivity = 'Still running...'
               break
+
+            case 'context_breakdown':
+              // Cache the per-category breakdown on the instance so the Status
+              // Drawer can render it synchronously on open. Also write contextWindow
+              // onto the tab so the status-bar denominator is correct mid-run and
+              // survives reload.
+              instPatch = {
+                ...instPatch,
+                contextBreakdown: {
+                  categories: event.categories ?? [],
+                  contextWindow: event.contextWindow ?? 0,
+                  totalTokens: event.totalTokens ?? 0,
+                  apiReportedTotal: event.apiReportedTotal,
+                  unaccounted: event.unaccounted,
+                  cacheReadTokens: event.cacheReadTokens,
+                  cacheCreationTokens: event.cacheCreationTokens,
+                  model: event.model ?? '',
+                },
+              }
+              // Mirror the authoritative contextWindow from the breakdown onto the
+              // tab so StatusBarContextIndicator has the correct denominator without
+              // needing to reach into inst.statusFields.
+              if (event.contextWindow) {
+                updated.contextWindow = event.contextWindow
+              }
+              instTouched = true
+              break
           }
 
           // Refresh last-message preview from whichever message ended up
@@ -483,6 +512,7 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
             if ('sessionModel' in instPatch) next.sessionModel = instPatch.sessionModel ?? null
             if ('permissionMode' in instPatch) next.permissionMode = instPatch.permissionMode!
             if ('agentStates' in instPatch) next.agentStates = instPatch.agentStates!
+            if ('contextBreakdown' in instPatch) next.contextBreakdown = instPatch.contextBreakdown ?? null
             if ('statusFields' in instPatch) next.statusFields = instPatch.statusFields!
             if ('conversationIds' in instPatch) next.conversationIds = instPatch.conversationIds!
             if ('sessions' in instPatch) next.sessions = instPatch.sessions!

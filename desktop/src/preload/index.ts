@@ -157,6 +157,10 @@ export interface IonAPI {
   engineDialogResponse(key: string, dialogId: string, value: any): Promise<void>
   engineCommand(key: string, command: string, args: string): Promise<void>
   engineStop(key: string): Promise<void>
+  /** Fire get_context_breakdown for the given engine key. Fire-and-forget:
+   *  the engine emits engine_context_breakdown on its event bus; the renderer
+   *  observes the result via the existing context_breakdown normalized event. */
+  engineGetContextBreakdown(key: string): Promise<void>
   engineRemapSession(oldKey: string, newKey: string): Promise<void>
   /** Broadcast a fresh engine_conversation_history for tabId/instanceId to all
    *  connected remote devices. Called by the renderer after a rewind restart so
@@ -420,6 +424,7 @@ const api: IonAPI = {
   engineDialogResponse: (key, dialogId, value) => ipcRenderer.invoke(IPC.ENGINE_DIALOG_RESPONSE, { key, dialogId, value }),
   engineCommand: (key, command, args) => ipcRenderer.invoke(IPC.ENGINE_COMMAND, { key, command, args }),
   engineStop: (key) => ipcRenderer.invoke(IPC.ENGINE_STOP, { key }),
+  engineGetContextBreakdown: (key) => ipcRenderer.invoke(IPC.ENGINE_GET_CONTEXT_BREAKDOWN, { key }),
   engineRemapSession: (oldKey, newKey) => ipcRenderer.invoke(IPC.ENGINE_REMAP_SESSION, { oldKey, newKey }),
   engineBroadcastHistory: (tabId, instanceId) => ipcRenderer.invoke(IPC.ENGINE_BROADCAST_HISTORY, { tabId, instanceId }),
   notifyTabFocus: (tabId) => ipcRenderer.send(IPC.NOTIFY_TAB_FOCUS, { tabId }),

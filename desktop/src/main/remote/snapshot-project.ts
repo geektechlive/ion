@@ -49,6 +49,20 @@ export interface RendererTabInput {
   convFingerprint?: string
   pillColor?: string | null
   pillIcon?: string | null
+  /**
+   * Cumulative cost in USD. Projected to iOS so the cost indicator is
+   * accurate on cold open without waiting for a live engine_status event.
+   * Undefined when the tab has never had a run.
+   */
+  totalCostUsd?: number
+  /** Cumulative provider-reported input tokens. Undefined on never-run tabs. */
+  inputTokens?: number
+  /** Cumulative output tokens. Undefined on never-run tabs. */
+  outputTokens?: number
+  /** Cumulative cache-read tokens (Anthropic prompt caching). Optional. */
+  cacheReadTokens?: number
+  /** Cumulative cache-creation tokens (Anthropic prompt caching). Optional. */
+  cacheCreationTokens?: number
 }
 
 export interface ProjectRendererTabOptions {
@@ -108,5 +122,10 @@ export function projectRendererTab(
     convFingerprint: t.convFingerprint || '',
     pillColor: t.pillColor || null,
     pillIcon: t.pillIcon || null,
+    totalCostUsd: t.totalCostUsd,
+    inputTokens: t.inputTokens,
+    outputTokens: t.outputTokens,
+    cacheReadTokens: t.cacheReadTokens,
+    cacheCreationTokens: t.cacheCreationTokens,
   }
 }

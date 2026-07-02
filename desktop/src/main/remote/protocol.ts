@@ -76,6 +76,31 @@ export interface RemoteTabState {
    * nominal window when null (cold-start tabs).
    */
   contextWindow: number | null
+  /**
+   * Cumulative cost in USD for this tab across all turns. Projected from
+   * StatusFields.totalCostUsd via the snapshot so iOS has the correct value
+   * on cold open without waiting for a live engine_status event. Optional so
+   * tabs that have never had a run omit it rather than emitting 0 (misleading).
+   */
+  totalCostUsd?: number
+  /**
+   * Cumulative provider-reported input tokens for this tab. Projected from
+   * the engine's usage tracking so iOS can populate the context-breakdown
+   * section on cold open. Optional — absent on tabs that have never run.
+   */
+  inputTokens?: number
+  /** Cumulative output tokens. Optional — absent on never-run tabs. */
+  outputTokens?: number
+  /**
+   * Cumulative cache-read tokens (Anthropic prompt caching). Optional —
+   * absent on tabs that have never run or whose provider does not report it.
+   */
+  cacheReadTokens?: number
+  /**
+   * Cumulative cache-creation tokens (Anthropic prompt caching). Optional —
+   * absent on tabs that have never run or whose provider does not report it.
+   */
+  cacheCreationTokens?: number
   modelOverride?: string | null
   messageCount: number
   /**
@@ -385,6 +410,17 @@ export type RemoteEvent =
   // absent/null for CLI-tab rewinds, where the tab has a single input.
   | { type: 'desktop_input_prefill'; tabId: string; text: string; switchTo?: boolean; instanceId?: string | null }
   | { type: 'desktop_engine_profiles'; profiles: Array<{ id: string; name: string; extensions: string[] }> }
+  // desktop_context_breakdown: forwarded from engine_context_breakdown. Carries
+  // the per-category token breakdown built during prompt assembly (and reconciled
+  // after the first usage event). iOS renders this in the Status Drawer's
+  // context-breakdown section. Lockstep desktop↔iOS wire — added to both
+  // protocol.ts and NormalizedEvent.swift in the same change.
+  | {
+      type: 'desktop_context_breakdown'
+      tabId: string
+      instanceId?: string | null
+      contextBreakdown: import('../../shared/types-engine').ContextBreakdownPayload
+    }
   // ─── Desktop settings projection (Part 7) ───────────────────────────
   // Snapshot of the desktop's projectable user preferences. Emitted once
   // on initial pairing (alongside `desktop_snapshot`) and on every subsequent

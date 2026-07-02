@@ -40,6 +40,16 @@ interface AgentDetailPanelProps {
    * (late attach / tab reopen). See childAgentsOf in agent-panel-helpers.
    */
   allAgents?: AgentStateUpdate[]
+  /**
+   * Pre-populated breadcrumb stack for deep-link entry. When provided, the
+   * panel initializes with this stack instead of the root-only single-frame
+   * default. Built by `buildBreadcrumbStack` in agent-panel-helpers, which
+   * walks dispatchParentId up through durable agentStates.
+   *
+   * Enables n-tier deep-links from the StatusDrawer without requiring the
+   * user to drill down through each intermediate tier manually.
+   */
+  initialStack?: BreadcrumbFrame[]
 }
 
 export function AgentDetailPanel({
@@ -52,6 +62,7 @@ export function AgentDetailPanel({
   onClose,
   dispatchTelemetry,
   allAgents,
+  initialStack,
 }: AgentDetailPanelProps) {
   const colors = useColors()
   const unifiedTurnView = usePreferencesStore((s) => s.unifiedTurnView)
@@ -62,23 +73,31 @@ export function AgentDetailPanel({
     [setGeometry],
   )
 
-  // Breadcrumb stack. The root frame is the initially opened agent.
+  // Breadcrumb stack. When initialStack is provided (deep-link from StatusDrawer),
+  // use it as the starting point. Otherwise start at the root frame (single entry).
   const rootDispatch = dispatches[selectedDispatch]
   const rootFrame: BreadcrumbFrame = {
     dispatchId: rootDispatch?.id ?? '',
     conversationId: rootDispatch?.conversationId ?? '',
     agentDisplayName: meta(agent, 'displayName', agent.name),
   }
-  const [stack, setStack] = useState<BreadcrumbFrame[]>([rootFrame])
+  const [stack, setStack] = useState<BreadcrumbFrame[]>(() =>
+    initialStack && initialStack.length > 0 ? initialStack : [rootFrame],
+  )
 
-  // Reset stack when the root agent/dispatch changes.
+  // Reset stack when the root agent/dispatch changes. When a new initialStack
+  // arrives (user clicked a different dispatch in the drawer), adopt it.
   useEffect(() => {
-    setStack([{
-      dispatchId: rootDispatch?.id ?? '',
-      conversationId: rootDispatch?.conversationId ?? '',
-      agentDisplayName: meta(agent, 'displayName', agent.name),
-    }])
-  }, [rootDispatch?.id, rootDispatch?.conversationId, agent.name])
+    if (initialStack && initialStack.length > 0) {
+      setStack(initialStack)
+    } else {
+      setStack([{
+        dispatchId: rootDispatch?.id ?? '',
+        conversationId: rootDispatch?.conversationId ?? '',
+        agentDisplayName: meta(agent, 'displayName', agent.name),
+      }])
+    }
+  }, [rootDispatch?.id, rootDispatch?.conversationId, agent.name, initialStack])
 
   const top = stack[stack.length - 1]
 

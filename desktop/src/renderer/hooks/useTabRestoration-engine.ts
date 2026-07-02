@@ -581,5 +581,8 @@ export function buildPopulatedInstance(
     // nesting depth derived from them) survive reload. Absent on pre-fix files.
     dispatchTelemetry: inst.dispatchTelemetry ? [...inst.dispatchTelemetry] : [],
     forkedFromConversationIds: inst.forkedFromConversationIds ? [...inst.forkedFromConversationIds] : null,
+    // Context breakdown is runtime-only: not persisted, populated from the first
+    // engine_context_breakdown event after session resume. Initialize to null.
+    contextBreakdown: null,
   }
 }

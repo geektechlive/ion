@@ -230,6 +230,13 @@ export interface ConversationInstance {
   /** Set after rewind — the conversation ID chain before rewind. Used to inject
    *  prior-conversation context on the next prompt. Cleared after first send. */
   forkedFromConversationIds: string[] | null
+  /**
+   * Most recent context breakdown from the engine_context_breakdown event.
+   * Replaced wholesale on each emission (snapshot semantics — the engine
+   * rebuilds the full breakdown on every turn). Null until the first run.
+   * The Status Drawer reads this synchronously on open; no fetch required.
+   */
+  contextBreakdown: ContextBreakdownPayload | null
 }
 
 export interface ConversationPane {
@@ -384,3 +391,46 @@ export interface LlmContentBlock {
 // Re-exported here so existing `import { EngineEvent } from './types-engine'`
 // sites are unchanged.
 export type { EngineEvent } from './types-engine-event'
+
+// ─── Context Breakdown (engine_context_breakdown wire payload) ───
+//
+// Mirrors Go's ContextBreakdownCategory and ContextBreakdownPayload in
+// engine/internal/types/engine_event.go. The desktop and iOS use these to
+// render the per-category context-usage readout in the Status Drawer.
+//
+// Cross-language contract: contract-sync.test.ts validates field parity against
+// engine/internal/types/testdata/contracts.json. Update that manifest whenever
+// the Go struct changes (go test ./internal/types/ -run TestContractManifest -update).
+
+/** One row in a context breakdown: a named category with its token count and resolution tier. */
+export interface ContextBreakdownCategory {
+  name: string
+  kind: string
+  tokens: number
+  /** How the count was obtained: provider endpoint, BPE, or char/4 heuristic. */
+  tier: 'exact' | 'local' | 'approximate'
+  /** Absolute path — populated for per-file rows (kind === 'file'). */
+  path?: string
+}
+
+/** Wire payload for engine_context_breakdown. Mirrors Go's ContextBreakdownPayload. */
+export interface ContextBreakdownPayload {
+  categories: ContextBreakdownCategory[]
+  contextWindow: number
+  totalTokens: number
+  /** Provider-reported input_tokens. Zero until reconciliation after first usage event. */
+  apiReportedTotal?: number
+  /** apiReportedTotal - totalTokens. Non-zero after reconciliation. */
+  unaccounted?: number
+  /**
+   * Provider-reported cache-read tokens. Non-additive annotation — NOT included in
+   * totalTokens. Zero/absent when the provider did not report cache activity.
+   */
+  cacheReadTokens?: number
+  /**
+   * Provider-reported cache-creation tokens. Non-additive annotation — NOT included in
+   * totalTokens. Zero/absent when the provider did not report cache activity.
+   */
+  cacheCreationTokens?: number
+  model: string
+}
