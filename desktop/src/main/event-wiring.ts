@@ -291,6 +291,7 @@ export function wireEngineBridgeEvents(): void {
         cacheReadTokens: event.contextBreakdown.cacheReadTokens,
         cacheCreationTokens: event.contextBreakdown.cacheCreationTokens,
         model: event.contextBreakdown.model ?? '',
+        aggregateCostUsd: event.contextBreakdown.aggregateCostUsd,
       })
       if (state.remoteTransport) {
         const tabIdBD = key.split(':')[0]

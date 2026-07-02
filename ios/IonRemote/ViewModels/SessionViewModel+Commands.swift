@@ -293,6 +293,13 @@ extension SessionViewModel {
         send(.requestTerminalSnapshot(tabId: tabId), intent: .automaticEssential)
     }
 
+    /// Request an on-demand context breakdown from the desktop for a tab.
+    /// The desktop forwards get_context_breakdown to the engine; the result
+    /// arrives as desktop_context_breakdown and populates inst.contextBreakdown.
+    func requestContextBreakdown(tabId: String) {
+        send(.requestContextBreakdown(tabId: tabId), intent: .automaticEssential)
+    }
+
     func renameTab(tabId: String, customTitle: String?) {
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].customTitle = customTitle

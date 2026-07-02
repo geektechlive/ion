@@ -47,6 +47,13 @@
 		A1B2C3D4E5F600010000D2AA /* AnsiParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000D3AA /* AnsiParser.swift */; };
 		A1B2C3D4E5F600010000E0AA /* AgentBarRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */; };
 		A1B2C3D4E5F600010000E2AA /* AgentExpandedContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F600010000E3AA /* AgentExpandedContent.swift */; };
+		APDR00000000000000001 /* AgentPanelDefaultResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = APDR00000000000000002 /* AgentPanelDefaultResolver.swift */; };
+		STATUSDWR0000000000001 /* StatusDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = STATUSDWR0000000000002 /* StatusDrawerView.swift */; };
+		STATUSDWRBRK000000001 /* StatusDrawerBreakdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = STATUSDWRBRK000000002 /* StatusDrawerBreakdown.swift */; };
+		ACTLROW00000000000001 /* ActiveToolRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACTLROW00000000000002 /* ActiveToolRow.swift */; };
+		CTXBDPAY0000000000001 /* ContextBreakdownPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTXBDPAY0000000000002 /* ContextBreakdownPayload.swift */; };
+		CTXBDTST0000000000001 /* ContextBreakdownDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CTXBDTST0000000000002 /* ContextBreakdownDecodeTests.swift */; };
+		REQCTXBD0000000000001 /* RequestContextBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REQCTXBD0000000000002 /* RequestContextBreakdownTests.swift */; };
 		DBSTATE00000000000000A1 /* DispatchBodyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBSTATE00000000000000A2 /* DispatchBodyState.swift */; };
 		TRNSCRPT000000000000A1 /* Transcript.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRNSCRPT000000000000A2 /* Transcript.swift */; };
 		DTELACC000000000000A1 /* SessionViewModel+DispatchTelemetryAccessors.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTELACC000000000000A2 /* SessionViewModel+DispatchTelemetryAccessors.swift */; };
@@ -95,6 +102,7 @@
 		DSPMKR0000000000000007 /* DispatchPreviewMarkerRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DSPMKR0000000000000008 /* DispatchPreviewMarkerRowTests.swift */; };
 		CSBVIS00000000000000007 /* ConversationStatusBarVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSBVIS00000000000000008 /* ConversationStatusBarVisibilityTests.swift */; };
 		CSBWAIT0000000000000007 /* ConversationStatusBarWaitingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSBWAIT0000000000000008 /* ConversationStatusBarWaitingTests.swift */; };
+		CSBTRIG0000000000000007 /* ConversationStatusBarTriggerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CSBTRIG0000000000000008 /* ConversationStatusBarTriggerTests.swift */; };
 		UCSTORE0000000000000007 /* UnifiedConversationStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UCSTORE0000000000000008 /* UnifiedConversationStoreTests.swift */; };
 		A1B2C3D4E5F60001000220AA /* TransportManager+Send.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000221AA /* TransportManager+Send.swift */; };
 		A1B2C3D4E5F60001000222AA /* TransportManager+Receive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60001000223AA /* TransportManager+Receive.swift */; };
@@ -273,6 +281,7 @@
 		AGPNK0000000000000001 /* AgentPanelNameKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGPNK0000000000000002 /* AgentPanelNameKeyTests.swift */; };
 		AGDAT00000000000000001 /* AgentDispatchAttributionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGDAT00000000000000002 /* AgentDispatchAttributionTests.swift */; };
 		AGPCST000000000000001 /* AgentPanelCollapseStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AGPCST000000000000002 /* AgentPanelCollapseStateTests.swift */; };
+		APDRTS000000000000001 /* AgentPanelDefaultResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APDRTS000000000000002 /* AgentPanelDefaultResolverTests.swift */; };
 		DSPPOPUP000000000001 /* DispatchPopupInitialLoadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DSPPOPUP000000000002 /* DispatchPopupInitialLoadTests.swift */; };
 		EMRTOOLS00000000000001 /* EngineMessageRow+ToolBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = EMRTOOLS00000000000002 /* EngineMessageRow+ToolBubble.swift */; };
 		EMRSUPP000000000000001 /* EngineMessageRow+Support.swift in Sources */ = {isa = PBXBuildFile; fileRef = EMRSUPP000000000000002 /* EngineMessageRow+Support.swift */; };
@@ -334,6 +343,13 @@
 		A1B2C3D4E5F600010000D3AA /* AnsiParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnsiParser.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBarRow.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F600010000E3AA /* AgentExpandedContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentExpandedContent.swift; sourceTree = "<group>"; };
+		APDR00000000000000002 /* AgentPanelDefaultResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPanelDefaultResolver.swift; sourceTree = "<group>"; };
+		STATUSDWR0000000000002 /* StatusDrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDrawerView.swift; sourceTree = "<group>"; };
+		STATUSDWRBRK000000002 /* StatusDrawerBreakdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusDrawerBreakdown.swift; sourceTree = "<group>"; };
+		ACTLROW00000000000002 /* ActiveToolRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveToolRow.swift; sourceTree = "<group>"; };
+		CTXBDPAY0000000000002 /* ContextBreakdownPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextBreakdownPayload.swift; sourceTree = "<group>"; };
+		CTXBDTST0000000000002 /* ContextBreakdownDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextBreakdownDecodeTests.swift; sourceTree = "<group>"; };
+		REQCTXBD0000000000002 /* RequestContextBreakdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestContextBreakdownTests.swift; sourceTree = "<group>"; };
 		DBSTATE00000000000000A2 /* DispatchBodyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DispatchBodyState.swift; sourceTree = "<group>"; };
 		TRNSCRPT000000000000A2 /* Transcript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transcript.swift; sourceTree = "<group>"; };
 		DTELACC000000000000A2 /* SessionViewModel+DispatchTelemetryAccessors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionViewModel+DispatchTelemetryAccessors.swift"; sourceTree = "<group>"; };
@@ -382,6 +398,7 @@
 		DSPMKR0000000000000008 /* DispatchPreviewMarkerRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DispatchPreviewMarkerRowTests.swift; sourceTree = "<group>"; };
 		CSBVIS00000000000000008 /* ConversationStatusBarVisibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatusBarVisibilityTests.swift; sourceTree = "<group>"; };
 		CSBWAIT0000000000000008 /* ConversationStatusBarWaitingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatusBarWaitingTests.swift; sourceTree = "<group>"; };
+		CSBTRIG0000000000000008 /* ConversationStatusBarTriggerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationStatusBarTriggerTests.swift; sourceTree = "<group>"; };
 		UCSTORE0000000000000008 /* UnifiedConversationStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedConversationStoreTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000221AA /* TransportManager+Send.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TransportManager+Send.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F60001000223AA /* TransportManager+Receive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TransportManager+Receive.swift"; sourceTree = "<group>"; };
@@ -559,6 +576,7 @@
 		AGPNK0000000000000002 /* AgentPanelNameKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPanelNameKeyTests.swift; sourceTree = "<group>"; };
 		AGDAT00000000000000002 /* AgentDispatchAttributionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDispatchAttributionTests.swift; sourceTree = "<group>"; };
 		AGPCST000000000000002 /* AgentPanelCollapseStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPanelCollapseStateTests.swift; sourceTree = "<group>"; };
+		APDRTS000000000000002 /* AgentPanelDefaultResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPanelDefaultResolverTests.swift; sourceTree = "<group>"; };
 		DSPPOPUP000000000002 /* DispatchPopupInitialLoadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DispatchPopupInitialLoadTests.swift; sourceTree = "<group>"; };
 		EMRTOOLS00000000000002 /* EngineMessageRow+ToolBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineMessageRow+ToolBubble.swift"; sourceTree = "<group>"; };
 		EMRSUPP000000000000002 /* EngineMessageRow+Support.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineMessageRow+Support.swift"; sourceTree = "<group>"; };
@@ -636,6 +654,7 @@
 				B1B2C3D4E5F60001CC000014 /* NormalizedEvent+Codable.swift */,
 				A1B2C3D4E5F60001FF0024AA /* NormalizedEvent+EngineDecoder.swift */,
 				A1B2C3D4E5F60001E50007AA /* EngineEventSupport.swift */,
+				CTXBDPAY0000000000002 /* ContextBreakdownPayload.swift */,
 				A1B2C3D4E5F60001D70007AA /* DesktopSettingsModel.swift */,
 				A1B2C3D4E5F60001000302AA /* NormalizedEvent+Git.swift */,
 				A1B2C3D4E5F60001000402AA /* NormalizedEvent+Files.swift */,
@@ -735,9 +754,13 @@
 				A1B2C3D4E5F600010000F5AA /* EngineInstanceBar.swift */,
 				A1B2C3D4E5F600010000E1AA /* AgentBarRow.swift */,
 				A1B2C3D4E5F600010000E3AA /* AgentExpandedContent.swift */,
+				APDR00000000000000002 /* AgentPanelDefaultResolver.swift */,
 				DBSTATE00000000000000A2 /* DispatchBodyState.swift */,
 				TRNSCRPT000000000000A2 /* Transcript.swift */,
 				A1B2C3D4E5F600010000E5AA /* AgentDetailFullScreenView.swift */,
+				STATUSDWR0000000000002 /* StatusDrawerView.swift */,
+				STATUSDWRBRK000000002 /* StatusDrawerBreakdown.swift */,
+				ACTLROW00000000000002 /* ActiveToolRow.swift */,
 				A1B2C3D4E5F6000100400EAA /* ConversationStatusBar.swift */,
 				A1B2C3D4E5F60001000304AA /* GitPaneView.swift */,
 				A1B2C3D4E5F60001000306AA /* GitChangesListView.swift */,
@@ -856,6 +879,7 @@
 				DSPMKR0000000000000008 /* DispatchPreviewMarkerRowTests.swift */,
 				CSBVIS00000000000000008 /* ConversationStatusBarVisibilityTests.swift */,
 				CSBWAIT0000000000000008 /* ConversationStatusBarWaitingTests.swift */,
+				CSBTRIG0000000000000008 /* ConversationStatusBarTriggerTests.swift */,
 				UCSTORE0000000000000008 /* UnifiedConversationStoreTests.swift */,
 				A1B2C3D4E5F60001E80007AA /* DesktopSettingsContractTests.swift */,
 				A1B2C3D4E5F60001F00007AA /* ContractSyncEngineEventsTests.swift */,
@@ -868,6 +892,8 @@
 				A1B2C3D4E5F60001F00013AB /* ThinkingEffortCodecTests.swift */,
 				E11C17CA0001F00013AB0001 /* ElicitationCodecTests.swift */,
 				RTSDECODE000000000002 /* RemoteTabStateDecodeTests.swift */,
+				CTXBDTST0000000000002 /* ContextBreakdownDecodeTests.swift */,
+				REQCTXBD0000000000002 /* RequestContextBreakdownTests.swift */,
 				B1B2C3D4E5F60001CC000002 /* ConversationStatusBarContextTests.swift */,
 				D1B2C3D4E5F60001AB000002 /* InputBarAbortGateTests.swift */,
 				MSGADDFRESH00000000000002 /* MessageAddedFreshConversationTests.swift */,
@@ -896,6 +922,7 @@
 				AGPNK0000000000000002 /* AgentPanelNameKeyTests.swift */,
 				AGDAT00000000000000002 /* AgentDispatchAttributionTests.swift */,
 				AGPCST000000000000002 /* AgentPanelCollapseStateTests.swift */,
+				APDRTS000000000000002 /* AgentPanelDefaultResolverTests.swift */,
 				DSPPOPUP000000000002 /* DispatchPopupInitialLoadTests.swift */,
 			);
 			path = IonRemoteTests;
@@ -1206,11 +1233,16 @@
 				A1B2C3D4E5F600010000D2AA /* AnsiParser.swift in Sources */,
 				A1B2C3D4E5F600010000E0AA /* AgentBarRow.swift in Sources */,
 				A1B2C3D4E5F600010000E2AA /* AgentExpandedContent.swift in Sources */,
+				APDR00000000000000001 /* AgentPanelDefaultResolver.swift in Sources */,
 				DBSTATE00000000000000A1 /* DispatchBodyState.swift in Sources */,
 				TRNSCRPT000000000000A1 /* Transcript.swift in Sources */,
 				DTELACC000000000000A1 /* SessionViewModel+DispatchTelemetryAccessors.swift in Sources */,
 				DTELENTRY0000000000A1 /* DispatchTelemetryEntry.swift in Sources */,
 				A1B2C3D4E5F600010000E4AA /* AgentDetailFullScreenView.swift in Sources */,
+				STATUSDWR0000000000001 /* StatusDrawerView.swift in Sources */,
+				STATUSDWRBRK000000001 /* StatusDrawerBreakdown.swift in Sources */,
+				ACTLROW00000000000001 /* ActiveToolRow.swift in Sources */,
+				CTXBDPAY0000000000001 /* ContextBreakdownPayload.swift in Sources */,
 				A1B2C3D4E5F6000100400FAA /* ConversationStatusBar.swift in Sources */,
 				A1B2C3D4E5F600010000F0AA /* EngineProfile.swift in Sources */,
 				A1B2C3D4E5F600010000F2AA /* KeyboardUtilityBar.swift in Sources */,
@@ -1313,6 +1345,7 @@
 				DSPMKR0000000000000007 /* DispatchPreviewMarkerRowTests.swift in Sources */,
 				CSBVIS00000000000000007 /* ConversationStatusBarVisibilityTests.swift in Sources */,
 				CSBWAIT0000000000000007 /* ConversationStatusBarWaitingTests.swift in Sources */,
+				CSBTRIG0000000000000007 /* ConversationStatusBarTriggerTests.swift in Sources */,
 				UCSTORE0000000000000007 /* UnifiedConversationStoreTests.swift in Sources */,
 				A1B2C3D4E5F60001000248AA /* ContractSyncTests.swift in Sources */,
 				A1B2C3D4E5F60001000A00AA /* SessionStatusSynthesisTests.swift in Sources */,
@@ -1327,6 +1360,8 @@
 				A1B2C3D4E5F60001F00012AB /* ThinkingEffortCodecTests.swift in Sources */,
 				E11C17CA0001F00012AB0001 /* ElicitationCodecTests.swift in Sources */,
 				RTSDECODE000000000001 /* RemoteTabStateDecodeTests.swift in Sources */,
+				CTXBDTST0000000000001 /* ContextBreakdownDecodeTests.swift in Sources */,
+				REQCTXBD0000000000001 /* RequestContextBreakdownTests.swift in Sources */,
 				B1B2C3D4E5F60001CC000001 /* ConversationStatusBarContextTests.swift in Sources */,
 				D1B2C3D4E5F60001AB000001 /* InputBarAbortGateTests.swift in Sources */,
 				MSGADDFRESH00000000000001 /* MessageAddedFreshConversationTests.swift in Sources */,
@@ -1355,6 +1390,7 @@
 				AGPNK0000000000000001 /* AgentPanelNameKeyTests.swift in Sources */,
 				AGDAT00000000000000001 /* AgentDispatchAttributionTests.swift in Sources */,
 				AGPCST000000000000001 /* AgentPanelCollapseStateTests.swift in Sources */,
+				APDRTS000000000000001 /* AgentPanelDefaultResolverTests.swift in Sources */,
 				DSPPOPUP000000000001 /* DispatchPopupInitialLoadTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -1,5 +1,5 @@
 // @file-size-exception: event-slice.ts is the single-path normalized event reducer.
-// Grew by 16 lines to add context_breakdown caching (plan modest-leaping-waffle).
+// Grew by 17 lines to add context_breakdown caching (plan modest-leaping-waffle).
 import type { TabStatus, Message } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
@@ -478,6 +478,7 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
                   cacheReadTokens: event.cacheReadTokens,
                   cacheCreationTokens: event.cacheCreationTokens,
                   model: event.model ?? '',
+                  aggregateCostUsd: event.aggregateCostUsd,
                 },
               }
               // Mirror the authoritative contextWindow from the breakdown onto the

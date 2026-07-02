@@ -115,6 +115,7 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   // Per-category token breakdown. Emitted after prompt assembly and again
   // after first usage-event reconciliation. Tier encodes the resolution path.
   context_breakdown: [
+    'aggregateCostUsd',
     'apiReportedTotal',
     'cacheCreationTokens',
     'cacheReadTokens',
@@ -214,6 +215,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
   ContextBreakdownCategory: ['kind', 'name', 'path', 'tier', 'tokens'],
   // Wire payload for engine_context_breakdown. Mirrors Go's ContextBreakdownPayload.
   ContextBreakdownPayload: [
+    'aggregateCostUsd',
     'apiReportedTotal',
     'cacheCreationTokens',
     'cacheReadTokens',

@@ -74,6 +74,8 @@ extension DiagnosticLog {
 
         case .requestTerminalSnapshot(let tabId):
             log("CMD: requestTerminalSnapshot tabId=\(tabId.prefix(8))")
+        case .requestContextBreakdown(let tabId):
+            log("CMD: requestContextBreakdown tabId=\(tabId.prefix(8))")
 
         case .renameTab(let tabId, let title):
             log("CMD: renameTab tabId=\(tabId.prefix(8)) title=\(title?.prefix(20) ?? "nil")")

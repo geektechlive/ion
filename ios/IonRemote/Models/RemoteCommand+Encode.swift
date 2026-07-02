@@ -110,6 +110,10 @@ extension RemoteCommand {
             try container.encode(TypeKey.requestTerminalSnapshot, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
+        case .requestContextBreakdown(let tabId):
+            try container.encode(TypeKey.requestContextBreakdown, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+
         case .renameTab(let tabId, let customTitle):
             try container.encode(TypeKey.renameTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)

@@ -286,6 +286,7 @@ export function StatusDrawer() {
     ? Math.round((contextPercent / 100) * statusFields.contextWindow)
     : null
   const totalCostUsd = usage?.cost ?? statusFields?.totalCostUsd ?? null
+  const aggregateCostUsd = contextBreakdown?.aggregateCostUsd ?? null
   const contextWindow = contextBreakdown?.contextWindow || statusFields?.contextWindow || null
   const state = statusFields?.state ?? null
 
@@ -352,6 +353,12 @@ export function StatusDrawer() {
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: 10, color: colors.textTertiary }}>Duration</span>
                   <span style={{ fontSize: 10, color: colors.textSecondary }}>{formatMs(tab.lastResult.durationMs)}</span>
+                </div>
+              )}
+              {typeof aggregateCostUsd === 'number' && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 10, color: colors.textTertiary }}>Total cost</span>
+                  <span style={{ fontSize: 10, color: colors.textSecondary }}>${aggregateCostUsd.toFixed(4)}</span>
                 </div>
               )}
               {tab?.sessionVersion && (

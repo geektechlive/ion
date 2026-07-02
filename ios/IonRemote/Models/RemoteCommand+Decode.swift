@@ -130,6 +130,10 @@ extension RemoteCommand {
             let tabId = try container.decode(String.self, forKey: .tabId)
             self = .requestTerminalSnapshot(tabId: tabId)
 
+        case .requestContextBreakdown:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            self = .requestContextBreakdown(tabId: tabId)
+
         case .renameTab:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let customTitle = try container.decodeIfPresent(String.self, forKey: .customTitle)

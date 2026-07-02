@@ -71,6 +71,10 @@ enum RemoteCommand: Codable, Sendable {
     case terminalRemoveInstance(tabId: String, instanceId: String)
     case terminalSelectInstance(tabId: String, instanceId: String)
     case requestTerminalSnapshot(tabId: String)
+    /// Request on-demand context breakdown from the desktop for a tab.
+    /// The desktop forwards get_context_breakdown to the engine; the result
+    /// arrives as desktop_context_breakdown and populates inst.contextBreakdown.
+    case requestContextBreakdown(tabId: String)
     case renameTab(tabId: String, customTitle: String?)
     case renameTerminalInstance(tabId: String, instanceId: String, label: String)
     case rewind(tabId: String, messageId: String)
@@ -232,6 +236,7 @@ enum RemoteCommand: Codable, Sendable {
         case terminalRemoveInstance = "desktop_terminal_remove_instance"
         case terminalSelectInstance = "desktop_terminal_select_instance"
         case requestTerminalSnapshot = "desktop_request_terminal_snapshot"
+        case requestContextBreakdown = "desktop_request_context_breakdown"
         case renameTab = "desktop_rename_tab"
         case renameTerminalInstance = "desktop_rename_terminal_instance"
         case rewind = "desktop_rewind"

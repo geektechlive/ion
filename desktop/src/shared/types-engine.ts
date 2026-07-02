@@ -433,4 +433,10 @@ export interface ContextBreakdownPayload {
    */
   cacheCreationTokens?: number
   model: string
+  /**
+   * Sum of this session's LLM cost plus every descendant dispatch session's
+   * cost, computed on demand from the conversation tree. Zero / absent for
+   * sessions with no dispatches or no cost yet.
+   */
+  aggregateCostUsd?: number
 }
