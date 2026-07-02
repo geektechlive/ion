@@ -1,5 +1,5 @@
 import { log as _log } from '../logger'
-import { sessionPlane, deviceFocusMap, state } from '../state'
+import { sessionPlane, deviceFocusMap, state, engineBridge } from '../state'
 import {
   handleSync,
   handleCreateTab,
@@ -134,6 +134,16 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'desktop_terminal_add_instance': await handleTerminalAddInstance(cmd); break
     case 'desktop_terminal_remove_instance': await handleTerminalRemoveInstance(cmd); break
     case 'desktop_request_terminal_snapshot': await handleRequestTerminalSnapshot(cmd, deviceId); break
+    case 'desktop_request_context_breakdown': {
+      // iOS opened the status drawer and needs an on-demand context breakdown
+      // for this tab. Forward get_context_breakdown to the engine; the result
+      // arrives as engine_context_breakdown, which event-wiring.ts forwards to
+      // iOS as desktop_context_breakdown. Modeled on handleRequestTerminalSnapshot.
+      const key = cmd.tabId
+      log(`desktop_request_context_breakdown: forwarding get_context_breakdown key=${key}`)
+      engineBridge._send({ cmd: 'get_context_breakdown', key })
+      break
+    }
     case 'desktop_terminal_select_instance': await handleTerminalSelectInstance(cmd); break
     case 'desktop_rename_tab': handleRenameTab(cmd); break
     case 'desktop_rename_terminal_instance': handleRenameTerminalInstance(cmd); break

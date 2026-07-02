@@ -241,6 +241,7 @@ export type RemoteCommand =
   | { type: 'desktop_terminal_remove_instance'; tabId: string; instanceId: string }
   | { type: 'desktop_terminal_select_instance'; tabId: string; instanceId: string }
   | { type: 'desktop_request_terminal_snapshot'; tabId: string }
+  | { type: 'desktop_request_context_breakdown'; tabId: string }
   | { type: 'desktop_rename_tab'; tabId: string; customTitle: string | null }
   | { type: 'desktop_rename_terminal_instance'; tabId: string; instanceId: string; label: string }
   | { type: 'desktop_rewind'; tabId: string; messageId: string }
