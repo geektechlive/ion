@@ -4,6 +4,7 @@ import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { makeLocalTab, nextMsgId, initialPermissionMode } from '../session-store-helpers'
 import { makeMainPane, commitInstance, activeInstance, effectivePermissionMode } from '../conversation-instance'
 import { lastPendingCardTool, type PendingCardMessage } from '../../../shared/pending-card'
+import { mapSessionHistory, mapSessionMessage } from '../../../shared/session-message-mapper'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
@@ -223,21 +224,10 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
             await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)))
           }
         }
-        const messages: Message[] = history.filter((m: any) => !m.internal).map((m) => ({
-          id: nextMsgId(),
-          role: m.role as Message['role'],
-          content: m.content || '',
-          toolName: m.toolName,
-          toolId: m.toolId,
-          toolInput: m.toolInput,
-          toolStatus: m.toolName ? 'completed' as const : undefined,
-          userExecuted: m.userExecuted,
-          slashCommand: m.slashCommand,
-          slashArgs: m.slashArgs,
-          slashSource: m.slashSource,
-          attachments: m.attachments,
-          timestamp: m.timestamp,
-        }))
+        // Map engine history rows → client Messages via the shared mapper,
+        // which also converts system-role marker rows (compaction/plan/steer)
+        // into the same divider Messages the live handlers produce.
+        const messages: Message[] = mapSessionHistory(history, nextMsgId)
 
         const restoredDenied = buildRestoredDenied(messages)
 
@@ -314,23 +304,9 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
         const allSessionIds = [...tab.historicalSessionIds, tab.conversationId]
         const history = await window.ion.loadChainHistory(allSessionIds)
 
-        const allMessages: Message[] = history
-          .filter((m: any) => !m.internal)
-          .map((m: any) => ({
-            id: nextMsgId(),
-            role: m.role as Message['role'],
-            content: m.content || '',
-            toolName: m.toolName,
-            toolId: m.toolId,
-            toolInput: m.toolInput,
-            toolStatus: m.toolName ? 'completed' as const : undefined,
-            userExecuted: m.userExecuted,
-            slashCommand: m.slashCommand,
-            slashArgs: m.slashArgs,
-            slashSource: m.slashSource,
-            attachments: m.attachments,
-            timestamp: m.timestamp,
-          }))
+        // Shared mapper: internal rows filtered, marker rows converted to
+        // system divider Messages (compaction/plan/steer).
+        const allMessages: Message[] = mapSessionHistory(history, nextMsgId)
 
         // Restore permissionDenied from the last tool message (only if the
         // instance doesn't already have one from the persisted state)
@@ -370,42 +346,18 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
         const allMessages: Message[] = []
         for (const histId of historicalSessionIds) {
           const history = await window.ion.loadSession(histId, defaultDir, encodedDir || undefined).catch(() => [])
-          for (const m of history.filter((h: any) => !h.internal)) {
-            allMessages.push({
-              id: nextMsgId(),
-              role: m.role as Message['role'],
-              content: m.content || '',
-              toolName: m.toolName,
-              toolId: m.toolId,
-              toolInput: m.toolInput,
-              toolStatus: m.toolName ? 'completed' as const : undefined,
-              userExecuted: m.userExecuted,
-              slashCommand: m.slashCommand,
-              slashArgs: m.slashArgs,
-              slashSource: m.slashSource,
-              attachments: m.attachments,
-              timestamp: m.timestamp,
-            })
+          for (const m of history) {
+            if (m.internal) continue
+            const mapped = mapSessionMessage(m, nextMsgId)
+            if (mapped) allMessages.push(mapped)
           }
         }
 
         const currentHistory = await window.ion.loadSession(sessionId, defaultDir, encodedDir || undefined).catch(() => [])
-        for (const m of currentHistory.filter((h: any) => !h.internal)) {
-          allMessages.push({
-            id: nextMsgId(),
-            role: m.role as Message['role'],
-            content: m.content || '',
-            toolName: m.toolName,
-            toolId: m.toolId,
-            toolInput: m.toolInput,
-            toolStatus: m.toolName ? 'completed' as const : undefined,
-            userExecuted: m.userExecuted,
-            slashCommand: m.slashCommand,
-            slashArgs: m.slashArgs,
-            slashSource: m.slashSource,
-            attachments: m.attachments,
-            timestamp: m.timestamp,
-          })
+        for (const m of currentHistory) {
+          if (m.internal) continue
+          const mapped = mapSessionMessage(m, nextMsgId)
+          if (mapped) allMessages.push(mapped)
         }
 
         const restoredDenied = buildRestoredDenied(allMessages)

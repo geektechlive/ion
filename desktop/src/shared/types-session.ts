@@ -534,6 +534,29 @@ export interface SessionLoadMessage {
   slashCommand?: string
   slashArgs?: string
   slashSource?: string
+  /**
+   * Marker payload fields (additive, omitempty on the wire). Set only when
+   * `role === 'system'` and this row is a persisted marker entry (compaction,
+   * plan, steer) the engine's `flattenEntries` replays on historical reload.
+   * The engine emits structured data, not display strings; the desktop formats
+   * the divider content from these fields using its existing formatters (see
+   * shared/session-message-mapper.ts). `markerKind` discriminates the family.
+   * Mirror of `types.SessionMessage.Marker*` in engine/internal/types/types.go.
+   */
+  markerKind?: string
+  /** Compaction marker fields (markerKind === 'compaction'). */
+  markerMessagesBefore?: number
+  markerMessagesAfter?: number
+  markerClearedBlocks?: number
+  markerStrategy?: string
+  markerMicroOnly?: boolean
+  markerSummary?: string
+  /** Plan marker fields (markerKind === 'plan'). */
+  markerPlanOperation?: string
+  markerPlanFilePath?: string
+  markerPlanSlug?: string
+  /** Steer marker fields (markerKind === 'steer'). */
+  markerMessageLength?: number
 }
 
 // ─── Terminal Multiplexing ───

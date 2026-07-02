@@ -7,6 +7,7 @@ import { restoreConversationTab } from './useTabRestoration-engine'
 import { makeLocalTab } from '../stores/session-store-helpers'
 import { makeMainPane, commitInstance, activeInstance } from '../stores/conversation-instance'
 import { lastPendingCardTool } from '../../shared/pending-card'
+import { mapSessionHistory } from '../../shared/session-message-mapper'
 import { parseToolInput, isSkeletonTab, normalizeLegacyTabFields, readMainInstance, reassertRestoredPlanMode, orderSessionCandidates, startSessionsSequentially } from './useTabRestoration-helpers'
 import { tabHasExtensions, persistedTabHasExtensions } from '../../shared/tab-predicates'
 
@@ -345,18 +346,7 @@ export function useTabRestoration() {
             const allHistoricalMessages: Message[] = []
             for (const hid of historicalIds) {
               const history = await window.ion.loadSession(hid, st.workingDirectory).catch(() => [])
-              const msgs = history.filter((m: any) => !m.internal).map((m) => ({
-                id: crypto.randomUUID(),
-                role: m.role as Message['role'],
-                content: m.content || '',
-                toolName: m.toolName,
-                toolId: m.toolId,
-                toolInput: m.toolInput,
-                toolStatus: m.toolName ? 'completed' as const : undefined,
-                userExecuted: m.userExecuted,
-                attachments: m.attachments,
-                timestamp: m.timestamp,
-              }))
+              const msgs = mapSessionHistory(history, () => crypto.randomUUID())
               allHistoricalMessages.push(...msgs)
             }
 
@@ -406,18 +396,7 @@ export function useTabRestoration() {
           if (!st.conversationId && historicalIds.length === 0 && st.lastKnownSessionId) {
             const history = await window.ion.loadSession(st.lastKnownSessionId, st.workingDirectory).catch(() => [])
             if (history.length > 0) {
-              const msgs = history.filter((m: any) => !m.internal).map((m) => ({
-                id: crypto.randomUUID(),
-                role: m.role as Message['role'],
-                content: m.content || '',
-                toolName: m.toolName,
-                toolId: m.toolId,
-                toolInput: m.toolInput,
-                toolStatus: m.toolName ? 'completed' as const : undefined,
-                userExecuted: m.userExecuted,
-                attachments: m.attachments,
-                timestamp: m.timestamp,
-              }))
+              const msgs = mapSessionHistory(history, () => crypto.randomUUID())
               // Prepend recovered messages onto the `main` instance scrollback.
               useSessionStore.setState((s) => ({
                 conversationPanes: commitInstance(s.conversationPanes, tabId, (i) => ({

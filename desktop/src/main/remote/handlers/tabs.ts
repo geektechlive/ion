@@ -374,6 +374,11 @@ export async function handleLoadConversation(cmd: Extract<RemoteCommand, { type:
               // Slash-command provenance from the engine SessionMessage, so iOS
               // renders the command pill for resolved slash invocations.
               slashCommand: m.slashCommand, slashArgs: m.slashArgs, slashSource: m.slashSource,
+              // Carry planFilePath through so plan-lifecycle divider system
+              // messages (Plan created / Plan updated / Implementing plan) stay
+              // clickable on iOS after a history reload. Mirrors
+              // readEngineHistoryFromStore (engine-history.ts), the rewind path.
+              planFilePath: m.planFilePath,
               attachments: (m.attachments || []).map(function(a) {
                 return { id: a.id, type: a.type, name: a.name, path: a.path };
               }),

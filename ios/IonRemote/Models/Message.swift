@@ -40,12 +40,14 @@ struct Message: Codable, Identifiable, Sendable {
     var interceptLevel: String? = nil
     /// Path to the plan file associated with a plan-lifecycle divider message.
     /// Populated only on `role: .system` divider messages whose content starts
-    /// with "── Plan created" or "── Plan updated" (built by
-    /// handleEnginePlanModeChanged in SessionViewModel+EngineEvents.swift from
-    /// the engine_plan_mode_changed event's planFilePath). EngineMessageRow
-    /// reads it to make the plan slug a tappable link that opens the plan
-    /// preview. Mirrors the desktop `Message.planFilePath`. Client-only field —
-    /// NOT part of the wire protocol, NOT persisted (excluded from CodingKeys).
+    /// with "── Plan created", "── Plan updated", or "── Implementing plan"
+    /// (built by handleEnginePlanFileWritten in
+    /// SessionViewModel+EngineEvents.swift from the engine_plan_file_written
+    /// event, and carried across a history reload by the desktop history mapper
+    /// — engine-history.ts — which decodes here via the engineJSON path).
+    /// EngineMessageRow reads it to make the plan slug a tappable link that
+    /// opens the plan preview. Mirrors the desktop `Message.planFilePath`.
+    /// Decoded from the wire on the engineJSON path; not a persisted local field.
     var planFilePath: String? = nil
 
     // MARK: - Extended-thinking summary (issue #158)
