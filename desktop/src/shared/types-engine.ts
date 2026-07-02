@@ -294,6 +294,11 @@ export interface LlmContentBlock {
   summary?: string
   factCount?: number
   recentFiles?: string[]
+  // context_injection structured field. Populated only when
+  // `type === 'context_injection'` (read-triggered nested AGENTS.md/ION.md
+  // descent). Carries the absolute instruction-file paths the block injected;
+  // it is the engine's structural dedup key. See Go-side llm.go.
+  contextPaths?: string[]
 }
 
 export type EngineEvent =

@@ -191,6 +191,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
   LlmContentBlock: [
     'clearedBlocks',
     'content',
+    'contextPaths',
     'factCount',
     'id',
     'input',
