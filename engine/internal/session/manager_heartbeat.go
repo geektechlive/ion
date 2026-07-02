@@ -172,6 +172,7 @@ func (m *Manager) emitStatusSnapshot(key, reason string) {
 	lastWindow := s.lastContextWindow
 	lastModel := s.lastModel
 	lastCost := s.lastTotalCost
+	sessionID := s.conversationID
 	bgCount := 0
 	if s.dispatchRegistry != nil {
 		bgCount = len(s.dispatchRegistry.ActiveIDs())
@@ -182,7 +183,9 @@ func (m *Manager) emitStatusSnapshot(key, reason string) {
 	m.emit(key, types.EngineEvent{
 		Type: "engine_status",
 		Fields: &types.StatusFields{
+			Label:             key,
 			State:             sessionState,
+			SessionID:         sessionID,
 			ContextPercent:    lastPct,
 			ContextWindow:     lastWindow,
 			Model:             lastModel,

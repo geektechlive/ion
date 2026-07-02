@@ -13,7 +13,10 @@
       "summary"
     ],
     "context_breakdown": [
+      "aggregateCostUsd",
       "apiReportedTotal",
+      "cacheCreationTokens",
+      "cacheReadTokens",
       "categories",
       "contextWindow",
       "model",
@@ -351,7 +354,10 @@
       "tokens"
     ],
     "ContextBreakdownPayload": [
+      "aggregateCostUsd",
       "apiReportedTotal",
+      "cacheCreationTokens",
+      "cacheReadTokens",
       "categories",
       "contextWindow",
       "model",

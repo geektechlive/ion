@@ -450,3 +450,21 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 
 	return toolDefs, serverTools
 }
+
+// AssembleSystemPromptOnDemand assembles the system prompt outside of an active
+// run. Exported so the session layer can reconstruct the prompt for on-demand
+// operations (e.g. ComputeAndEmitContextBreakdown) without needing a live
+// activeRun. Equivalent to buildSystemPrompt with a nil run — the nil-guard
+// inside that function means the plan_mode_sparse_reminder cache path is
+// skipped, which is correct for the on-demand case (no run is in flight).
+func AssembleSystemPromptOnDemand(opts *types.RunOptions, conv *conversation.Conversation) string {
+	return buildSystemPrompt(opts, conv, RunHooks{}, "on-demand", nil)
+}
+
+// ResolveProviderOnDemand resolves the provider for the given model and returns
+// it. Exported thin wrapper around the unexported resolveProvider, used by the
+// session layer for on-demand operations (ComputeAndEmitContextBreakdown) that
+// need a provider reference without a live activeRun.
+func (b *ApiBackend) ResolveProviderOnDemand(model string) providers.LlmProvider {
+	return b.resolveProvider(model)
+}

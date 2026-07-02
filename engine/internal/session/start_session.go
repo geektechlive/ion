@@ -152,11 +152,26 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 			if info := providers.GetModelInfo(convModel); info != nil {
 				ctxWindow = info.ContextWindow
 			}
+			// Seed lastContextPct from the persisted conversation so the initial
+			// idle engine_status reports the true usage instead of 0%. Without
+			// this a resumed conversation shows an empty context bar until the
+			// first prompt's usage event lands. Load the full conversation to
+			// compute usage against the resolved context window.
+			seededPct := 0
+			if conv, lerr := conversation.Load(s.conversationID, ""); lerr == nil {
+				usage := conversation.GetContextUsage(conv, ctxWindow)
+				if usage.Percent > 0 {
+					seededPct = usage.Percent
+				}
+			}
 			m.mu.Lock()
 			s.lastModel = convModel
 			s.lastContextWindow = ctxWindow
+			if seededPct > 0 {
+				s.lastContextPct = seededPct
+			}
 			m.mu.Unlock()
-			utils.Log("Session", fmt.Sprintf("StartSession: key=%s seeded lastModel=%s contextWindow=%d from conversation=%s", key, convModel, ctxWindow, s.conversationID))
+			utils.Log("Session", fmt.Sprintf("StartSession: key=%s seeded lastModel=%s contextWindow=%d contextPct=%d from conversation=%s", key, convModel, ctxWindow, seededPct, s.conversationID))
 		} else if err != nil {
 			utils.Debug("Session", fmt.Sprintf("StartSession: key=%s could not load conversation model conv=%s err=%v", key, s.conversationID, err))
 		}
@@ -263,10 +278,12 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		Type:         "engine_working_message",
 		EventMessage: "",
 	})
-	m.emit(key, types.EngineEvent{
-		Type:   "engine_status",
-		Fields: &types.StatusFields{Label: key, State: "idle", SessionID: s.conversationID},
-	})
+	// Emit the initial idle status through emitStatusSnapshot so the payload
+	// carries the seeded contextPercent / contextWindow / model rather than
+	// hardcoded zeros. On a resumed conversation lastContextPct is seeded above
+	// from the conversation file, so the desktop binds the correct usage from
+	// the first status rather than showing 0% until the first prompt.
+	m.emitStatusSnapshot(key, "start_session")
 
 	return &StartSessionResult{Existed: false, ConversationID: s.conversationID}, nil
 }

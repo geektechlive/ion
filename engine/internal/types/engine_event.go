@@ -549,5 +549,13 @@ type ContextBreakdownPayload struct {
 	TotalTokens      int                        `json:"totalTokens"`
 	APIReportedTotal int                        `json:"apiReportedTotal,omitempty"`
 	Unaccounted      int                        `json:"unaccounted,omitempty"`
-	Model            string                     `json:"model"`
+	// CacheReadTokens and CacheCreationTokens are provider-reported cache
+	// annotations. Annotation only — NOT included in TotalTokens.
+	CacheReadTokens     int    `json:"cacheReadTokens,omitempty"`
+	CacheCreationTokens int    `json:"cacheCreationTokens,omitempty"`
+	Model               string `json:"model"`
+	// AggregateCostUsd is the sum of this session's cost plus every descendant
+	// dispatch session's cost, computed on demand. Zero for sessions with no
+	// dispatches or no cost yet.
+	AggregateCostUsd float64 `json:"aggregateCostUsd,omitempty"`
 }

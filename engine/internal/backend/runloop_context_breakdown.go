@@ -54,11 +54,11 @@ func (b *ApiBackend) maybeEmitContextBreakdown(
 // "unaccounted" row and re-emits the breakdown so consumers see the reconciled
 // numbers. Guarded by run.breakdownReconciled so later turns don't append
 // duplicate rows.
-func (b *ApiBackend) maybeReconcileContextBreakdown(run *activeRun, apiReportedTotal int) {
+func (b *ApiBackend) maybeReconcileContextBreakdown(run *activeRun, apiReportedTotal, cacheReadTokens, cacheCreationTokens int) {
 	if run.contextBreakdown == nil || run.breakdownReconciled {
 		return
 	}
-	providers.ReconcileBreakdown(run.contextBreakdown, apiReportedTotal)
+	providers.ReconcileBreakdown(run.contextBreakdown, apiReportedTotal, cacheReadTokens, cacheCreationTokens)
 	run.breakdownReconciled = true
 	b.emit(run, types.NormalizedEvent{Data: run.contextBreakdown.ToNormalizedEvent()})
 }

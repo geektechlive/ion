@@ -70,8 +70,14 @@ type ContextBreakdown struct {
 	APIReportedTotal int `json:"apiReportedTotal,omitempty"`
 	// Unaccounted is the delta between APIReportedTotal and the itemized sum.
 	// Set after reconciliation. May be positive or negative.
-	Unaccounted int    `json:"unaccounted,omitempty"`
-	Model       string `json:"model"`
+	Unaccounted int `json:"unaccounted,omitempty"`
+	// CacheReadTokens is the provider-reported cache-read input tokens.
+	// Annotation only — not summed into TotalTokens.
+	CacheReadTokens int `json:"cacheReadTokens,omitempty"`
+	// CacheCreationTokens is the provider-reported cache-creation input tokens.
+	// Annotation only — not summed into TotalTokens.
+	CacheCreationTokens int    `json:"cacheCreationTokens,omitempty"`
+	Model               string `json:"model"`
 }
 
 // cachedCount stores a resolved count alongside the tier it was resolved at so
@@ -130,6 +136,126 @@ func countText(ctx context.Context, model string, provider LlmProvider, text, ca
 	return n, TierApproximate
 }
 
+// appendToolRows batch-counts all tool schemas in a single CountTokens call
+// (matching what Stream sends), subtracts one fixed ToolTokenCountOverhead to
+// get the content-only total, and distributes that total per-tool in proportion
+// to each tool's serialized byte size. When the provider has no count-tokens
+// endpoint, it falls back to a local BPE estimate per tool. No synthetic
+// overhead row is appended and no row is ever negative.
+func appendToolRows(ctx context.Context, bd *ContextBreakdown, model string, provider LlmProvider, toolDefs []types.LlmToolDef) error {
+	var batchTotal int
+	var batchTier TokenizerTier
+
+	if provider != nil {
+		n, err := provider.CountTokens(ctx, CountTokensRequest{
+			Model: model,
+			Tools: toolDefs,
+		})
+		if err == nil {
+			batchTotal = n - ToolTokenCountOverhead
+			if batchTotal < 0 {
+				batchTotal = 0
+			}
+			batchTier = TierExact
+		}
+	}
+
+	if batchTier == "" {
+		// Fallback: estimate each tool's size locally and sum, then subtract
+		// the fixed overhead once.
+		for _, tool := range toolDefs {
+			toolJSON, err := json.Marshal(tool)
+			if err != nil {
+				return err
+			}
+			n, _, lerr := LocalTokenCount(model, string(toolJSON))
+			if lerr != nil {
+				n = EstimateTokensChar4(string(toolJSON))
+			}
+			batchTotal += n
+		}
+		if batchTotal > ToolTokenCountOverhead {
+			batchTotal -= ToolTokenCountOverhead
+		} else {
+			batchTotal = 0
+		}
+		batchTier = TierLocal
+	}
+
+	// Compute each tool's serialized byte size for proportional distribution.
+	toolSizes := make([]int, len(toolDefs))
+	totalEstimated := 0
+	for i, tool := range toolDefs {
+		toolJSON, err := json.Marshal(tool)
+		if err != nil {
+			return err
+		}
+		toolSizes[i] = len(toolJSON)
+		totalEstimated += toolSizes[i]
+	}
+
+	for i, tool := range toolDefs {
+		toolTokens := 0
+		if totalEstimated > 0 {
+			toolTokens = batchTotal * toolSizes[i] / totalEstimated
+		}
+		bd.Categories = append(bd.Categories, BreakdownCategory{
+			Name: tool.Name, Kind: "tool", Tokens: toolTokens, Tier: batchTier,
+		})
+	}
+	return nil
+}
+
+// appendConversationRow counts the conversation structurally via CountTokens —
+// passing the messages array exactly as Stream would send it — and appends a
+// single "conversation" row. Falls back to a per-message local count when the
+// provider has no count-tokens endpoint.
+func appendConversationRow(ctx context.Context, bd *ContextBreakdown, model string, provider LlmProvider, messages []types.LlmMessage) error {
+	var conversationTokens int
+	var conversationTier TokenizerTier
+
+	if provider != nil {
+		n, err := provider.CountTokens(ctx, CountTokensRequest{
+			Model:    model,
+			Messages: messages,
+		})
+		if err == nil {
+			conversationTokens = n
+			conversationTier = TierExact
+		}
+	}
+
+	if conversationTier == "" {
+		// Fall back to a per-message local count.
+		for _, msg := range messages {
+			var text string
+			switch v := msg.Content.(type) {
+			case string:
+				text = v
+			default:
+				b, err := json.Marshal(v)
+				if err != nil {
+					return err
+				}
+				text = string(b)
+			}
+			n, t := countText(ctx, model, nil, text, "msg:"+msg.Role)
+			conversationTokens += n
+			if conversationTier == "" || (t == TierApproximate && conversationTier != TierApproximate) {
+				conversationTier = t
+			}
+		}
+		if conversationTier == "" {
+			conversationTier = TierApproximate
+		}
+	}
+
+	bd.Categories = append(bd.Categories, BreakdownCategory{
+		Name: "conversation", Kind: "conversation", Tokens: conversationTokens, Tier: conversationTier,
+	})
+	return nil
+}
+
 // BuildContextBreakdown assembles a per-category token breakdown from the
 // fully-assembled options plus the individual injected blocks. provider may be
 // nil (no network); the resolver then falls back to local BPE / char4.
@@ -182,35 +308,27 @@ func BuildContextBreakdown(
 		})
 	}
 
-	// 5. Tools. Each tool marshals to JSON and is counted individually; then a
-	// single synthetic "tool_overhead" row carries -ToolTokenCountOverhead so
-	// the tool rows sum to the real marginal cost.
+	// 5. Tools. All tool schemas are counted in a SINGLE CountTokens call
+	// (matching what Stream sends: the whole tool array in one request). One
+	// fixed ToolTokenCountOverhead is subtracted from that batch total to get
+	// the content-only cost, which is then distributed per-tool proportionally
+	// by each tool's serialized byte size. No synthetic "tool_overhead" row and
+	// no negative rows — the overhead is folded into the batch total once.
 	if opts != nil && len(opts.Tools) > 0 {
-		for _, tool := range opts.Tools {
-			toolJSON, err := json.Marshal(tool)
-			if err != nil {
-				return nil, err
-			}
-			n, tier := countText(ctx, model, provider, string(toolJSON), "tool:"+tool.Name)
-			bd.Categories = append(bd.Categories, BreakdownCategory{
-				Name: tool.Name, Kind: "tool", Tokens: n, Tier: tier,
-			})
-		}
-		bd.Categories = append(bd.Categories, BreakdownCategory{
-			Name: "tool_overhead", Kind: "tool", Tokens: -ToolTokenCountOverhead, Tier: TierExact,
-		})
-	}
-
-	// 6. Conversation (all messages as one block).
-	if opts != nil && len(opts.Messages) > 0 {
-		msgJSON, err := json.Marshal(opts.Messages)
-		if err != nil {
+		if err := appendToolRows(ctx, bd, model, provider, opts.Tools); err != nil {
 			return nil, err
 		}
-		n, tier := countText(ctx, model, provider, string(msgJSON), "conversation")
-		bd.Categories = append(bd.Categories, BreakdownCategory{
-			Name: "conversation", Kind: "conversation", Tokens: n, Tier: tier,
-		})
+	}
+
+	// 6. Conversation. The messages are counted structurally via CountTokens —
+	// passing opts.Messages as the real messages array, exactly as Stream would
+	// send them — rather than counting a marshaled JSON blob (which inflates the
+	// count with structural noise). Tools are counted separately in step 5, so
+	// this call passes messages only.
+	if opts != nil && len(opts.Messages) > 0 {
+		if err := appendConversationRow(ctx, bd, model, provider, opts.Messages); err != nil {
+			return nil, err
+		}
 	}
 
 	// Total and context window.
@@ -229,19 +347,38 @@ func BuildContextBreakdown(
 
 // ReconcileBreakdown updates the breakdown with the provider's reported total
 // after the first UsageEvent. Records the unaccounted delta as an explicit row
-// rather than silently absorbing it into an existing category.
-func ReconcileBreakdown(bd *ContextBreakdown, apiReportedTotal int) {
+// rather than silently absorbing it into an existing category. The cache token
+// counts are recorded as annotations only — they are NOT summed into
+// TotalTokens. The unaccounted row is only appended when the drift is
+// non-trivial (> unaccountedThreshold or > 5% of the reported total); the
+// Unaccounted field itself is always set honestly regardless.
+func ReconcileBreakdown(bd *ContextBreakdown, apiReportedTotal, cacheReadTokens, cacheCreationTokens int) {
 	if bd == nil {
 		return
 	}
 	bd.APIReportedTotal = apiReportedTotal
+	bd.CacheReadTokens = cacheReadTokens
+	bd.CacheCreationTokens = cacheCreationTokens
 	bd.Unaccounted = apiReportedTotal - bd.TotalTokens
-	bd.Categories = append(bd.Categories, BreakdownCategory{
-		Name:   "unaccounted",
-		Kind:   "unaccounted",
-		Tokens: bd.Unaccounted,
-		Tier:   TierExact,
-	})
+
+	// Only surface the unaccounted row when the drift is non-trivial. Never
+	// scale or silently absorb: the Unaccounted value above is always honest;
+	// this only governs whether a visible row is added. Threshold is the larger
+	// of a fixed floor and 5% of the reported total so small prompts still
+	// surface proportionally-significant drift.
+	const unaccountedFloor = 50 // tokens
+	threshold := unaccountedFloor
+	if pct := apiReportedTotal * 5 / 100; pct > threshold {
+		threshold = pct
+	}
+	if bd.Unaccounted > threshold || bd.Unaccounted < -threshold {
+		bd.Categories = append(bd.Categories, BreakdownCategory{
+			Name:   "unaccounted",
+			Kind:   "unaccounted",
+			Tokens: bd.Unaccounted,
+			Tier:   TierExact,
+		})
+	}
 }
 
 // ToNormalizedEvent converts a ContextBreakdown into the ContextBreakdownEvent
@@ -261,11 +398,13 @@ func (bd *ContextBreakdown) ToNormalizedEvent() *types.ContextBreakdownEvent {
 		})
 	}
 	return &types.ContextBreakdownEvent{
-		Categories:       cats,
-		ContextWindow:    bd.ContextWindow,
-		TotalTokens:      bd.TotalTokens,
-		APIReportedTotal: bd.APIReportedTotal,
-		Unaccounted:      bd.Unaccounted,
-		Model:            bd.Model,
+		Categories:          cats,
+		ContextWindow:       bd.ContextWindow,
+		TotalTokens:         bd.TotalTokens,
+		APIReportedTotal:    bd.APIReportedTotal,
+		Unaccounted:         bd.Unaccounted,
+		CacheReadTokens:     bd.CacheReadTokens,
+		CacheCreationTokens: bd.CacheCreationTokens,
+		Model:               bd.Model,
 	}
 }

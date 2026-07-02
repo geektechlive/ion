@@ -78,6 +78,11 @@ type activeDispatch struct {
 	// allowlist restriction on this agent's nested dispatches. Set via
 	// SetAllowedSubAgents after registration.
 	AllowedSubAgents []string
+
+	// ChildConvID is the child conversation ID set once the child session
+	// initialises and emits its SessionID. Updated via SetChildConvID.
+	// Empty until the child session initialises.
+	ChildConvID string
 }
 
 // NewDispatchRegistry returns an empty, ready-to-use registry.
@@ -550,4 +555,34 @@ func (r *DispatchRegistry) SteerByID(dispatchID, message string) SteerDispatchOu
 		dispatchID, name, childRunID, len(message), result, outcome,
 	))
 	return outcome
+}
+
+// SetChildConvID records the child conversation ID for a dispatch entry once
+// it is known (from the child's SessionInitEvent). No-op if the dispatch ID
+// is not found.
+func (r *DispatchRegistry) SetChildConvID(id, convID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.dispatches[id]
+	if !ok {
+		return
+	}
+	d.ChildConvID = convID
+	utils.Debug("DispatchRegistry", fmt.Sprintf("SetChildConvID: id=%q convID=%q", id, convID))
+}
+
+// LiveConvIDs returns the child conversation IDs of all currently active
+// dispatches. Dispatches that have not yet recorded a conversation ID return
+// an empty string and are excluded from the result. Used by the aggregate-cost
+// walk to include in-flight children whose tree entries are not yet persisted.
+func (r *DispatchRegistry) LiveConvIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []string
+	for _, d := range r.dispatches {
+		if d.ChildConvID != "" {
+			ids = append(ids, d.ChildConvID)
+		}
+	}
+	return ids
 }

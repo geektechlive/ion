@@ -291,6 +291,13 @@ var validCommands = map[string]bool{
 	// { newConversationDefaults } in the result data (null when no enterprise
 	// config / no section is present).
 	"get_enterprise_policy": true,
+	// get_context_breakdown: on-demand context breakdown outside of an active
+	// run. Reconstructs the full assembly pipeline (system prompt + tools +
+	// conversation messages) for the given session key and emits
+	// engine_context_breakdown. For a fresh session the breakdown reflects
+	// system prompt + tools with zero conversation tokens; for a historical
+	// session it reflects all on-disk messages. Requires only key.
+	"get_context_breakdown": true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -498,6 +505,9 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		// Stateless read; no required fields. requestId is optional but needed
 		// to receive the ServerResult (per the wire contract).
 		return true
+	case "get_context_breakdown":
+		// On-demand breakdown for the given session key. Only key is required.
+		return hasNonEmptyString(raw, "key")
 	}
 	return false
 }

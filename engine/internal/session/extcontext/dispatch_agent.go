@@ -380,33 +380,10 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 					// Tell the activity emitter the child conversation id so its
 					// pushed deltas carry the reconcile key.
 					activity.SetConversationID(childSessionID)
-					elapsedSoFar := time.Since(start).Seconds()
-					sa.UpdateAgentStateByID(agentID, func(state *types.AgentStateUpdate) {
-						if state.Metadata == nil {
-							state.Metadata = map[string]interface{}{}
-						}
-						existing, _ := state.Metadata["conversationIds"].([]interface{})
-						alreadyPresent := false
-						for _, v := range existing {
-							if s, ok := v.(string); ok && s == childSessionID {
-								alreadyPresent = true
-								break
-							}
-						}
-						if !alreadyPresent {
-							state.Metadata["conversationIds"] = append(existing, childSessionID)
-						}
-						state.Metadata["conversationId"] = childSessionID
-						// Write the id into the structured dispatches[] entry while
-						// the dispatch is still running so consumers can load the
-						// live conversation by ID.
-						agents.UpdateDispatchEntry(state.Metadata, agentID, "running", elapsedSoFar, childSessionID)
-					})
-					sa.EmitAgentSnapshot("dispatch_conversation_id")
-					utils.Log("Dispatch", fmt.Sprintf(
-						"captured child conversation id early agent=%q convId=%s session=%s",
-						opts.Name, childSessionID, sa.SessionKey(),
-					))
+					if registry != nil {
+						registry.SetChildConvID(agentID, childSessionID)
+					}
+					recordChildConvID(sa, agentID, childSessionID, opts.Name, start)
 				}
 			case *types.TextChunkEvent:
 				// Push the streamed text to the live transcript (coalesced).

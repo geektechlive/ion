@@ -17,8 +17,18 @@ type ContextBreakdownEvent struct {
 	// APIReportedTotal is the provider's reported input_tokens. Zero until reconciliation.
 	APIReportedTotal int `json:"apiReportedTotal,omitempty"`
 	// Unaccounted is APIReportedTotal - TotalTokens. Non-zero after reconciliation.
-	Unaccounted int    `json:"unaccounted,omitempty"`
-	Model       string `json:"model"`
+	Unaccounted int `json:"unaccounted,omitempty"`
+	// CacheReadTokens is the provider-reported cache-read input tokens.
+	// Annotation only — NOT included in TotalTokens. Zero until reconciliation.
+	CacheReadTokens int `json:"cacheReadTokens,omitempty"`
+	// CacheCreationTokens is the provider-reported cache-creation input tokens.
+	// Annotation only — NOT included in TotalTokens. Zero until reconciliation.
+	CacheCreationTokens int    `json:"cacheCreationTokens,omitempty"`
+	Model               string `json:"model"`
+	// AggregateCostUsd is the sum of this session's cost plus every descendant
+	// dispatch session's cost, walked on demand from the conversation tree.
+	// Zero for fresh sessions and sessions with no dispatches.
+	AggregateCostUsd float64 `json:"aggregateCostUsd,omitempty"`
 }
 
 func (ContextBreakdownEvent) eventType() string { return EventContextBreakdown }

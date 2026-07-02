@@ -409,6 +409,62 @@ func LoadLlmHeaderModel(id, dir string) (string, error) {
 	return model, nil
 }
 
+// LoadLlmHeaderCost reads only the totalCost field from a conversation's
+// .llm.jsonl header without parsing any messages. This is a lightweight
+// alternative to Load when only the session cost is needed (e.g. aggregate
+// cost walk across a dispatch tree).
+//
+// Returns (0, nil) when the totalCost key is missing or zero — a fresh
+// conversation has no persisted cost, which is not an error. An error is
+// returned only for a missing file or a parse failure.
+func LoadLlmHeaderCost(id, dir string) (float64, error) {
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return 0, err
+		}
+		dir = filepath.Join(home, ".ion", "conversations")
+	}
+
+	llmPath := filepath.Join(dir, id+".llm.jsonl")
+	f, err := os.Open(llmPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return 0, fmt.Errorf("open llm file %s: %w", llmPath, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScanTokenSize)
+
+	// Read only the first non-empty line (the header).
+	var headerLine string
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			headerLine = line
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("scan llm header %s: %w", llmPath, err)
+	}
+	if headerLine == "" {
+		return 0, fmt.Errorf("empty llm file: %s", llmPath)
+	}
+
+	var header map[string]any
+	if err := json.Unmarshal([]byte(headerLine), &header); err != nil {
+		return 0, fmt.Errorf("invalid llm header in %s: %w", llmPath, err)
+	}
+
+	cost := jsonFloat(header, "totalCost", 0)
+	utils.Debug("Conversation", fmt.Sprintf("LoadLlmHeaderCost: id=%s cost=%f", id, cost))
+	return cost, nil
+}
+
 // Load reads a conversation from disk. Probe order:
 //
 //  1. <id>.llm.jsonl AND <id>.tree.jsonl both present → new split format.

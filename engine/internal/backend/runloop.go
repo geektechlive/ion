@@ -492,7 +492,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			// Reconcile the context breakdown with the provider-reported input
 			// total on the FIRST usage event only. See
 			// runloop_context_breakdown.go.
-			b.maybeReconcileContextBreakdown(run, totalIn)
+			b.maybeReconcileContextBreakdown(run, totalIn, cacheRead, cacheCreate)
 
 			// Accumulate output tokens for the early-stop continuation
 			// decision. Done unconditionally — the feature gates itself on

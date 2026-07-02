@@ -283,6 +283,17 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		s.manager.QuerySessionStatus(cmd.Key)
 		s.sendResult(conn, cmd, nil, nil)
 
+	case "get_context_breakdown":
+		// On-demand context breakdown. Reconstructs the full assembly
+		// pipeline (system prompt + tools + conversation) outside any
+		// active run and emits engine_context_breakdown via the normal
+		// event bus. RPC result is empty — the caller observes the
+		// emission through the event stream.
+		utils.Log("Dispatch", fmt.Sprintf("get_context_breakdown: key=%s computing on-demand breakdown", cmd.Key))
+		s.manager.ComputeAndEmitContextBreakdown(cmd.Key)
+		utils.Log("Dispatch", fmt.Sprintf("get_context_breakdown: key=%s dispatched (emission via event bus)", cmd.Key))
+		s.sendResult(conn, cmd, nil, nil)
+
 	case "migrate_conversation":
 		// Implementation in dispatch_data.go.
 		s.dispatchMigrateConversation(conn, cmd)

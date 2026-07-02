@@ -267,12 +267,15 @@ func translateToEngineEvent(event types.NormalizedEvent, contextWindow int) type
 		return types.EngineEvent{
 			Type: "engine_context_breakdown",
 			ContextBreakdown: &types.ContextBreakdownPayload{
-				Categories:       e.Categories,
-				ContextWindow:    e.ContextWindow,
-				TotalTokens:      e.TotalTokens,
-				APIReportedTotal: e.APIReportedTotal,
-				Unaccounted:      e.Unaccounted,
-				Model:            e.Model,
+				Categories:          e.Categories,
+				ContextWindow:       e.ContextWindow,
+				TotalTokens:         e.TotalTokens,
+				APIReportedTotal:    e.APIReportedTotal,
+				Unaccounted:         e.Unaccounted,
+				CacheReadTokens:     e.CacheReadTokens,
+				CacheCreationTokens: e.CacheCreationTokens,
+				Model:               e.Model,
+				AggregateCostUsd:    e.AggregateCostUsd,
 			},
 		}
 
