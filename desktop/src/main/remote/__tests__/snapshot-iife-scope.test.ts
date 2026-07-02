@@ -96,7 +96,9 @@ describe('snapshot IIFE scope guard (#256 Defect 2)', () => {
   })
 
   it('thinkingEffort projection does not fork on tabHasExtensions (WI-002)', () => {
-    const effortIdx = iife.indexOf('thinkingEffort:')
+    // Target the tab-level thinkingEffort IIFE (not the per-instance one on
+    // conversationInstances). The tab-level projection wraps in `(function()`.
+    const effortIdx = iife.indexOf('thinkingEffort: (function()')
     expect(effortIdx).toBeGreaterThan(-1)
     const effortBlock = iife.slice(effortIdx, effortIdx + 300)
     expect(effortBlock).not.toContain('tabHasExtensions(t)')
@@ -105,7 +107,8 @@ describe('snapshot IIFE scope guard (#256 Defect 2)', () => {
 
   it('permissionMode and thinkingEffort projections use a single read path (WI-002)', () => {
     const permIdx = iife.indexOf('permissionMode:')
-    const effortIdx = iife.indexOf('thinkingEffort:')
+    // Target the tab-level thinkingEffort IIFE, not the per-instance one.
+    const effortIdx = iife.indexOf('thinkingEffort: (function()')
     const permBlock = iife.slice(permIdx, Math.min(permIdx + 300, effortIdx > -1 ? effortIdx : permIdx + 300))
     const effortBlock = effortIdx > -1 ? iife.slice(effortIdx, effortIdx + 400) : ''
     expect(permBlock).not.toMatch(/tabHasExtensions\(t\)\s*\?/)

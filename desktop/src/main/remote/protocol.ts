@@ -12,6 +12,7 @@
  */
 
 import type { NormalizedEvent, TabStatus, PermissionRequest, ElicitationRequest, AgentStateUpdate, StatusFields } from '../../shared/types'
+import type { DispatchTelemetryEntry } from '../../shared/types-engine'
 
 /**
  * Wire shape for one entry in `desktop_settings_snapshot.schema`.
@@ -95,7 +96,7 @@ export interface RemoteTabState {
    *  by iOS (RemoteTabState.swift). Not a backend flag. */
   hasEngineExtension?: boolean
   engineProfileId?: string | null
-  conversationInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null; isRunning?: boolean; runningAgentCount?: number; modelFallback?: { requestedModel: string; fallbackModel: string }; conversationIds?: string[]; thinkingEffort?: 'low' | 'medium' | 'high' }>
+  conversationInstances?: Array<{ id: string; label: string; waitingState?: 'plan-ready' | 'question' | null; isRunning?: boolean; runningAgentCount?: number; modelFallback?: { requestedModel: string; fallbackModel: string }; conversationIds?: string[]; thinkingEffort?: 'low' | 'medium' | 'high'; dispatchTelemetry?: DispatchTelemetryEntry[] }>
   activeConversationInstanceId?: string | null
   terminalInstances?: TerminalInstanceInfo[]
   activeTerminalInstanceId?: string | null
