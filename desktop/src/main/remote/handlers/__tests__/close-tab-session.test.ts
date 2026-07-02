@@ -21,6 +21,24 @@
 
 import { vi, describe, it, expect, beforeEach } from 'vitest'
 
+// Electron is not installed in CI (npm ci --ignore-scripts skips the binary
+// download). Any module in the transitive import chain that does
+// `import ... from 'electron'` at the top level will throw at load time
+// without this stub. This test runs headless main-process logic only; no
+// real Electron APIs are exercised.
+vi.mock('electron', () => ({
+  app: { get isPackaged() { return false } },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (s: string) => Buffer.from(s),
+    decryptString: (b: Buffer) => b.toString(),
+  },
+  ipcMain: { on: vi.fn(), handle: vi.fn(), removeHandler: vi.fn() },
+  dialog: { showSaveDialog: vi.fn(), showOpenDialog: vi.fn() },
+  nativeImage: { createFromPath: vi.fn(), createFromBuffer: vi.fn() },
+  shell: { openExternal: vi.fn() },
+}))
+
 const mocks = vi.hoisted(() => ({
   stopSession: vi.fn().mockResolvedValue(undefined),
   stopByPrefix: vi.fn(),
