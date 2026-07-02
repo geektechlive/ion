@@ -1,14 +1,11 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package main
 
 import (
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 // physicalMemoryBytes returns the host's total physical RAM in bytes, or 0 when
@@ -16,17 +13,11 @@ import (
 // conservative default (see resolveMemoryLimit in memlimit.go).
 //
 // Platform strategy:
-//   - darwin: sysctl hw.memsize (total physical RAM, in bytes).
+//   - darwin: sysctl hw.memsize (total physical RAM, in bytes) — see memstat_darwin.go.
 //   - linux (and other unix): MemTotal from /proc/meminfo (kB), converted to bytes.
 //     /proc/meminfo is the portable, cgo-free source and reflects the value the
 //     kernel reports to the OOM killer's accounting.
 func physicalMemoryBytes() uint64 {
-	if runtime.GOOS == "darwin" {
-		if v, err := unix.SysctlUint64("hw.memsize"); err == nil && v > 0 {
-			return v
-		}
-		return 0
-	}
 	return memTotalFromProcMeminfo("/proc/meminfo")
 }
 
