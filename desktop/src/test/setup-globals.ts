@@ -36,4 +36,16 @@ function installLocalStorageShim(): void {
   })
 }
 
+// jsdom does not implement Element.prototype.scrollIntoView. Any component that
+// calls el.scrollIntoView(...) (e.g. inside a requestAnimationFrame callback)
+// will throw a TypeError in jsdom-based renderer tests, which vitest surfaces as
+// an unhandled error that can cause false positives. This no-op stub covers all
+// renderer tests globally so no individual test needs to polyfill it.
+function installScrollIntoViewStub(): void {
+  if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+    Element.prototype.scrollIntoView = function () { /* no-op in jsdom */ }
+  }
+}
+
 installLocalStorageShim()
+installScrollIntoViewStub()
