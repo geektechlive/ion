@@ -101,6 +101,13 @@ struct StatusDrawerView: View {
             ?? viewModel.tab(for: tabId)?.totalCostUsd
     }
 
+    /// Aggregate cost: this session's cost plus every descendant dispatch
+    /// session's cost, computed by the engine and forwarded on the context
+    /// breakdown payload. Distinct from `totalCostUsd`, which is top-level only.
+    private var aggregateCostUsd: Double? {
+        inst?.contextBreakdown?.aggregateCostUsd
+    }
+
     /// Engine state string (prefer live fields, then instance).
     private var engineState: String? {
         fields?.state ?? inst?.statusFields?.state
@@ -180,6 +187,19 @@ struct StatusDrawerView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     copyButton(id)
+                }
+            }
+            // Aggregate cost: this session plus all descendant dispatch
+            // sessions. Rendered only when the breakdown payload carries it.
+            if let cost = aggregateCostUsd {
+                HStack {
+                    Text("Total cost")
+                        .font(.caption)
+                        .foregroundStyle(theme.textSecondary)
+                    Spacer()
+                    Text(String(format: "$%.4f", cost))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(theme.textSecondary)
                 }
             }
             // Turns / duration are shown only when the snapshot carries them.

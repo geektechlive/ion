@@ -332,6 +332,13 @@ extension DiagnosticLog {
 
         case .planContent(let questionId, let planFilePath, let offset, let content, let totalBytes, let hasMore):
             log("EVENT: planContent qId=\(questionId.prefix(12)) path=\(planFilePath.suffix(30)) offset=\(offset) contentLen=\(content.count) totalBytes=\(totalBytes) hasMore=\(hasMore)")
+
+        case .desktopContextBreakdown(let tabId, let instanceId, let payload):
+            // Context-breakdown diagnostics: log category count, total token sum, and
+            // whether this is a post-reconciliation update (apiReportedTotal present).
+            let reconciled = payload.apiReportedTotal != nil ? "reconciled" : "pre"
+            let unaccounted = payload.unaccounted.map { " unaccounted=\($0)" } ?? ""
+            log("EVENT: desktopContextBreakdown tab=\(tabId.prefix(8)) inst=\(instanceId?.prefix(8) ?? "nil") cats=\(payload.categories.count) total=\(payload.totalTokens)/\(payload.contextWindow) \(reconciled)\(unaccounted)")
         }
     }
 }

@@ -10,6 +10,7 @@ struct ConversationView: View {
     @State var agentsPanelExpanded: Bool? = nil
     @State var agentPanelFullscreen = false
     @State var selectedDispatchId: String?
+    @State var showStatusDrawer = false
     /// Set to the plan file path when the user taps a plan-lifecycle divider's
     /// slug link; drives the plan-preview full-screen cover (PlanContentView).
     @State var selectedPlanPath: IdentifiablePath?
@@ -73,12 +74,7 @@ struct ConversationView: View {
     /// agentPanelDefaultOpen setting > true.
     var isAgentsPanelExpanded: Bool {
         if let explicit = agentsPanelExpanded { return explicit }
-        if let settings = viewModel.desktopSettings,
-           let val = settings.currentValue(for: "agentPanelDefaultOpen"),
-           let flag = val.value as? Bool {
-            return flag
-        }
-        return true
+        return AgentPanelDefaultResolver.resolveAgentPanelDefault(viewModel.desktopSettings)
     }
 
     /// Two-way binding for the agent panel expanded state. Reads through the
@@ -110,6 +106,13 @@ struct ConversationView: View {
 
     var runningAgentCount: Int {
         visibleAgents.filter { $0.status == "running" }.count
+    }
+
+    /// Active tool calls for this tab, sorted by start time (oldest first).
+    /// Read from the flat toolId-keyed store; the StatusDrawerView renders these.
+    var activeToolsList: [ActiveToolInfo] {
+        guard let tools = viewModel.activeTools[tabId] else { return [] }
+        return Array(tools.values).sorted { $0.startTime < $1.startTime }
     }
 
     var engineMsgs: [Message] {
@@ -334,6 +337,9 @@ struct ConversationView: View {
                 },
                 onTapAttachments: {
                     showAttachments = true
+                },
+                onTapContextIndicator: {
+                    showStatusDrawer = true
                 },
                 hasEngineExtension: tabHasExtensions,
                 // DATA-driven (#256 follow-up): pass the harness/extension name

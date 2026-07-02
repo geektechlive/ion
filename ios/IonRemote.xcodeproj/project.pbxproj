@@ -160,6 +160,7 @@
 		HRNSBDG0000000000000003 /* EngineHarnessBadgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = HRNSBDG0000000000000004 /* EngineHarnessBadgeTests.swift */; };
 		PLANCARD0000000000000001 /* PlanApprovalCardContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLANCARD0000000000000002 /* PlanApprovalCardContentTests.swift */; };
 		PLANCARD0000000000000003 /* PlanApprovalCardGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLANCARD0000000000000004 /* PlanApprovalCardGateTests.swift */; };
+		PLANCARD0000000000000005 /* PlanApprovalCardUnpinGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PLANCARD0000000000000006 /* PlanApprovalCardUnpinGateTests.swift */; };
 		HRNSBDG0000000000000005 /* EngineInstanceCollapseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = HRNSBDG0000000000000006 /* EngineInstanceCollapseTests.swift */; };
 		EDTDLTORD000000000000001 /* EngineTextDeltaOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDTDLTORD000000000000002 /* EngineTextDeltaOrderingTests.swift */; };
 		HRNSBDG0000000000000007 /* EngineSessionKeyCollapseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = HRNSBDG0000000000000008 /* EngineSessionKeyCollapseTests.swift */; };
@@ -453,6 +454,7 @@
 		HRNSBDG0000000000000004 /* EngineHarnessBadgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineHarnessBadgeTests.swift; sourceTree = "<group>"; };
 		PLANCARD0000000000000002 /* PlanApprovalCardContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanApprovalCardContentTests.swift; sourceTree = "<group>"; };
 		PLANCARD0000000000000004 /* PlanApprovalCardGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanApprovalCardGateTests.swift; sourceTree = "<group>"; };
+		PLANCARD0000000000000006 /* PlanApprovalCardUnpinGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanApprovalCardUnpinGateTests.swift; sourceTree = "<group>"; };
 		HRNSBDG0000000000000006 /* EngineInstanceCollapseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineInstanceCollapseTests.swift; sourceTree = "<group>"; };
 		EDTDLTORD000000000000002 /* EngineTextDeltaOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineTextDeltaOrderingTests.swift; sourceTree = "<group>"; };
 		HRNSBDG0000000000000008 /* EngineSessionKeyCollapseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineSessionKeyCollapseTests.swift; sourceTree = "<group>"; };
@@ -911,6 +913,7 @@
 				HRNSBDG0000000000000004 /* EngineHarnessBadgeTests.swift */,
 				PLANCARD0000000000000002 /* PlanApprovalCardContentTests.swift */,
 				PLANCARD0000000000000004 /* PlanApprovalCardGateTests.swift */,
+				PLANCARD0000000000000006 /* PlanApprovalCardUnpinGateTests.swift */,
 				HRNSBDG0000000000000006 /* EngineInstanceCollapseTests.swift */,
 				EDTDLTORD000000000000002 /* EngineTextDeltaOrderingTests.swift */,
 				HRNSBDG0000000000000008 /* EngineSessionKeyCollapseTests.swift */,
@@ -1379,6 +1382,7 @@
 				HRNSBDG0000000000000003 /* EngineHarnessBadgeTests.swift in Sources */,
 				PLANCARD0000000000000001 /* PlanApprovalCardContentTests.swift in Sources */,
 				PLANCARD0000000000000003 /* PlanApprovalCardGateTests.swift in Sources */,
+				PLANCARD0000000000000005 /* PlanApprovalCardUnpinGateTests.swift in Sources */,
 				HRNSBDG0000000000000005 /* EngineInstanceCollapseTests.swift in Sources */,
 				EDTDLTORD000000000000001 /* EngineTextDeltaOrderingTests.swift in Sources */,
 				HRNSBDG0000000000000007 /* EngineSessionKeyCollapseTests.swift in Sources */,

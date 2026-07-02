@@ -87,7 +87,34 @@ struct PlanApprovalCardView: View {
     }
 
     private var showUnpinOption: Bool {
-        tab?.groupPinned == true && tab?.hasEngineExtension != true
+        let resolved = Self.resolveShowUnpinOption(
+            groupPinned: tab?.groupPinned,
+            hasEngineExtension: tab?.hasEngineExtension
+        )
+        DiagnosticLog.log(
+            "PLAN-CARD: showUnpinOption tabId=\(tabId.prefix(8)) "
+            + "groupPinned=\(String(describing: tab?.groupPinned)) "
+            + "hasEngineExtension=\(String(describing: tab?.hasEngineExtension)) "
+            + "showUnpinOption=\(resolved)"
+        )
+        return resolved
+    }
+
+    /// Pure resolver for the "Implement and Unpin" split-row gate, extracted so
+    /// the group-pinned → unpin-option mapping is unit-testable without
+    /// instantiating the SwiftUI view (which needs an @Environment
+    /// SessionViewModel). Mirrors the desktop gate exactly: the unpin option is
+    /// revealed whenever the tab is pinned to its group (`groupPinned == true`),
+    /// regardless of whether the conversation is extension-hosted.
+    ///
+    /// Pin: extension-hosted conversations (`hasEngineExtension == true`) are NOT
+    /// excluded. The prior `&& hasEngineExtension != true` predicate was an
+    /// orphaned pre-unification artifact — PR #256 (commit 2ade1824) unified
+    /// plain and extension-hosted conversations but left the predicate behind,
+    /// which hid the unpin button on iOS for extension-hosted, group-pinned tabs
+    /// while desktop (which checks only `groupPinned`) still showed it.
+    static func resolveShowUnpinOption(groupPinned: Bool?, hasEngineExtension: Bool?) -> Bool {
+        groupPinned == true
     }
 
     private var showClearContextOption: Bool {

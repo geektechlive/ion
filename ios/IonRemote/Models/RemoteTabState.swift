@@ -76,6 +76,21 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// by `TabRowView` to resolve the profile display name for the harness
     /// badge. Mirrors `RemoteTabState.engineProfileId` in protocol.ts.
     var engineProfileId: String?
+    /// Cumulative cost in USD for this tab across all turns. Projected from
+    /// StatusFields.totalCostUsd via the desktop snapshot so iOS has the correct
+    /// value on cold open without waiting for a live engine_status event. Optional
+    /// so tabs that have never had a run omit it. Mirrors protocol.ts RemoteTabState.
+    var totalCostUsd: Double?
+    /// Cumulative provider-reported input tokens for this tab. Projected from the
+    /// engine's usage tracking via the desktop snapshot (cold-start parity fix,
+    /// plan modest-leaping-waffle §6). Optional — absent on tabs that have never run.
+    var inputTokens: Int?
+    /// Cumulative output tokens. Optional — absent on never-run tabs.
+    var outputTokens: Int?
+    /// Cumulative cache-read tokens (Anthropic prompt caching). Optional.
+    var cacheReadTokens: Int?
+    /// Cumulative cache-creation tokens (Anthropic prompt caching). Optional.
+    var cacheCreationTokens: Int?
 
     var displayTitle: String {
         customTitle ?? title
@@ -185,6 +200,13 @@ struct ConversationInstanceInfo: Codable, Identifiable, Sendable {
     /// Also populated by live engine events (dispatch_start/end) and
     /// reconciled from the snapshot on reconnect.
     var dispatchTelemetry: [DispatchTelemetryEntry]? = nil
+
+    /// Per-instance context breakdown from the most recent desktop_context_breakdown
+    /// event. Updated by live events; nil until the engine emits a breakdown for
+    /// this tab. The StatusDrawerView reads this to render the Context Breakdown
+    /// section. Not persisted in the snapshot (live-only; the engine re-emits on
+    /// reconnect). Mirrors ConversationInstance.contextBreakdown in the desktop store.
+    var contextBreakdown: ContextBreakdownPayload? = nil
 
     // Non-Codable conversation state — populated by live events /
     // loadEngineConversation, not decoded from the snapshot JSON.

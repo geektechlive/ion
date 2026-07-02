@@ -520,6 +520,16 @@ extension SessionViewModel {
 
         case .engineIntercept(let tabId, let instanceId, let level, let title, let message, _, _):
             handleEngineIntercept(tabId: tabId, instanceId: instanceId, level: level, title: title, message: message)
+
+        case .desktopContextBreakdown(let tabId, let instanceId, let payload):
+            // Per-category context breakdown from the engine (forwarded by the desktop).
+            // Store on the active instance so StatusDrawerView can read it without a
+            // separate fetch. Mirrors the desktop's engine-event-slice handler that
+            // writes contextBreakdown onto the ConversationInstance.
+            DiagnosticLog.log("ENGINE: context_breakdown tabId=\(tabId.prefix(8)) categories=\(payload.categories.count) total=\(payload.totalTokens)")
+            mutateEngineInstance(tabId: tabId, instanceId: instanceId) {
+                $0.contextBreakdown = payload
+            }
         }
     }
 

@@ -25,6 +25,7 @@ struct ConversationStatusBar: View {
     let onSelectModel: (String) -> Void
     let onToggleMode: () -> Void
     let onTapAttachments: () -> Void
+    var onTapContextIndicator: () -> Void = {}
 
     // Engine-specific optional parameters
     var hasEngineExtension: Bool = false
@@ -338,13 +339,16 @@ struct ConversationStatusBar: View {
 
             // Context usage (only when data is available)
             if let pct = resolvedContextPercent {
-                HStack(spacing: 4) {
-                    ProgressView(value: min(pct / 100.0, 1.0))
-                        .frame(width: 40)
-                        .tint(contextColor)
-                    Text("\(Int(pct))%")
-                        .foregroundStyle(contextColor)
+                Button(action: onTapContextIndicator) {
+                    HStack(spacing: 4) {
+                        ProgressView(value: min(pct / 100.0, 1.0))
+                            .frame(width: 40)
+                            .tint(contextColor)
+                        Text("\(Int(pct))%")
+                            .foregroundStyle(contextColor)
+                    }
                 }
+                .buttonStyle(.plain)
             }
         }
         .font(.caption2)

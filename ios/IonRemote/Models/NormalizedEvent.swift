@@ -380,6 +380,21 @@ enum RemoteEvent: Sendable {
     /// full plan body in PlanFullScreenView or copies it to the clipboard.
     case planContent(questionId: String, planFilePath: String, offset: Int, content: String, totalBytes: Int, hasMore: Bool)
 
+    /// Desktop-forwarded context breakdown (desktop_context_breakdown). Carries
+    /// per-category token counts with provenance tier (exact / local / approximate),
+    /// context window, total tokens, and post-reconciliation unaccounted delta.
+    /// Emitted once per run after prompt assembly and again after the first
+    /// UsageEvent reconciliation. Mirrors engine_context_breakdown on the engine
+    /// wire; the desktop forwards it as desktop_context_breakdown so iOS reads
+    /// it from the same desktop↔iOS stream as all other events (plan
+    /// modest-leaping-waffle.md §9). iOS stores the payload on the active
+    /// instance's contextBreakdown field for drawer rendering.
+    case desktopContextBreakdown(
+        tabId: String,
+        instanceId: String?,
+        contextBreakdown: ContextBreakdownPayload
+    )
+
     // MARK: - Codable keys
 
     enum TypeKey: String, Codable {
@@ -485,6 +500,11 @@ enum RemoteEvent: Sendable {
         case planContent = "desktop_plan_content"
         /// Raw engine wire event for engine_plan_content (distinct from desktop_plan_content).
         case enginePlanContent = "engine_plan_content"
+        /// Desktop-forwarded context breakdown (desktop_context_breakdown).
+        /// Carries per-category token counts, provenance tiers, and reconciliation delta
+        /// from the engine's context analysis. Lockstep parity with engine_context_breakdown
+        /// (plan modest-leaping-waffle.md §9).
+        case desktopContextBreakdown = "desktop_context_breakdown"
     }
 
     // CodingKeys and the init(from:)/encode(to:) requirements must live in
@@ -648,6 +668,12 @@ enum RemoteEvent: Sendable {
         // --- desktop_request_resend / desktop_resend_unavailable payload ---
         // desktop_resend_unavailable payload — the start seq of the evicted range.
         case fromSeq
+        // desktop_context_breakdown — per-category context usage readout forwarded
+        // from engine_context_breakdown. The whole breakdown payload decodes under
+        // a single `contextBreakdown` key using ContextBreakdownPayload (Codable).
+        // perFile / perTool / apiReportedTotal / unaccounted / model live inside
+        // the ContextBreakdownPayload struct, not as top-level CodingKeys here.
+        case contextBreakdown
     }
 }
 

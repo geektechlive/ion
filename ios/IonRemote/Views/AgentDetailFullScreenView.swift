@@ -12,12 +12,36 @@ struct AgentDetailFullScreenView: View {
     let dispatchId: String
     let agentName: String
     let compoundKey: String
+    /// Optional pre-populated ancestor breadcrumb chain for the NavigationStack.
+    /// When set (by the status drawer's deep-link path), the stack starts with
+    /// these frames already pushed so the user sees the full root→…→target chain
+    /// from the first frame. Nil (default) = empty stack (root only), matching
+    /// the existing drill-down entry point. Plan modest-leaping-waffle §9a.
+    var initialAncestorPath: [BreadcrumbEntry] = []
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appTheme) private var theme
     @State private var isNearBottom = true
     @State private var forceScrollCounter = 0
     @State private var navigationPath: [BreadcrumbEntry] = []
+    @State private var agentsPanelExpanded: Bool? = nil
+
+    /// Whether the embedded agent panel is expanded. Resolution order:
+    ///   explicit override (agentsPanelExpanded) > agentPanelDefaultOpen setting > true.
+    private var isAgentsPanelExpanded: Bool {
+        if let explicit = agentsPanelExpanded { return explicit }
+        return AgentPanelDefaultResolver.resolveAgentPanelDefault(viewModel.desktopSettings)
+    }
+
+    /// Two-way binding for the agent panel expanded state. Reads through the
+    /// settings-fallback computed var so the desktop default is honored;
+    /// writes to `agentsPanelExpanded` so the explicit override takes effect.
+    private var agentsPanelExpandedBinding: Binding<Bool> {
+        Binding(
+            get: { isAgentsPanelExpanded },
+            set: { agentsPanelExpanded = $0 }
+        )
+    }
 
     /// Live agent from the view model's agent state array.
     private var agent: AgentStateUpdate? {
@@ -124,6 +148,16 @@ struct AgentDetailFullScreenView: View {
                     )
                 }
         }
+        .onAppear {
+            // Step 9a: pre-populate the breadcrumb stack from the initialAncestorPath
+            // supplied by the status drawer's deep-link path. This gives the user the
+            // full root→…→target chain from the first frame rather than an empty stack.
+            // Only apply on first appear (navigationPath starts empty) to avoid
+            // clobbering user navigation.
+            if navigationPath.isEmpty, !initialAncestorPath.isEmpty {
+                navigationPath = initialAncestorPath
+            }
+        }
     }
 
     @ViewBuilder
@@ -152,7 +186,8 @@ struct AgentDetailFullScreenView: View {
                                 conversationId: dispatch.conversationId,
                                 dispatchId: dispatch.id
                             ))
-                        }
+                        },
+                        agentPanelExpanded: agentsPanelExpandedBinding
                     )
                 }
             } else {
@@ -242,6 +277,22 @@ private struct BreadcrumbDestinationView: View {
     let onOpenChild: (BreadcrumbEntry) -> Void
     @Environment(SessionViewModel.self) private var viewModel
     @Environment(\.appTheme) private var theme
+    @State private var agentsPanelExpanded: Bool? = nil
+
+    /// Whether the embedded agent panel is expanded. Resolution order:
+    ///   explicit override (agentsPanelExpanded) > agentPanelDefaultOpen setting > true.
+    private var isAgentsPanelExpanded: Bool {
+        if let explicit = agentsPanelExpanded { return explicit }
+        return AgentPanelDefaultResolver.resolveAgentPanelDefault(viewModel.desktopSettings)
+    }
+
+    /// Two-way binding for the agent panel expanded state in this breadcrumb level.
+    private var agentsPanelExpandedBinding: Binding<Bool> {
+        Binding(
+            get: { isAgentsPanelExpanded },
+            set: { agentsPanelExpanded = $0 }
+        )
+    }
 
     private var childAgent: AgentStateUpdate? {
         let tabId = SessionViewModel.parseEngineSessionKey(compoundKey)
@@ -286,7 +337,8 @@ private struct BreadcrumbDestinationView: View {
                             conversationId: dispatch.conversationId,
                             dispatchId: dispatch.id
                         ))
-                    }
+                    },
+                    agentPanelExpanded: agentsPanelExpandedBinding
                 )
             } else {
                 ContentUnavailableView(

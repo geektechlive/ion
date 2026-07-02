@@ -326,6 +326,13 @@ final class SessionViewModel {
     /// Tab ID to auto-open the Git pane for (set by tapping the branch badge in tab list).
     /// Observed by ConversationView; cleared after the pane is presented.
     var pendingGitPaneTabId: String? = nil
+    /// Dispatch ID to auto-open in AgentDetailFullScreenView after the conversation view
+    /// appears. Mirrors the pendingNavigationTabId deep-link pattern. Set by
+    /// StatusDrawerView when the user taps a running dispatch row; cleared after the
+    /// fullScreenCover is presented. ConversationView observes via .onChange and opens
+    /// AgentDetailFullScreenView for the specific dispatchId, reconstructing the ancestor
+    /// breadcrumb chain before presenting (plan modest-leaping-waffle §9a).
+    var pendingDispatchId: String? = nil
     /// The currently focused tab ID — the tab the user is viewing right now.
     /// Updated by TabListView whenever the selected/navigated tab changes and
     /// cleared when the app backgrounds. The desktop reads this via `report_focus`

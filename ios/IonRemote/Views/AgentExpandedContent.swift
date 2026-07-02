@@ -30,6 +30,11 @@ struct AgentExpandedContent: View {
     /// Drill-down handler: opening a child agent row pushes onto the preview's
     /// breadcrumb navigation. nil in the inline AgentBarRow layout.
     var onOpenChildDispatch: ((DispatchInfo, AgentStateUpdate) -> Void)?
+    /// Two-way binding for the embedded agent panel's expanded state.
+    /// Only the pinned/popup layout (AgentDetailFullScreenView,
+    /// BreadcrumbDestinationView) supplies this; the inline AgentBarRow
+    /// leaves it nil, which is fine because AgentBarRow builds no Transcript.
+    var agentPanelExpanded: Binding<Bool>?
     @Environment(\.appTheme) private var theme
     @State private var selectedDispatchIndex: Int?
     /// Live clock for the duration ticker — only ticks when pinHeader is true
@@ -96,6 +101,7 @@ struct AgentExpandedContent: View {
                     onOpenDispatch: onOpenChildDispatch,
                     isNearBottom: $transcriptNearBottom,
                     forceScrollCounter: transcriptForceScroll,
+                    agentPanelExpanded: agentPanelExpanded,
                     alwaysShowAgentPanel: true
                 )
             }

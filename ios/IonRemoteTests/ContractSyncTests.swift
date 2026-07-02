@@ -546,6 +546,7 @@ final class ContractSyncTests: XCTestCase {
             "supportsCaching", "supportsThinking", "supportsImages",
             "thinkingMode", "thinkingEfforts",
             "isCustom",
+            "tokenizer", // engine field; iOS does not consume it (thin client)
         ]
         let goSet = Set(goFields)
         let unhandled = goSet.subtracting(swiftHandled)
@@ -615,6 +616,33 @@ final class ContractSyncTests: XCTestCase {
         XCTAssert(
             missingFromGo.isEmpty,
             "EngineEvent manifest is missing dispatch fields consumed by iOS: \(missingFromGo.sorted())"
+        )
+    }
+
+    // MARK: - context_breakdown normalized-event field coverage
+
+    /// Pins that every field the Go engine declares on the context_breakdown
+    /// normalized event is mirrored by the Swift ContextBreakdownPayload. The
+    /// cacheReadTokens / cacheCreationTokens fields were added in the
+    /// minty-grinning-cocoa plan (C7); this guards against future Go-side
+    /// additions the Swift wire type doesn't handle.
+    func testContextBreakdownNormalizedEventFields() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.normalizedEvents["context_breakdown"] ?? nil else {
+            XCTFail("context_breakdown not found in Go normalizedEvents manifest")
+            return
+        }
+
+        // Fields decoded by ContextBreakdownPayload / ContextBreakdownCategory on iOS.
+        let swiftHandled: Set<String> = [
+            "aggregateCostUsd", "apiReportedTotal", "cacheCreationTokens", "cacheReadTokens",
+            "categories", "contextWindow", "model", "totalTokens", "unaccounted",
+        ]
+        let goSet = Set(goFields)
+        let unhandled = goSet.subtracting(swiftHandled)
+        XCTAssert(
+            unhandled.isEmpty,
+            "Go context_breakdown has fields not tracked in Swift test: \(unhandled.sorted())"
         )
     }
 

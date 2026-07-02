@@ -424,6 +424,17 @@ extension RemoteEvent {
                 metadata: metadata
             )
 
+        case .desktopContextBreakdown:
+            // desktop_context_breakdown — forwarded by the desktop from the engine's
+            // context-analysis pass. The full payload decodes under a single
+            // `contextBreakdown` key so the struct is self-contained and forward-
+            // compatible (new fields land in ContextBreakdownPayload without touching
+            // the CodingKeys enum here). tabId and instanceId follow the standard pattern.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let payload = try container.decode(ContextBreakdownPayload.self, forKey: .contextBreakdown)
+            return .desktopContextBreakdown(tabId: tabId, instanceId: instanceId, contextBreakdown: payload)
+
         default:
             return nil
         }

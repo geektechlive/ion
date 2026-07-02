@@ -391,6 +391,15 @@ extension RemoteEvent {
             try container.encodeIfPresent(metadata, forKey: .metadata)
             return true
 
+        case .desktopContextBreakdown(let tabId, let instanceId, let breakdown):
+            // Encoder mirror for desktop_context_breakdown. iOS never originates
+            // this event; the encoder enables round-trip tests.
+            try container.encode(TypeKey.desktopContextBreakdown, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            try container.encode(breakdown, forKey: .contextBreakdown)
+            return true
+
         default:
             return false
         }
