@@ -254,6 +254,47 @@ describe('runHandleImplement — plan-mode flip (plain tab)', () => {
   })
 })
 
+describe('runHandleImplement — planFilePath cleared on instance after implement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockPrompt.mockResolvedValue(undefined)
+    mockReadPlan.mockResolvedValue({ content: '# plan body' })
+  })
+
+  it('clears instance.planFilePath to null (not a silent no-op on tabs[])', async () => {
+    // Seed a pane whose active instance has planFilePath set.
+    // On the broken code the write targets tabs[].planFilePath (a field that
+    // does not exist on TabState), so the stale path survives on the instance.
+    const tab = makeTab()
+    const PLAN_PATH = '/Users/josh/.ion/plans/bold-guiding-kite.md'
+    const { state } = buildHarness(tab, { permissionMode: 'plan', planFilePath: PLAN_PATH })
+
+    // Confirm the instance starts with planFilePath set.
+    const paneBefore = state.conversationPanes.get('tab-1')!
+    const instBefore = paneBefore.instances.find((i: any) => i.id === paneBefore.activeInstanceId) ?? paneBefore.instances[0]
+    expect(instBefore.planFilePath).toBe(PLAN_PATH)
+
+    mockReadPlan.mockResolvedValue({ content: '# plan' })
+
+    await runHandleImplement(
+      {
+        tabId: 'tab-1',
+        clearPermissionDenied: () => {},
+        submit: state.submit,
+        tabPlanFilePath: PLAN_PATH,
+        permissionDenied: null,
+      },
+      false,
+    )
+
+    // After implement the instance.planFilePath must be null — the path was
+    // consumed and must not linger to contaminate a subsequent planning cycle.
+    const paneAfter = state.conversationPanes.get('tab-1')!
+    const instAfter = paneAfter.instances.find((i: any) => i.id === paneAfter.activeInstanceId) ?? paneAfter.instances[0]
+    expect(instAfter.planFilePath).toBeNull()
+  })
+})
+
 describe('runHandleImplement — clearContext branch', () => {
   beforeEach(() => {
     vi.clearAllMocks()

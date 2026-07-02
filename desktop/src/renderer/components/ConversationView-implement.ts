@@ -182,11 +182,16 @@ export async function runHandleImplement(
     }
   }
 
-  // Clear the tab-level planFilePath now that we've read it
+  // Clear the instance-level planFilePath now that we've consumed it.
+  // The authoritative field is conversationPanes → instance.planFilePath
+  // (mirrors the iOS precedent in handlers/implement-plan.ts line 171).
+  // Writing to tabs[].planFilePath is a silent no-op: that field does not
+  // exist on TabState and the stale path would survive on the instance.
   useSessionStore.setState((s) => ({
-    tabs: s.tabs.map((t) =>
-      t.id === tabId ? { ...t, planFilePath: null } : t
-    ),
+    conversationPanes: commitInstance(s.conversationPanes, tabId, (inst) => ({
+      ...inst,
+      planFilePath: null,
+    })),
   }))
 
   const implementPrompt = planContent
