@@ -100,6 +100,26 @@ describe('Defect 3 — restored assistant messages carry sealed=true', () => {
     expect(populated.messages).toHaveLength(0)
   })
 
+  it('preserves planFilePath on a restored plan-lifecycle divider (link survives restart)', () => {
+    // The serializer persists planFilePath on divider system rows; restoration
+    // must carry it back so the slug stays clickable after a restart. Dropping
+    // it would leave the "Plan created · slug" text intact but break the link
+    // (SystemMessage.hasPlanLink requires message.planFilePath).
+    const inst = makePersistedInstance([
+      {
+        role: 'system',
+        content: '── Plan created at 12:00 PM · happy-rabbit ──',
+        timestamp: 2000,
+        // PersistedMessage carries planFilePath for divider rows.
+        planFilePath: '/tmp/happy-rabbit.md',
+      } as any,
+    ])
+    const populated = buildPopulatedInstance(inst as any, 'tab1', NOOP_TAB as any)
+    const sysMsg = populated.messages.find((m) => m.role === 'system')
+    expect(sysMsg).toBeDefined()
+    expect((sysMsg as any).planFilePath).toBe('/tmp/happy-rabbit.md')
+  })
+
   it('seals all assistant messages when multiple exist', () => {
     const inst = makePersistedInstance([
       { role: 'assistant', content: 'first', timestamp: 1000 },

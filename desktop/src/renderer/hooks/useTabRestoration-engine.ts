@@ -465,6 +465,11 @@ export function buildPopulatedInstance(
     toolStatus: m.toolStatus as Message['toolStatus'],
     timestamp: m.timestamp,
     dedupKey: m.dedupKey,
+    // Restore planFilePath on plan-lifecycle divider rows (Plan created /
+    // Plan updated / Implementing plan) so the slug stays clickable after a
+    // restart. The serializer persists it (serialize-conversation-pane.ts);
+    // dropping it here would leave the divider text intact but break the link.
+    planFilePath: m.planFilePath,
     slashCommand: m.slashCommand,
     slashArgs: m.slashArgs,
     slashSource: m.slashSource,

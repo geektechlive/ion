@@ -199,6 +199,22 @@ describe('serializeConversationPane — content arm on data fact', () => {
     expect(result?.instances[0].messages).toBeDefined()
     expect(result?.instances[0].messages?.some((m) => m.role === 'harness')).toBe(true)
   })
+
+  it('persists planFilePath on a plan-lifecycle divider row (link survives restart)', () => {
+    // A plan divider is a renderer-only `system` row, so its presence forces
+    // full-content persistence. The serializer must carry planFilePath so the
+    // restored divider's slug stays clickable. Pairs with the restore-side test
+    // in engine-restore-plan-seal.test.ts (the two halves of the round-trip).
+    const divider = makeMsg('system', '── Plan created at 12:00 PM · happy-rabbit ──')
+    divider.planFilePath = '/tmp/happy-rabbit.md'
+    const msgs = [makeMsg('user'), divider, makeMsg('assistant')]
+    const inst = makeInstance({ messages: msgs, messageCount: msgs.length })
+    const result = serializeConversationPane(makePane(inst), { tabIdForLog: 'tab-divider' })
+
+    const persistedDivider = result?.instances[0].messages?.find((m) => m.role === 'system')
+    expect(persistedDivider).toBeDefined()
+    expect((persistedDivider as any).planFilePath).toBe('/tmp/happy-rabbit.md')
+  })
 })
 
 // ─── 6. Count-only arm fires when no renderer-only rows ──────────────────────
