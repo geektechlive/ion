@@ -27,7 +27,7 @@ export function FileEditor({ dir, tabId }: FileEditorProps) {
   // Panel position and size — managed via refs + direct DOM mutation during
   // drag to avoid re-renders that interfere with framer-motion Reorder
   // layout animations. Geometry is persisted to the global session store.
-  const { panelRef, posRef, size, handleDragStart, handleResizeStart } = useFileEditorPanel()
+  const { panelRef, posRef, size, handleDragStart, renderResizeZones } = useFileEditorPanel()
 
   // Store selectors
   const editorState = useSessionStore((s) => s.fileEditorStates.get(dir))
@@ -177,17 +177,20 @@ export function FileEditor({ dir, tabId }: FileEditorProps) {
         />
       )}
 
-      {/* Resize handle */}
+      {/* 8-direction resize hit zones (edges + corners) */}
+      {renderResizeZones()}
+
+      {/* Visible bottom-right grip — purely a visual affordance; the actual
+          hit zone is the `se` zone rendered above (which sits on top). */}
       <div
         data-ion-ui
-        onMouseDown={handleResizeStart}
         style={{
           position: 'absolute',
           right: 0,
           bottom: 0,
           width: 16,
           height: 16,
-          cursor: 'nwse-resize',
+          pointerEvents: 'none',
         }}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" style={{ opacity: 0.25 }}>

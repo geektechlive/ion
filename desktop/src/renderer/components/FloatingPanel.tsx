@@ -6,6 +6,26 @@ import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import { useSessionStore } from '../stores/sessionStore'
+import { useEdgeResize } from '../hooks/useEdgeResize'
+
+/**
+ * Clamp a geometry so it fits within the current viewport: never larger than
+ * the viewport, never positioned off-screen. Used on mount/restore so a panel
+ * saved on a large monitor doesn't render oversized or stranded on a laptop.
+ */
+function clampToViewport(
+  geo: { x: number; y: number; w: number; h: number },
+  minWidth: number,
+  minHeight: number,
+): { x: number; y: number; w: number; h: number } {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const w = Math.max(minWidth, Math.min(geo.w, vw))
+  const h = Math.max(minHeight, Math.min(geo.h, vh))
+  const x = Math.max(0, Math.min(geo.x, vw - w))
+  const y = Math.max(0, Math.min(geo.y, vh - h))
+  return { x, y, w, h }
+}
 
 interface FloatingPanelProps {
   title: string
@@ -54,15 +74,22 @@ export function FloatingPanel({
   const [size, setSize] = useState(initialSize ?? { w: defaultWidth, h: defaultHeight })
   const [titleCtxMenu, setTitleCtxMenu] = useState<{ x: number; y: number } | null>(null)
 
-  // Drag state
+  // Drag state (header move only; resize handled by useEdgeResize below)
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null)
-  // Resize state
-  const resizeRef = useRef<{ startX: number; startY: number; originW: number; originH: number } | null>(null)
   // Track latest pos/size for geometry callback
   const posRef = useRef(pos)
   const sizeRef = useRef(size)
   posRef.current = pos
   sizeRef.current = size
+
+  // Clamp the initial geometry to the viewport once on mount so a panel
+  // restored from a larger display renders on-screen and correctly sized.
+  useEffect(() => {
+    const clamped = clampToViewport({ ...posRef.current, ...sizeRef.current }, minWidth, minHeight)
+    setPos({ x: clamped.x, y: clamped.y })
+    setSize({ w: clamped.w, h: clamped.h })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     // Only drag from header (left button)
@@ -71,12 +98,20 @@ export function FloatingPanel({
     dragRef.current = { startX: e.clientX, startY: e.clientY, originX: pos.x, originY: pos.y }
   }, [pos])
 
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return
-    e.preventDefault()
-    e.stopPropagation()
-    resizeRef.current = { startX: e.clientX, startY: e.clientY, originW: size.w, originH: size.h }
-  }, [size])
+  // 8-direction edge/corner resize. onResize applies geometry live; onResizeEnd
+  // persists via the existing onGeometryChange callback.
+  const { renderZones } = useEdgeResize({
+    minWidth,
+    minHeight,
+    getGeometry: () => ({ ...posRef.current, ...sizeRef.current }),
+    onResize: (geo) => {
+      setSize({ w: geo.w, h: geo.h })
+      setPos({ x: geo.x, y: geo.y })
+    },
+    onResizeEnd: (geo) => {
+      if (onGeometryChange) onGeometryChange(geo)
+    },
+  })
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -88,19 +123,10 @@ export function FloatingPanel({
         const newY = Math.max(0, Math.min(window.innerHeight - 32, dragRef.current.originY + dy))
         setPos({ x: newX, y: newY })
       }
-      if (resizeRef.current) {
-        const dx = e.clientX - resizeRef.current.startX
-        const dy = e.clientY - resizeRef.current.startY
-        setSize({
-          w: Math.max(minWidth, resizeRef.current.originW + dx),
-          h: Math.max(minHeight, resizeRef.current.originH + dy),
-        })
-      }
     }
     const handleMouseUp = () => {
-      const wasDragging = dragRef.current !== null || resizeRef.current !== null
+      const wasDragging = dragRef.current !== null
       dragRef.current = null
-      resizeRef.current = null
       if (wasDragging && onGeometryChange) {
         onGeometryChange({ ...posRef.current, ...sizeRef.current })
       }
@@ -111,7 +137,7 @@ export function FloatingPanel({
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [minWidth, minHeight])
+  }, [onGeometryChange])
 
   // Escape to close
   useEffect(() => {
@@ -210,17 +236,20 @@ export function FloatingPanel({
         {children}
       </div>
 
-      {/* Resize handle (bottom-right corner) */}
+      {/* 8-direction resize hit zones (edges + corners) */}
+      {renderZones()}
+
+      {/* Visible bottom-right grip — purely a visual affordance; the actual
+          hit zone is the `se` zone rendered above (which sits on top). */}
       <div
         data-ion-ui
-        onMouseDown={handleResizeStart}
         style={{
           position: 'absolute',
           right: 0,
           bottom: 0,
           width: 16,
           height: 16,
-          cursor: 'nwse-resize',
+          pointerEvents: 'none',
         }}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" style={{ opacity: 0.25 }}>
