@@ -71,11 +71,19 @@ beforeEach(() => {
   writtenFiles = {}
   fakeFs = {}
   vi.clearAllMocks()
+  // Pin to darwin so that the darwin-branch code paths execute regardless of
+  // the CI host OS. The production guard (process.platform !== 'darwin') is
+  // exercised by the dedicated no-op test below, which explicitly sets 'linux'.
+  // Without this pin the darwin tests silently pass on macOS (where the real
+  // platform IS darwin) but fail on the Linux CI container where the early-exit
+  // branch fires and nothing is written/copied/exec'd.
+  Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+  platformOverride = 'darwin'
 })
 
 afterEach(() => {
   if (platformOverride !== null) {
-    Object.defineProperty(process, 'platform', { value: originalPlatform })
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     platformOverride = null
   }
 })
@@ -261,7 +269,7 @@ describe('engine-bootstrap', () => {
   })
 
   it('is a no-op on non-darwin platforms', async () => {
-    Object.defineProperty(process, 'platform', { value: 'linux' })
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
     platformOverride = 'linux'
 
     await ensureEngineDaemon()
