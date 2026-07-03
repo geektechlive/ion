@@ -28,6 +28,10 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		hooks = run.cfg.Hooks
 	}
 
+	// Install the provider stream-idle deadline for this run from the resolved
+	// timeouts config. See installStreamIdleTimeout (runloop_stream_idle.go).
+	installStreamIdleTimeout(run)
+
 	// Resolve the effective early-stop continuation config for this run.
 	// Defaults < engine.json < RunOptions < sub-agent gate. Log the final
 	// snapshot once at INFO so a reader can reconstruct the decision path
@@ -65,6 +69,11 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	}
 	run.conv = conv
 
+	// Initialize the read-triggered nested context sink. The dedup set is
+	// seeded later, after the system prompt is built (so conv.System carries
+	// the eager context blocks we must not re-inject).
+	run.touchedSink = types.NewTouchedPathSink()
+
 	// Resolve the conversations directory for post-compact .tree.jsonl path
 	// injection. Best-effort: an error just leaves the path empty.
 	convDir := ""
@@ -89,9 +98,32 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 	// Build system prompt (may rewrite opts.Prompt and opts.PlanModeTools)
 	conv.System = buildSystemPrompt(&opts, conv, hooks, run.requestID, run)
 
+	// Seed the nested-context dedup set now that conv.System carries the eager
+	// root/home context blocks. Scanning conv.System + conv.Messages recovers
+	// every "# Context from <path>" already present (eager walk this turn, plus
+	// any nested injections from prior sessions in history) so the nested
+	// loader never re-injects a file that is already in the conversation.
+	seeded := seedInjectedNestedPaths(conv, opts)
+	run.mu.Lock()
+	run.injectedNestedPaths = seeded
+	run.mu.Unlock()
+	utils.Debug("ApiBackend", fmt.Sprintf("nestedContext: run=%s seeded %d already-present context path(s)", run.requestID, len(seeded)))
+
 	// Append the inbound user turn. See appendInboundUserMessage for the
 	// attachment / slash-command-split handling (extracted to keep this file
 	// under the size cap).
+	//
+	// The engine does NOT echo the appended user turn back to clients. A user
+	// turn is either (1) the local client's own input — which the client already
+	// rendered optimistically and does not need echoed back to remember — or
+	// (2) a turn originated on another client, whose live cross-device echo is
+	// owned by the desktop↔client wire (the desktop pipeline's
+	// desktop_message_added), not by the engine. The persisted turn is the
+	// snapshot authority: it lives in the conversation transcript and reaches
+	// every consumer via history load. Re-broadcasting it as a live event would
+	// duplicate the client's own input and force a dedup contract on every
+	// consumer; it also surfaced extension-injected turns (ctx.sendMessage) as
+	// phantom user bubbles. See the removal of engine_user_turn.
 	appendInboundUserMessage(conv, &opts)
 	// Persist immediately: if the engine dies mid-stream, the user prompt
 	// must survive so the user does not lose what they just typed.
@@ -140,6 +172,13 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		run.turnCount.Store(int64(turn))
 		// Belt-and-suspenders progress bump (see bumpProgressAtTurnBoundary).
 		run.bumpProgressAtTurnBoundary()
+
+		// Read-triggered nested context loading: drain the paths tools touched
+		// last turn and inject any not-yet-seen AGENTS.md/ION.md (and, when
+		// gated on, CLAUDE.md) from directories below cwd on the path to each
+		// touched file. Runs before streamOpts is built so new subtree context
+		// reaches the model on this turn's provider call.
+		b.drainNestedContext(run, conv, hooks, opts, opts.ProjectPath, turn, maxTurns)
 
 		// Wind-down: warn the LLM 2 turns before max so it can wrap up
 		if maxTurns > 4 && turn == maxTurns-2 {
@@ -251,6 +290,11 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		if opts.Thinking != nil {
 			streamOpts.Thinking = opts.Thinking
 		}
+
+		// Build and emit the per-category context breakdown once per run, on
+		// the first turn that has assembled stream options. See
+		// runloop_context_breakdown.go for the build/emit + reconcile helpers.
+		b.maybeEmitContextBreakdown(ctx, run, model, provider, &streamOpts)
 
 		// Call provider with retry (with telemetry span)
 		runIDCopy, turnCopy := run.requestID, turn
@@ -425,6 +469,11 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 			run.totalCost += costUsd
 			conversation.UpdateCost(conv, costUsd)
 
+			// Accumulate per-run token totals for TaskCompleteEvent.Usage.
+			run.cumulativeInputTokens += turnUsage.InputTokens
+			run.cumulativeCacheReadTokens += turnUsage.CacheReadInputTokens
+			run.cumulativeCacheCreateTokens += turnUsage.CacheCreationInputTokens
+
 			// Emit usage event with TOTAL input tokens (including cached) so
 			// consumers can compute accurate context percentage
 			totalIn := turnUsage.InputTokens + turnUsage.CacheReadInputTokens + turnUsage.CacheCreationInputTokens
@@ -439,6 +488,11 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					CacheCreationInputTokens: &cacheCreate,
 				},
 			}})
+
+			// Reconcile the context breakdown with the provider-reported input
+			// total on the FIRST usage event only. See
+			// runloop_context_breakdown.go.
+			b.maybeReconcileContextBreakdown(run, totalIn, cacheRead, cacheCreate)
 
 			// Accumulate output tokens for the early-stop continuation
 			// decision. Done unconditionally — the feature gates itself on
@@ -544,6 +598,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					DurationMs:        elapsed,
 					NumTurns:          turn,
 					SessionID:         conv.ID,
+					Usage:             cumulativeUsage(run),
 					PermissionDenials: denials,
 				}})
 				b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
@@ -576,6 +631,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 				DurationMs: elapsed,
 				NumTurns:   turn,
 				SessionID:  conv.ID,
+				Usage:      cumulativeUsage(run),
 			}})
 			b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
 			return
@@ -637,6 +693,7 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 					DurationMs:        elapsed,
 					NumTurns:          turn,
 					SessionID:         conv.ID,
+					Usage:             cumulativeUsage(run),
 					PermissionDenials: denials,
 				}})
 				b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
@@ -729,65 +786,8 @@ func (b *ApiBackend) runLoop(ctx context.Context, run *activeRun, opts types.Run
 		DurationMs: elapsed,
 		NumTurns:   turn,
 		SessionID:  conv.ID,
+		Usage:      cumulativeUsage(run),
 	}})
 	utils.Warn("ApiBackend", fmt.Sprintf("max turns exceeded: runID=%s turns=%d/%d cost=$%.4f", run.requestID, turn, maxTurns, run.totalCost))
 	b.emitExit(run.requestID, intPtr(0), nil, conv.ID)
-}
-
-// injectSystemMessage handles all engine-injected steering messages.
-// It checks disable flags, fires the system_inject hook, and either
-// adds a transient message (suppress mode) or persists it normally.
-func (b *ApiBackend) injectSystemMessage(
-	run *activeRun,
-	conv *conversation.Conversation,
-	hooks RunHooks,
-	opts types.RunOptions,
-	kind, defaultText string,
-	turn, maxTurns int,
-) {
-	// Check per-injection disable flag
-	switch kind {
-	case "plan_mode_reminder":
-		if opts.DisablePlanModeReminder {
-			return
-		}
-	case "turn_limit_warning":
-		if opts.DisableTurnLimitWarning {
-			return
-		}
-	case "max_token_continue":
-		if opts.DisableMaxTokenContinue {
-			return
-		}
-	case earlyStopContinueKind:
-		if opts.DisableEarlyStopContinue {
-			utils.Debug("ApiBackend", fmt.Sprintf(
-				"earlyStop: injection suppressed by DisableEarlyStopContinue: runID=%s turn=%d",
-				run.requestID, turn,
-			))
-			return
-		}
-	}
-
-	// Fire hook if registered
-	text := defaultText
-	if hooks.OnSystemInject != nil {
-		hookText, suppress := hooks.OnSystemInject(kind, defaultText, turn, maxTurns)
-		if suppress {
-			return
-		}
-		if hookText != "" {
-			text = hookText
-		}
-	}
-
-	// Add message: transient (in-memory only) or persistent
-	if opts.SuppressSystemMessages {
-		conversation.AddTransientUserMessage(conv, text)
-	} else {
-		conversation.AddUserMessage(conv, text)
-		if err := conversation.Save(conv, ""); err != nil {
-			utils.Log("ApiBackend", "failed to save conversation after system inject: "+err.Error())
-		}
-	}
 }

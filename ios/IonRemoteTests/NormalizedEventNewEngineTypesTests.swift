@@ -180,24 +180,38 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineDispatchStart() throws {
         let json = """
-        {"type":"desktop_dispatch_start","tabId":"t1","instanceId":"i1"}
+        {"type":"desktop_dispatch_start","tabId":"t1","instanceId":"i1","dispatchAgent":"agent-a","dispatchSessionId":"sess-1","dispatchModel":"opus","dispatchTask":"do stuff","dispatchDepth":1,"dispatchParentId":"parent-x","dispatchId":"id-1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .engineDispatchStart(let tabId, let instanceId) = event {
+        if case .engineDispatchStart(let tabId, let instanceId, let agent, let sessionId, let model, let task, let depth, let parentId, let dispatchId) = event {
             XCTAssertEqual(tabId, "t1")
             XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(agent, "agent-a")
+            XCTAssertEqual(sessionId, "sess-1")
+            XCTAssertEqual(model, "opus")
+            XCTAssertEqual(task, "do stuff")
+            XCTAssertEqual(depth, 1)
+            XCTAssertEqual(parentId, "parent-x")
+            XCTAssertEqual(dispatchId, "id-1")
         } else {
             XCTFail("Expected engineDispatchStart, got \(event)")
         }
     }
 
     func testRoundTripEngineDispatchStart() throws {
-        let original = RemoteEvent.engineDispatchStart(tabId: "t1", instanceId: "i1")
+        let original = RemoteEvent.engineDispatchStart(tabId: "t1", instanceId: "i1", dispatchAgent: "agent-b", dispatchSessionId: "sess-2", dispatchModel: "sonnet", dispatchTask: "review", dispatchDepth: 2, dispatchParentId: "p-123", dispatchId: "id-2")
         let data = try encoder.encode(original)
         let decoded = try decoder.decode(RemoteEvent.self, from: data)
-        if case .engineDispatchStart(let tabId, let instanceId) = decoded {
+        if case .engineDispatchStart(let tabId, let instanceId, let agent, let sessionId, let model, let task, let depth, let parentId, let dispatchId) = decoded {
             XCTAssertEqual(tabId, "t1")
             XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(agent, "agent-b")
+            XCTAssertEqual(sessionId, "sess-2")
+            XCTAssertEqual(model, "sonnet")
+            XCTAssertEqual(task, "review")
+            XCTAssertEqual(depth, 2)
+            XCTAssertEqual(parentId, "p-123")
+            XCTAssertEqual(dispatchId, "id-2")
         } else {
             XCTFail("Round-trip engineDispatchStart failed")
         }
@@ -208,11 +222,34 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
         {"type":"desktop_dispatch_start","tabId":"t1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .engineDispatchStart(let tabId, let instanceId) = event {
+        if case .engineDispatchStart(let tabId, let instanceId, let agent, _, _, _, let depth, let parentId, _) = event {
             XCTAssertEqual(tabId, "t1")
             XCTAssertNil(instanceId)
+            XCTAssertEqual(agent, "")
+            XCTAssertEqual(depth, 0)
+            XCTAssertEqual(parentId, "")
         } else {
             XCTFail("Expected engineDispatchStart, got \(event)")
+        }
+    }
+
+    // MARK: - engine_dispatch_end
+
+    func testDecodeEngineDispatchEnd() throws {
+        let json = """
+        {"type":"desktop_dispatch_end","tabId":"t1","instanceId":"i1","dispatchAgent":"agent-a","dispatchDepth":1,"dispatchParentId":"","dispatchExitCode":0,"dispatchElapsed":2.5}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineDispatchEnd(let tabId, let instanceId, let agent, let depth, let parentId, let exitCode, let elapsed, _, _) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(agent, "agent-a")
+            XCTAssertEqual(depth, 1)
+            XCTAssertEqual(parentId, "")
+            XCTAssertEqual(exitCode, 0)
+            XCTAssertEqual(elapsed, 2.5, accuracy: 0.01)
+        } else {
+            XCTFail("Expected engineDispatchEnd, got \(event)")
         }
     }
 

@@ -11,18 +11,34 @@ struct PlanApprovalCardView: View {
 
     // MARK: - Plan data (preview path, plan gentle-perching-lemon)
     //
-    // The snapshot no longer carries `planContent` (full body). It now carries:
+    // The snapshot carries a bounded preview for instant card render:
     //   planContentPreview: String   — first 4 KB for instant card render
     //   planSizeBytes: Int           — full file size in bytes
     //   planTruncated: Bool          — true when file > 4 KB
     //
     // iOS renders the preview immediately. On expand (showFullPlan) or
     // "Copy Plan", it fetches the full body via PlanContentStore (paged
-    // request_plan_content commands). The legacy `planContent` key is no
-    // longer read — do NOT reference it.
+    // request_plan_content commands).
+    //
+    // Fallback to inline `planContent`: two card-source paths deliver the full
+    // body inline in `toolInput.planContent` and NEVER carry `planContentPreview`
+    // — (1) the desktop snapshot promotes a permission denial whose toolInput was
+    // backfilled from conversation history, and its preview enrichment is skipped
+    // when the plan file is unreadable on disk; (2) `computeRestoredSpecialCard`
+    // synthesizes the card from a persisted ExitPlanMode message, and the preview
+    // key is snapshot-only so it is structurally absent. Reading ONLY
+    // `planContentPreview` made both produce a blank card. We therefore prefer the
+    // preview and fall back to the inline `planContent` the card already carries.
+    // (Earlier this comment said "never read planContent" — that was the bug.)
 
     private var planContentPreview: String? {
         request.toolInput?["planContentPreview"]?.value as? String
+    }
+
+    /// Full plan body delivered inline on the card's toolInput by the backfill /
+    /// restored-synthesis paths (which never produce `planContentPreview`).
+    private var planContentInline: String? {
+        request.toolInput?["planContent"]?.value as? String
     }
 
     private var planSizeBytes: Int {
@@ -37,11 +53,28 @@ struct PlanApprovalCardView: View {
         request.toolInput?["planFilePath"]?.value as? String
     }
 
-    /// Content to display in the inline preview. Uses the preview string from
-    /// the snapshot. Never reads the old `planContent` key.
+    /// Content to display in the inline preview. Prefers the bounded snapshot
+    /// preview; falls back to the inline `planContent` the card carries when the
+    /// snapshot did not enrich a preview (restored / synthesized cards, or an
+    /// unreadable plan file). Nil only when neither is present.
     private var displayContent: String? {
-        guard let preview = planContentPreview, !preview.isEmpty else { return nil }
-        return preview
+        Self.resolveDisplayContent(toolInput: request.toolInput)
+    }
+
+    /// Pure precedence resolver for the inline card body, extracted so the
+    /// `planContentPreview` → inline-`planContent` fallback is unit-testable
+    /// without instantiating the SwiftUI view (which needs an @Environment
+    /// SessionViewModel). Returns the non-empty preview if present, else the
+    /// non-empty inline body, else nil. Pin: a card carrying only `planContent`
+    /// (the backfill / restored-synthesis shape) must resolve to that body.
+    static func resolveDisplayContent(toolInput: [String: AnyCodable]?) -> String? {
+        if let preview = toolInput?["planContentPreview"]?.value as? String, !preview.isEmpty {
+            return preview
+        }
+        if let inline = toolInput?["planContent"]?.value as? String, !inline.isEmpty {
+            return inline
+        }
+        return nil
     }
 
     /// Full plan body assembled from paged fetches, once complete.
@@ -54,11 +87,48 @@ struct PlanApprovalCardView: View {
     }
 
     private var showUnpinOption: Bool {
-        tab?.groupPinned == true && tab?.hasEngineExtension != true
+        let resolved = Self.resolveShowUnpinOption(
+            groupPinned: tab?.groupPinned,
+            hasEngineExtension: tab?.hasEngineExtension
+        )
+        DiagnosticLog.log(
+            "PLAN-CARD: showUnpinOption tabId=\(tabId.prefix(8)) "
+            + "groupPinned=\(String(describing: tab?.groupPinned)) "
+            + "hasEngineExtension=\(String(describing: tab?.hasEngineExtension)) "
+            + "showUnpinOption=\(resolved)"
+        )
+        return resolved
+    }
+
+    /// Pure resolver for the "Implement and Unpin" split-row gate, extracted so
+    /// the group-pinned → unpin-option mapping is unit-testable without
+    /// instantiating the SwiftUI view (which needs an @Environment
+    /// SessionViewModel). Mirrors the desktop gate exactly: the unpin option is
+    /// revealed whenever the tab is pinned to its group (`groupPinned == true`),
+    /// regardless of whether the conversation is extension-hosted.
+    ///
+    /// Pin: extension-hosted conversations (`hasEngineExtension == true`) are NOT
+    /// excluded. The prior `&& hasEngineExtension != true` predicate was an
+    /// orphaned pre-unification artifact — PR #256 (commit 2ade1824) unified
+    /// plain and extension-hosted conversations but left the predicate behind,
+    /// which hid the unpin button on iOS for extension-hosted, group-pinned tabs
+    /// while desktop (which checks only `groupPinned`) still showed it.
+    static func resolveShowUnpinOption(groupPinned: Bool?, hasEngineExtension: Bool?) -> Bool {
+        groupPinned == true
     }
 
     private var showClearContextOption: Bool {
-        guard let settings = viewModel.desktopSettings,
+        Self.resolveShowClearContext(settings: viewModel.desktopSettings)
+    }
+
+    /// Pure resolver for the "Implement, clear context" button gate, extracted
+    /// so the desktop-setting → button-visibility mapping is unit-testable
+    /// without instantiating the SwiftUI view (which needs an @Environment
+    /// SessionViewModel). Mirrors the desktop gate: the button is revealed only
+    /// when the `showImplementClearContext` desktop setting is `true`. Returns
+    /// `false` when settings are absent or the key is missing/non-boolean.
+    static func resolveShowClearContext(settings: DesktopSettingsState?) -> Bool {
+        guard let settings,
               let val = settings.currentValue(for: "showImplementClearContext"),
               let on = val.value as? Bool else {
             return false
@@ -139,42 +209,39 @@ struct PlanApprovalCardView: View {
 
                 // Action buttons — split row when pinned, single button otherwise
                 if showUnpinOption {
-                    GeometryReader { geo in
-                        let spacing: CGFloat = 8
-                        let availableWidth = geo.size.width - 32
-                        let smallWidth = (availableWidth - spacing) * 0.38
-                        let largeWidth = availableWidth - spacing - smallWidth
-                        HStack(spacing: spacing) {
-                            Button {
-                                Haptic.medium()
-                                implementAndUnpin()
-                            } label: {
-                                Label("Implement and Unpin", systemImage: "pin.slash")
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                    .frame(width: largeWidth, height: 44)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.green)
-
-                            Button {
-                                Haptic.medium()
-                                implement()
-                            } label: {
-                                Text("Implement")
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                    .frame(width: smallWidth, height: 44)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color(.systemGray3))
+                    // Native HStack (no GeometryReader): both buttons share the row
+                    // 50/50 via .frame(maxWidth: .infinity), so the row reports its
+                    // true height to the enclosing VStack and the clear-context
+                    // button below flows beneath it instead of overlapping. The
+                    // prior GeometryReader (38/62 pixel split) did not report a
+                    // stable intrinsic height, which caused the overlap.
+                    HStack(spacing: 8) {
+                        Button {
+                            Haptic.medium()
+                            implementAndUnpin()
+                        } label: {
+                            Label("Implement and Unpin", systemImage: "pin.slash")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .frame(maxWidth: .infinity, minHeight: 44)
                         }
-                        .frame(width: availableWidth)
-                        .frame(maxWidth: .infinity)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+
+                        Button {
+                            Haptic.medium()
+                            implement()
+                        } label: {
+                            Text("Implement")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color(.systemGray3))
                     }
-                    .frame(height: 44)
                 } else {
                     Button {
                         Haptic.medium()
@@ -215,8 +282,9 @@ struct PlanApprovalCardView: View {
                 implement()
             }
         }) {
-            // Use the full assembled body when available; fall back to preview.
-            let content = fullPlanContent ?? planContentPreview ?? ""
+            // Use the full assembled body when available; fall back to the
+            // bounded preview, then to the inline body the card carries.
+            let content = fullPlanContent ?? planContentPreview ?? planContentInline ?? ""
             let isFetching = viewModel.planContentStore.isFetching(questionId: request.questionId)
             PlanFullScreenView(content: content, isFetching: isFetching) {
                 implementOnDismiss = true
@@ -233,8 +301,8 @@ struct PlanApprovalCardView: View {
     }
 
     private func implementAndUnpin(clearContext: Bool = false) {
-        viewModel.toggleTabGroupPin(tabId: tabId)
-        implement(clearContext: clearContext)
+        viewModel.dismissSpecialPermission(tabId: tabId, questionId: request.questionId)
+        viewModel.sendUnpinThenImplementPlanIntent(tabId: tabId, questionId: request.questionId, clearContext: clearContext)
     }
 
     /// Initiate the paged fetch of the full plan body if not already fetched.
@@ -250,7 +318,7 @@ struct PlanApprovalCardView: View {
         if let full = fullPlanContent {
             UIPasteboard.general.string = full
         } else {
-            UIPasteboard.general.string = planContentPreview ?? ""
+            UIPasteboard.general.string = planContentPreview ?? planContentInline ?? ""
             ensurePlanFetched()
         }
     }

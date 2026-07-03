@@ -10,6 +10,7 @@ import { isValidProjectPath, isValidSessionId, resolveDiscoveryWorkingDir } from
 import {
   cleanCliTags,
   collapseSessionChains,
+  conversationExists,
   decodeProjectPath,
   extractBashEntries,
   extractTag,
@@ -273,6 +274,14 @@ export function registerSessionsListIpc(): void {
         return []
       }
     }
+  })
+
+  ipcMain.handle(IPC.CONVERSATION_EXISTS, (_e, sessionId: string) => {
+    // Cheap file-presence probe used by the restore path to skip phantom
+    // (fileless, never-saved) conversation ids when resolving which
+    // conversation a tab should resume. Returns false for invalid ids.
+    if (!isValidSessionId(sessionId)) return false
+    return conversationExists(sessionId)
   })
 
   ipcMain.handle(IPC.READ_PLAN, async (_e, filePath: string) => {

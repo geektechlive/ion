@@ -19,6 +19,7 @@
 // The orchestrator spine wires:
 //   session_start    -> log + emit initial agent panel snapshot
 //   before_prompt    -> inject the persona as systemPrompt
+//   message_end      -> log context usage from engine_context_breakdown
 //   agent_start/end  -> update active-specialist tracker, re-emit panel
 //   capability_*     -> advertise extension-authoring capabilities
 //   on_error         -> surface caught errors via engine_notify
@@ -129,6 +130,34 @@ ion.on('before_prompt', (ctx, _prompt) => {
   // Inject the persona on every prompt. The persona is cached per
   // extensionDir so this is cheap after the first call.
   return { systemPrompt: loadPersona(ctx.config.extensionDir) }
+})
+
+// Context-breakdown consumer: after each LLM message ends the engine has
+// emitted engine_context_breakdown (exact/local/approximate tier counts per
+// category). We fetch the usage snapshot here and log it so the breakdown
+// surface has a live in-repo consumer. This is an observability hook only
+// — ion-meta does not alter the breakdown; it surfaces it in the diagnostic
+// log so developers can verify the tiering logic.
+ion.on('message_end', async (ctx) => {
+  try {
+    const usage = await ctx.getContextUsage()
+    if (usage) {
+      log.info('ion-meta: context usage after message_end', {
+        sessionKey: ctx.sessionKey,
+        contextPercent: usage.percent,
+        contextTokens: usage.tokens,
+        costUsd: usage.cost,
+      })
+    }
+  } catch (err) {
+    // Non-fatal: getContextUsage may not be populated on every turn
+    // (e.g. the first harness message before a real LLM call). Log at
+    // debug so the noise stays low in normal operation.
+    log.debug('ion-meta: getContextUsage unavailable in message_end', {
+      sessionKey: ctx.sessionKey,
+      err: (err as Error).message,
+    })
+  }
 })
 
 // Belt-and-suspenders: if the generic Agent tool is somehow called without

@@ -75,31 +75,8 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
 
   const inner = (
     <div className="group/turn relative">
-      {/* Extended-thinking row — the turn's top group, above the tool row. */}
+      {/* Extended-thinking row — top of the turn, above assistant text. */}
       {thinking && <ThinkingBlock message={thinking} skipMotion={skipMotion} />}
-
-      {/* Collapsible activity panel */}
-      {activityHeader}
-
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            key="tools-panel"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.15 }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div
-              className="ml-1 pl-3 mb-1"
-              style={{ borderLeft: `1px solid ${colors.timelineLine}` }}
-            >
-              <ToolGroup tools={tools} skipMotion />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Assistant text (always visible, rendered sequentially) */}
       {assistantMessages.length > 0 && (
@@ -120,6 +97,29 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
           )}
         </div>
       )}
+
+      {/* Collapsible activity panel — rendered below assistant text */}
+      {activityHeader}
+
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="tools-panel"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.15 }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div
+              className="ml-1 pl-3 mb-1"
+              style={{ borderLeft: `1px solid ${colors.timelineLine}` }}
+            >
+              <ToolGroup tools={tools} skipMotion embedded />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 

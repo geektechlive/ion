@@ -39,6 +39,14 @@ func (m *Manager) wirePermissionHookServer(s *engineSession, key string, opts *t
 	token := fmt.Sprintf("run-%d", time.Now().UnixMilli())
 	hookServer.RegisterToken(token)
 
+	// Install the human-wait configuration so an unanswered permission dialog
+	// waits indefinitely by default (and applies the configured fail-action
+	// only when an operator sets a finite human-wait). A nil config yields the
+	// indefinite default (the server-side accessors are nil-safe).
+	if m.config != nil {
+		hookServer.SetTimeouts(m.config.Timeouts)
+	}
+
 	// When the hook server gets an "ask" decision, emit
 	// engine_permission_request and block until the user responds with an
 	// option ID.
@@ -74,6 +82,43 @@ func (m *Manager) wirePermissionHookServer(s *engineSession, key string, opts *t
 	}
 	opts.HookSettingsPath = tmpFile
 	utils.Log("Session", fmt.Sprintf("hook settings written to %s", tmpFile))
+}
+
+// buildToolAliasDirective renders a system-prompt directive that maps bare
+// extension tool names to their MCP-prefixed forms.  The CLI backend bridges
+// extension tools via an MCP server, so the model only sees them as
+// "mcp__<mcpServerName>__<name>".  Extension prompts reference bare names
+// (e.g. "dispatch_agent"), so without this directive the model never calls
+// them.
+//
+// Returns an empty string when bareNames is empty so callers can skip the
+// append entirely.
+func buildToolAliasDirective(bareNames []string, mcpServerName string) string {
+	if len(bareNames) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Tool name aliases: when your instructions reference a bare tool name, it is the same tool exposed under the MCP-prefixed name. Use the prefixed name when calling the tool.")
+	for _, name := range bareNames {
+		fmt.Fprintf(&b, "\n- %s = mcp__%s__%s", name, mcpServerName, name)
+	}
+	return b.String()
+}
+
+// appendDirective appends a non-empty tool-alias directive to opts.AppendSystemPrompt,
+// inserting the blank-line separator when a prior prompt is present, and logs the
+// outcome with the contributing tool names. An empty directive is a no-op (logged
+// as skipped). names is used only for the log line.
+func appendDirective(opts *types.RunOptions, directive string, names []string) {
+	if directive == "" {
+		utils.Log("Session", "tool alias directive skipped (no tools)")
+		return
+	}
+	if opts.AppendSystemPrompt != "" {
+		opts.AppendSystemPrompt += "\n\n"
+	}
+	opts.AppendSystemPrompt += directive
+	utils.Log("Session", fmt.Sprintf("tool alias directive built (%d tools: %s)", len(names), strings.Join(names, ", ")))
 }
 
 // wireToolServer starts a ToolServer for CLI backend when extensions provide
@@ -116,6 +161,14 @@ func (m *Manager) wireToolServer(s *engineSession, key string, opts *types.RunOp
 	m.mu.Lock()
 	s.toolServer = ts
 	m.mu.Unlock()
+
+	bareNames := make([]string, len(extTools))
+	for i, t := range extTools {
+		bareNames[i] = t.Name
+	}
+	directive := buildToolAliasDirective(bareNames, backend.McpServerName)
+	appendDirective(opts, directive, bareNames)
+
 	utils.Log("Session", fmt.Sprintf("ToolServer started for CLI backend (%d tools)", len(extTools)))
 }
 
@@ -172,6 +225,10 @@ func (m *Manager) wireAgentToolServer(s *engineSession, key string, opts *types.
 		s.toolServer = ts
 		m.mu.Unlock()
 	}
+
+	aliasNames := []string{"ion_agent"}
+	directive := buildToolAliasDirective(aliasNames, backend.McpServerName)
+	appendDirective(opts, directive, aliasNames)
 
 	utils.Log("Session", "ion_agent tool registered on ToolServer for CLI backend")
 }

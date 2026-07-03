@@ -7,20 +7,18 @@ import { usePreferencesStore } from '../preferences'
 import { useModelStore } from '../stores/model-store'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
-import { useActiveEngineKey } from './StatusBarEngineHelpers'
+import { activeInstance } from '../stores/conversation-instance'
 import type { ThinkingEffort } from '../../shared/types-session'
 
 /* ─── Thinking Effort Picker ─── */
 
 /**
  * Per-conversation extended-thinking control rendered in the unified
- * `StatusBar` left cluster, next to the permission-mode pill. Mirrors
- * `StatusBarPermissionModePicker`'s per-tab vs per-instance routing.
+ * `StatusBar` left cluster.
  *
- * Read paths (isolated per conversation/subtab):
- * - **Engine tabs**: `instance.thinkingEffort` on the active instance.
- * - **Conversation tabs**: `tab.thinkingEffort`.
- * Both default to 'off'.
+ * Read path: `instance.thinkingEffort` on the active conversation instance
+ * for EVERY tab type. `TabState.thinkingEffort` is gone (WI-002). Both
+ * default to 'off'.
  *
  * Visibility gate (two conditions, both required):
  * 1. The global `thinkingEnabled` preference is ON. When off, the whole
@@ -43,29 +41,21 @@ const LEVELS: Array<{ value: ThinkingEffort; label: string }> = [
 
 export function ThinkingPicker() {
   const thinkingEnabled = usePreferencesStore((s) => s.thinkingEnabled)
-  const engineKey = useActiveEngineKey()
-  const isEngine = engineKey != null
 
-  // Per-conversation effort (default 'off'), routed by tab type.
+  // Per-conversation effort (default 'off') read from the active instance for
+  // EVERY tab type — the unified home for the per-conversation thinking effort
+  // (matches the unified submit, which reads it from the instance). No
+  // engine-vs-plain fork.
   const effort = useSessionStore((s): ThinkingEffort => {
-    if (engineKey) {
-      const pane = s.conversationPanes.get(engineKey.tabId)
-      const inst = pane?.instances.find((i) => i.id === engineKey.instanceId)
-      return inst?.thinkingEffort ?? 'off'
-    }
-    return s.tabs.find((t) => t.id === s.activeTabId)?.thinkingEffort ?? 'off'
+    const inst = activeInstance(s.conversationPanes, s.activeTabId)
+    return inst?.thinkingEffort ?? 'off'
   })
 
-  // Resolve the active model to read its allowed thinking efforts. Mirrors
-  // StatusBarModelPicker's resolution order: engine override / session model,
-  // else tab override, else preferred model.
+  // Resolve the active model to read its allowed thinking efforts — from the
+  // same active instance (modelOverride / sessionModel), else preferred model.
   const preferredModel = usePreferencesStore((s) => s.preferredModel)
   const activeModelId = useSessionStore((s) => {
-    const tabId = engineKey?.tabId ?? s.activeTabId
-    const pane = s.conversationPanes.get(tabId)
-    const inst = engineKey
-      ? pane?.instances.find((i) => i.id === engineKey.instanceId)
-      : pane?.instances.find((i) => i.id === pane?.activeInstanceId)
+    const inst = activeInstance(s.conversationPanes, s.activeTabId)
     return inst?.modelOverride || inst?.sessionModel || preferredModel
   })
   const findModel = useModelStore((s) => s.findModel)
@@ -130,7 +120,7 @@ export function ThinkingPicker() {
         }}
         title={
           modelSupportsThinking
-            ? `Extended thinking (this ${isEngine ? 'sub-conversation' : 'tab'})`
+            ? 'Extended thinking (this conversation)'
             : 'This model does not support extended thinking'
         }
       >

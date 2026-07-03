@@ -14,6 +14,12 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// desktop snapshot's RemoteTabState.thinkingEffort.
     var thinkingEffort: String?
     var permissionQueue: [PermissionRequest]
+    /// Live extension elicitations (ctx.elicit) awaiting a user decision on the
+    /// active instance. The head entry renders an approval card; iOS answers via
+    /// the `desktop_respond_elicitation` command. Optional/absent on older
+    /// desktops (additive, non-breaking). Mirrors the desktop snapshot's
+    /// RemoteTabState.elicitationQueue.
+    var elicitationQueue: [ElicitationRequest]?
     var lastMessage: String?
     var contextTokens: Int?
     var contextPercent: Double?
@@ -28,6 +34,14 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// rationale.
     var contextWindow: Int?
     var messageCount: Int?
+    /// Conversation tail fingerprint from the desktop snapshot — the staleness
+    /// signal for the main-conversation heal. iOS computes the same fingerprint
+    /// (conversationTailFingerprint in SessionViewModel+Snapshot.swift) over its
+    /// local tail and re-fetches history when they diverge (dropped live deltas,
+    /// e.g. a LAN↔relay transport switch). Empty/nil for cold-start tabs.
+    /// Algorithm pinned byte-identically with the desktop
+    /// (shared/conversation-fingerprint.ts + snapshot.ts inline JS).
+    var convFingerprint: String?
     var queuedPrompts: [String]?
     var isTerminalOnly: Bool?
     var hasEngineExtension: Bool?
@@ -57,6 +71,26 @@ struct RemoteTabState: Codable, Identifiable, Sendable {
     /// yellow until they're upgraded. See CLAUDE.md § "Common parity
     /// surfaces" parity table for the desktop/iOS parity rule.
     var hasRunningChildren: Bool?
+    /// Engine profile ID for this tab. Non-nil when the tab was created with
+    /// a specific engine profile (i.e. `hasEngineExtension == true`). Used
+    /// by `TabRowView` to resolve the profile display name for the harness
+    /// badge. Mirrors `RemoteTabState.engineProfileId` in protocol.ts.
+    var engineProfileId: String?
+    /// Cumulative cost in USD for this tab across all turns. Projected from
+    /// StatusFields.totalCostUsd via the desktop snapshot so iOS has the correct
+    /// value on cold open without waiting for a live engine_status event. Optional
+    /// so tabs that have never had a run omit it. Mirrors protocol.ts RemoteTabState.
+    var totalCostUsd: Double?
+    /// Cumulative provider-reported input tokens for this tab. Projected from the
+    /// engine's usage tracking via the desktop snapshot (cold-start parity fix,
+    /// plan modest-leaping-waffle §6). Optional — absent on tabs that have never run.
+    var inputTokens: Int?
+    /// Cumulative output tokens. Optional — absent on never-run tabs.
+    var outputTokens: Int?
+    /// Cumulative cache-read tokens (Anthropic prompt caching). Optional.
+    var cacheReadTokens: Int?
+    /// Cumulative cache-creation tokens (Anthropic prompt caching). Optional.
+    var cacheCreationTokens: Int?
 
     var displayTitle: String {
         customTitle ?? title
@@ -99,7 +133,25 @@ struct EngineInstanceModelFallback: Codable, Sendable, Equatable {
 
 // MARK: - ConversationInstanceInfo
 
+/// The single per-tab conversation record (post-#256 unification).
+///
+/// Mirrors the desktop's `ConversationInstance`: every non-terminal tab —
+/// plain or extension — has exactly **one** of these, the `main` instance
+/// (`id == ConversationInstanceInfo.mainInstanceId`). It carries all of the
+/// tab's conversation state: the message list, live streaming text, agent
+/// states, status, and model override.
+///
+/// Before #256's iOS completion, plain tabs stored their state in loose
+/// top-level dictionaries on `SessionViewModel` (`messages[tabId]`,
+/// `liveText[tabId]`, …) while engine tabs used this struct. The unification
+/// collapses both onto this single record, reached through the accessors in
+/// `SessionViewModel+Conversation.swift`.
 struct ConversationInstanceInfo: Codable, Identifiable, Sendable {
+    /// The canonical id for the single conversation instance every tab owns.
+    /// Matches the desktop's `'main'` instance id so the two clients agree on
+    /// the per-instance key for any wire surface that still carries one.
+    static let mainInstanceId = "main"
+
     let id: String
     var label: String
     /// Per-engine-instance waiting state, decoded from the desktop snapshot.
@@ -144,16 +196,54 @@ struct ConversationInstanceInfo: Codable, Identifiable, Sendable {
     /// or nil/absent when off. Mirrors the desktop snapshot's per-instance
     /// thinkingEffort so iOS shows the right level for the active sub-tab.
     var thinkingEffort: String? = nil
+    /// Per-instance dispatch telemetry, projected from the desktop snapshot.
+    /// Also populated by live engine events (dispatch_start/end) and
+    /// reconciled from the snapshot on reconnect.
+    var dispatchTelemetry: [DispatchTelemetryEntry]? = nil
 
-    // Non-Codable conversation state — populated by ConversationInstance,
-    // not decoded from the snapshot JSON.
+    /// Per-instance context breakdown from the most recent desktop_context_breakdown
+    /// event. Updated by live events; nil until the engine emits a breakdown for
+    /// this tab. The StatusDrawerView reads this to render the Context Breakdown
+    /// section. Not persisted in the snapshot (live-only; the engine re-emits on
+    /// reconnect). Mirrors ConversationInstance.contextBreakdown in the desktop store.
+    var contextBreakdown: ContextBreakdownPayload? = nil
+
+    // Non-Codable conversation state — populated by live events /
+    // loadEngineConversation, not decoded from the snapshot JSON.
     var messages: [Message] = []
+    // agentStates IS persisted (see CodingKeys) so the agents panel and the
+    // dispatch popup/breadcrumb — which key state on dispatch id — render on
+    // reload before the engine re-emits live agent-state events. Defaults to []
+    // so pre-fix snapshots without the field decode cleanly.
     var agentStates: [AgentStateUpdate] = []
     var statusFields: StatusFields? = nil
     var modelOverride: String? = nil
+    /// Live streaming text accumulator for the relay text-chunk path
+    /// (`text_chunk`/`tool_call`/`tool_result`/`error` events that arrive
+    /// before a conversation's history is loaded). Distinct from `messages`,
+    /// which is the structured/loaded view. Cleared when history loads or the
+    /// turn completes. Plain tabs used the old top-level `liveText[tabId]`
+    /// dict; post-#256 both tab types share this field via
+    /// `SessionViewModel.liveText(_:)` / `setLiveText(tabId:_:)`.
+    var liveText: String = ""
+    /// In-progress thinking-block accumulator: the `Message.id` of the live
+    /// `.thinking` message that `thinking_block_start` created, so
+    /// `thinking_delta` can append to it and `thinking_block_end` can finalize
+    /// it. Nil when no reasoning block is in progress. Cleared on stream reset /
+    /// history reload so a stale in-progress block never lingers. Replaces the
+    /// old top-level `thinkingInProgress[compoundKey]` dict (post-#256).
+    var thinkingMessageId: String? = nil
+    /// Transient "working" status line the engine emits while a run is active
+    /// (e.g. "Reading files…"). Distinct from `messages` and `liveText`: it is a
+    /// replace-style single-line indicator rendered above the scrollback, not
+    /// appended content. Empty when no working message is active. Replaces the
+    /// old top-level `engineWorkingMessages[compoundKey]` dict (post-#256).
+    var workingMessage: String = ""
 
-    // Explicit CodingKeys so the four fields above are excluded from
-    // JSON encoding/decoding and don't break snapshot deserialization.
+    // Explicit CodingKeys so the live-only fields above (messages, statusFields,
+    // modelOverride, liveText, thinkingMessageId, workingMessage) are excluded
+    // from JSON encoding/decoding and don't break snapshot deserialization.
+    // `agentStates` IS persisted (see the custom Codable in the extension below).
     enum CodingKeys: String, CodingKey {
         case id
         case label
@@ -163,6 +253,75 @@ struct ConversationInstanceInfo: Codable, Identifiable, Sendable {
         case modelFallback
         case conversationIds
         case thinkingEffort
+        case dispatchTelemetry
+        case agentStates
+    }
+}
+
+// Custom Codable defined in an extension (not the main declaration) so the
+// synthesized memberwise initializer is preserved for the many call sites that
+// build ConversationInstanceInfo directly (tests, snapshot projection).
+extension ConversationInstanceInfo {
+    // Custom decode so a missing `agentStates` key falls back to the default
+    // (empty) rather than throwing keyNotFound. Swift's synthesized decoder does
+    // NOT apply a stored-property default for a non-optional value type when the
+    // key is absent — only optionals get the decodeIfPresent → nil treatment —
+    // so pre-fix snapshots (no agentStates field) would fail to decode without
+    // this.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            label: try container.decode(String.self, forKey: .label)
+        )
+        waitingState = try container.decodeIfPresent(String.self, forKey: .waitingState)
+        isRunning = try container.decodeIfPresent(Bool.self, forKey: .isRunning)
+        runningAgentCount = try container.decodeIfPresent(Int.self, forKey: .runningAgentCount)
+        modelFallback = try container.decodeIfPresent(EngineInstanceModelFallback.self, forKey: .modelFallback)
+        conversationIds = try container.decodeIfPresent([String].self, forKey: .conversationIds)
+        thinkingEffort = try container.decodeIfPresent(String.self, forKey: .thinkingEffort)
+        dispatchTelemetry = try container.decodeIfPresent([DispatchTelemetryEntry].self, forKey: .dispatchTelemetry)
+        agentStates = try container.decodeIfPresent([AgentStateUpdate].self, forKey: .agentStates) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        try container.encodeIfPresent(waitingState, forKey: .waitingState)
+        try container.encodeIfPresent(isRunning, forKey: .isRunning)
+        try container.encodeIfPresent(runningAgentCount, forKey: .runningAgentCount)
+        try container.encodeIfPresent(modelFallback, forKey: .modelFallback)
+        try container.encodeIfPresent(conversationIds, forKey: .conversationIds)
+        try container.encodeIfPresent(thinkingEffort, forKey: .thinkingEffort)
+        try container.encodeIfPresent(dispatchTelemetry, forKey: .dispatchTelemetry)
+        // Only emit agentStates when non-empty to keep snapshots compact and to
+        // avoid churn against fixtures that predate the field.
+        if !agentStates.isEmpty {
+            try container.encode(agentStates, forKey: .agentStates)
+        }
+    }
+}
+
+extension ConversationInstanceInfo {
+    /// Resolve the active engine-instance id for a tab from a (possibly legacy
+    /// multi-instance) snapshot: prefer the explicit `activeConversationInstanceId`,
+    /// otherwise fall back to the first instance's id, otherwise nil.
+    ///
+    /// This is the single source of truth for the resolution that
+    /// `SessionViewModel+Snapshot` performs when projecting a snapshot
+    /// (`activeEngineInstance[tab.id] = ...`). Extracted so it is unit-testable
+    /// directly — driving this function pins the *shipped* behavior rather than
+    /// re-deriving a similar expression inline in a test.
+    ///
+    /// Post-#256 every tab is single-instance, but the engine/desktop may still
+    /// deliver a legacy multi-instance snapshot during migration, so the
+    /// resolution must stay correct for >1 instances.
+    static func resolveActiveInstanceId(
+        activeId: String?,
+        instances: [ConversationInstanceInfo]
+    ) -> String? {
+        activeId ?? instances.first?.id
     }
 }
 
@@ -181,13 +340,34 @@ struct PermissionRequest: Codable, Identifiable, Sendable {
     let options: [PermissionOption]
     /// Engine instance (sub-tab) this request belongs to. Populated by the
     /// desktop for engine-view denials (both the live `permission_request`
-    /// event and the snapshot queue promotion) so `EngineView` can scope
+    /// event and the snapshot queue promotion) so `ConversationView` can scope
     /// the plan/question card to the owning sub-conversation. Nil for CLI
     /// tabs and for payloads from older desktops — nil passes the
     /// active-instance filter for backward compatibility.
     var instanceId: String? = nil
 
     var id: String { questionId }
+}
+
+// MARK: - ElicitationRequest
+
+/// A live extension elicitation (`ctx.elicit`) awaiting a user decision.
+/// Mirrors `ElicitationRequest` in `src/shared/types-session.ts`. The engine
+/// fans `engine_elicitation_request` to every client and parks the run on an
+/// indefinite human-wait until one answers; iOS renders an approval card from
+/// `mode` + `schema` and replies with the `desktop_respond_elicitation`
+/// command keyed by `requestId`.
+struct ElicitationRequest: Codable, Identifiable, Sendable {
+    /// Engine-assigned id echoed back in the response command.
+    let requestId: String
+    /// Renderer selector ("approval", "select", ...). May be empty.
+    let mode: String
+    /// Harness-defined description of what is being requested.
+    let schema: [String: AnyCodable]?
+    /// Optional deep-link URL for web flows.
+    let url: String?
+
+    var id: String { requestId }
 }
 
 // MARK: - ActiveToolInfo

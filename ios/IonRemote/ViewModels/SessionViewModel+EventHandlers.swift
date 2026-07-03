@@ -75,6 +75,13 @@ extension SessionViewModel {
             connectionQuality.transportState = transport?.state ?? .disconnected
             connectionQuality.recordHeartbeat(senderTs: senderTs, buffered: buffered)
 
+        case .resendUnavailable:
+            // Gap-recovery control event. The TransportManager already cleared
+            // its pending-resend range on receipt; nothing more to do at the
+            // ViewModel layer — the snapshot reconcile heals the gap. Observed
+            // here only to keep the event switch exhaustive.
+            break
+
         case .peerDisconnected:
             // Don't tear down the transport — the relay auto-reconnects and
             // startRelayStateObservation re-sends sync when the peer returns.
@@ -115,22 +122,22 @@ extension SessionViewModel {
         case .textChunk(let tabId, let text):
             // Update tab preview for the tab list (shows most recent text)
             if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
-                let preview = (liveText[tabId] ?? "") + text
+                let preview = liveText(tabId) + text
                 tabs[idx].lastMessage = String(preview.suffix(64))
                     .replacingOccurrences(of: "\n", with: " ")
             }
             guard !conversationLoaded.contains(tabId) else { break }
-            liveText[tabId, default: ""] += text
+            appendLiveText(tabId: tabId, text)
 
         case .toolCall(let tabId, let toolName, _):
             guard !conversationLoaded.contains(tabId) else { break }
-            liveText[tabId, default: ""] += "\n> \(toolName)\n"
+            appendLiveText(tabId: tabId, "\n> \(toolName)\n")
 
         case .toolResult(let tabId, _, let content, let isError):
             guard !conversationLoaded.contains(tabId) else { break }
             let prefix = isError ? "[error]" : "[ok]"
             let truncated = content.prefix(200)
-            liveText[tabId, default: ""] += "\(prefix) \(truncated)\n"
+            appendLiveText(tabId: tabId, "\(prefix) \(truncated)\n")
 
         case .taskComplete(let tabId, _, _):
             handleTaskComplete(tabId: tabId)
@@ -159,7 +166,7 @@ extension SessionViewModel {
 
         case .error(let tabId, let message):
             guard !conversationLoaded.contains(tabId) else { break }
-            liveText[tabId, default: ""] += "\n[error] \(message)\n"
+            appendLiveText(tabId: tabId, "\n[error] \(message)\n")
 
         case .inputPrefill(let tabId, let text, let switchTo, let instanceId):
             handleInputPrefill(tabId: tabId, text: text, switchTo: switchTo, instanceId: instanceId)
@@ -197,19 +204,21 @@ extension SessionViewModel {
             // state with the payload, full stop — no merging, no historical
             // preservation. See docs/architecture/agent-state.md.
             //
-            // Instance resolution: when the engine omits instanceId we
-            // resolve to the active engine instance so the event lands
-            // on the same instance the EngineView reads. The desktop bridge
-            // always sends an instanceId today, but this guards against a
-            // future emitter (or test harness) that sends nil.
-            let resolvedId = resolveInstanceId(tabId: tabId, instanceId: instanceId)
+            // Post-#256 a tab has exactly one conversation instance, so the
+            // event's instanceId is vestigial — mutateEngineInstance targets
+            // that single instance regardless.
             let statuses = agents.map { "\($0.name):\($0.status)" }.joined(separator: ",")
-            DiagnosticLog.log("ENGINE: agent_state tabId=\(tabId.prefix(8)) instId=\(resolvedId?.prefix(8) ?? "nil") count=\(agents.count) statuses=[\(statuses)]")
-            mutateEngineInstance(tabId: tabId, instanceId: resolvedId) { $0.agentStates = agents }
+            DiagnosticLog.log("ENGINE: agent_state tabId=\(tabId.prefix(8)) count=\(agents.count) statuses=[\(statuses)]")
+            mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.agentStates = agents }
+            // Clear push/snapshot input caches for terminal dispatches so
+            // stale push entries don't produce ghost duplicates on popup reopen.
+            clearTerminalDispatchCaches(for: agents)
 
         case .engineStatus(let tabId, let instanceId, let fields, _):
-            let resolvedId = resolveInstanceId(tabId: tabId, instanceId: instanceId)
-            mutateEngineInstance(tabId: tabId, instanceId: resolvedId) { $0.statusFields = fields }
+            mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.statusFields = fields }
+            // Detect engine restarts: a changed sessionId means a new engine
+            // binary is running and all cached dispatch snapshots may be stale.
+            handleEngineSessionIdChange(tabId: tabId, sessionId: fields.sessionId)
 
         case .engineSessionStatus(let tabId, let instanceId, let sessionStatus, _):
             // Phase 3 of the state-management overhaul. The typed
@@ -217,12 +226,11 @@ extension SessionViewModel {
             // the dispatcher in SessionViewModel+SessionStatus.swift
             // applies it via the same path so readers see consistent
             // state. Phase 4 makes this the sole writer.
-            let resolvedId = resolveInstanceId(tabId: tabId, instanceId: instanceId)
-            applyEngineSessionStatus(tabId: tabId, instanceId: resolvedId, status: sessionStatus)
+            applyEngineSessionStatus(tabId: tabId, instanceId: instanceId, status: sessionStatus)
 
         case .engineWorkingMessage(let tabId, let instanceId, let message, _):
-            let key = resolveEngineKey(tabId: tabId, instanceId: instanceId)
-            engineWorkingMessages[key] = message
+            _ = instanceId // vestigial post-#256; working message is per-tab
+            setWorkingMessage(tabId: tabId, message)
 
         case .engineToolStart(let tabId, let instanceId, let toolName, let toolId):
             handleEngineToolStart(tabId: tabId, instanceId: instanceId, toolName: toolName, toolId: toolId)
@@ -231,8 +239,8 @@ extension SessionViewModel {
             handleEngineToolEnd(tabId: tabId, instanceId: instanceId, toolId: toolId, result: result, isError: isError)
 
         case .engineToolStalled(let tabId, let instanceId, let toolId, _, _):
-            let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-            activeTools[key]?[toolId]?.isStalled = true
+            _ = instanceId // unused post-#256, bare tabId is the key
+            activeTools[tabId]?[toolId]?.isStalled = true
 
         case .engineRunStalled(let tabId, let instanceId, let stalledDuration, let lastActivity):
             handleEngineRunStalled(tabId: tabId, instanceId: instanceId, stalledDuration: stalledDuration, lastActivity: lastActivity)
@@ -255,8 +263,42 @@ extension SessionViewModel {
 
         // No-op: iOS does not render these events yet. Decoding them
         // prevents the 123 decode-errors/session diagnostic finding.
-        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall, .engineDispatchStart:
+        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall:
             break
+
+        // Dispatch telemetry: accumulate start/end into the per-instance
+        // dispatchTelemetry array, mirroring desktop buildDispatchStartEntry /
+        // applyDispatchEnd in engine-event-slice-helpers.ts.
+        case .engineDispatchStart(let tabId, let instanceId, let agent, let sessionId, let model, let task, let depth, let parentId, let dispatchId):
+            DiagnosticLog.log("ENGINE: dispatch_start agent=\(agent) depth=\(depth) parentId=\(parentId.prefix(16)) id=\(dispatchId.prefix(16))")
+            let entry = DispatchTelemetryEntry(
+                dispatchAgent: agent,
+                dispatchSessionId: sessionId,
+                dispatchModel: model,
+                dispatchTask: task,
+                dispatchDepth: depth,
+                dispatchParentId: parentId,
+                dispatchId: dispatchId
+            )
+            mutateEngineInstance(tabId: tabId, instanceId: instanceId) {
+                var existing = $0.dispatchTelemetry ?? []
+                existing.append(entry)
+                $0.dispatchTelemetry = existing
+            }
+        case .engineDispatchEnd(let tabId, let instanceId, let agent, let depth, let parentId, let exitCode, let elapsed, let dispatchId, let conversationId):
+            DiagnosticLog.log("ENGINE: dispatch_end agent=\(agent) depth=\(depth) parentId=\(parentId.prefix(16)) exit=\(exitCode) elapsed=\(String(format: "%.2f", elapsed))s id=\(dispatchId.prefix(16))")
+            mutateEngineInstance(tabId: tabId, instanceId: instanceId) {
+                guard var telemetry = $0.dispatchTelemetry else { return }
+                if let idx = telemetry.firstIndex(where: { $0.dispatchId == dispatchId }) {
+                    telemetry[idx].exitCode = exitCode
+                    telemetry[idx].elapsed = elapsed
+                    telemetry[idx].conversationId = conversationId
+                    $0.dispatchTelemetry = telemetry
+                }
+            }
+
+        case .engineDispatchActivity(_, _, let agentId, let conversationId, let kind, let seq, let toolName, let toolId, let textDelta, let isError, let ts):
+            handleDispatchActivity(dispatchAgentId: agentId, conversationId: conversationId, kind: kind, seq: seq, ts: ts, toolName: toolName, toolId: toolId, textDelta: textDelta, isError: isError)
 
         case .engineError(let tabId, let instanceId, let message):
             handleEngineError(tabId: tabId, instanceId: instanceId, message: message)
@@ -265,12 +307,12 @@ extension SessionViewModel {
             handleEngineNotify(tabId: tabId, instanceId: instanceId, message: message, level: level)
 
         case .engineDialog(let tabId, let instanceId, let dialogId, let method, let title, let options, let defaultValue):
-            let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-            engineDialogs[key] = EngineDialogInfo(dialogId: dialogId, method: method, title: title, options: options, defaultValue: defaultValue)
+            _ = instanceId // unused post-#256
+            engineDialogs[tabId] = EngineDialogInfo(dialogId: dialogId, method: method, title: title, options: options, defaultValue: defaultValue)
 
         case .engineDialogResolved(let tabId, let instanceId, _):
-            let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-            engineDialogs[key] = nil
+            _ = instanceId // unused post-#256
+            engineDialogs[tabId] = nil
 
         case .engineTextDelta(let tabId, let instanceId, let text):
             handleEngineTextDelta(tabId: tabId, instanceId: instanceId, text: text)
@@ -281,20 +323,16 @@ extension SessionViewModel {
         case .engineHarnessMessage(let tabId, let instanceId, let message, _, _):
             handleEngineHarnessMessage(tabId: tabId, instanceId: instanceId, message: message)
 
-        case .enginePlanModeChanged(let tabId, let instanceId, let planModeEnabled, _, let planSlug):
-            handleEnginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planSlug: planSlug)
+        // engineConversationHistory event removed (WI-004 / #259).
+        // The unified desktop_conversation_history response maps to
+        // conversationHistory, handled above. Any stale event from an old
+        // desktop build is simply unrecognized and dropped by the decoder.
 
-        case .engineConversationHistory(let tabId, let instanceId, let messages):
-            let key = instanceId != nil ? "\(tabId):\(instanceId!)" : tabId
-            let filtered = messages.filter { $0.isInternal != true }
-            DiagnosticLog.log("LOAD-CONV: engineConversationHistory key=\(key.prefix(16)) total=\(messages.count) filtered=\(filtered.count) alreadyLoaded=\(engineConversationLoaded.contains(key))")
-            mutateEngineInstance(tabId: tabId, instanceId: instanceId) { $0.messages = filtered }
-            engineConversationLoaded.insert(key)
-            // History reload replaces the message array wholesale — any
-            // in-progress thinking block id now points at a message that no
-            // longer exists. Clear the accumulator so a late delta/block_end
-            // can't mutate the reloaded history. (Stream-reset semantics.)
-            clearThinkingAccumulator(forKey: key)
+        case .enginePlanModeChanged(let tabId, let instanceId, let planModeEnabled, let planFilePath, let planSlug):
+            handleEnginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planFilePath: planFilePath, planSlug: planSlug)
+
+        case .enginePlanFileWritten(let tabId, let instanceId, let operation, let planFilePath, let planSlug):
+            handleEnginePlanFileWritten(tabId: tabId, instanceId: instanceId, operation: operation, planFilePath: planFilePath, planSlug: planSlug)
 
         case .agentConversationHistory(let agentName, let conversationId, let messages):
             handleAgentConversationHistory(agentName: agentName, conversationId: conversationId, messages: messages)
@@ -302,47 +340,14 @@ extension SessionViewModel {
         case .engineDead(let tabId, let instanceId, let exitCode, let signal, let stderrTail):
             handleEngineDead(tabId: tabId, instanceId: instanceId, exitCode: exitCode, signal: signal, stderrTail: stderrTail)
 
-        case .engineInstanceAdded(let tabId, let instanceId, let label):
-            let info = ConversationInstanceInfo(id: instanceId, label: label)
-            conversationInstances[tabId, default: []].append(info)
-            activeEngineInstance[tabId] = instanceId
-
-        case .engineInstanceRemoved(let tabId, let instanceId):
-            handleEngineInstanceRemoved(tabId: tabId, instanceId: instanceId)
-
-        case .engineInstanceMoved(let sourceTabId, let instanceId, let targetTabId):
-            // Server-confirmed move: reconcile local state.
-            // Mirrors desktop's engine-slice.ts:200-230 which rekeys every
-            // compound-keyed Map when an instance moves between tabs.
-            // Without this, agent state, status, working message, dialogs,
-            // and tool state are orphaned under the old compound key and
-            // silently disappear from the view when the user switches to
-            // the target tab.
-            if var srcInstances = conversationInstances[sourceTabId],
-               let idx = srcInstances.firstIndex(where: { $0.id == instanceId }) {
-                let inst = srcInstances.remove(at: idx)
-                conversationInstances[sourceTabId] = srcInstances.isEmpty ? nil : srcInstances
-                if srcInstances.isEmpty {
-                    activeEngineInstance.removeValue(forKey: sourceTabId)
-                } else if activeEngineInstance[sourceTabId] == instanceId {
-                    activeEngineInstance[sourceTabId] = srcInstances.last?.id
-                }
-                var tgtInstances = conversationInstances[targetTabId] ?? []
-                if !tgtInstances.contains(where: { $0.id == instanceId }) {
-                    tgtInstances.append(inst)
-                    conversationInstances[targetTabId] = tgtInstances
-                }
-                activeEngineInstance[targetTabId] = instanceId
-
-                // Rekey every compound-keyed map so the agent panel,
-                // status bar, working banner, and active tools follow
-                // the instance to its new tab.
-                let oldKey = "\(sourceTabId):\(instanceId)"
-                let newKey = "\(targetTabId):\(instanceId)"
-                rekeyEngineMaps(oldKey: oldKey, newKey: newKey)
-            } else {
-                DiagnosticLog.log("ENGINE: instance_moved: src not found sourceTabId=\(sourceTabId.prefix(8)) instanceId=\(instanceId.prefix(8))")
-            }
+        // Instance lifecycle events. The desktop still emits desktop_instance_added
+        // from the live engine-prompt auto-instance path (tabs-prompt.ts), so the
+        // TypeKey + decoder must stay to avoid throwing on a live event. iOS itself
+        // is single-instance post-#256: the snapshot is the authoritative source of
+        // instance truth, so these carry no additional state for iOS and are
+        // intentionally dropped here.
+        case .engineInstanceAdded, .engineInstanceRemoved, .engineInstanceMoved:
+            break
 
         case .engineModelOverride(let tabId, let instanceId, let model):
             mutateEngineInstance(tabId: tabId, instanceId: instanceId) {
@@ -375,7 +380,7 @@ extension SessionViewModel {
             // exportFormat drives the shared file's extension.
             handleEngineExport(tabId: tabId, payload: message, format: exportFormat)
 
-        case .desktopSettingsSnapshot(let settings, let schema, let groups):
+        case .desktopSettingsSnapshot(let settings, let schema, let groups, let newConversationPolicy):
             // Per-desktop user-preferences projection. Snapshot semantics
             // — replace the cached state wholesale. The view layer binds
             // to `viewModel.desktopSettings` and re-renders the Settings
@@ -390,6 +395,13 @@ extension SessionViewModel {
                 schema: schema,
                 groups: groups,
             )
+            // Enterprise new-conversation policy. Nil means no enterprise config
+            // (or pre-#256 desktop); non-nil + locked=true means the
+            // new-conversation flow must skip picker and use mandated values.
+            enterpriseNewConversationPolicy = newConversationPolicy
+            if let policy = newConversationPolicy {
+                DiagnosticLog.log("SETTINGS: newConversationPolicy received locked=\(policy.locked) dir=\(policy.baseDirectory.prefix(40)) profile=\(policy.engineProfileId.prefix(8))")
+            }
 
         // Git events
         case .gitChangesResponse(let directory, let response):
@@ -508,6 +520,16 @@ extension SessionViewModel {
 
         case .engineIntercept(let tabId, let instanceId, let level, let title, let message, _, _):
             handleEngineIntercept(tabId: tabId, instanceId: instanceId, level: level, title: title, message: message)
+
+        case .desktopContextBreakdown(let tabId, let instanceId, let payload):
+            // Per-category context breakdown from the engine (forwarded by the desktop).
+            // Store on the active instance so StatusDrawerView can read it without a
+            // separate fetch. Mirrors the desktop's engine-event-slice handler that
+            // writes contextBreakdown onto the ConversationInstance.
+            DiagnosticLog.log("ENGINE: context_breakdown tabId=\(tabId.prefix(8)) categories=\(payload.categories.count) total=\(payload.totalTokens)")
+            mutateEngineInstance(tabId: tabId, instanceId: instanceId) {
+                $0.contextBreakdown = payload
+            }
         }
     }
 

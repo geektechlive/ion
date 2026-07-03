@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -147,32 +148,51 @@ func TestHeartbeat_GoroutineFiresOnTimer(t *testing.T) {
 // Shutdown is called. A leaked goroutine would emit events past the
 // test boundary and pollute subsequent tests sharing the same backend
 // mock.
+//
+// Design: we drive one tick synchronously via emitHeartbeatTick() to
+// confirm the event plumbing is wired (same pattern used in
+// TestHeartbeat_EmitsForEveryAttachedSession), then quiet the background
+// goroutine with a long interval so it cannot race with the assertion,
+// then call Shutdown(). Shutdown() blocks until the heartbeat goroutine
+// closes heartbeatDone, so the count sampled immediately after is
+// authoritative — the goroutine cannot emit again. No sleep required
+// anywhere in this test.
+//
+// The previous version slept 80 ms before Shutdown and 150 ms after,
+// relying on wall-clock timing to prove the goroutine had exited. On a
+// CPU-pressured Linux -race runner the goroutine could be starved and
+// still be mid-tick when the post-shutdown assertion ran, causing
+// non-deterministic failures. The Shutdown-blocks-on-done approach
+// eliminates the race entirely.
 func TestHeartbeat_StopsOnShutdown(t *testing.T) {
 	mb := newMockBackend()
 	mgr := NewManager(mb)
-	mgr.SetHeartbeatInterval(20 * time.Millisecond)
+	// Long interval: the background goroutine will not fire during this
+	// test. We assert behavior via direct tick calls below.
+	mgr.SetHeartbeatInterval(10 * time.Second)
 	_, _ = mgr.StartSession("hb-stop", defaultConfig())
 
 	cap := newCaptureEngineStatus()
 	mgr.OnEvent(cap.handler())
 
-	// Let at least one tick fire so we know the goroutine is alive.
-	time.Sleep(80 * time.Millisecond)
+	// Drive one tick synchronously to confirm the event path is wired.
+	mgr.emitHeartbeatTick()
 	before := cap.countFor("hb-stop")
 	if before == 0 {
 		t.Fatal("expected at least one heartbeat emission before Shutdown")
 	}
 
+	// Shutdown blocks until the heartbeat goroutine has fully exited
+	// (it closes heartbeatDone before returning). The count sampled
+	// immediately after is therefore final — no sleep needed.
 	mgr.Shutdown()
-	// Wait several tick intervals; if the goroutine survived Shutdown
-	// it would emit more events.
-	time.Sleep(150 * time.Millisecond)
 	after := cap.countFor("hb-stop")
-	// Some slop allowed: a tick that was already in-flight when
-	// Shutdown closed the stop channel may still emit. We assert the
-	// growth is small and bounded, not exactly zero.
-	if after-before > 1 {
-		t.Errorf("expected heartbeat to stop after Shutdown, but grew from %d to %d", before, after)
+
+	// The goroutine is gone; count must not have grown. The background
+	// goroutine was quiesced (10 s interval) so the only emission was
+	// the direct tick above — growth must be exactly zero.
+	if after != before {
+		t.Errorf("expected heartbeat to stop after Shutdown, but count grew from %d to %d", before, after)
 	}
 }
 
@@ -362,5 +382,96 @@ func TestHeartbeat_EmitsAgentStateForEverySession(t *testing.T) {
 	}
 	if agentEvents["hb-agent-b"] != 2 {
 		t.Errorf("expected exactly 2 agent_state heartbeat emissions for hb-agent-b, got %d", agentEvents["hb-agent-b"])
+	}
+}
+
+// TestEmitStatusSnapshot_CarriesBackgroundAgents verifies that emitStatusSnapshot
+// includes the live BackgroundAgents count from the session's dispatchRegistry.
+//
+// Red-then-green: remove the `BackgroundAgents: bgCount` line added to
+// emitStatusSnapshot and re-run — the test fails because the emitted count is 0
+// (field absent / zero-value due to omitempty).
+func TestEmitStatusSnapshot_CarriesBackgroundAgents(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	defer mgr.Shutdown()
+	// Quiet the background goroutine so it cannot interfere.
+	mgr.SetHeartbeatInterval(10 * time.Second)
+
+	const key = "snap-bg-session"
+	_, _ = mgr.StartSession(key, defaultConfig())
+
+	// Register 3 dispatches in the session's dispatchRegistry so the
+	// live count is non-zero at emission time.
+	const wantBg = 3
+	mgr.mu.RLock()
+	s := mgr.sessions[key]
+	mgr.mu.RUnlock()
+	for i := 0; i < wantBg; i++ {
+		id := fmt.Sprintf("agent-%d", i)
+		s.dispatchRegistry.RegisterWithID(id, id, nil, nil, key, "", 0)
+	}
+
+	cap := newCaptureEngineStatus()
+	mgr.OnEvent(cap.handler())
+
+	mgr.emitStatusSnapshot(key, "test")
+
+	last, ok := cap.last(key)
+	if !ok {
+		t.Fatal("emitStatusSnapshot emitted no engine_status event")
+	}
+	if last.Fields == nil {
+		t.Fatal("engine_status Fields is nil")
+	}
+	if last.Fields.BackgroundAgents != wantBg {
+		t.Errorf("engine_status BackgroundAgents=%d, want %d; heartbeat/query path does not carry the live count",
+			last.Fields.BackgroundAgents, wantBg)
+	}
+}
+
+// TestHeartbeatDoesNotClobberBackgroundAgents is the regression for the live bug:
+// the 30 s heartbeat (and query_session_status ~every 5 s) was emitting
+// engine_status WITHOUT BackgroundAgents, so every tick clobbered the correct
+// count (stamped by handleRunExit + Deregister re-emit) back to 0.
+//
+// Red-then-green: remove the `BackgroundAgents: bgCount` line from
+// emitStatusSnapshot. This test fails because the heartbeat tick carries 0 while
+// two dispatches are still registered.
+func TestHeartbeatDoesNotClobberBackgroundAgents(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	defer mgr.Shutdown()
+	// Quiet the background goroutine; drive ticks directly.
+	mgr.SetHeartbeatInterval(10 * time.Second)
+
+	const key = "hb-clobber-session"
+	_, _ = mgr.StartSession(key, defaultConfig())
+
+	// Simulate 2 background dispatches in flight.
+	mgr.mu.RLock()
+	s := mgr.sessions[key]
+	mgr.mu.RUnlock()
+	s.dispatchRegistry.RegisterWithID("bg-agent-1", "bg-agent-1", nil, nil, key, "", 0)
+	s.dispatchRegistry.RegisterWithID("bg-agent-2", "bg-agent-2", nil, nil, key, "", 0)
+
+	cap := newCaptureEngineStatus()
+	mgr.OnEvent(cap.handler())
+
+	// Fire a heartbeat tick — this is exactly the path that was clobbering
+	// BackgroundAgents back to 0 before the fix.
+	mgr.emitHeartbeatTick()
+
+	last, ok := cap.last(key)
+	if !ok {
+		t.Fatal("heartbeat tick emitted no engine_status event")
+	}
+	if last.Fields == nil {
+		t.Fatal("engine_status Fields is nil")
+	}
+	const wantBg = 2
+	if last.Fields.BackgroundAgents != wantBg {
+		t.Errorf("heartbeat engine_status BackgroundAgents=%d, want %d; heartbeat is clobbering the count to 0",
+			last.Fields.BackgroundAgents, wantBg)
 	}
 }

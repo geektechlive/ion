@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/providers"
+	"github.com/dsswift/ion/engine/internal/tools"
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -61,6 +62,10 @@ type wedgeProvider struct {
 }
 
 func (w *wedgeProvider) ID() string { return w.id }
+
+func (w *wedgeProvider) CountTokens(_ context.Context, _ providers.CountTokensRequest) (int, error) {
+	return 0, providers.ErrCountUnsupported
+}
 
 func (w *wedgeProvider) Stream(ctx context.Context, _ types.LlmStreamOptions) (<-chan types.LlmStreamEvent, <-chan error) {
 	w.streamCalls.Add(1)
@@ -183,6 +188,112 @@ func TestRunloopWatchdogCancelsStalledRun(t *testing.T) {
 	}
 }
 
+// TestRunStallFiresDespiteToolStallEmits is the regression test for the
+// conversation 1782012033034-37d617d3d9ab incident: a wedged, deadline-exempt
+// Agent/dispatch tool emitted a ToolStalledEvent every stall interval, each
+// emit reset the run-progress clock, and the run-stall watchdog never fired —
+// so the run hung for ~10 minutes until the engine restarted.
+//
+// The fix routes ToolStalledEvent through emitWithoutProgress, so the stall
+// advisory no longer counts as forward progress. This test pins that: a tool
+// that wedges forever, runs longer than both the tool-stall interval AND the
+// run-stall threshold, must still trip the run-stall watchdog. The tool is
+// named tools.AgentToolName so the runloop's per-tool-deadline exemption is in
+// force (otherwise the per-tool deadline, not the watchdog, would end the run
+// and the test would not pin the right mechanism).
+//
+// On the UNFIXED code this test fails: the periodic ToolStalledEvent emits keep
+// lastProgressAt fresh, the watchdog never observes RunStall idleness, and
+// waitForExit times out.
+func TestRunStallFiresDespiteToolStallEmits(t *testing.T) {
+	withFastWatchdogTick(t, 20*time.Millisecond)
+
+	// A tool that wedges until ctx cancellation. Named "Agent" so the runloop
+	// takes the deadline-exempt branch (no per-tool DeadlineSuspender). It
+	// honors ctx so the watchdog's run.cancel() unblocks it cleanly.
+	tools.RegisterTool(&types.ToolDef{
+		Name:        tools.AgentToolName,
+		Description: "wedges forever (test)",
+		InputSchema: map[string]any{"type": "object"},
+		Execute: func(ctx context.Context, _ map[string]any, _ string) (*types.ToolResult, error) {
+			<-ctx.Done()
+			return &types.ToolResult{Content: "cancelled", IsError: true}, ctx.Err()
+		},
+	})
+
+	// Provider calls the wedging Agent tool, then (never reached) end_turn.
+	mock := &mockLlmProvider{
+		id: watchdogTestProviderID,
+		responses: [][]types.LlmStreamEvent{
+			toolUseResponse(tools.AgentToolName, "agent-wedge-1", map[string]any{}, 10, 5),
+			textResponse("unreachable", 10, 5),
+		},
+	}
+	registerWatchdogTestProvider(t, mock)
+
+	b := NewApiBackend()
+	const requestID = "req-agent-wedge"
+	c := collectEvents(b, requestID)
+
+	// Tool-stall interval (50ms) well below the run-stall threshold (400ms):
+	// several ToolStalledEvents fire before the run-stall window elapses, so
+	// the test genuinely exercises "stall emits do not hold the watchdog off".
+	cfg := &RunConfig{
+		Timeouts: &types.TimeoutsConfig{
+			ToolStallMs: 50,
+			RunStallMs:  400,
+		},
+	}
+	b.StartRunWithConfig(requestID, types.RunOptions{
+		Prompt:           "wedge the agent tool",
+		Model:            watchdogTestModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
+	}, cfg)
+
+	if !waitForExit(c, 5*time.Second) {
+		t.Fatal("run-stall watchdog never fired despite a wedged deadline-exempt Agent tool — tool-stall emits are defeating the watchdog (the incident defect)")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// The stall advisory must still have fired (we did not silence it; we
+	// only made it progress-neutral). At least one ToolStalledEvent proves
+	// the tool ran long enough to emit, which is precisely the case the
+	// watchdog must survive.
+	var sawToolStalled, sawRunStalled, sawRunStalledErrorCode bool
+	for _, ev := range c.normalized {
+		switch d := ev.Data.(type) {
+		case *types.ToolStalledEvent:
+			if d.ToolID == "agent-wedge-1" {
+				sawToolStalled = true
+			}
+		case *types.RunStalledEvent:
+			sawRunStalled = true
+		case *types.ErrorEvent:
+			if d.ErrorCode == "run_stalled" {
+				sawRunStalledErrorCode = true
+			}
+		}
+	}
+	if !sawToolStalled {
+		t.Error("expected at least one ToolStalledEvent for the wedged Agent tool (advisory must still fire)")
+	}
+	if !sawRunStalled {
+		t.Error("expected RunStalledEvent — the run-stall watchdog must fire despite the periodic tool-stall emits")
+	}
+	if !sawRunStalledErrorCode {
+		t.Error("expected ErrorEvent{run_stalled} for headless consumers")
+	}
+
+	b.mu.Lock()
+	_, stillActive := b.activeRuns[requestID]
+	b.mu.Unlock()
+	if stillActive {
+		t.Error("expected run removed from activeRuns after watchdog cancellation")
+	}
+}
+
 // TestRunloopWatchdogResetsOnProgress locks in the negative case: a
 // run that legitimately makes incremental progress must NOT trip the
 // watchdog. Every emit() bumps lastProgressAt, so a provider that
@@ -257,6 +368,10 @@ func newProgressDripProvider(id string) *progressDripProvider {
 }
 
 func (p *progressDripProvider) ID() string { return p.id }
+
+func (p *progressDripProvider) CountTokens(_ context.Context, _ providers.CountTokensRequest) (int, error) {
+	return 0, providers.ErrCountUnsupported
+}
 
 func (p *progressDripProvider) Stream(ctx context.Context, opts types.LlmStreamOptions) (<-chan types.LlmStreamEvent, <-chan error) {
 	p.mu.Lock()

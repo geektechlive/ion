@@ -103,7 +103,15 @@ func loadOrCreateConversation(opts types.RunOptions, model string) (*conversatio
 			// caller can diagnose and retry without data loss.
 			if errors.Is(err, conversation.ErrNotFound) {
 				utils.Log("ApiBackend", "creating new conversation: "+opts.SessionID)
-				return conversation.CreateConversation(opts.SessionID, opts.SystemPrompt, model), nil
+				created := conversation.CreateConversation(opts.SessionID, opts.SystemPrompt, model)
+				// Record on-disk descent when the caller supplied a parent (a
+				// client-driven checkpoint cut for an existing tab). Empty leaves
+				// parentId unset, as before.
+				if opts.ParentConversationID != "" {
+					created.ParentID = opts.ParentConversationID
+					utils.Log("ApiBackend", fmt.Sprintf("new conversation %s descends from parentId=%s", opts.SessionID, opts.ParentConversationID))
+				}
+				return created, nil
 			}
 			utils.Error("ApiBackend", fmt.Sprintf("failed to load conversation %s: %v", opts.SessionID, err))
 			return nil, fmt.Errorf("failed to load conversation %s: %w", opts.SessionID, err)
@@ -120,11 +128,16 @@ func loadOrCreateConversation(opts types.RunOptions, model string) (*conversatio
 	}
 	// Use the canonical conversation ID generator so two runs that begin
 	// in the same millisecond cannot collide on the conversation file.
-	return conversation.CreateConversation(
+	created := conversation.CreateConversation(
 		conversation.NewConversationID(),
 		opts.SystemPrompt,
 		model,
-	), nil
+	)
+	if opts.ParentConversationID != "" {
+		created.ParentID = opts.ParentConversationID
+		utils.Log("ApiBackend", fmt.Sprintf("new conversation %s descends from parentId=%s", created.ID, opts.ParentConversationID))
+	}
+	return created, nil
 }
 
 // buildSystemPrompt assembles the final system prompt for a run, layering in
@@ -281,7 +294,24 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 		// Emit a state-transition event so consumers can mirror the active
 		// plan-mode flag. Snapshot-style: the event is the authoritative
 		// signal that the run is now in plan mode.
-		b.emit(run, types.NormalizedEvent{Data: &types.PlanModeChangedEvent{Enabled: true}})
+		//
+		// Carry the plan identity (path + slug) on every emission. This site
+		// fires when a run STARTS while the session is already in plan mode
+		// (a continuation/subsequent turn of an existing plan); run.planFilePath
+		// is already populated from options.PlanFilePath at run creation
+		// (api_backend.go), so the path is available here. Populating it
+		// matches the model-initiated EnterPlanMode emit in
+		// runloop_plan_mode_gates.go and lets consumers (a) render the plan
+		// slug on the divider and (b) distinguish the first divider for a path
+		// ("Plan created") from subsequent ones ("Plan updated"). Omitting the
+		// path here produced a nameless, non-dedupable second divider on the
+		// clients. PlanSlugFromPath returns "" for an empty path, so the
+		// pathological empty-path case degrades to today's slug-less divider.
+		b.emit(run, types.NormalizedEvent{Data: &types.PlanModeChangedEvent{
+			Enabled:      true,
+			PlanFilePath: run.planFilePath,
+			PlanSlug:     types.PlanSlugFromPath(run.planFilePath),
+		}})
 		utils.Info("PlanMode", fmt.Sprintf("run=%s tools_filtered=%d allowed=%v", run.requestID, len(toolDefs), planTools))
 		// Install the EFFECTIVE allowlist on the run so applyPlanModeBashGate
 		// (executed per-tool-call in runloop_plan_mode_gates.go) sees the
@@ -419,4 +449,22 @@ func (b *ApiBackend) buildToolDefs(run *activeRun, opts types.RunOptions, provid
 	}
 
 	return toolDefs, serverTools
+}
+
+// AssembleSystemPromptOnDemand assembles the system prompt outside of an active
+// run. Exported so the session layer can reconstruct the prompt for on-demand
+// operations (e.g. ComputeAndEmitContextBreakdown) without needing a live
+// activeRun. Equivalent to buildSystemPrompt with a nil run — the nil-guard
+// inside that function means the plan_mode_sparse_reminder cache path is
+// skipped, which is correct for the on-demand case (no run is in flight).
+func AssembleSystemPromptOnDemand(opts *types.RunOptions, conv *conversation.Conversation) string {
+	return buildSystemPrompt(opts, conv, RunHooks{}, "on-demand", nil)
+}
+
+// ResolveProviderOnDemand resolves the provider for the given model and returns
+// it. Exported thin wrapper around the unexported resolveProvider, used by the
+// session layer for on-demand operations (ComputeAndEmitContextBreakdown) that
+// need a provider reference without a live activeRun.
+func (b *ApiBackend) ResolveProviderOnDemand(model string) providers.LlmProvider {
+	return b.resolveProvider(model)
 }

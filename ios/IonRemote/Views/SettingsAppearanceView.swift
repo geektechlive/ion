@@ -102,7 +102,7 @@ struct SettingsAppearanceView: View {
             // above the keyboard with paste / select all / tab / new
             // line / undo / redo / dismiss buttons). The bar's underlying
             // implementation lives in InputBar.swift (CLI) and
-            // EngineView.swift (engine view); the toggles default to on
+            // ConversationView.swift (the conversation view); the toggles default to on
             // and a previous iOS settings refactor (9b3d1e5f) lost the
             // UI for these toggles when it deleted SettingsInterfaceView.
             // Restored here under Appearance because the toggles control

@@ -161,7 +161,7 @@ export function DirContextMenu({
           onMouseEnter={(e) => { if (!finishWorkDisabled) (e.currentTarget as HTMLElement).style.background = colors.tabActive }}
           onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
         >
-          <CheckCircle size={14} color={finishWorkDisabled ? colors.textTertiary : '#4ade80'} />
+          <CheckCircle size={14} color={finishWorkDisabled ? colors.textTertiary : colors.worktreeGreen} />
           <span>{finishWorkDisabled === 'checking' ? 'Finish work (checking...)' : finishWorkDisabled ? 'Finish work (uncommitted changes)' : 'Finish work'}</span>
         </button>
       )}

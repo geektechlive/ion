@@ -69,7 +69,7 @@ func TestApiBackend_ConcurrentSessionsNoInterlace(t *testing.T) {
 			Description: "session-specific external tool",
 			InputSchema: map[string]any{"type": "object"},
 		}
-		mcpRouter := func(name string, _ map[string]interface{}) (string, bool, error) {
+		mcpRouter := func(_ context.Context, name string, _ map[string]interface{}) (string, bool, error) {
 			addRecord("router-call", "router-"+name, tag)
 			return "router-" + tag, false, nil
 		}

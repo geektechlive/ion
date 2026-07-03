@@ -46,8 +46,6 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave, onCursorChange, 
   const activeFileIdRef = useRef<string | null>(null)
   const cursorCbRef = useRef(onCursorChange)
   cursorCbRef.current = onCursorChange
-  const setEditorFontSize = usePreferencesStore((s) => s.setEditorFontSize)
-
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
 
@@ -142,20 +140,10 @@ export function FileEditorCodeMirror({ dir, activeFile, onSave, onCursorChange, 
             return true
           },
         },
-        {
-          key: 'Mod-=',
-          run: () => {
-            setEditorFontSize(usePreferencesStore.getState().editorFontSize + 1)
-            return true
-          },
-        },
-        {
-          key: 'Mod--',
-          run: () => {
-            setEditorFontSize(usePreferencesStore.getState().editorFontSize - 1)
-            return true
-          },
-        },
+        // Mod-= and Mod-- are intentionally absent: editor font zoom is owned
+        // exclusively by the global handler in useKeyboardShortcuts so there
+        // is exactly one increment per keypress and the shortcut works in
+        // preview mode where no .cm-editor node exists.
       ]),
     ]
 

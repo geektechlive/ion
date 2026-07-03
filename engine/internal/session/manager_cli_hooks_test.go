@@ -864,3 +864,155 @@ func TestFireCliTurnHooks_MultiTurnMessageUpdate(t *testing.T) {
 		t.Errorf("turn 2 content = %q, want 'turn two'", msgs[1].Content)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// wireToolServer alias directive tests
+// ---------------------------------------------------------------------------
+
+// newToolExtGroup builds an ExtensionGroup with one host that has the named
+// tools registered.  The Execute stub always returns a zero result — these
+// tests only care about the system-prompt directive, not tool execution.
+func newToolExtGroup(toolNames []string) *extension.ExtensionGroup {
+	host := extension.NewHost()
+	for _, name := range toolNames {
+		n := name
+		host.SDK().RegisterTool(extension.ToolDefinition{
+			Name:        n,
+			Description: "test tool " + n,
+			Parameters:  map[string]interface{}{},
+			Execute: func(params interface{}, ctx *extension.Context) (*types.ToolResult, error) {
+				return &types.ToolResult{Content: "ok"}, nil
+			},
+		})
+	}
+	g := extension.NewExtensionGroup()
+	g.Add(host)
+	return g
+}
+
+// TestWireToolServer_AppendSystemPromptContainsAliases verifies that after
+// wireToolServer runs on a CLI backend with non-empty extension tools, each
+// bare name and its mcp__<server>__<name> form appear in AppendSystemPrompt.
+func TestWireToolServer_AppendSystemPromptContainsAliases(t *testing.T) {
+	cb := backend.NewCliBackend()
+	mgr := NewManager(cb)
+	s := newCliSession("wts1")
+
+	toolNames := []string{"dispatch_agent", "recall_agent"}
+	extGroup := newToolExtGroup(toolNames)
+
+	opts := types.RunOptions{}
+	mgr.wireToolServer(s, "wts1", &opts, extGroup)
+
+	// Cleanup
+	mgr.mu.Lock()
+	ts := s.toolServer
+	mgr.mu.Unlock()
+	if ts != nil {
+		defer ts.Stop()
+	}
+
+	for _, name := range toolNames {
+		if !strings.Contains(opts.AppendSystemPrompt, name) {
+			t.Errorf("AppendSystemPrompt missing bare name %q:\n%s", name, opts.AppendSystemPrompt)
+		}
+		prefixed := "mcp__" + backend.McpServerName + "__" + name
+		if !strings.Contains(opts.AppendSystemPrompt, prefixed) {
+			t.Errorf("AppendSystemPrompt missing prefixed name %q:\n%s", prefixed, opts.AppendSystemPrompt)
+		}
+	}
+}
+
+// TestWireToolServer_PreservesExistingAppendSystemPrompt verifies that
+// pre-existing AppendSystemPrompt content is preserved when the directive is
+// appended.  Mirrors the accumulation assertions near lines 70-80.
+func TestWireToolServer_PreservesExistingAppendSystemPrompt(t *testing.T) {
+	cb := backend.NewCliBackend()
+	mgr := NewManager(cb)
+	s := newCliSession("wts2")
+
+	extGroup := newToolExtGroup([]string{"dispatch_agent"})
+	existingContent := "pre-existing system prompt content"
+
+	opts := types.RunOptions{AppendSystemPrompt: existingContent}
+	mgr.wireToolServer(s, "wts2", &opts, extGroup)
+
+	// Cleanup
+	mgr.mu.Lock()
+	ts := s.toolServer
+	mgr.mu.Unlock()
+	if ts != nil {
+		defer ts.Stop()
+	}
+
+	if !strings.Contains(opts.AppendSystemPrompt, existingContent) {
+		t.Errorf("pre-existing AppendSystemPrompt content lost:\n%s", opts.AppendSystemPrompt)
+	}
+	if !strings.Contains(opts.AppendSystemPrompt, "dispatch_agent") {
+		t.Errorf("new directive content missing from AppendSystemPrompt:\n%s", opts.AppendSystemPrompt)
+	}
+}
+
+// TestWireToolServer_NoopForAPIBackend verifies that wireToolServer is a
+// no-op for non-CLI backends: no directive is appended.
+func TestWireToolServer_NoopForAPIBackend(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	s := newCliSession("wts-api1")
+
+	extGroup := newToolExtGroup([]string{"dispatch_agent"})
+	opts := types.RunOptions{AppendSystemPrompt: "base"}
+	mgr.wireToolServer(s, "wts-api1", &opts, extGroup)
+
+	if opts.AppendSystemPrompt != "base" {
+		t.Errorf("API backend: AppendSystemPrompt must not be modified; got %q", opts.AppendSystemPrompt)
+	}
+}
+
+// TestWireAgentToolServer_AppendSystemPromptContainsIonAgent verifies that
+// after wireAgentToolServer, the ion_agent bare and prefixed forms appear in
+// AppendSystemPrompt.
+func TestWireAgentToolServer_AppendSystemPromptContainsIonAgent(t *testing.T) {
+	cb := backend.NewCliBackend()
+	mgr := NewManager(cb)
+	s := newCliSession("wats1")
+
+	mgr.mu.Lock()
+	mgr.sessions["wats1"] = s
+	mgr.mu.Unlock()
+
+	opts := types.RunOptions{}
+	mgr.wireAgentToolServer(s, "wats1", &opts)
+
+	// Cleanup
+	mgr.mu.Lock()
+	ts := s.toolServer
+	mgr.mu.Unlock()
+	if ts != nil {
+		defer ts.Stop()
+	}
+
+	if !strings.Contains(opts.AppendSystemPrompt, "ion_agent") {
+		t.Errorf("AppendSystemPrompt missing bare name 'ion_agent':\n%s", opts.AppendSystemPrompt)
+	}
+	prefixed := "mcp__" + backend.McpServerName + "__ion_agent"
+	if !strings.Contains(opts.AppendSystemPrompt, prefixed) {
+		t.Errorf("AppendSystemPrompt missing prefixed name %q:\n%s", prefixed, opts.AppendSystemPrompt)
+	}
+}
+
+// TestWireAgentToolServer_NoopForAPIBackendDirective verifies that
+// wireAgentToolServer is a no-op for non-CLI backends: no directive is
+// appended.
+func TestWireAgentToolServer_NoopForAPIBackendDirective(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	s := newCliSession("wats-api1")
+
+	opts := types.RunOptions{AppendSystemPrompt: "existing"}
+	mgr.wireAgentToolServer(s, "wats-api1", &opts)
+
+	if opts.AppendSystemPrompt != "existing" {
+		t.Errorf("API backend: AppendSystemPrompt must not be modified; got %q", opts.AppendSystemPrompt)
+	}
+}

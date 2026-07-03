@@ -365,6 +365,50 @@ func TestBuildToolDefs_PlanModeInjectsExitAndAsk(t *testing.T) {
 	}
 }
 
+// TestBuildToolDefs_PlanModeEmitCarriesPathAndSlug pins that the
+// plan-mode-entered emit fired at run setup (when a run STARTS while the
+// session is already in plan mode — a continuation of an existing plan)
+// carries the plan identity: PlanFilePath and the derived PlanSlug.
+//
+// Regression target: this emit previously sent PlanModeChangedEvent{Enabled:
+// true} with NO path/slug, producing a nameless, non-dedupable second
+// divider on the clients ("Plan created" with no plan name, not clickable).
+// run.planFilePath is populated at run creation from options.PlanFilePath, so
+// the path is available here and must be carried. Reverting the
+// runloop_setup.go fix (back to a bare Enabled:true emit) turns this red.
+func TestBuildToolDefs_PlanModeEmitCarriesPathAndSlug(t *testing.T) {
+	b := NewApiBackend()
+	var emitted []types.NormalizedEvent
+	b.OnNormalized(func(_ string, ev types.NormalizedEvent) {
+		emitted = append(emitted, ev)
+	})
+	run := &activeRun{requestID: "test", planMode: true, planFilePath: "/tmp/happy-jumping-rabbit.md"}
+	opts := types.RunOptions{PlanMode: true, PlanFilePath: "/tmp/happy-jumping-rabbit.md"}
+	provider := &mockLlmProvider{id: "anthropic"}
+
+	b.buildToolDefs(run, opts, provider)
+
+	var pmc *types.PlanModeChangedEvent
+	for _, ev := range emitted {
+		if e, ok := ev.Data.(*types.PlanModeChangedEvent); ok {
+			pmc = e
+			break
+		}
+	}
+	if pmc == nil {
+		t.Fatal("expected a PlanModeChangedEvent to be emitted at plan-mode run setup")
+	}
+	if !pmc.Enabled {
+		t.Error("expected PlanModeChangedEvent.Enabled to be true")
+	}
+	if pmc.PlanFilePath != "/tmp/happy-jumping-rabbit.md" {
+		t.Errorf("PlanFilePath = %q, want /tmp/happy-jumping-rabbit.md", pmc.PlanFilePath)
+	}
+	if pmc.PlanSlug != "happy-jumping-rabbit" {
+		t.Errorf("PlanSlug = %q, want happy-jumping-rabbit", pmc.PlanSlug)
+	}
+}
+
 func TestBuildToolDefs_NoPlanModeHasAskButNoExit(t *testing.T) {
 	b := NewApiBackend()
 	run := &activeRun{requestID: "test"}
@@ -724,6 +768,54 @@ func TestLoadOrCreateConversation_NoSessionID_CreatesFresh(t *testing.T) {
 	}
 	if conv.ID == "" {
 		t.Error("expected fresh conversation to have a non-empty ID")
+	}
+}
+
+// TestLoadOrCreateConversation_ParentConversationID_SetOnFreshWithSessionID
+// verifies that a client-driven checkpoint cut (ParentConversationID set,
+// SessionID names an unsaved id) records the descent: the new conversation's
+// ParentID equals the supplied parent. Revert the parentId wiring in
+// loadOrCreateConversation and this goes red (ParentID stays empty).
+func TestLoadOrCreateConversation_ParentConversationID_SetOnFreshWithSessionID(t *testing.T) {
+	opts := types.RunOptions{
+		SessionID:            "child-conv-id-99999",
+		ParentConversationID: "parent-conv-id-00001",
+	}
+	conv, err := loadOrCreateConversation(opts, "mock-model")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if conv.ParentID != "parent-conv-id-00001" {
+		t.Errorf("expected ParentID=%q, got %q", "parent-conv-id-00001", conv.ParentID)
+	}
+}
+
+// TestLoadOrCreateConversation_ParentConversationID_SetOnFreshNoSessionID
+// verifies the same descent linkage on the empty-SessionID fresh-mint path.
+func TestLoadOrCreateConversation_ParentConversationID_SetOnFreshNoSessionID(t *testing.T) {
+	opts := types.RunOptions{
+		SessionID:            "",
+		ParentConversationID: "parent-conv-id-fresh",
+	}
+	conv, err := loadOrCreateConversation(opts, "mock-model")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if conv.ParentID != "parent-conv-id-fresh" {
+		t.Errorf("expected ParentID=%q, got %q", "parent-conv-id-fresh", conv.ParentID)
+	}
+}
+
+// TestLoadOrCreateConversation_NoParent_LeavesParentIDEmpty verifies the
+// non-breaking default: absent ParentConversationID leaves ParentID empty.
+func TestLoadOrCreateConversation_NoParent_LeavesParentIDEmpty(t *testing.T) {
+	opts := types.RunOptions{SessionID: "no-parent-conv-id"}
+	conv, err := loadOrCreateConversation(opts, "mock-model")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if conv.ParentID != "" {
+		t.Errorf("expected empty ParentID, got %q", conv.ParentID)
 	}
 }
 

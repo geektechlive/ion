@@ -54,9 +54,15 @@ function log(msg: string): void {
  *     (it's a checkpoint, not a session restart), so this guard CANNOT rely
  *     on `conversationId` being null to recognize a freshly-cleared tab.
  *
- * Two sources of "this is a resumed session" — both still count as NOT-fresh:
- *   1. `runOptionsSessionId` — the renderer passes `runOptions.sessionId`
- *      when submitting a prompt against a previously-saved conversation.
+ * "Not fresh" is driven by two signals on the tab entry:
+ *   1. `resumedSavedConversation === true` — the tab's tracked conversationId
+ *      came from RESUMING A SAVED conversation (caller-supplied id on restore),
+ *      not from a fresh engine mint. This replaces the old "any non-null
+ *      runOptions.sessionId ⇒ resumed" heuristic, which mis-classified a
+ *      brand-new eagerly-started session (whose engine-minted id the renderer
+ *      also sends as runOptions.sessionId) as resumed — the bug that ran a
+ *      first-prompt `/align` in plan mode. See resumedSavedConversation in
+ *      engine-control-plane-events.ts for scenarios B (resume) vs C (mint).
  *   2. `promptCountSinceCheckpoint > 0` — at least one prompt has been
  *      submitted in the current checkpoint window.
  *
@@ -65,20 +71,23 @@ function log(msg: string): void {
  *     i.e. genuinely fresh. Returns true.
  *   - `clearedSinceLastPrompt` → `/clear` just fired; treat as fresh.
  *
- * @param tabId               The active tab id.
- * @param runOptionsSessionId The `sessionId` from `RunOptions` sent by the
- *                            renderer — non-null when resuming a saved
- *                            conversation.
+ * @param tabId The active tab id.
  */
-export function isFirstPromptForTab(tabId: string, runOptionsSessionId?: string | null): boolean {
+export function isFirstPromptForTab(tabId: string): boolean {
   const tab = sessionPlane.getTabStatus(tabId)
   // Tab not registered yet — genuinely fresh.
   if (!tab) return true
   // /clear just fired — treat as fresh even though the renderer still sends
   // the stale conversationId. The flag is cleared by submitPrompt.
   if (tab.clearedSinceLastPrompt) return true
-  // Renderer is resuming a saved conversation — not fresh.
-  if (runOptionsSessionId) return false
+  // Resuming a SAVED conversation (scenario B) — not fresh. We key off the
+  // explicit resumedSavedConversation flag, NOT the bare presence of a
+  // runOptions.sessionId: the engine pre-mints a conversationId for a brand-new
+  // eagerly-started session (scenario C), which the renderer then sends as
+  // runOptions.sessionId — so a non-null sessionId alone cannot distinguish a
+  // real resume (B) from a fresh mint (C). Only B sets the flag. See the
+  // resumedSavedConversation doc in engine-control-plane-events.ts.
+  if (tab.resumedSavedConversation) return false
   return tab.promptCountSinceCheckpoint === 0
 }
 

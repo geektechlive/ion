@@ -3,18 +3,14 @@ import UIKit
 
 // MARK: - Keyboard Utility Bar Overlay
 //
-// Extracted from EngineView.swift per the round-2 alignment plan: the
-// `@file-size-exception` marker on EngineView declares the file is
-// awaiting decomposition, and the per-AGENTS plan-resolution rules
-// forbid extending an exempted file with new functionality. Pull the
-// keyboard utility bar plumbing (state, conditional rendering modifier,
-// keyboard-show/hide observers, animation modifier) into a small,
-// purpose-built modifier so EngineView itself shrinks back toward its
-// pre-`acee1738` line count.
+// Extracted from the conversation view to keep that file under the Swift
+// 600-line cap. Pulls the keyboard utility bar plumbing (state, conditional
+// rendering modifier, keyboard-show/hide observers, animation modifier) into a
+// small, purpose-built modifier.
 //
 // Why a ViewModifier rather than a standalone View
 // ────────────────────────────────────────────────
-// The keyboard utility bar in EngineView reads three pieces of host
+// The keyboard utility bar in ConversationView reads three pieces of host
 // view state: the local `@State keyboardVisible`, the host's
 // `SessionViewModel.showKeyboardUtilityBarInEngine` toggle, and the
 // host's input focus / draft binding. A standalone View would need all

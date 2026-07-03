@@ -51,6 +51,41 @@ func (s *engineSession) rootContext() context.Context {
 	return s.rootCtx
 }
 
+// rearmRootContextIfCancelled re-creates the session's cancellation root iff
+// the current root is nil or already cancelled. It is the recovery counterpart
+// to cancelSessionRoot: an abort (SendAbort) or a stalled-run cancellation
+// permanently closes rootCtx, and because newSessionRootContext is only called
+// once at StartSession, every subsequent run would otherwise derive its
+// ParentCtx from that dead context and exit immediately with signal=cancelled.
+// That wedged the session so badly the only fix was an engine restart (the
+// 1782088921498-960b064fe896 incident: two `resume` attempts both exited
+// instantly because the post-abort root was still cancelled).
+//
+// Re-arming here, at the start of each new dispatch, makes a session
+// self-healing: after any abort the next prompt gets a live root and runs
+// normally — no engine restart, ever.
+//
+// Idempotent and safe for the normal case: when the root is still live (Err()
+// == nil), this is a no-op, so back-to-back prompts with no intervening abort
+// keep the SAME root and never reparent in-flight descendants. The caller MUST
+// hold the manager lock (every other rootCtx access does), and the new-run
+// busy-guard upstream guarantees no run is in flight when this fires, so no
+// live descendant is ever orphaned by the swap.
+func (s *engineSession) rearmRootContextIfCancelled() {
+	if s.rootCtx != nil && s.rootCtx.Err() == nil {
+		// Still live — keep the existing root so in-flight descendants
+		// (background dispatches, llmCalls) stay parented to it.
+		utils.Debug("Session", "rearmRootContextIfCancelled: root still live, no-op key="+s.key)
+		return
+	}
+	reason := "nil"
+	if s.rootCtx != nil {
+		reason = "cancelled"
+	}
+	utils.Info("Session", "rearmRootContextIfCancelled: re-creating session root (was "+reason+") key="+s.key)
+	s.newSessionRootContext()
+}
+
 // cancelSessionRoot cancels the session's cancellation root, cascading to
 // every descendant context (backend run, dispatched agents, in-flight
 // llmCall). Idempotent and nil-safe: cancelling an already-cancelled context

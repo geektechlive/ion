@@ -6,7 +6,7 @@
  *
  * What this file covers
  * ─────────────────────
- *   1. Engine-tab path (`engineBridge.sendPrompt`):
+ *   1. Extension-hosted path (`engineBridge.sendPrompt`):
  *      - undefined input → guidance alone is sent
  *      - non-empty input ("voice mode") → `"voice mode\n\n<guidance>"` sent
  *      - already-tailed input → idempotent, no double-append
@@ -146,66 +146,58 @@ beforeEach(() => {
 })
 
 describe('processIncomingPrompt — harness system-prompt addenda (turn-grouping guidance)', () => {
-  it('appends the guidance to engineBridge.sendPrompt when no upstream addendum exists', async () => {
-    // Desktop-source engine tab, non-slash text, no incoming
-    // appendSystemPrompt. The engine bridge should receive the
-    // guidance alone.
+  it('appends the guidance to the RunOptions when no upstream addendum exists', async () => {
+    // Desktop-source extension-hosted tab, non-slash text, no incoming appendSystemPrompt.
+    // The unified submitPrompt RunOptions should carry the guidance alone.
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: 'hello',
       reqId: 'req-addenda-1',
       source: 'desktop',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst-x',
-      // appendSystemPrompt intentionally omitted
+      runOptions: { prompt: 'hello', projectPath: '/tmp', extensions: ['ext-a'] },
     })
-    expect(mocks.sendPromptMock).toHaveBeenCalledTimes(1)
-    // engineBridge.sendPrompt signature: (key, text, model,
-    // appendSystemPrompt, imageAttachments, implementationPhase,
-    // enterPlanModeDescription, planModeSparseReminder, planFilePath)
-    const call = mocks.sendPromptMock.mock.calls[0]
-    const sentAppendSystemPrompt = call[3]
-    expect(sentAppendSystemPrompt).toBe(TURN_GROUPING_GUIDANCE)
+    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
+    const opts = mocks.submitPromptMock.mock.calls[0][2]
+    expect(opts.appendSystemPrompt).toBe(TURN_GROUPING_GUIDANCE)
   })
 
   it('appends the guidance after an existing upstream addendum with a \\n\\n separator', async () => {
-    // Desktop-source engine tab with a voice-mode-style upstream
-    // addendum. The pipeline must preserve the upstream text and
-    // append the guidance after a blank-line separator.
+    // Desktop-source extension-hosted tab with a voice-mode-style upstream addendum on
+    // RunOptions. The pipeline preserves the upstream text and appends the
+    // guidance after a blank-line separator.
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: 'hello',
       reqId: 'req-addenda-2',
       source: 'desktop',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst-x',
-      appendSystemPrompt: 'voice mode',
+      runOptions: { prompt: 'hello', projectPath: '/tmp', extensions: ['ext-a'], appendSystemPrompt: 'voice mode' },
     })
-    expect(mocks.sendPromptMock).toHaveBeenCalledTimes(1)
-    const sentAppendSystemPrompt = mocks.sendPromptMock.mock.calls[0][3]
-    expect(sentAppendSystemPrompt).toBe(`voice mode\n\n${TURN_GROUPING_GUIDANCE}`)
+    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
+    const opts = mocks.submitPromptMock.mock.calls[0][2]
+    expect(opts.appendSystemPrompt).toBe(`voice mode\n\n${TURN_GROUPING_GUIDANCE}`)
   })
 
   it('is idempotent — does not double-append when re-invoked on already-guidance-tailed input', async () => {
-    // The iOS-engine path bounces through the renderer: the first
-    // pipeline invocation (source='remote') appends the guidance and
-    // broadcasts via REMOTE_ENGINE_PROMPT, then the renderer calls
-    // back via window.ion.enginePrompt and we land in the pipeline a
-    // second time. Without the endsWith() guard, the guidance would
-    // appear twice in the system block. This test simulates the
-    // second invocation directly and asserts no duplication.
+    // The iOS-engine path bounces through the renderer once. Without the
+    // endsWith() guard, the guidance would appear twice. This simulates the
+    // second invocation directly (guidance already present on RunOptions) and
+    // asserts no duplication.
     const alreadyTailed = `voice mode\n\n${TURN_GROUPING_GUIDANCE}`
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: 'hello',
       reqId: 'req-addenda-3',
       source: 'desktop',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst-x',
-      appendSystemPrompt: alreadyTailed,
+      runOptions: { prompt: 'hello', projectPath: '/tmp', extensions: ['ext-a'], appendSystemPrompt: alreadyTailed },
     })
-    expect(mocks.sendPromptMock).toHaveBeenCalledTimes(1)
-    const sentAppendSystemPrompt = mocks.sendPromptMock.mock.calls[0][3]
+    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
+    const sentAppendSystemPrompt = mocks.submitPromptMock.mock.calls[0][2].appendSystemPrompt
     expect(sentAppendSystemPrompt).toBe(alreadyTailed)
     // Belt-and-suspenders: count occurrences of the guidance text in
     // the final string. Must be exactly one.
@@ -224,7 +216,7 @@ describe('processIncomingPrompt — harness system-prompt addenda (turn-grouping
       text: 'hello',
       reqId: 'req-addenda-4',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: opts,
     })
     expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)

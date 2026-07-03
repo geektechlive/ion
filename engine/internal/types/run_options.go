@@ -33,6 +33,14 @@ type RunOptions struct {
 	// defect this field fixes — claude rejects non-UUID resume ids with exit
 	// code 1, killing every fresh manager-driven CLI run.
 	CliResumeSessionID string          `json:"cliResumeSessionId,omitempty"`
+	// ParentConversationID, when set, is written as the new conversation's
+	// `parentId` IF this run creates a fresh conversation file (SessionID names
+	// an id with no backing file yet). It records that the new session descends
+	// from a prior one — the on-disk linkage for a client-driven checkpoint cut
+	// (e.g. a desktop "clear context" that starts a new conversation for an
+	// existing tab). Ignored when resuming an existing conversation. Additive
+	// and non-breaking: an absent value leaves parentId empty as before.
+	ParentConversationID string         `json:"parentConversationId,omitempty"`
 	AllowedTools       []string        `json:"allowedTools,omitempty"`
 	SuppressTools      []string        `json:"suppressTools,omitempty"`
 	MaxTurns           int             `json:"maxTurns,omitempty"`
@@ -161,6 +169,19 @@ type RunOptions struct {
 	DisablePlanModeReminder bool         `json:"disablePlanModeReminder,omitempty"`
 	DisableTurnLimitWarning bool         `json:"disableTurnLimitWarning,omitempty"`
 	DisableMaxTokenContinue bool         `json:"disableMaxTokenContinue,omitempty"`
+	// ClaudeCompat mirrors EngineConfig.ClaudeCompat onto the run so the
+	// backend's read-triggered nested context loader applies the same Ion-vs-
+	// Claude gate as the eager context walk: Ion-native instruction files
+	// (AGENTS.md, ION.md) load regardless; Claude-compat files (CLAUDE.md)
+	// load only when this is true. Set from s.config.ClaudeCompat in
+	// buildRunOptions. Zero value (false) preserves today's behavior.
+	ClaudeCompat bool `json:"claudeCompat,omitempty"`
+	// DisableNestedContext turns off read-triggered nested context loading
+	// (progressive AGENTS.md/ION.md descent) for this run. Zero value (false)
+	// means the feature is ON by default; set true to suppress nested
+	// injections (the per-run analogue of SuppressSystemMessages but scoped to
+	// the nested-context mechanism specifically).
+	DisableNestedContext    bool         `json:"disableNestedContext,omitempty"`
 	CapabilityTools         []LlmToolDef `json:"-"` // capability tools injected by session manager
 	CapabilityPrompt        string       `json:"-"` // capability prompt content injected by session manager
 	WebSearchMode           string       `json:"-"` // "auto", "client", or "server", propagated from config

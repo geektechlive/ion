@@ -13,7 +13,7 @@ func TestSetPlanMode_Enable(t *testing.T) {
 	mgr := NewManager(mb)
 	_, _ = mgr.StartSession("plan", defaultConfig())
 
-	mgr.SetPlanMode("plan", true, []string{"Read", "Grep"}, "")
+	mgr.SetPlanMode("plan", true, []string{"Read", "Grep"}, "", "")
 
 	_ = mgr.SendPrompt("plan", "plan it", nil)
 
@@ -32,8 +32,8 @@ func TestSetPlanMode_Disable(t *testing.T) {
 	mgr := NewManager(mb)
 	_, _ = mgr.StartSession("plan2", defaultConfig())
 
-	mgr.SetPlanMode("plan2", true, []string{"Read"}, "")
-	mgr.SetPlanMode("plan2", false, nil, "")
+	mgr.SetPlanMode("plan2", true, []string{"Read"}, "", "")
+	mgr.SetPlanMode("plan2", false, nil, "", "")
 
 	_ = mgr.SendPrompt("plan2", "execute", nil)
 
@@ -52,7 +52,7 @@ func TestSetPlanMode_UnknownSessionNoPanic(t *testing.T) {
 	mgr := NewManager(mb)
 
 	// Should not panic
-	mgr.SetPlanMode("ghost", true, []string{"Read"}, "")
+	mgr.SetPlanMode("ghost", true, []string{"Read"}, "", "")
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +601,7 @@ func TestSetPlanMode_PreservesPlanFilePathAfterExit(t *testing.T) {
 	_, _ = mgr.StartSession("preserve", defaultConfig())
 
 	// Enable plan mode and send a prompt to generate a plan file path
-	mgr.SetPlanMode("preserve", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("preserve", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("preserve", "plan it", nil)
 
 	// Capture the plan file path
@@ -618,7 +618,7 @@ func TestSetPlanMode_PreservesPlanFilePathAfterExit(t *testing.T) {
 	mgr.MarkPlanModeExited("preserve")
 
 	// Disable plan mode — planFilePath should be preserved because hasExitedPlanMode is true
-	mgr.SetPlanMode("preserve", false, nil, "test")
+	mgr.SetPlanMode("preserve", false, nil, "test", "")
 
 	mgr.mu.RLock()
 	s = mgr.sessions["preserve"]
@@ -641,7 +641,7 @@ func TestSetPlanMode_PreservesPlanFilePathOnManualDisable(t *testing.T) {
 	_, _ = mgr.StartSession("manual-disable", defaultConfig())
 
 	// Enable plan mode and send a prompt to generate a plan file path
-	mgr.SetPlanMode("manual-disable", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("manual-disable", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("manual-disable", "plan it", nil)
 
 	// Capture the plan file path
@@ -656,7 +656,7 @@ func TestSetPlanMode_PreservesPlanFilePathOnManualDisable(t *testing.T) {
 
 	// Disable plan mode WITHOUT calling MarkPlanModeExited (simulates dropdown toggle).
 	// planFilePath MUST be preserved, and hasExitedPlanMode MUST be set true.
-	mgr.SetPlanMode("manual-disable", false, nil, "ui_dropdown")
+	mgr.SetPlanMode("manual-disable", false, nil, "ui_dropdown", "")
 
 	mgr.mu.RLock()
 	s = mgr.sessions["manual-disable"]
@@ -678,12 +678,12 @@ func TestPlanModeReentry_SetOnRunOptions(t *testing.T) {
 	_, _ = mgr.StartSession("reentry-opts", defaultConfig())
 
 	// Enable plan mode and send first prompt to generate plan file path
-	mgr.SetPlanMode("reentry-opts", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("reentry-opts", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("reentry-opts", "plan it", nil)
 
 	// Mark as exited and disable plan mode
 	mgr.MarkPlanModeExited("reentry-opts")
-	mgr.SetPlanMode("reentry-opts", false, nil, "test")
+	mgr.SetPlanMode("reentry-opts", false, nil, "test", "")
 
 	// Simulate run exit so requestID is cleared
 	ordered := mb.startedInOrder()
@@ -691,7 +691,7 @@ func TestPlanModeReentry_SetOnRunOptions(t *testing.T) {
 	mb.emitExit(ordered[0], &code, nil, "sess-abc")
 
 	// Re-enable plan mode — should be detected as reentry
-	mgr.SetPlanMode("reentry-opts", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("reentry-opts", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("reentry-opts", "add a deliverable", nil)
 
 	allOrdered := mb.startedInOrder()
@@ -714,7 +714,7 @@ func TestSetPlanMode_ReentryAfterManualToggle(t *testing.T) {
 	_, _ = mgr.StartSession("manual-reentry", defaultConfig())
 
 	// Enter plan mode, send a prompt to allocate a plan hash.
-	mgr.SetPlanMode("manual-reentry", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("manual-reentry", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("manual-reentry", "plan it", nil)
 
 	mgr.mu.RLock()
@@ -732,10 +732,10 @@ func TestSetPlanMode_ReentryAfterManualToggle(t *testing.T) {
 	mb.emitExit(ordered[0], &code, nil, "sess-1")
 
 	// User toggles plan mode OFF via dropdown — no MarkPlanModeExited call.
-	mgr.SetPlanMode("manual-reentry", false, nil, "ui_dropdown")
+	mgr.SetPlanMode("manual-reentry", false, nil, "ui_dropdown", "")
 
 	// User toggles plan mode ON again via dropdown.
-	mgr.SetPlanMode("manual-reentry", true, []string{"Read"}, "ui_dropdown")
+	mgr.SetPlanMode("manual-reentry", true, []string{"Read"}, "ui_dropdown", "")
 	_ = mgr.SendPrompt("manual-reentry", "amend the plan", nil)
 
 	// The second run must see the same planFilePath and PlanModeReentry=true.

@@ -1,4 +1,4 @@
-import type { GitOpsMode, WorktreeCompletionStrategy, TabGroupMode, TabGroup, QuickTool, RemotePairedDevice, EngineProfile } from '../shared/types'
+import type { GitOpsMode, WorktreeCompletionStrategy, TabGroupMode, TabGroup, QuickTool, RemotePairedDevice, EngineProfile, NewConversationDefaultsPolicy } from '../shared/types'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
@@ -30,6 +30,8 @@ export interface PreferencesState {
   editorFontSize: number
   /** Font size in px for conversation message body text. 8–24. */
   conversationFontSize: number
+  /** Font size in px for floating pop-up previews (plan, diff, resource). 8–24. */
+  previewFontSize: number
   /** Git operations mode: manual (no automation) or worktree (managed per-tab worktrees) */
   gitOpsMode: GitOpsMode
   /** How to complete worktree work: merge --no-ff or push + PR */
@@ -135,12 +137,25 @@ export interface PreferencesState {
   engineDefaultModel: string
   /** Preferred model for new conversations (persisted across restarts) */
   preferredModel: string
+  /**
+   * Default engine profile for new tabs. Empty string means "plain
+   * conversation" (no extension). A non-empty value is an EngineProfile id;
+   * if the referenced profile no longer exists the desktop falls back to
+   * plain. Set from the Settings dialog (Phase 3 UI, #256).
+   */
+  defaultEngineProfileId: string
   /** Named engine profiles for tab creation */
   engineProfiles: EngineProfile[]
-  /** Default tall mode per tab type */
+  /**
+   * Enterprise new-tab policy fetched from the engine at startup.
+   * null means no enterprise config is active.
+   * Not persisted to disk — always loaded fresh from the engine.
+   */
+  enterpriseNewConversationDefaults: NewConversationDefaultsPolicy | null
+  /** Default tall mode. One flag for every conversation tab (the engine-
+   *  specific default was collapsed away), plus a terminal-specific flag. */
   defaultTallConversation: boolean
   defaultTallTerminal: boolean
-  defaultTallEngine: boolean
   /** Auto-recover tabs that appear stuck (no engine events for a period) */
   tabRecoveryEnabled: boolean
   /** Idle threshold in seconds before a stuck tab is force-recovered */
@@ -190,11 +205,12 @@ export interface PreferencesState {
    * iOS-driven CLI tabs honor the action fully.
    */
   showImplementClearContext: boolean
+  /** Keyboard shortcut overrides (command id -> chord string). Only non-default entries stored. */
+  keyboardShortcuts: Record<string, string>
   /** OS-reported dark mode -- used when themeMode is 'system' */
   _systemIsDark: boolean
   setDefaultTallConversation: (enabled: boolean) => void
   setDefaultTallTerminal: (enabled: boolean) => void
-  setDefaultTallEngine: (enabled: boolean) => void
   setTabRecoveryEnabled: (enabled: boolean) => void
   setTabRecoveryTimeoutSec: (sec: number) => void
   setIsDark: (isDark: boolean) => void
@@ -222,6 +238,7 @@ export interface PreferencesState {
   setEditorWordWrap: (enabled: boolean) => void
   setEditorFontSize: (size: number) => void
   setConversationFontSize: (size: number) => void
+  setPreviewFontSize: (size: number) => void
   setGitOpsMode: (mode: GitOpsMode) => void
   setWorktreeCompletionStrategy: (strategy: WorktreeCompletionStrategy) => void
   setWorktreeBranchDefault: (repoPath: string, branch: string) => void
@@ -279,6 +296,9 @@ export interface PreferencesState {
   setRemoteDisplay: (customName: string | null, customIcon: string | null) => void
   setEngineDefaultModel: (model: string) => void
   setPreferredModel: (model: string) => void
+  setDefaultEngineProfileId: (profileId: string) => void
+  /** Load the enterprise new-tab policy from the engine and store it. Not persisted. */
+  setEnterpriseNewConversationDefaults: (policy: NewConversationDefaultsPolicy | null) => void
   addEngineProfile: (profile: EngineProfile) => void
   updateEngineProfile: (id: string, updates: Partial<EngineProfile>) => void
   removeEngineProfile: (id: string) => void
@@ -289,10 +309,16 @@ export interface PreferencesState {
   setGitWatcherIgnoredDirectories: (dirs: string[]) => void
   setExcludedResourceKinds: (kinds: string[]) => void
   setShowImplementClearContext: (enabled: boolean) => void
+  /** Set a single keyboard shortcut override (command id -> chord). Rejects invalid chords. */
+  setKeyboardShortcut: (commandId: string, chord: string) => void
+  /** Remove a single override, restoring the catalog default. */
+  resetKeyboardShortcut: (commandId: string) => void
+  /** Clear all overrides, restoring every command to its catalog default. */
+  resetAllKeyboardShortcuts: () => void
   /** Called by OS theme change listener -- updates system value */
   setSystemTheme: (isDark: boolean) => void
   /** Apply a settings preset (batch-set multiple fields at once) */
   applyPreset: (preset: Record<string, unknown>) => void
 }
 
-export const SETTINGS_DEFAULTS = { themeMode: 'dark' as ThemeMode, selectedTheme: 'ion-dark', soundEnabled: true, expandedUI: false, ultraWide: false, defaultBaseDirectory: '', recentBaseDirectories: [] as string[], directoryUsageCounts: {} as Record<string, number>, preferredOpenWith: 'cli' as 'cli' | 'vscode', defaultPermissionMode: 'plan' as 'auto' | 'plan', expandOnTabSwitch: true, bashCommandEntry: false, gitPanelSplitRatio: 0.4, gitPanelChangesOpen: true, gitPanelGraphOpen: true, expandToolResults: false, terminalFontFamily: 'Menlo, Monaco, monospace', terminalFontSize: 13, closeExplorerOnFileOpen: true, openMarkdownInPreview: true, editorWordWrap: true, editorFontSize: 12, conversationFontSize: 13, gitOpsMode: 'manual' as GitOpsMode, worktreeCompletionStrategy: 'merge-ff' as WorktreeCompletionStrategy, worktreeBranchDefaults: {} as Record<string, string>, worktreeSkipPrTitle: false, allowSettingsEdits: false, enableClaudeCompat: true, enableEarlyStopContinuation: false, showTodoList: true, agentPanelDefaultOpen: true, agentDetailPopup: true, unifiedTurnView: true, aiGeneratedTitles: true, hideOnExternalLaunch: true, keepExplorerOnCollapse: false, keepTerminalOnCollapse: false, keepGitPanelOnCollapse: false, tabGroupMode: 'off' as TabGroupMode, tabGroups: [] as TabGroup[], autoGroupOrder: [] as string[], stashedManualGroups: [] as TabGroup[], stashedManualTabAssignments: {} as Record<string, string>, inProgressGroupId: null as string | null, doneGroupId: null as string | null, planningGroupId: null as string | null, autoGroupMovement: false, commitCommand: '', gitChangesTreeView: false, quickTools: [] as QuickTool[], uiZoom: 1, remoteEnabled: false, relayUrl: '', relayApiKey: '', lanServerPort: 19837, pairedDevices: [] as RemotePairedDevice[], streamThinkingToRemote: true, thinkingEnabled: false, remoteDisplay: null as { customName: string | null; customIcon: string | null; updatedAt: number } | null, engineDefaultModel: '', engineProfiles: [] as EngineProfile[], preferredModel: 'claude-opus-4-6', defaultTallConversation: false, defaultTallTerminal: false, defaultTallEngine: false, tabRecoveryEnabled: true, tabRecoveryTimeoutSec: 120, planModelSplitEnabled: false, planModeModel: '', implementModeModel: '', showImplementClearContext: false, planModeAllowedBashCommands: ['gh'] as string[], gitWatcherIgnoredDirectories: ['~/.ion'] as string[], excludedResourceKinds: [] as string[] }
+export const SETTINGS_DEFAULTS = { themeMode: 'dark' as ThemeMode, selectedTheme: 'ion-dark', soundEnabled: true, expandedUI: false, ultraWide: false, defaultBaseDirectory: '', recentBaseDirectories: [] as string[], directoryUsageCounts: {} as Record<string, number>, preferredOpenWith: 'cli' as 'cli' | 'vscode', defaultPermissionMode: 'plan' as 'auto' | 'plan', expandOnTabSwitch: true, bashCommandEntry: false, gitPanelSplitRatio: 0.4, gitPanelChangesOpen: true, gitPanelGraphOpen: true, expandToolResults: false, terminalFontFamily: 'Menlo, Monaco, monospace', terminalFontSize: 13, closeExplorerOnFileOpen: true, openMarkdownInPreview: true, editorWordWrap: true, editorFontSize: 12, conversationFontSize: 13, previewFontSize: 13, gitOpsMode: 'manual' as GitOpsMode, worktreeCompletionStrategy: 'merge-ff' as WorktreeCompletionStrategy, worktreeBranchDefaults: {} as Record<string, string>, worktreeSkipPrTitle: false, allowSettingsEdits: false, enableClaudeCompat: true, enableEarlyStopContinuation: false, showTodoList: true, agentPanelDefaultOpen: true, agentDetailPopup: true, unifiedTurnView: true, aiGeneratedTitles: true, hideOnExternalLaunch: true, keepExplorerOnCollapse: false, keepTerminalOnCollapse: false, keepGitPanelOnCollapse: false, tabGroupMode: 'off' as TabGroupMode, tabGroups: [] as TabGroup[], autoGroupOrder: [] as string[], stashedManualGroups: [] as TabGroup[], stashedManualTabAssignments: {} as Record<string, string>, inProgressGroupId: null as string | null, doneGroupId: null as string | null, planningGroupId: null as string | null, autoGroupMovement: false, commitCommand: '', gitChangesTreeView: false, quickTools: [] as QuickTool[], uiZoom: 1, remoteEnabled: false, relayUrl: '', relayApiKey: '', lanServerPort: 19837, pairedDevices: [] as RemotePairedDevice[], streamThinkingToRemote: true, thinkingEnabled: false, remoteDisplay: null as { customName: string | null; customIcon: string | null; updatedAt: number } | null, engineDefaultModel: '', preferredModel: 'claude-opus-4-6', defaultEngineProfileId: '', engineProfiles: [] as EngineProfile[], defaultTallConversation: false, defaultTallTerminal: false, tabRecoveryEnabled: true, tabRecoveryTimeoutSec: 120, planModelSplitEnabled: false, planModeModel: '', implementModeModel: '', showImplementClearContext: false, planModeAllowedBashCommands: ['gh'] as string[], gitWatcherIgnoredDirectories: ['~/.ion'] as string[], excludedResourceKinds: [] as string[], keyboardShortcuts: {} as Record<string, string> }

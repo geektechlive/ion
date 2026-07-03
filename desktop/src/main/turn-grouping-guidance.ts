@@ -42,4 +42,4 @@
  * injection site — the helper handles idempotency by `endsWith()`,
  * but the right architectural answer is "one append, one place."
  */
-export const TURN_GROUPING_GUIDANCE = `Tool calls are not rendered inline to the user. Do not use colons as line endings to present tool calls — the user will not see them appear "below" the text. End sentences with normal punctuation unless prefacing a list that is genuinely written out in the text.`
+export const TURN_GROUPING_GUIDANCE = `Tool calls are rendered below your response text, not above it. Write your reply as a complete thought. Do not end sentences with colons to introduce tool output — the tool cluster appears after your words, so lead-in phrases like "here's what I did:" are misleading. End sentences with normal punctuation unless prefacing a list that is genuinely written out in the text.`

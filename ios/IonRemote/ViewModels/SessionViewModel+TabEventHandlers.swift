@@ -10,13 +10,11 @@ extension SessionViewModel {
         tabIdleSince.removeValue(forKey: tabId)
         tabs.removeAll { $0.id == tabId }
         tabIds.remove(tabId)
-        liveText.removeValue(forKey: tabId)
-        // Clean up all engine state for this tab
+        // Clean up all conversation/engine state for this tab. The single
+        // instance carries messages + liveText + workingMessage +
+        // thinkingMessageId, so removing it drops all of them.
         conversationInstances.removeValue(forKey: tabId)
         activeEngineInstance.removeValue(forKey: tabId)
-        for key in engineWorkingMessages.keys where key == tabId || key.hasPrefix("\(tabId):") {
-            engineWorkingMessages.removeValue(forKey: key)
-        }
         for key in engineDialogs.keys where key == tabId || key.hasPrefix("\(tabId):") {
             engineDialogs.removeValue(forKey: key)
         }
@@ -26,19 +24,18 @@ extension SessionViewModel {
         for key in activeTools.keys where key.hasPrefix("\(tabId):") || key == tabId {
             activeTools.removeValue(forKey: key)
         }
-        for key in thinkingInProgress.keys where key == tabId || key.hasPrefix("\(tabId):") {
-            thinkingInProgress.removeValue(forKey: key)
-        }
-        engineConversationLoaded = engineConversationLoaded.filter { $0 != tabId && !$0.hasPrefix("\(tabId):") }
+        conversationLoaded.remove(tabId)
+        loadingConversation.remove(tabId)
         // Drafts are local-only state — clean them up when the tab is closed
-        // (don't survive tab close; do survive disconnect / restart).
+        // (don't survive tab close; do survive disconnect / restart). One
+        // unified bare-tabId draft store covers plain and engine tabs.
         clearTabDraft(tabId)
-        clearEngineDrafts(forTab: tabId)
     }
 
     @MainActor
     func handleTabStatus(tabId: String, status: TabStatus) {
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
+            let previousStatus = tabs[idx].status
             tabs[idx].status = status
             if status == .running {
                 // A new task started — any previous ExitPlanMode/AskUserQuestion
@@ -50,11 +47,12 @@ extension SessionViewModel {
             if status == .idle || status == .completed || status == .failed || status == .dead {
                 // Capture preview from liveText before clearing — if tabStatus
                 // arrives before taskComplete, this preserves the lastMessage.
-                if let text = liveText[tabId], !text.isEmpty {
+                let text = liveText(tabId)
+                if !text.isEmpty {
                     tabs[idx].lastMessage = String(text.suffix(64))
                         .replacingOccurrences(of: "\n", with: " ")
                 }
-                liveText.removeValue(forKey: tabId)
+                clearLiveText(tabId: tabId)
                 // Preserve ExitPlanMode/AskUserQuestion entries -- desktop auto-allows
                 // these but iOS needs them for plan card UI and status indicators
                 tabs[idx].permissionQueue.removeAll {
@@ -65,6 +63,18 @@ extension SessionViewModel {
                 for key in activeTools.keys where key.hasPrefix("\(tabId):") {
                     activeTools.removeValue(forKey: key)
                 }
+            }
+            // One-shot post-run heal: when a tab transitions out of .running or
+            // .connecting into a terminal/idle state, the local transcript may
+            // have missed the final deltas (tool_end, last assistant text chunk).
+            // Fire a reconcile now that streaming has stopped; the fingerprint
+            // and debounce guards in maybeReconcileStaleConversation ensure this
+            // only triggers a reload if there is a real divergence, and at most
+            // once per reconcileDebounce window.
+            if (previousStatus == .running || previousStatus == .connecting)
+                && (status == .idle || status == .completed || status == .failed || status == .dead) {
+                DiagnosticLog.log("SNAP: post-run heal check tabId=\(tabId.prefix(16)) \(previousStatus.rawValue)->\(status.rawValue)")
+                maybeReconcileStaleConversation(tab: tabs[idx])
             }
         }
         // Track idle-since timestamp for sidebar display
@@ -79,9 +89,10 @@ extension SessionViewModel {
     func handleTaskComplete(tabId: String) {
         // Capture liveText before it's cleared — the relay sends assistant
         // output as text_chunk (which populates liveText) rather than
-        // engine_text_delta (which populates engineMessages), so liveText
-        // is the only reliable source for voice readback.
-        let capturedLiveText = liveText[tabId]
+        // engine_text_delta (which populates the instance messages), so
+        // liveText is the only reliable source for voice readback in that
+        // path.
+        let capturedLiveText = liveText(tabId)
 
         if let idx = tabs.firstIndex(where: { $0.id == tabId }) {
             tabs[idx].status = .completed
@@ -90,37 +101,34 @@ extension SessionViewModel {
                 $0.toolName != "ExitPlanMode" && $0.toolName != "AskUserQuestion"
             }
             // Capture final preview from accumulated live text before it's cleared
-            if let text = capturedLiveText, !text.isEmpty {
-                tabs[idx].lastMessage = String(text.suffix(64))
+            if !capturedLiveText.isEmpty {
+                tabs[idx].lastMessage = String(capturedLiveText.suffix(64))
                     .replacingOccurrences(of: "\n", with: " ")
             }
         }
-        liveText.removeValue(forKey: tabId)
+        clearLiveText(tabId: tabId)
         activeTools.removeValue(forKey: tabId)
         for key in activeTools.keys where key.hasPrefix("\(tabId):") {
             activeTools.removeValue(forKey: key)
         }
         tabIdleSince[tabId] = Date()
 
-        // TTS: try instance messages → conversation messages → liveText
+        // TTS: try the unified conversation messages → liveText. Both the
+        // engine_text_delta path and the message_added path now land in the
+        // single instance, so one read covers both; liveText is the
+        // text_chunk (relay) fallback.
         let convLoaded = conversationLoaded.contains(tabId)
-        let engineMsgCount = engineInstance(tabId: tabId, instanceId: activeEngineInstance[tabId])?.messages.count ?? -1
-        DiagnosticLog.log("VOICE-TTS: taskComplete tabId=\(tabId.prefix(8)) convLoaded=\(convLoaded) liveText=\(capturedLiveText?.count ?? -1) msgs=\(messages[tabId]?.count ?? -1) engineMsgs=\(engineMsgCount)")
+        let msgs = conversationMessages(tabId)
+        DiagnosticLog.log("VOICE-TTS: taskComplete tabId=\(tabId.prefix(8)) convLoaded=\(convLoaded) liveText=\(capturedLiveText.count) msgs=\(msgs.count)")
         let spokenInfo: (text: String, messageId: String?)? = {
-            // 1. instance.messages (engine_text_delta path) — no stable message ID
-            if let last = engineInstance(tabId: tabId, instanceId: activeEngineInstance[tabId])?.messages.last(where: { $0.role == .assistant }),
-               !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return (last.content, nil)
-            }
-            // 2. conversation messages (message_added path) — has stable ID
-            if let last = messages[tabId]?.last(where: { $0.role == .assistant }),
+            // 1. unified instance messages (engine_text_delta + message_added)
+            if let last = msgs.last(where: { $0.role == .assistant }),
                !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return (last.content, last.id)
             }
-            // 3. liveText (text_chunk path — captured before clear) — no ID
-            if let text = capturedLiveText,
-               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return (text, nil)
+            // 2. liveText (text_chunk path — captured before clear) — no ID
+            if !capturedLiveText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (capturedLiveText, nil)
             }
             return nil
         }()

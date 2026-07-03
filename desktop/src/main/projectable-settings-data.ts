@@ -210,6 +210,21 @@ export const PROJECTABLE_SETTINGS_DATA: readonly ProjectableSetting[] = [
     description: 'Command prefixes allowed in plan mode (e.g. "gh", "git log", "git diff"). Token-based prefix matching: "gh" matches "gh pr view" but not "ghost". Empty disables Bash entirely in plan mode.',
     defaultValue: ['gh'],
   },
+  {
+    // Default engine profile selection (Phase 3 foundation, #256).
+    // Empty string = plain conversation (no extension loaded).
+    // A non-empty value is an EngineProfile.id; the desktop falls back to
+    // plain if the profile no longer exists. The Phase 3 UI control
+    // (a profile picker in the Settings dialog AI category) is not built
+    // yet — this entry projects the preference to iOS so the iOS picker
+    // can set it before the desktop UI ships.
+    key: 'defaultEngineProfileId',
+    type: 'string',
+    group: 'ai',
+    label: 'Default engine profile',
+    description: 'Engine profile used when opening a new tab. Leave empty for a plain conversation (no extension). Set to a profile ID to always open with that extension loaded.',
+    defaultValue: '',
+  },
 
   // ═══════════════════════════════════════════════════════════════════
   // APPEARANCE
@@ -276,14 +291,6 @@ export const PROJECTABLE_SETTINGS_DATA: readonly ProjectableSetting[] = [
     group: 'appearance',
     label: 'Tall terminal tabs by default',
     description: 'Open terminal tabs in tall mode.',
-    defaultValue: false,
-  },
-  {
-    key: 'defaultTallEngine',
-    type: 'boolean',
-    group: 'appearance',
-    label: 'Tall engine tabs by default',
-    description: 'Open engine tabs in tall mode.',
     defaultValue: false,
   },
   {
@@ -513,6 +520,29 @@ export const PROJECTABLE_SETTINGS_DATA: readonly ProjectableSetting[] = [
     group: 'notifications',
     label: 'Hidden notification kinds',
     description: 'Resource kinds to hide from the global notification tray (e.g. "desktop.focus"). The desktop still receives every kind; this only filters what the tray shows. Conversation-scoped resources are never affected. Empty shows all kinds.',
+    defaultValue: [],
+  },
+
+  // ═══════════════════════════════════════════════════════════════════
+  // KEYBOARD SHORTCUTS
+  // ───────────────────────────────────────────────────────────────────
+  // User/enterprise keyboard-shortcut overrides. Only non-default
+  // bindings are stored. Grouped under 'advanced' because iOS has no
+  // desktop-chord editing surface — the key is validated and recognized
+  // but is NOT added to PROJECTABLE_GROUP_ORDER, so it is not projected
+  // to iOS. The allowlist entry ensures `isProjectableKey` returns true
+  // and `validateSettingValue` can accept/reject values, enabling
+  // enterprise deployment via settings.json without crashing the
+  // validator. `projectableKeysWithoutDefault()` stays green because
+  // `keyboardShortcuts: {}` is in RENDERER_SETTINGS_DEFAULTS.
+  // ═══════════════════════════════════════════════════════════════════
+  {
+    key: 'keyboardShortcuts',
+    type: 'list',
+    itemType: 'string',
+    group: 'advanced',
+    label: 'Keyboard shortcut overrides',
+    description: 'Custom keyboard bindings (command id → chord). Only non-default entries are stored. Edit via Settings → Keyboard or directly in ~/.ion/settings.json.',
     defaultValue: [],
   },
 ]

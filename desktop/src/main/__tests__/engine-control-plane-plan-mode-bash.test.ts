@@ -138,6 +138,7 @@ describe('EngineControlPlane — setPermissionMode plan-mode bash allowlist proj
       undefined,
       'test-source',
       ['gh'],
+      undefined,
     )
   })
 
@@ -162,6 +163,7 @@ describe('EngineControlPlane — setPermissionMode plan-mode bash allowlist proj
       undefined,
       'test-source',
       [],
+      undefined,
     )
   })
 
@@ -182,6 +184,7 @@ describe('EngineControlPlane — setPermissionMode plan-mode bash allowlist proj
       true,
       undefined,
       'test-source',
+      undefined,
       undefined,
     )
   })
@@ -209,6 +212,7 @@ describe('EngineControlPlane — setPermissionMode plan-mode bash allowlist proj
       true,
       undefined,
       'test-source',
+      undefined,
       undefined,
     )
 
@@ -238,7 +242,73 @@ describe('EngineControlPlane — setPermissionMode plan-mode bash allowlist proj
       undefined,
       'test-source',
       undefined,
+      undefined,
     )
     expect(mocks.readSettings).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// planFilePath restore-on-toggle (plan-file continuity)
+// ---------------------------------------------------------------------------
+//
+// When entering plan mode, setPermissionMode must forward the supplied
+// planFilePath as the SIXTH sendSetPlanMode argument so the engine restores
+// plan-file continuity (re-adopting an existing on-disk plan after a session
+// replacement) instead of allocating a fresh slug. On 'auto' the path is
+// dropped — the engine ignores it on disable, and forwarding it would be
+// misleading. These tests would go red if setPermissionMode dropped the arg.
+
+describe('EngineControlPlane — setPermissionMode forwards planFilePath on plan-enter', () => {
+  let cp: EngineControlPlane
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    uuidCounter = 0
+    mocks.readSettings.mockReset().mockReturnValue({})
+    mockBridge.startSession.mockResolvedValue({ ok: true })
+    cp = new EngineControlPlane(new (EngineBridge as any)())
+  })
+
+  it('forwards planFilePath as the 6th arg when entering plan mode', () => {
+    const tabId = cp.createTab()
+    cp.setPermissionMode(tabId, 'plan', 'ui_dropdown', '/Users/x/.ion/plans/simple-sailing-pine.md')
+
+    expect(mockBridge.sendSetPlanMode).toHaveBeenLastCalledWith(
+      tabId,
+      true,
+      undefined,
+      'ui_dropdown',
+      undefined,
+      '/Users/x/.ion/plans/simple-sailing-pine.md',
+    )
+  })
+
+  it('drops planFilePath when switching to auto (engine ignores it on disable)', () => {
+    const tabId = cp.createTab()
+    cp.setPermissionMode(tabId, 'auto', 'ui_dropdown', '/Users/x/.ion/plans/simple-sailing-pine.md')
+
+    expect(mockBridge.sendSetPlanMode).toHaveBeenLastCalledWith(
+      tabId,
+      false,
+      undefined,
+      'ui_dropdown',
+      undefined,
+      undefined,
+    )
+  })
+
+  it('forwards undefined planFilePath when none is supplied (the common case)', () => {
+    const tabId = cp.createTab()
+    cp.setPermissionMode(tabId, 'plan', 'ui_dropdown')
+
+    expect(mockBridge.sendSetPlanMode).toHaveBeenLastCalledWith(
+      tabId,
+      true,
+      undefined,
+      'ui_dropdown',
+      undefined,
+      undefined,
+    )
   })
 })

@@ -72,7 +72,7 @@ export function AttachmentsButton() {
       const tab = s.tabs.find((t) => t.id === s.activeTabId)
       // Messages and plan state now live on the active `ConversationInstance`
       // for every tab type (normal tabs carry a single `main` instance), so
-      // there is no longer a `tab.hasEngineExtension` fork — `activeInstance` resolves
+      // there is no longer a tab-type fork — `activeInstance` resolves
       // the right instance uniformly.
       const inst = tab ? activeInstance(s.conversationPanes, tab.id) : null
       const msgs: MsgLike[] = (inst?.messages ?? []) as MsgLike[]

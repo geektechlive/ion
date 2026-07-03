@@ -51,6 +51,22 @@ func (m *Manager) dispatchCommand(s *engineSession, key, command, args string) {
 		cmds := s.extGroup.Commands()
 		if cmd, exists := cmds[command]; exists {
 			utils.Log("Session", fmt.Sprintf("SendCommand: dispatching extension command key=%s command=%s argsLen=%d", key, command, len(args)))
+			// Stash the raw slash invocation so that if the handler calls
+			// ctx.sendPrompt(expandedBody), SendPrompt can attach the slash
+			// provenance to the persisted user turn. This is consumed (cleared)
+			// on the next SendPrompt call. Without this, extension-command-
+			// resolved slashes persist the expanded body as plain content with
+			// no slash metadata, and consumers have no dispatch label to surface after
+			// a history reload. Written under the manager lock because
+			// SendPrompt reads it under the same lock from a different goroutine
+			// (the ext/send_prompt RPC handler goroutine).
+			m.mu.Lock()
+			s.pendingSlashInvocation = &conversation.SlashInvocation{
+				Command: "/" + command,
+				Args:    args,
+				Source:  "extension",
+			}
+			m.mu.Unlock()
 			ctx := m.newExtContext(s, key)
 			err := cmd.Execute(args, ctx)
 			m.emitCommandResult(key, command, err)

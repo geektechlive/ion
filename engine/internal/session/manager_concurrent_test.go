@@ -419,11 +419,11 @@ func TestSetPlanMode_Toggle(t *testing.T) {
 	_, _ = mgr.StartSession("toggle", defaultConfig())
 
 	// Enable
-	mgr.SetPlanMode("toggle", true, []string{"Read"}, "")
+	mgr.SetPlanMode("toggle", true, []string{"Read"}, "", "")
 	// Disable
-	mgr.SetPlanMode("toggle", false, nil, "")
+	mgr.SetPlanMode("toggle", false, nil, "", "")
 	// Re-enable with different tools
-	mgr.SetPlanMode("toggle", true, []string{"Grep", "Glob", "Read"}, "")
+	mgr.SetPlanMode("toggle", true, []string{"Grep", "Glob", "Read"}, "", "")
 
 	_ = mgr.SendPrompt("toggle", "go", nil)
 

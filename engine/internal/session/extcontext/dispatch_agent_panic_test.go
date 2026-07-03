@@ -18,13 +18,13 @@ import (
 // UpdateAgentStateByID closures and EmitAgentSnapshot reasons so the
 // test can assert the synthesized terminal transition happens.
 type panicTestAccessor struct {
-	mu                    sync.Mutex
-	extGroup              *extension.ExtensionGroup
-	updatedAgentID        string
-	updaterCalled         bool
-	finalState            types.AgentStateUpdate
-	snapshotReasons       []string
-	emittedEvents         []types.EngineEvent
+	mu              sync.Mutex
+	extGroup        *extension.ExtensionGroup
+	updatedAgentID  string
+	updaterCalled   bool
+	finalState      types.AgentStateUpdate
+	snapshotReasons []string
+	emittedEvents   []types.EngineEvent
 }
 
 func (p *panicTestAccessor) SessionKey() string       { return "panic-test-session" }
@@ -35,9 +35,10 @@ func (p *panicTestAccessor) Emit(ev types.EngineEvent) {
 	defer p.mu.Unlock()
 	p.emittedEvents = append(p.emittedEvents, ev)
 }
-func (p *panicTestAccessor) SendAbort() {}
-func (p *panicTestAccessor) RootContext() context.Context { return context.Background() }
+func (p *panicTestAccessor) SendAbort()                               {}
+func (p *panicTestAccessor) RootContext() context.Context             { return context.Background() }
 func (p *panicTestAccessor) SendPrompt(_, _ string, _ []string) error { return nil }
+func (p *panicTestAccessor) SteerSelfMainLoop(_ string) bool          { return false }
 func (p *panicTestAccessor) Elicit(_ extension.ElicitationRequestInfo) (map[string]interface{}, bool, error) {
 	return nil, false, nil
 }
@@ -50,20 +51,22 @@ func (p *panicTestAccessor) DeregisterAgentSpec(_ string)                   {}
 func (p *panicTestAccessor) LookupAgentSpec(_ string) (types.AgentSpec, bool) {
 	return types.AgentSpec{}, false
 }
-func (p *panicTestAccessor) LookupExtDisplayName(_ string) string        { return "" }
-func (p *panicTestAccessor) ExtGroup() *extension.ExtensionGroup         { return p.extGroup }
-func (p *panicTestAccessor) ExtConfig() *extension.ExtensionConfig       { return nil }
-func (p *panicTestAccessor) ProcRegistry() *extension.ProcessRegistry    { return nil }
-func (p *panicTestAccessor) NewChildBackend() backend.RunBackend         { return nil }
-func (p *panicTestAccessor) EngineConfig() *types.EngineRuntimeConfig    { return nil }
-func (p *panicTestAccessor) ResolveTier(_ string) string                 { return "" }
+func (p *panicTestAccessor) LookupExtDisplayName(_ string) string     { return "" }
+func (p *panicTestAccessor) ExtGroup() *extension.ExtensionGroup      { return p.extGroup }
+func (p *panicTestAccessor) ExtConfig() *extension.ExtensionConfig    { return nil }
+func (p *panicTestAccessor) ProcRegistry() *extension.ProcessRegistry { return nil }
+func (p *panicTestAccessor) NewChildBackend() backend.RunBackend      { return nil }
+func (p *panicTestAccessor) BumpParentProgress()                      {}
+func (p *panicTestAccessor) EmitDispatchCountStatus(_ string)         {}
+func (p *panicTestAccessor) EngineConfig() *types.EngineRuntimeConfig { return nil }
+func (p *panicTestAccessor) ResolveTier(_ string) string              { return "" }
 func (p *panicTestAccessor) PermissionCheck(_ string, _ map[string]interface{}) (string, string) {
 	return "", ""
 }
-func (p *panicTestAccessor) McpConnections() []*mcp.Connection             { return nil }
+func (p *panicTestAccessor) McpConnections() []*mcp.Connection                      { return nil }
 func (p *panicTestAccessor) SearchHistory(_ string, _ int) []extension.HistoryMatch { return nil }
-func (p *panicTestAccessor) GetSessionMemory() string                              { return "" }
-func (p *panicTestAccessor) SetSessionMemory(_ string)                             {}
+func (p *panicTestAccessor) GetSessionMemory() string                               { return "" }
+func (p *panicTestAccessor) SetSessionMemory(_ string)                              {}
 func (p *panicTestAccessor) TranslateEvent(_ types.NormalizedEvent, _ int) types.EngineEvent {
 	return types.EngineEvent{}
 }
@@ -88,10 +91,10 @@ func (p *panicTestAccessor) EmitAgentSnapshot(reason string) {
 	defer p.mu.Unlock()
 	p.snapshotReasons = append(p.snapshotReasons, reason)
 }
-func (p *panicTestAccessor) ResourceBroker() *resource.Broker        { return nil }
-func (p *panicTestAccessor) GlobalResourceBroker() *resource.Broker  { return nil }
-func (p *panicTestAccessor) BroadcastNotification(_ types.NotifyOpts) {}
-func (p *panicTestAccessor) BroadcastIntercept(_ extension.InterceptOpts) {}
+func (p *panicTestAccessor) ResourceBroker() *resource.Broker              { return nil }
+func (p *panicTestAccessor) GlobalResourceBroker() *resource.Broker        { return nil }
+func (p *panicTestAccessor) BroadcastNotification(_ types.NotifyOpts)      {}
+func (p *panicTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)  {}
 func (p *panicTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
 func (p *panicTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil
@@ -111,15 +114,15 @@ func (p *panicTestAccessor) RunOnceComplete(_ string, _ bool)              {}
 // recoverBackgroundDispatchPanic must produce the same five-step
 // terminal sequence that runChild's normal-error branch does:
 //
-//   1. utils.Error log with the panic message and stack trace
-//   2. UpdateAgentStateByID transitions the agent to "error" with
-//      a lastWork message that surfaces the panic in the agent panel
-//   3. EmitAgentSnapshot fires so consumers see the terminal status
-//   4. agent_end fires on the parent extension group (skipped here
-//      because the test accessor has no real ExtGroup; the in-tree
-//      code path is exercised when ExtGroup is non-nil)
-//   5. engine_dispatch_end fires on the parent session
-//   6. Registry deregisters the agent name
+//  1. utils.Error log with the panic message and stack trace
+//  2. UpdateAgentStateByID transitions the agent to "error" with
+//     a lastWork message that surfaces the panic in the agent panel
+//  3. EmitAgentSnapshot fires so consumers see the terminal status
+//  4. agent_end fires on the parent extension group (skipped here
+//     because the test accessor has no real ExtGroup; the in-tree
+//     code path is exercised when ExtGroup is non-nil)
+//  5. engine_dispatch_end fires on the parent session
+//  6. Registry deregisters the agent name
 //
 // This test focuses on the SessionAccessor-observable transitions
 // (steps 2, 3, 5) plus the registry deregister (step 6). The
@@ -132,11 +135,14 @@ func TestRecoverBackgroundDispatchPanic_SynthesizesTerminalState(t *testing.T) {
 
 	// Register the agent first so deregister has something to remove.
 	// In production this happens at the top of the background dispatch
-	// branch before the goroutine is launched.
-	registry.Register("test-agent",
+	// branch before the goroutine is launched. Use RegisterWithID so the
+	// key matches the agentID that recoverBackgroundDispatchPanic will
+	// pass to Deregister.
+	registry.RegisterWithID("agent-id-xyz", "test-agent",
 		func() {},
 		nil, // child backend not exercised on the panic path
 		"panic-test-session",
+		"", 0, // parentID, depth
 	)
 	if _, ok := registry.ActiveNames()["test-agent"]; !ok {
 		t.Fatal("precondition: registry should have the test agent registered")
@@ -160,6 +166,8 @@ func TestRecoverBackgroundDispatchPanic_SynthesizesTerminalState(t *testing.T) {
 		"agent-id-xyz",
 		"test-agent",
 		"synthetic panic value for test",
+		0,  // childDepth
+		"", // parentDispatchId
 	)
 
 	sa.mu.Lock()
@@ -262,12 +270,14 @@ func TestBackgroundDispatchAgentEndAlwaysFires(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sa := &panicTestAccessor{}
 			registry := NewDispatchRegistry()
-			registry.Register("agent-"+tc.name, func() {}, nil, "k")
+			agentID := "dispatch-id-" + tc.name
+			registry.RegisterWithID(agentID, "agent-"+tc.name, func() {}, nil, "k", "", 0)
 
 			recoverBackgroundDispatchPanic(
 				sa, registry,
 				extension.DispatchAgentOpts{Name: "agent-" + tc.name, Task: "t"},
-				"k", "id", "agent-"+tc.name, tc.panicValue,
+				"k", agentID, "agent-"+tc.name, tc.panicValue,
+				0, "", // childDepth, parentDispatchId
 			)
 
 			sa.mu.Lock()

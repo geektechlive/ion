@@ -1,3 +1,4 @@
+// @file-size-exception: contract sync test suite — each shared type needs its own decode + field-set test
 import XCTest
 @testable import IonRemote
 
@@ -390,6 +391,48 @@ final class ContractSyncTests: XCTestCase {
         }
     }
 
+    func testEngineDispatchActivityDecode() throws {
+        // tool_start (with dispatchActivityTs — the full wire shape)
+        let startJSON = """
+        {"type":"desktop_dispatch_activity","tabId":"t1","instanceId":"i1","dispatchAgentId":"dispatch-dev-1","dispatchConversationId":"child-conv","dispatchActivityKind":"tool_start","dispatchSeq":1,"toolName":"Read","toolId":"tool-1","dispatchActivityTs":1782088921498}
+        """.data(using: .utf8)!
+        let startEvent = try decoder.decode(RemoteEvent.self, from: startJSON)
+        guard case .engineDispatchActivity(_, _, let agentId, let convId, let kind, let seq, let toolName, let toolId, _, _, let ts) = startEvent else {
+            return XCTFail("Expected engineDispatchActivity (tool_start)")
+        }
+        XCTAssertEqual(agentId, "dispatch-dev-1")
+        XCTAssertEqual(convId, "child-conv")
+        XCTAssertEqual(kind, "tool_start")
+        XCTAssertEqual(seq, 1)
+        XCTAssertEqual(toolName, "Read")
+        XCTAssertEqual(toolId, "tool-1")
+        XCTAssertEqual(ts, 1782088921498)
+
+        // text delta
+        let textJSON = """
+        {"type":"desktop_dispatch_activity","tabId":"t1","dispatchAgentId":"a","dispatchConversationId":"c","dispatchActivityKind":"text","dispatchSeq":2,"dispatchTextDelta":"hello"}
+        """.data(using: .utf8)!
+        let textEvent = try decoder.decode(RemoteEvent.self, from: textJSON)
+        guard case .engineDispatchActivity(_, _, _, _, let tkind, _, _, _, let textDelta, _, let textTs) = textEvent else {
+            return XCTFail("Expected engineDispatchActivity (text)")
+        }
+        XCTAssertEqual(tkind, "text")
+        XCTAssertEqual(textDelta, "hello")
+        // Absent dispatchActivityTs decodes as nil (tolerant mirror).
+        XCTAssertNil(textTs)
+
+        // tool_end with error
+        let endJSON = """
+        {"type":"desktop_dispatch_activity","tabId":"t1","dispatchAgentId":"a","dispatchConversationId":"c","dispatchActivityKind":"tool_end","dispatchSeq":3,"toolId":"tool-1","dispatchToolIsError":true}
+        """.data(using: .utf8)!
+        let endEvent = try decoder.decode(RemoteEvent.self, from: endJSON)
+        guard case .engineDispatchActivity(_, _, _, _, let ekind, _, _, _, _, let isError, _) = endEvent else {
+            return XCTFail("Expected engineDispatchActivity (tool_end)")
+        }
+        XCTAssertEqual(ekind, "tool_end")
+        XCTAssertTrue(isError)
+    }
+
     func testEngineMessageEndDecode() throws {
         let json = """
         {"type":"desktop_message_end","tabId":"t1","usage":{"inputTokens":100,"outputTokens":50,"contextPercent":30,"cost":0.01}}
@@ -503,6 +546,7 @@ final class ContractSyncTests: XCTestCase {
             "supportsCaching", "supportsThinking", "supportsImages",
             "thinkingMode", "thinkingEfforts",
             "isCustom",
+            "tokenizer", // engine field; iOS does not consume it (thin client)
         ]
         let goSet = Set(goFields)
         let unhandled = goSet.subtracting(swiftHandled)
@@ -541,6 +585,64 @@ final class ContractSyncTests: XCTestCase {
         XCTAssert(
             unhandled.isEmpty,
             "Go ProviderEntry has fields not tracked in Swift test: \(unhandled.sorted())"
+        )
+    }
+
+    // MARK: - EngineEvent dispatch field coverage
+
+    /// Pins that dispatchId and dispatchConversationId are present in the Go
+    /// EngineEvent manifest and that the Swift decoder handles them on
+    /// engineDispatchStart / engineDispatchEnd. Any future Go field added to
+    /// dispatch events that Swift doesn't decode will surface here.
+    func testEngineDispatchFieldsInManifest() throws {
+        let manifest = try loadManifest()
+        let goEventFields = Set(manifest.engineEvent)
+
+        // Fields consumed by engineDispatchStart / engineDispatchEnd on iOS.
+        let swiftConsumed: Set<String> = [
+            "dispatchId",
+            "dispatchConversationId",
+            "dispatchAgent",
+            "dispatchSessionId",
+            "dispatchModel",
+            "dispatchTask",
+            "dispatchDepth",
+            "dispatchParentId",
+            "dispatchExitCode",
+            "dispatchElapsed",
+        ]
+
+        let missingFromGo = swiftConsumed.subtracting(goEventFields)
+        XCTAssert(
+            missingFromGo.isEmpty,
+            "EngineEvent manifest is missing dispatch fields consumed by iOS: \(missingFromGo.sorted())"
+        )
+    }
+
+    // MARK: - context_breakdown normalized-event field coverage
+
+    /// Pins that every field the Go engine declares on the context_breakdown
+    /// normalized event is mirrored by the Swift ContextBreakdownPayload. The
+    /// cacheReadTokens / cacheCreationTokens fields were added in the
+    /// minty-grinning-cocoa plan (C7); this guards against future Go-side
+    /// additions the Swift wire type doesn't handle.
+    func testContextBreakdownNormalizedEventFields() throws {
+        let manifest = try loadManifest()
+        guard let goFields = manifest.normalizedEvents["context_breakdown"] ?? nil else {
+            XCTFail("context_breakdown not found in Go normalizedEvents manifest")
+            return
+        }
+
+        // Fields decoded by ContextBreakdownPayload / ContextBreakdownCategory on iOS.
+        let swiftHandled: Set<String> = [
+            "aggregateCostUsd", "apiReportedTotal", "cacheCreationTokens", "cacheReadTokens",
+            "categories", "contextWindow", "model", "totalTokens", "unaccounted",
+        ]
+        let goSet = Set(goFields)
+        let unhandled = goSet.subtracting(swiftHandled)
+        XCTAssert(
+            unhandled.isEmpty,
+            "Go context_breakdown has fields not tracked in Swift test: \(unhandled.sorted())"
         )
     }
 

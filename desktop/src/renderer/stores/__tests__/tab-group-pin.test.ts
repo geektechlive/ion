@@ -43,7 +43,6 @@ vi.mock('../session-store-helpers', () => ({
     workingDirectory: '~',
     hasChosenDirectory: false,
     additionalDirs: [],
-    permissionMode: 'auto' as const,
     bashResults: [],
     bashExecuting: false,
     bashExecId: null,
@@ -60,11 +59,11 @@ vi.mock('../session-store-helpers', () => ({
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
   })),
   initialModelOverride: vi.fn(() => null),
+  initialPermissionMode: vi.fn(() => 'auto' as const),
   nextMsgId: vi.fn(() => `msg-${Math.random()}`),
   playNotificationIfHidden: vi.fn(async () => {}),
   cancelDoneGroupMove: vi.fn(() => false),
@@ -150,7 +149,6 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     workingDirectory: '/home/test',
     hasChosenDirectory: true,
     additionalDirs: [],
-    permissionMode: 'plan',
     bashResults: [],
     bashExecuting: false,
     bashExecId: null,
@@ -167,14 +165,13 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
     ...overrides,
   }
 }
 
-function buildHarness(initialTab: TabState) {
+function buildHarness(initialTab: TabState, instanceMode: 'auto' | 'plan' = 'plan') {
   const state: any = {
     tabs: [initialTab],
     activeTabId: initialTab.id,
@@ -195,7 +192,7 @@ function buildHarness(initialTab: TabState) {
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    conversationPanes: seedMainPane(initialTab.id, { permissionMode: initialTab.permissionMode }),
+    conversationPanes: seedMainPane(initialTab.id, { permissionMode: instanceMode }),
     engineModelFallbacks: new Map(),
     fileExplorerOpenDirs: new Set(),
     fileEditorOpenDirs: new Set(),
@@ -235,37 +232,37 @@ describe('auto-move suppression when groupPinned = true', () => {
 
   describe('sendMessage', () => {
     it('moves tab to planning group when groupPinned = false and mode = plan', () => {
-      const tab = makeTab({ permissionMode: 'plan', groupPinned: false })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: false })
+      const { state, moveTabToGroup } = buildHarness(tab, 'plan')
 
-      state.sendMessage('hello', '/home/test')
+      state.submit('tab-1', 'hello', { projectPath: '/home/test' })
 
       expect(moveTabToGroup).toHaveBeenCalledWith('tab-1', PLANNING_GROUP)
     })
 
     it('does NOT move tab when groupPinned = true and mode = plan', () => {
-      const tab = makeTab({ permissionMode: 'plan', groupPinned: true })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: true })
+      const { state, moveTabToGroup } = buildHarness(tab, 'plan')
 
-      state.sendMessage('hello', '/home/test')
+      state.submit('tab-1', 'hello', { projectPath: '/home/test' })
 
       expect(moveTabToGroup).not.toHaveBeenCalled()
     })
 
     it('moves tab to in-progress group when groupPinned = false and mode = auto', () => {
-      const tab = makeTab({ permissionMode: 'auto', groupPinned: false })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: false })
+      const { state, moveTabToGroup } = buildHarness(tab, 'auto')
 
-      state.sendMessage('hello', '/home/test')
+      state.submit('tab-1', 'hello', { projectPath: '/home/test' })
 
       expect(moveTabToGroup).toHaveBeenCalledWith('tab-1', INPROGRESS_GROUP)
     })
 
     it('does NOT move tab when groupPinned = true and mode = auto', () => {
-      const tab = makeTab({ permissionMode: 'auto', groupPinned: true })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: true })
+      const { state, moveTabToGroup } = buildHarness(tab, 'auto')
 
-      state.sendMessage('hello', '/home/test')
+      state.submit('tab-1', 'hello', { projectPath: '/home/test' })
 
       expect(moveTabToGroup).not.toHaveBeenCalled()
     })
@@ -273,8 +270,8 @@ describe('auto-move suppression when groupPinned = true', () => {
 
   describe('submitRemotePrompt', () => {
     it('moves tab to planning group when groupPinned = false and mode = plan', () => {
-      const tab = makeTab({ permissionMode: 'plan', groupPinned: false })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: false })
+      const { state, moveTabToGroup } = buildHarness(tab, 'plan')
 
       state.submitRemotePrompt('tab-1', 'hello')
 
@@ -282,8 +279,8 @@ describe('auto-move suppression when groupPinned = true', () => {
     })
 
     it('does NOT move tab when groupPinned = true and mode = plan', () => {
-      const tab = makeTab({ permissionMode: 'plan', groupPinned: true })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: true })
+      const { state, moveTabToGroup } = buildHarness(tab, 'plan')
 
       state.submitRemotePrompt('tab-1', 'hello')
 
@@ -291,8 +288,8 @@ describe('auto-move suppression when groupPinned = true', () => {
     })
 
     it('moves tab to in-progress group when groupPinned = false and mode = auto', () => {
-      const tab = makeTab({ permissionMode: 'auto', groupPinned: false })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: false })
+      const { state, moveTabToGroup } = buildHarness(tab, 'auto')
 
       state.submitRemotePrompt('tab-1', 'hello')
 
@@ -300,8 +297,8 @@ describe('auto-move suppression when groupPinned = true', () => {
     })
 
     it('does NOT move tab when groupPinned = true and mode = auto', () => {
-      const tab = makeTab({ permissionMode: 'auto', groupPinned: true })
-      const { state, moveTabToGroup } = buildHarness(tab)
+      const tab = makeTab({ groupPinned: true })
+      const { state, moveTabToGroup } = buildHarness(tab, 'auto')
 
       state.submitRemotePrompt('tab-1', 'hello')
 
@@ -399,11 +396,11 @@ describe('moveTabToGroupAndPin', () => {
     // pinning, sendMessage would normally move it. After moveTabToGroupAndPin,
     // it should already be pinned and the send-slice should skip the move.
     const tab = makeTab({
-      permissionMode: 'plan',
       groupId: INTERMEDIATE_GROUP,
       groupPinned: false,
     })
-    const { state, moveTabToGroup } = buildHarness(tab)
+    // permissionMode lives on the instance (WI-002) — pass as second arg
+    const { state, moveTabToGroup } = buildHarness(tab, 'plan')
 
     // Pin it into the planning group.
     state.moveTabToGroupAndPin('tab-1', PLANNING_GROUP)
@@ -413,7 +410,7 @@ describe('moveTabToGroupAndPin', () => {
     // behaviour from this point onward.
     moveTabToGroup.mockClear()
 
-    state.sendMessage('hello', '/home/test')
+    state.submit('tab-1', 'hello', { projectPath: '/home/test' })
 
     expect(moveTabToGroup).not.toHaveBeenCalled()
     expect(state.tabs[0].groupId).toBe(PLANNING_GROUP)
@@ -446,8 +443,11 @@ describe('createTabInDirectory with pinToGroupId', () => {
     // Round out the window stub with the APIs createTabInDirectory touches.
     // window.ion.createTab returns a tabId; gitIsRepo is called only when
     // useWorktree is true (we set it false), but mock it defensively.
+    // ensureEngineSession is called by createConversationTab to warm the
+    // engine session for the new tab.
     ;(globalThis as any).window.ion.createTab = vi.fn(async () => ({ tabId: 'new-tab-id' }))
     ;(globalThis as any).window.ion.gitIsRepo = vi.fn(async () => ({ isRepo: false }))
+    ;(globalThis as any).window.ion.ensureEngineSession = vi.fn(async () => undefined)
   })
 
   it('places the new tab into pinToGroupId with groupPinned=true', async () => {
@@ -479,15 +479,19 @@ describe('createTabInDirectory with pinToGroupId', () => {
     const { state, moveTabToGroup } = buildHarness(tab)
 
     const newId = await state.createTabInDirectory('/home/test/proj', false, true, PLANNING_GROUP)
-    // Switch the new tab to plan mode (matches the default for fresh tabs in
-    // production but our mock makeLocalTab sets it to 'auto').
-    state.tabs = state.tabs.map((t: TabState) =>
-      t.id === newId ? { ...t, permissionMode: 'plan' as const } : t
-    )
+    // Switch the new tab to plan mode via the instance (WI-002 — permissionMode
+    // lives on the conversation instance, not the TabState).
+    const pane = state.conversationPanes.get(newId)
+    if (pane && pane.instances.length > 0) {
+      const updatedInstances = pane.instances.map((i: any) => ({ ...i, permissionMode: 'plan' }))
+      const updatedPanes = new Map(state.conversationPanes)
+      updatedPanes.set(newId, { ...pane, instances: updatedInstances })
+      state.conversationPanes = updatedPanes
+    }
     state.activeTabId = newId
     moveTabToGroup.mockClear()
 
-    state.sendMessage('hello', '/home/test/proj')
+    state.submit(newId, 'hello', { projectPath: '/home/test/proj' })
 
     expect(moveTabToGroup).not.toHaveBeenCalled()
     const created = state.tabs.find((t: TabState) => t.id === newId)

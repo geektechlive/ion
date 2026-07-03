@@ -141,8 +141,24 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 
 	requestID := fmt.Sprintf("%s-%d", key, time.Now().UnixMilli())
 	s.requestID = requestID
+	// Bind runID -> key for event routing, independent of the transient
+	// s.requestID (which currentSessionStatus may clear mid-run). Held under
+	// m.mu here, same as the s.requestID assignment above. Cleared at the
+	// terminal points: handleRunExit and the early-abort paths below.
+	m.bindRunLocked(requestID, key)
 	s.cliTurnNumber = 0
 	s.cliTurnActive = false
+
+	// Re-arm the session cancellation root if a prior abort (SendAbort) or a
+	// stalled-run cancellation left it cancelled. Done under the manager lock,
+	// at the new-run seam, BEFORE opts.ParentCtx = s.rootContext() below — so
+	// this run derives from a LIVE root instead of a dead one. Without this a
+	// session that was ever aborted is wedged: every subsequent run would be
+	// born cancelled and exit instantly with signal=cancelled, recoverable only
+	// by restarting the engine. The busy-guard above (s.requestID != "") means
+	// no run is in flight here, so re-creating the root cannot orphan a live
+	// descendant. No-op when the root is still live. See session_root_context.go.
+	s.rearmRootContextIfCancelled()
 
 	if s.planMode && s.planFilePath == "" {
 		// Try to restore a persisted plan file path from the client
@@ -192,11 +208,33 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	// handled here — those route through SendCommand; this path owns the
 	// .md/skill/template resolution that was formerly a per-consumer fallback.
 	if overrides != nil && overrides.ResolveSlash {
-		if !m.resolveSlashIntoOpts(s, key, &opts) {
+		resolved, failedCmd := m.resolveSlashIntoOpts(s, key, &opts)
+		if !resolved {
 			m.mu.Unlock()
 			s.requestID = ""
+			m.unbindRun(requestID)
+			m.emitUnknownCommand(key, failedCmd)
 			return nil
 		}
+	}
+
+	// Extension-command slash provenance. When an extension command handler
+	// (dispatchCommand → cmd.Execute → ctx.sendPrompt) initiated this prompt,
+	// the session carries pendingSlashInvocation with the raw command/args.
+	// Consume it so the run loop persists the raw invocation as the display
+	// turn (with slashCommand/slashArgs provenance) instead of the expanded
+	// body. Only applies when resolveSlashIntoOpts did NOT already set the
+	// fields (the pending is the fallback for the extension-command path).
+	if s.pendingSlashInvocation != nil && opts.ResolvedSlashCommand == "" {
+		opts.ResolvedSlashCommand = s.pendingSlashInvocation.Command
+		opts.ResolvedSlashArgs = s.pendingSlashInvocation.Args
+		opts.ResolvedSlashSource = s.pendingSlashInvocation.Source
+		utils.Log("Session", fmt.Sprintf("SendPrompt[%s]: applied pending slash invocation command=%s argsLen=%d",
+			key, opts.ResolvedSlashCommand, len(opts.ResolvedSlashArgs)))
+		s.pendingSlashInvocation = nil
+	} else if s.pendingSlashInvocation != nil {
+		// resolveSlashIntoOpts already set the fields; discard the pending.
+		s.pendingSlashInvocation = nil
 	}
 	m.applyConfigDefaults(&opts)
 	resolveModelTier(&opts)
@@ -256,6 +294,9 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	if opts.ResolvedSlashContext == "fork" {
 		m.forkResolvedSlash(s, key, &opts)
 		s.requestID = ""
+		// Forked to a sub-agent — no inline run started on the parent, so
+		// clear the routing binding set at dispatch.
+		m.unbindRun(requestID)
 		return nil
 	}
 

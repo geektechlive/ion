@@ -1,377 +1,400 @@
-import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
-import { AnimatePresence } from 'framer-motion'
-import { ArrowCounterClockwise } from '@phosphor-icons/react'
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePreferencesStore } from '../preferences'
-import { activeInstance } from '../stores/conversation-instance'
-import { PermissionCard } from './PermissionCard'
-import { PermissionDeniedCard } from './PermissionDeniedCard'
 import { useColors } from '../theme'
+import { runHandleImplement } from './ConversationView-implement'
+import { EngineDialog } from './EngineDialog'
+import { EngineNotificationToasts } from './EngineNotificationToasts'
+import { AgentPanel } from './AgentPanel'
+import { PermissionDeniedCard } from './PermissionDeniedCard'
+import { resolvePlanCardSuppression } from '../../shared/plan-card-gate'
+import { useClearPermissionDenied } from '../hooks/useClearPermissionDenied'
+import { ElicitationCardHost } from './ElicitationCardHost'
 import { TodoListPanel } from './TodoListPanel'
 import { ConversationSearch } from './ConversationSearch'
 import { useConversationSearch } from '../hooks/useConversationSearch'
+import { useScrollFollow } from './conversation/useScrollFollow'
+import { ScrollToBottomButton } from './conversation/ScrollToBottomButton'
+import { TranscriptRows } from './conversation/TranscriptRows'
 import {
   groupMessages,
-  ToolGroup, AssistantMessage, SystemMessage, InterruptButton,
-  UserMessage, QueuedMessage, MessageActions, EmptyState,
-  CompactionRow, AgentTurnGroup, InterceptBanner, ThinkingBlock,
+  MessageActions, InterruptButton,
+  QueuedMessage, EmptyState,
 } from './conversation'
-import { buildPermissionDeniedHandlers } from './conversation/usePermissionDeniedHandlers'
 
-// ─── Constants ───
+// Stable empty refs to avoid creating new array/object references on every render.
+// Without these, `|| []` in selectors creates a new array each time, which Zustand
+// treats as a change (Object.is), triggering cascading re-renders.
+const EMPTY_ARRAY: any[] = []
+const EMPTY_NOTIFICATIONS: any[] = []
+const EMPTY_MESSAGES: any[] = []
+const EMPTY_AGENTS: any[] = []
+const EMPTY_TELEMETRY: import('../../shared/types-engine').DispatchTelemetryEntry[] = []
 
 const INITIAL_RENDER_CAP = 100
 const PAGE_SIZE = 100
 
 // ─── Main Component ───
+//
+// The single, unified conversation view for EVERY tab, plain or
+// extension-backed. There is no separate "engine view": this component (the
+// former, richer EngineView) renders every feature from DATA, so engine-only
+// chrome (agent panel, dialog, toasts, pinned prompt, working message) simply
+// self-hides when its backing collection is empty. A plain conversation that
+// dispatches background sub-agents shows the agent panel exactly like an
+// extension-backed one. App.tsx mounts this for all non-terminal tabs.
 
-export function ConversationView() {
-  const tabs = useSessionStore((s) => s.tabs)
-  const activeTabId = useSessionStore((s) => s.activeTabId)
-  const sendMessage = useSessionStore((s) => s.sendMessage)
-  const editQueuedMessage = useSessionStore((s) => s.editQueuedMessage)
-  const staticInfo = useSessionStore((s) => s.staticInfo)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const [, setHovered] = useState(false)
-  const [renderOffset, setRenderOffset] = useState(0) // 0 = show from tail
-  const isNearBottomRef = useRef(true)
-  const prevTabIdRef = useRef(activeTabId)
+interface ConversationViewProps {
+  tabId: string
+}
+
+export function ConversationView({ tabId }: ConversationViewProps) {
   const colors = useColors()
-  const unifiedTurnView = usePreferencesStore((s) => s.unifiedTurnView)
+  const pane = useSessionStore(s => s.conversationPanes.get(tabId))
+  const activeInstanceId = pane?.activeInstanceId || ''
+  const key = activeInstanceId ? tabId : ''
   const conversationFontSize = usePreferencesStore((s) => s.conversationFontSize)
-  const scrollToBottomCounter = useSessionStore((s) => s.scrollToBottomCounter)
+  const queuedPrompts = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.queuedPrompts ?? EMPTY_ARRAY)
+  const editQueuedMessage = useSessionStore(s => s.editQueuedMessage)
 
-  const tab = tabs.find((t) => t.id === activeTabId)
-
-  // Per-conversation state (messages, permission queue/denied, planFilePath)
-  // now lives on the active `ConversationInstance` in `conversationPanes`, not on
-  // `TabState`. Subscribe to the active instance so the view re-renders as
-  // its scrollback/permission state changes. Normal tabs resolve to their
-  // single `main` instance; engine tabs to their active sub-conversation.
-  const inst = useSessionStore((s) =>
-    activeTabId ? activeInstance(s.conversationPanes, activeTabId) : null,
-  )
-
-  // Reset render offset and scroll state when switching tabs
-  useEffect(() => {
-    if (activeTabId !== prevTabIdRef.current) {
-      prevTabIdRef.current = activeTabId
-      setRenderOffset(0)
-      isNearBottomRef.current = true
+  const pinnedPrompt = useSessionStore(s => {
+    const p = s.conversationPanes.get(tabId)
+    const k = p?.activeInstanceId ? tabId : ''
+    return k ? (s.enginePinnedPrompt.get(k) || '') : ''
+  })
+  const notifications = useSessionStore(s => {
+    const p = s.conversationPanes.get(tabId)
+    const k = p?.activeInstanceId ? tabId : ''
+    return k ? (s.engineNotifications.get(k) || EMPTY_NOTIFICATIONS) : EMPTY_NOTIFICATIONS
+  })
+  const messages = useSessionStore(s => {
+    const p = s.conversationPanes.get(tabId)
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.messages ?? EMPTY_MESSAGES
+  })
+  const { agentStates, dispatchTelemetry } = useSessionStore(s => {
+    const p = s.conversationPanes.get(tabId)
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return {
+      agentStates: inst?.agentStates ?? EMPTY_AGENTS,
+      dispatchTelemetry: inst?.dispatchTelemetry ?? EMPTY_TELEMETRY,
     }
-  }, [activeTabId])
+  })
+  const workingMessage = useSessionStore(s => {
+    const p = s.conversationPanes.get(tabId)
+    const k = p?.activeInstanceId ? tabId : ''
+    return k ? (s.engineWorkingMessages.get(k) || '') : ''
+  })
+  const tabStatus = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.status)
+  const permissionDenied = useSessionStore(s => {
+    const p = s.conversationPanes.get(tabId)
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.permissionDenied ?? null
+  })
+  const tabPlanFilePath = useSessionStore(s => {
+    const p = s.conversationPanes.get(tabId)
+    const inst = p?.activeInstanceId ? p.instances.find(i => i.id === p.activeInstanceId) : null
+    return inst?.planFilePath ?? null
+  })
+  const tabGroupPinned = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.groupPinned)
+  const tabConversationId = useSessionStore(s => s.tabs.find(t => t.id === tabId)?.conversationId)
+  const staticInfo = useSessionStore(s => s.staticInfo)
+  const submit = useSessionStore(s => s.submit)
+  const interrupt = useSessionStore(s => s.interrupt)
+  const unifiedTurnView = usePreferencesStore(s => s.unifiedTurnView)
+  const isRunning = tabStatus === 'running' || tabStatus === 'connecting'
+  const runningChildCount = agentStates.filter(a => a.status === 'running').length
+  const hasRunningChildren = runningChildCount > 0
+  const suppressPlanCard = resolvePlanCardSuppression({
+    toolNames: permissionDenied?.tools.map((t) => t.toolName),
+    hasRunningChildren,
+    tabId,
+    runningChildCount,
+    log: console.log,
+  })
+  const [agentPanelFullscreen, setAgentPanelFullscreen] = useState(false)
+  const [agentPanelHeights, setAgentPanelHeights] = useState<Map<string, number>>(new Map())
+  const [renderOffset, setRenderOffset] = useState(0)
 
-  // Track whether user is scrolled near the bottom
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-  }, [])
+  // Scroll-follow via shared hook.
+  const { scrollRef, isNearBottomRef, showScrollBtn, handleScroll, scrollToBottom } = useScrollFollow([
+    messages.length, agentStates.length, workingMessage, isRunning,
+  ])
 
-  // Auto-scroll when content changes and user is near bottom.
-  const msgCount = inst?.messages?.length ?? 0
-  const lastMsg = inst?.messages?.at(-1)
-  const permissionQueueLen = inst?.permissionQueue?.length ?? 0
-  const queuedCount = tab?.queuedPrompts?.length ?? 0
-  const scrollTrigger = `${msgCount}:${lastMsg?.content?.length ?? 0}:${permissionQueueLen}:${queuedCount}`
+  // Conversation search, scoped to scrollRef.
+  const searchTrigger = `${messages.length}:${messages[messages.length - 1]?.content?.length ?? 0}`
+  const [searchState, searchActions] = useConversationSearch(scrollRef, searchTrigger)
 
-  useEffect(() => {
-    if (isNearBottomRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [scrollTrigger])
-
-  // Force scroll to bottom when user sends a new message (even if scrolled up)
-  useEffect(() => {
-    if (scrollToBottomCounter > 0 && scrollRef.current) {
-      isNearBottomRef.current = true
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [scrollToBottomCounter])
-
-  // Group only the visible slice of messages
-  const allMessages = inst?.messages ?? []
-  const totalCount = allMessages.length
-  let startIndex = Math.max(0, totalCount - INITIAL_RENDER_CAP - renderOffset * PAGE_SIZE)
-
-  // When unified turn view is on, snap startIndex backward to the nearest
-  // user message so we never show a partial turn at the top of the visible window.
-  if (unifiedTurnView && startIndex > 0) {
-    let snapped = startIndex
-    while (snapped > 0 && allMessages[snapped]?.role !== 'user') {
-      snapped--
-    }
-    startIndex = snapped
-  }
-
-  const visibleMessages = useMemo(() => startIndex > 0 ? allMessages.slice(startIndex) : allMessages, [allMessages, startIndex])
-  const hasOlder = startIndex > 0
-
-  const grouped = useMemo(
-    () => groupMessages(visibleMessages, { unifiedTurnView }),
-    [visibleMessages, unifiedTurnView],
-  )
-
-  const hiddenCount = totalCount - visibleMessages.length
-
-  const handleLoadOlder = useCallback(() => {
-    setRenderOffset((o) => o + 1)
-  }, [])
-
-  // Load all older messages (used by ConversationSearch "Load all" button)
-  const handleLoadAllOlder = useCallback(() => {
-    setRenderOffset(Math.ceil(totalCount / INITIAL_RENDER_CAP))
-  }, [totalCount])
-
-  // Conversation search — scoped to scrollRef
-  const [searchState, searchActions] = useConversationSearch(scrollRef, scrollTrigger)
-
-  // When search scrolls to a match, prevent auto-scroll-to-bottom from fighting it
-  useEffect(() => {
-    const handler = () => { isNearBottomRef.current = false }
-    window.addEventListener('ion:search-scrolled', handler)
-    return () => window.removeEventListener('ion:search-scrolled', handler)
-  }, [])
-
-  // Close search when switching tabs
+  // Close search when switching tabs.
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('ion:search-close'))
-  }, [activeTabId])
+  }, [tabId])
 
-  if (!tab) return null
+  const handleRetry = useCallback(() => {
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
+    if (lastUserMsg) submit(tabId, lastUserMsg.content)
+  }, [messages, submit, tabId])
 
-  // Skeleton tab: the active instance hasn't been hydrated yet (lazy loading
-  // in progress). Under the 2A invariant a normal tab's `main` instance is
-  // materialized eagerly, so a null `inst` here means the pane/instance is
-  // not yet present — treat it as the loading state.
-  if (!inst) {
+  // Reset pagination when switching engine instances
+  useEffect(() => { setRenderOffset(0) }, [activeInstanceId])
+
+  // Pagination
+  const totalCount = messages.length
+  let startIndex = Math.max(0, totalCount - INITIAL_RENDER_CAP - renderOffset * PAGE_SIZE)
+  const visibleMessages = startIndex > 0 ? messages.slice(startIndex) : messages
+  const hasOlder = startIndex > 0
+  const hiddenCount = totalCount - visibleMessages.length
+  const grouped = useMemo(() => groupMessages(visibleMessages, { includeUser: true, unifiedTurnView }), [visibleMessages, unifiedTurnView])
+
+  const hasContent = visibleMessages.some(m => m.role === 'assistant' && (m.content || '').length > 0)
+  const showThinkingForeground = isRunning && !hasContent && runningChildCount === 0
+  const showWaitingChildren = !isRunning && hasRunningChildren
+  const showThinking = showThinkingForeground || showWaitingChildren
+
+  // Auto-create first instance
+  const tabsReady = useSessionStore(s => s.tabsReady)
+  useEffect(() => {
+    if (!tabsReady) return
+    const pane = useSessionStore.getState().conversationPanes.get(tabId)
+    if (!pane || pane.instances.length === 0) {
+      useSessionStore.getState().addEngineInstance(tabId)
+    }
+  }, [tabId, tabsReady])
+
+  const dismissNotification = useCallback((id: string) => {
+    useSessionStore.setState(state => {
+      const p = state.conversationPanes.get(tabId)
+      const k = p?.activeInstanceId ? tabId : ''
+      if (!k) return {}
+      const notifs = new Map(state.engineNotifications)
+      const keyNotifs = notifs.get(k) || []
+      if (keyNotifs.length === 0) return {}
+      notifs.set(k, keyNotifs.filter(n => n.id !== id))
+      return { engineNotifications: notifs }
+    })
+  }, [tabId])
+
+  const handleAbort = useCallback(() => {
+    interrupt(tabId)
+  }, [interrupt, tabId])
+
+  const clearPermissionDenied = useClearPermissionDenied(key, tabId, activeInstanceId)
+
+  const handleAnswerDenial = useCallback((answer: string) => {
+    console.log(`[ConversationView] handleAnswerDenial: tab=${tabId.slice(0, 8)} answerLen=${answer.length}`)
+    clearPermissionDenied()
+    submit(tabId, answer)
+  }, [tabId, clearPermissionDenied, submit])
+
+  const handleImplement = useCallback(async (clearContext: boolean = false) => {
+    await runHandleImplement(
+      { tabId, clearPermissionDenied, submit, tabPlanFilePath, permissionDenied },
+      clearContext,
+    )
+  }, [tabId, clearPermissionDenied, submit, tabPlanFilePath, permissionDenied])
+
+  const handleImplementAndUnpin = useCallback(async (clearContext: boolean = false) => {
+    useSessionStore.getState().toggleTabGroupPin(tabId)
+    console.log(`[EngineView] implement-and-unpin: tab=${tabId.slice(0, 8)} clearContext=${clearContext} — pin cleared`)
+    await handleImplement(clearContext)
+  }, [tabId, handleImplement])
+
+  const handleLoadOlder = useCallback(() => { setRenderOffset((o) => o + 1) }, [])
+
+  // Per-message actions renderer (rewind/fork menu on user bubbles).
+  const renderActions = useCallback((msg: import('../../shared/types-session').Message) => (
+    <MessageActions message={msg} variant="user" engineContext={{ tabId, instanceId: activeInstanceId }} />
+  ), [tabId, activeInstanceId])
+
+  if (!pane || pane.instances.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ color: colors.textSecondary }}>
-        <div className="flex items-center gap-2 text-sm">
-          <span className="flex gap-[3px]">
-            <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: colors.statusRunning, animationDelay: '0ms' }} />
-            <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: colors.statusRunning, animationDelay: '150ms' }} />
-            <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: colors.statusRunning, animationDelay: '300ms' }} />
-          </span>
-          Loading conversation…
-        </div>
+      <div style={{
+        display: 'flex', flexDirection: 'column', height: '100%',
+        alignItems: 'center', justifyContent: 'center',
+        color: colors.textTertiary, fontSize: 13,
+      }}>
+        Session not started
       </div>
     )
   }
 
-  const isRunning = tab.status === 'running' || tab.status === 'connecting'
-  const isDead = tab.status === 'dead'
-  const isFailed = tab.status === 'failed'
-  const showInterrupt = (isRunning || tab.bashExecuting) && inst.messages.some((m) => m.role === 'user')
-
-  if (inst.messages.length === 0) {
-    return <EmptyState />
-  }
-
-  // Messages from before initial render cap are "historical" — no motion
-  const historicalThreshold = Math.max(0, totalCount - 20)
-
-  const handleRetry = () => {
-    const lastUserMsg = [...inst.messages].reverse().find((m) => m.role === 'user')
-    if (lastUserMsg) {
-      sendMessage(lastUserMsg.content)
-    }
-  }
-
-  const permissionDeniedHandlers = inst.permissionDenied
-    ? buildPermissionDeniedHandlers(tab, sendMessage)
-    : null
-
   return (
-    <div
-      data-ion-ui
-      className="flex flex-col min-h-0 min-w-0 overflow-hidden"
-      style={{ flex: 1 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      {/* Scroll area wrapper — relative so activity row and search bar can overlay */}
-      <div className="relative flex-1 min-h-0 min-w-0 flex flex-col">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      {/* Pinned prompt header */}
+      {pinnedPrompt && (
+        <div
+          style={{
+            padding: '8px 12px',
+            borderBottom: `1px solid ${colors.containerBorder}`,
+            fontSize: 13,
+            color: colors.textSecondary,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          <span style={{ color: colors.accent, fontWeight: 600 }}>{' > '}</span>
+          {pinnedPrompt}
+        </div>
+      )}
+
+      {/* Scrollable conversation area */}
+      <div style={{ flex: agentPanelFullscreen ? 0 : 1, maxHeight: agentPanelFullscreen ? 100 : undefined, position: 'relative', overflow: 'hidden' }}>
         <ConversationSearch
           state={searchState}
           actions={searchActions}
           hiddenCount={hiddenCount}
-          onLoadAllOlder={handleLoadAllOlder}
+          onLoadAllOlder={() => setRenderOffset(Math.ceil(totalCount / INITIAL_RENDER_CAP))}
         />
-        {/* Scrollable messages area */}
-        <div
-          ref={scrollRef}
-          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 pt-2 conversation-selectable"
-          style={{ paddingBottom: 28, ['--ion-conv-font-size' as string]: `${conversationFontSize}px` } as React.CSSProperties}
-          onScroll={handleScroll}
-        >
-        {/* Load older button */}
-        {hasOlder && (
-          <div className="flex justify-center py-2">
-            <button
-              onClick={handleLoadOlder}
-              className="text-[11px] px-3 py-1 rounded-full transition-colors"
-              style={{ color: colors.textTertiary, border: `1px solid ${colors.toolBorder}` }}
-            >
-              Load {Math.min(PAGE_SIZE, hiddenCount)} older messages ({hiddenCount} hidden)
-            </button>
-          </div>
-        )}
+        <div ref={scrollRef} onScroll={handleScroll} style={{ height: '100%', overflowY: 'auto', padding: '8px 12px', ['--ion-conv-font-size' as string]: `${conversationFontSize}px` } as React.CSSProperties}>
+          {messages.length === 0 && !isRunning && <EmptyState />}
+          {/* Thinking indicator */}
+          <AnimatePresence>
+            {showThinking && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '8px 0', fontSize: 12, color: colors.textTertiary,
+                }}
+              >
+                <span
+                  className="animate-pulse-dot"
+                  style={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    background: showWaitingChildren ? colors.statusWaitingChildren : colors.accent, display: 'inline-block',
+                  }}
+                />
+                <span>
+                  {showWaitingChildren
+                    ? `Waiting for agent${runningChildCount === 1 ? '' : 's'}…`
+                    : 'Thinking...'}
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        <div className="space-y-1 relative min-w-0">
-          {grouped.map((item, idx) => {
-            const msgIndex = startIndex + idx
-            const isHistorical = msgIndex < historicalThreshold
-
-            switch (item.kind) {
-              case 'user':
-                return <UserMessage key={item.message.id} message={item.message} skipMotion={isHistorical} />
-              case 'assistant':
-                return <AssistantMessage key={item.message.id} message={item.message} skipMotion={isHistorical} actions={<MessageActions message={item.message} variant="assistant" />} />
-              case 'tool-group':
-                return <ToolGroup key={`tg-${item.messages[0].id}`} tools={item.messages} skipMotion={isHistorical} />
-              case 'agent-turn':
-                return <AgentTurnGroup key={`at-${item.tools[0]?.id ?? idx}`} tools={item.tools} assistantMessages={item.assistantMessages} isActive={item.isActive} thinking={item.thinking} skipMotion={isHistorical} />
-              case 'thinking':
-                return <ThinkingBlock key={item.message.id} message={item.message} skipMotion={isHistorical} />
-              case 'compaction':
-                return <CompactionRow key={item.message.id} message={item.message} skipMotion={isHistorical} />
-              case 'system':
-                return <SystemMessage key={item.message.id} message={item.message} skipMotion={isHistorical} />
-              case 'intercept':
-                return <InterceptBanner key={item.message.id} message={item.message} skipMotion={isHistorical} />
-              default:
-                return null
-            }
-          })}
-        </div>
-
-        {/* Permission card (shows first item from queue) */}
-        <AnimatePresence>
-          {inst.permissionQueue.length > 0 && (
-            <PermissionCard
-              tabId={tab.id}
-              permission={inst.permissionQueue[0]}
-              queueLength={inst.permissionQueue.length}
-            />
-          )}
-        </AnimatePresence>
-
-        {/* Permission denied fallback card.
-            Hidden while the tab is running — after the user sends feedback,
-            answers a question, or clicks Implement, the card must stay hidden
-            until the agent finishes the new turn. Without this, stale heartbeat
-            ticks can re-synthesize task_complete with old permissionDenials
-            before prompt_dispatch clears the engine's lastPermissionDenials. */}
-        <AnimatePresence>
-          {inst.permissionDenied && permissionDeniedHandlers && !isRunning && (
-            <PermissionDeniedCard
-              tools={inst.permissionDenied.tools}
-              tabId={tab.id}
-              sessionId={tab.conversationId}
-              projectPath={staticInfo?.projectPath || process.cwd()}
-              messages={inst.messages}
-              tabPlanFilePath={inst.planFilePath}
-              tabGroupPinned={tab.groupPinned}
-              onDismiss={permissionDeniedHandlers.onDismiss}
-              onAnswer={permissionDeniedHandlers.onAnswer}
-              onApprove={permissionDeniedHandlers.onApprove}
-              onImplement={permissionDeniedHandlers.onImplement}
-              onImplementAndUnpin={permissionDeniedHandlers.onImplementAndUnpin}
-            />
-          )}
-        </AnimatePresence>
-
-        {/* Queued prompts */}
-        <AnimatePresence>
-          {tab.queuedPrompts.map((prompt, i) => (
-            <QueuedMessage key={`queued-${i}`} content={prompt} onEdit={() => editQueuedMessage(tab.id)} />
-          ))}
-        </AnimatePresence>
-
-        <div ref={bottomRef} />
-      </div>
-
-        {/* Activity row — absolutely positioned over bottom of scroll area */}
-        <div
-          className="flex items-center justify-between px-4"
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: 28,
-            background: `linear-gradient(to bottom, transparent, ${colors.containerBg} 70%)`,
-            zIndex: 2,
-          }}
-        >
-        {/* Left: status indicator */}
-        <div className="flex items-center gap-1.5 text-[11px] min-w-0">
-          {isRunning && (
-            <span className="flex items-center gap-1.5">
-              <span className="flex gap-[3px]">
-                <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: tab.isCompacting ? colors.statusCompacting : colors.statusRunning, animationDelay: '0ms' }} />
-                <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: tab.isCompacting ? colors.statusCompacting : colors.statusRunning, animationDelay: '150ms' }} />
-                <span className="w-[4px] h-[4px] rounded-full animate-bounce-dot" style={{ background: tab.isCompacting ? colors.statusCompacting : colors.statusRunning, animationDelay: '300ms' }} />
-              </span>
-              <span style={{ color: colors.textSecondary }}>{tab.currentActivity || 'Working...'}</span>
-            </span>
+          {/* Load older messages (pagination) */}
+          {hasOlder && (
+            <div className="flex justify-center py-2">
+              <button
+                onClick={handleLoadOlder}
+                className="text-[11px] px-3 py-1 rounded-full transition-colors"
+                style={{ color: colors.textTertiary, border: `1px solid ${colors.toolBorder}` }}
+              >
+                Load {Math.min(PAGE_SIZE, hiddenCount)} older messages ({hiddenCount} hidden)
+              </button>
+            </div>
           )}
 
-          {isDead && (
-            <span style={{ color: colors.statusError, fontSize: 11 }}>Session ended unexpectedly</span>
+          {/* Grouped conversation messages via shared TranscriptRows */}
+          <TranscriptRows grouped={grouped} actions={renderActions} />
+
+          {/* Queued prompts */}
+          <AnimatePresence>
+            {queuedPrompts.map((prompt: string, i: number) => (
+              <QueuedMessage key={`queued-${i}`} content={prompt} onEdit={() => editQueuedMessage(tabId)} />
+            ))}
+          </AnimatePresence>
+
+          {/* Working message */}
+          {workingMessage && (
+            <div style={{
+              padding: '6px 0', fontSize: 12,
+              color: colors.textTertiary, fontStyle: 'italic',
+            }}>
+              {workingMessage}
+            </div>
           )}
 
-          {isFailed && (
-            <span className="flex items-center gap-1.5">
+          {/* Streaming indicator */}
+          {isRunning && hasContent && (
+            <div style={{ padding: '4px 0' }}>
+              <span
+                className="animate-pulse-dot"
+                style={{
+                  width: 5, height: 5, borderRadius: '50%',
+                  background: colors.accent, display: 'inline-block',
+                }}
+              />
+            </div>
+          )}
+
+          {/* Dead / failed state rows */}
+          {tabStatus === 'dead' && (
+            <div style={{ padding: '6px 0', fontSize: 11, color: colors.statusError }}>
+              Session ended unexpectedly
+            </div>
+          )}
+          {tabStatus === 'failed' && (
+            <div style={{ padding: '6px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: colors.statusError, fontSize: 11 }}>Failed</span>
               <button
                 onClick={handleRetry}
-                className="flex items-center gap-1 rounded-full px-2 py-0.5 transition-colors"
-                style={{ color: colors.accent, fontSize: 11 }}
+                style={{ color: colors.accent, fontSize: 11, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
               >
-                <ArrowCounterClockwise size={10} />
                 Retry
               </button>
-            </span>
+            </div>
           )}
         </div>
+        {/* Scroll-to-bottom FAB (shared component) */}
+        <ScrollToBottomButton visible={showScrollBtn} onClick={scrollToBottom} />
 
-        {/* Right: interrupt button when running */}
-        <div className="flex items-center flex-shrink-0">
-          <AnimatePresence>
-            {showInterrupt && (
-              <InterruptButton onInterrupt={async () => {
-                console.log(`[ConversationView] interrupt: tabId=${tab.id} bashExecId=${tab.bashExecId ?? 'none'} status=${tab.status}`)
-                if (tab.bashExecId) {
-                  console.log(`[ConversationView] cancelling bash: execId=${tab.bashExecId}`)
-                  window.ion.cancelBash(tab.bashExecId)
-                  return
-                }
-                console.log(`[ConversationView] stopping tab: tabId=${tab.id}`)
-                const tabId = tab.id
-                try { await window.ion.stopTab(tabId) } catch {}
-                // 5s fallback: if engine never confirms idle, force-recover locally
-                // so the UI is always usable after pressing the interrupt button.
-                setTimeout(() => {
-                  const cur = useSessionStore.getState().tabs.find((t) => t.id === tabId)
-                  if (cur && (cur.status === 'running' || cur.status === 'connecting')) {
-                    useSessionStore.getState().forceRecoverTab(
-                      tabId,
-                      'Engine did not respond to interrupt within 5s. Tab reset locally.'
-                    )
-                  }
-                }, 5_000)
-              }} />
-            )}
-          </AnimatePresence>
-        </div>
-      </div>{/* end activity row */}
-      </div>{/* end scroll + activity wrapper */}
+        {/* Interrupt button */}
+        <AnimatePresence>
+          {(isRunning || hasRunningChildren) && (
+            <div style={{ position: 'absolute', bottom: 4, right: 12, zIndex: 2 }}>
+              <InterruptButton onInterrupt={handleAbort} />
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
 
-      {/* Task list — pinned below scroll area */}
-      <TodoListPanel messages={inst.messages} isRunning={isRunning} />
+      {/* Permission-denied / AskUserQuestion card */}
+      <AnimatePresence>
+        {permissionDenied && !isRunning && !suppressPlanCard && (
+          <PermissionDeniedCard
+            tools={permissionDenied.tools}
+            tabId={tabId}
+            sessionId={tabConversationId ?? null}
+            projectPath={staticInfo?.projectPath || ''}
+            messages={messages}
+            tabPlanFilePath={tabPlanFilePath}
+            tabGroupPinned={tabGroupPinned}
+            onDismiss={clearPermissionDenied}
+            onAnswer={handleAnswerDenial}
+            onImplement={handleImplement}
+            onImplementAndUnpin={handleImplementAndUnpin}
+          />
+        )}
+      </AnimatePresence>
+
+      <ElicitationCardHost tabId={tabId} />
+
+      {/* Agent panel */}
+      <div style={{ flex: agentPanelFullscreen ? 1 : undefined, overflow: agentPanelFullscreen ? 'auto' : undefined, minHeight: 0 }}>
+        <AgentPanel
+          agents={agentStates}
+          dispatchTelemetry={dispatchTelemetry}
+          rootOnly
+          isFullscreen={agentPanelFullscreen}
+          onToggleFullscreen={() => setAgentPanelFullscreen(!agentPanelFullscreen)}
+          panelHeight={key ? agentPanelHeights.get(key) : undefined}
+          onPanelHeightChange={(h) => {
+            if (!key) return
+            setAgentPanelHeights(prev => { const next = new Map(prev); next.set(key, h); return next })
+          }}
+        />
+      </div>
+
+      <EngineNotificationToasts notifications={notifications} onDismiss={dismissNotification} />
+      <TodoListPanel messages={messages} isRunning={isRunning} />
+      <EngineDialog tabId={tabId} />
     </div>
   )
 }

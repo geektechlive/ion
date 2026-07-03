@@ -1,116 +1,47 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/types'
 import { buildClearDividerRemoteEvent } from '../../shared/clear-divider'
-import { parseSessionKey } from '../../shared/session-key'
 import { log as _log } from '../logger'
+import { isValidProjectPath } from '../ipc-validation'
 import { engineBridge, sessionPlane, state } from '../state'
-import { processIncomingPrompt } from '../prompt-pipeline'
-import { encodeImageAttachments } from '../remote/attachment-encoder'
 import { broadcastEngineHistory } from '../remote/handlers/engine-history'
 
 function log(msg: string): void {
   _log('main', msg)
 }
 
+/**
+ * Validate a renderer/iOS-supplied planFilePath before forwarding it to the
+ * engine. planFilePath is an absolute instruction-file path; an invalid value
+ * degrades to "no restore" (undefined) rather than aborting the plan-mode
+ * toggle — enabling plan mode without a restore file is still the correct
+ * outcome. Returns the validated path, or undefined when absent or malformed.
+ */
+export function sanitizePlanFilePath(planFilePath: string | undefined, channel: string): string | undefined {
+  if (!planFilePath) return undefined
+  if (!isValidProjectPath(planFilePath)) {
+    log(`IPC ${channel}: rejecting malformed planFilePath (degrading to no-restore)`)
+    return undefined
+  }
+  return planFilePath
+}
+
 export function registerEngineIpc(): void {
   ipcMain.handle(IPC.ENGINE_START, async (_event, { key, config }: { key: string; config: import('../../shared/types').EngineConfig }) => {
-    log(`IPC ENGINE_START: key=${key} ext=${config.extensions?.join(',')}`)
+    log(`IPC ENGINE_START: key=${key} ext=${config.extensions?.join(',')} sessionId=${config.sessionId ?? 'none'}`)
+    // Seed the control-plane TabEntry with the resolved conversationId BEFORE the
+    // engine session starts. This IPC starts the session via engineBridge
+    // directly (bypassing EngineControlPlane.ensureSession, which is the only
+    // other start site that seeds conversationId). Without this seed, an
+    // extension-hosted restored tab has no tracked id when the engine emits its
+    // first idle status, so the engine_status first-bind branch adopts whatever
+    // id the engine reports — including an empty pre-minted id on a restore that
+    // supplied none. Seeding here arms the divergence guard. Idempotent: a no-op
+    // when the tab already tracks an id.
+    if (config.sessionId) {
+      sessionPlane.seedConversationId(key, config.sessionId)
+    }
     return engineBridge.startSession(key, config)
-  })
-
-  ipcMain.handle(IPC.ENGINE_PROMPT, async (_event, { key, text, model, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase, thinkingEffort }: { key: string; text: string; model?: string; appendSystemPrompt?: string; imageAttachments?: import('../../shared/types').ImageAttachmentPayload[]; rawAttachments?: import('../../shared/types-session').FileAttachment[]; implementationPhase?: boolean; thinkingEffort?: string }) => {
-    log(`IPC ENGINE_PROMPT: key=${key} model=${model ?? 'default'} hasSysPrompt=${!!appendSystemPrompt} images=${imageAttachments?.length ?? 0} rawAttachments=${rawAttachments?.length ?? 0} implementationPhase=${implementationPhase ?? false} thinkingEffort=${thinkingEffort ?? 'off'}`)
-    // Encode raw file attachments when present (desktop InputBar path).
-    // This mirrors the remote handler pattern at handlers/engine.ts:108-114.
-    let resolvedText = text
-    let resolvedImageAttachments = imageAttachments
-    if (rawAttachments && rawAttachments.length > 0 && !imageAttachments?.length) {
-      const ctx = rawAttachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
-      resolvedText = `${ctx}\n\n${text}`
-      const { encoded, rewrittenText } = encodeImageAttachments(resolvedText, rawAttachments)
-      resolvedText = rewrittenText
-      resolvedImageAttachments = encoded
-    }
-    // Route through the unified prompt pipeline so engine-tab slash commands
-    // get the same precedence (extension command → .md → unknown) as CLI
-    // tabs. The renderer's submitEnginePrompt already inserted the optimistic
-    // user bubble and set status='running'; the pipeline will dispatch the
-    // slash and (for pure-command success) clear status back to idle, or
-    // (for a non-slash) submit the prompt to the engine bridge directly.
-    //
-    // Key shape: the engine-extension addressing key is `${tabId}:${instanceId}`
-    // for an extension-hosted instance. parseSessionKey feeds the pipeline its
-    // expected (tabId, instanceId) pair; a bare key (which should not occur on
-    // this extension-hosted path) resolves to the `main` instance rather than a
-    // null instanceId, matching engineKey()'s fallback in prompt-pipeline.ts.
-    const { tabId, instanceId } = parseSessionKey(key)
-    const reqId = `desktop-engine-${Date.now()}`
-
-    // Resolve the tab's working directory from the renderer store so the
-    // pipeline can find project-scoped `.ion/commands/*.md` templates.
-    // Mirrors the same query in remote/handlers/engine.ts:123-134 — that
-    // path already threads projectPath through; this is the desktop IPC
-    // equivalent. Without it, `{project}/.ion/commands/align.md` is never
-    // probed (expandSlashCommand skips the project candidate when
-    // projectPath is undefined) and any project-scoped slash command that
-    // is not also registered via registerCommand returns "Unknown command".
-    const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
-    let projectPath: string | undefined
-    try {
-      const cwd = await state.mainWindow?.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return null;
-          var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTab}'; });
-          return tab && tab.workingDirectory ? tab.workingDirectory : null;
-        })()
-      `)
-      projectPath = cwd || undefined
-    } catch (err) {
-      log(`IPC ENGINE_PROMPT: projectPath query failed key=${key}: ${(err as Error).message}`)
-    }
-
-    // Resolve planFilePath from the renderer store so the engine can
-    // restore the plan file after a desktop restart instead of
-    // allocating a fresh slug. Same executeJavaScript pattern as
-    // projectPath above.
-    let planFilePath: string | undefined
-    try {
-      const pfp = await state.mainWindow?.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return null;
-          var tab = store.getState().tabs.find(function(t) { return t.id === '${escapedTab}'; });
-          return tab && tab.planFilePath ? tab.planFilePath : null;
-        })()
-      `)
-      planFilePath = pfp || undefined
-    } catch (err) {
-      log(`IPC ENGINE_PROMPT: planFilePath query failed key=${key}: ${(err as Error).message}`)
-    }
-
-    try {
-      await processIncomingPrompt({
-        tabId,
-        text: resolvedText,
-        reqId,
-        source: 'desktop',
-        isEngineTab: true,
-        instanceId,
-        appendSystemPrompt,
-        model,
-        imageAttachments: resolvedImageAttachments,
-        implementationPhase,
-        thinkingEffort,
-        projectPath,
-        planFilePath,
-      })
-      return { ok: true }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      log(`IPC ENGINE_PROMPT: pipeline error key=${key} err=${msg}`)
-      return { ok: false, error: msg }
-    }
   })
 
   ipcMain.handle(IPC.ENGINE_ABORT, (_event, { key }: { key: string }) => {
@@ -150,6 +81,15 @@ export function registerEngineIpc(): void {
     engineBridge.stopSession(key)
   })
 
+  ipcMain.handle(IPC.ENGINE_GET_CONTEXT_BREAKDOWN, (_event, { key }: { key: string }) => {
+    log(`IPC ENGINE_GET_CONTEXT_BREAKDOWN: key=${key}`)
+    // Fire-and-forget. The engine emits engine_context_breakdown on its event
+    // bus; the existing event-wiring handler translates it to context_breakdown
+    // and broadcasts to the renderer. The IPC reply is empty — the caller
+    // observes the result through the engine event stream.
+    engineBridge._send({ cmd: 'get_context_breakdown', key })
+  })
+
   ipcMain.handle(IPC.ENGINE_REMAP_SESSION, (_event, { oldKey, newKey }: { oldKey: string; newKey: string }) => {
     log(`IPC ENGINE_REMAP_SESSION: ${oldKey} -> ${newKey}`)
     engineBridge.remapSession(oldKey, newKey)
@@ -160,18 +100,25 @@ export function registerEngineIpc(): void {
     await broadcastEngineHistory(tabId, instanceId)
   })
 
-  ipcMain.on(IPC.SET_PERMISSION_MODE, (_event, payload: { tabId: string; mode: string; source?: string }) => {
-    const { tabId, mode, source } = payload
+  ipcMain.on(IPC.SET_PERMISSION_MODE, (_event, payload: { tabId: string; mode: string; source?: string; planFilePath?: string }) => {
+    const { tabId, mode, source, planFilePath } = payload
     if (mode !== 'auto' && mode !== 'plan') {
       log(`IPC SET_PERMISSION_MODE: invalid mode "${mode}" — ignoring`)
       return
     }
-    log(`IPC SET_PERMISSION_MODE: tab=${tabId} mode=${mode} source=${source ?? 'unknown'}`)
-    sessionPlane.setPermissionMode(tabId, mode, source)
+    const safePlanFilePath = sanitizePlanFilePath(planFilePath, 'SET_PERMISSION_MODE')
+    log(`IPC SET_PERMISSION_MODE: tab=${tabId} mode=${mode} source=${source ?? 'unknown'} planFilePath=${safePlanFilePath ?? '<none>'}`)
+    sessionPlane.setPermissionMode(tabId, mode, source, safePlanFilePath)
   })
 
-  ipcMain.on('ion:engine-set-plan-mode', (_event, key: string, enabled: boolean) => {
-    log(`IPC engine-set-plan-mode: key=${key} enabled=${enabled}`)
-    engineBridge.sendSetPlanMode(key, enabled, undefined, 'prompt_sync')
+  ipcMain.on('ion:engine-set-plan-mode', (_event, key: string, enabled: boolean, planFilePath?: string) => {
+    const safePlanFilePath = sanitizePlanFilePath(planFilePath, 'engine-set-plan-mode')
+    log(`IPC engine-set-plan-mode: key=${key} enabled=${enabled} planFilePath=${safePlanFilePath ?? '<none>'}`)
+    // planFilePath restores plan-file continuity when enabling plan mode on a
+    // session that lost its in-memory path (e.g. after restart / rebind). The
+    // engine re-adopts it if it exists on disk; ignored on disable. Forwarded
+    // as the 6th sendSetPlanMode arg (bash allowlist stays undefined here —
+    // the extension-instance plan toggle does not project the allowlist).
+    engineBridge.sendSetPlanMode(key, enabled, undefined, 'prompt_sync', undefined, safePlanFilePath)
   })
 }

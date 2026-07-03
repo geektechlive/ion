@@ -14,7 +14,7 @@ extension RemoteEvent {
             let tabId = try container.decode(String.self, forKey: .tabId)
             // Engine sub-tab scoping — absent for CLI tabs and for older
             // desktops; nil keeps the legacy "show on the whole tab"
-            // behavior (see EngineView.pendingPermission filter).
+            // behavior (see ConversationView.pendingPermission filter).
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             let questionId = try container.decode(String.self, forKey: .questionId)
             let toolName = try container.decode(String.self, forKey: .toolName)

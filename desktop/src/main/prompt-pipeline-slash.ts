@@ -27,7 +27,7 @@ import { type ParsedSlash } from './slash-parse'
 import { dispatchExtensionCommand, isFirstPromptForTab } from './slash-classify'
 import { awaitCommandResult } from './command-await'
 import { handleLocalClearShortCircuit } from './slash-clear'
-import { emitRemoteMessageAdded, insertRendererSystemMessage, clearConnectingStatus } from './prompt-pipeline-renderer'
+import { emitRemoteMessageAdded, insertRendererSystemMessage, clearConnectingStatus, insertRendererRemoteUserMessage } from './prompt-pipeline-renderer'
 // Type-only import: the IncomingPrompt shape lives with the orchestrator. A
 // type import creates no runtime dependency, so the runtime seam stays one-way
 // (orchestrator → this file → engine bridge / renderer helpers).
@@ -69,6 +69,48 @@ async function surfaceEngineUnknownCommand(p: IncomingPrompt, slash: ParsedSlash
   }
 }
 
+/**
+ * Plan→auto auto-switch (DESKTOP policy, not an engine concern). A slash
+ * command represents "run this task", which is incompatible with plan mode — so
+ * when the slash command is the FIRST prompt of the current checkpoint window
+ * (fresh tab, or freshly `/clear`ed), the desktop tells the engine to exit plan
+ * mode before the command executes. The engine never decides to leave plan mode
+ * on its own for a command; the client that toggles plan mode on the session is
+ * responsible. `setPermissionMode(tabId, 'auto')` flips local tab state AND calls
+ * `sendSetPlanMode(false)` on the engine; the broadcast mirrors the change to
+ * remote (iOS) consumers.
+ *
+ * This policy is TAB-TYPE-AGNOSTIC (plain and extension-hosted alike: both
+ * `isFirstPromptForTab` and `setPermissionMode` are tab-type-agnostic, the latter
+ * bare-tabId keyed) and BRANCH-AGNOSTIC: it must fire whether the engine resolves
+ * the slash directly (`commandError === ''`, which can start a run —
+ * see clearConnectingStatus note below) or disclaims it (`unknown_command`, which
+ * re-submits with resolveSlash and starts a run). A prior version only flipped on
+ * the unknown_command re-submit branch, so a first-prompt slash that the engine's
+ * command registry resolved directly executed under the still-active plan mode.
+ *
+ * Exclusions:
+ *   - `/clear` is a checkpoint, not a task. It must never change permission mode,
+ *     so the caller excludes it (it can arrive on either branch).
+ *
+ * Guard: only on the first prompt of the checkpoint window. A mid-conversation
+ * slash command (`promptCountSinceCheckpoint > 0`) or a resumed session preserves
+ * the current permission mode, so a plan-mode conversation stays in plan mode when
+ * the user invokes a command midway. This restores the behavior the retired
+ * local-expansion path performed in `tryExpandMarkdownSlash` before slash
+ * resolution moved to the engine.
+ */
+function maybeFlipPlanToAutoForSlash(p: IncomingPrompt): void {
+  if (isFirstPromptForTab(p.tabId)) {
+    log(`pipeline: first-prompt slash command on tab=${p.tabId} → flipping plan→auto before submit`)
+    sessionPlane.setPermissionMode(p.tabId, 'auto', 'slash_command')
+    broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId: p.tabId, mode: 'auto' })
+  } else {
+    const tab = sessionPlane.getTabStatus(p.tabId)
+    log(`pipeline: slash command not first-of-checkpoint on tab=${p.tabId} (promptCount=${tab?.promptCountSinceCheckpoint ?? '?'}, resumedSavedConversation=${tab?.resumedSavedConversation ?? '?'}, engineTab=${p.hasExtensions}) → preserving permission mode`)
+  }
+}
+
 export async function handleSlash(p: IncomingPrompt, slash: ParsedSlash, deps: SlashDeps): Promise<void> {
   // Echo the raw slash text to iOS so the optimistic timestamp is corrected.
   if (p.source === 'remote') {
@@ -78,10 +120,33 @@ export async function handleSlash(p: IncomingPrompt, slash: ParsedSlash, deps: S
   const result = await dispatchExtensionCommand(deps.engineKey(p), slash)
 
   if (result.commandError === '') {
-    // Success. Clear the optimistic 'connecting' state because no run will
-    // follow for a pure command. (Extensions that DO start a run will set
-    // status='running' via run_start before this clear executes, and the
-    // clear is a no-op when status isn't 'connecting'.)
+    // The engine resolved the command directly. It MAY start a run (the comment
+    // on clearConnectingStatus below) — so a first-prompt slash command must
+    // exit plan mode before it executes, exactly as the unknown_command branch
+    // does. `/clear` is excluded: it is a checkpoint, not a task, and must not
+    // change permission mode.
+    if (slash.command !== 'clear') {
+      maybeFlipPlanToAutoForSlash(p)
+
+      // For remote-originated prompts, insert the user message into the desktop
+      // renderer store. The renderer's submit() was never called for this prompt
+      // (the pipeline handled it directly), so the store has no user bubble.
+      // Without this, the desktop shows assistant text with no preceding user
+      // turn, and iOS history reads (which pull from the renderer store) also
+      // miss it. The iOS device already has the message from the
+      // desktop_message_added echo in tabs-prompt.ts; this insert is for the
+      // desktop renderer only. /clear is excluded: it is a checkpoint that
+      // renders as a divider, not a user turn.
+      if (p.source === 'remote') {
+        const rawInvocation = '/' + slash.command + (slash.args ? ' ' + slash.args : '')
+        void insertRendererRemoteUserMessage(p, rawInvocation, '/' + slash.command, slash.args)
+      }
+    }
+
+    // Clear the optimistic 'connecting' state because no run will follow for a
+    // pure command. (Extensions that DO start a run will set status='running'
+    // via run_start before this clear executes, and the clear is a no-op when
+    // status isn't 'connecting'.)
     log(`pipeline: ext cmd success key=${deps.engineKey(p)} cmd=/${slash.command}`)
     await clearConnectingStatus(p)
     return
@@ -119,30 +184,10 @@ export async function handleSlash(p: IncomingPrompt, slash: ParsedSlash, deps: S
     }
     p.resolveSlash = true
 
-    // Plan→auto auto-switch (DESKTOP policy, not an engine concern). A slash
-    // command represents "run this task", which is incompatible with plan
-    // mode — so when the slash command is the FIRST prompt of the current
-    // checkpoint window (fresh tab, or freshly `/clear`ed), the desktop tells
-    // the engine to exit plan mode before forwarding the command. The engine
-    // does not own this behavior: it never decides to leave plan mode on its
-    // own for a command; the client that toggles plan mode on the session is
-    // responsible. setPermissionMode(tabId, 'auto') flips local tab state AND
-    // calls sendSetPlanMode(false) on the engine; the broadcast mirrors the
-    // change to remote (iOS) consumers.
-    //
-    // Guard: only on the first prompt of the checkpoint window. A
-    // mid-conversation slash command (promptCountSinceCheckpoint > 0) or a
-    // resumed session preserves the current permission mode, so a plan-mode
-    // conversation stays in plan mode when the user invokes a command midway.
-    // This restores the behavior the retired local-expansion path performed in
-    // tryExpandMarkdownSlash before slash resolution moved to the engine.
-    if (!p.isEngineTab && isFirstPromptForTab(p.tabId, p.runOptions?.sessionId)) {
-      log(`pipeline: first-prompt slash command on tab=${p.tabId} → flipping plan→auto before submit`)
-      sessionPlane.setPermissionMode(p.tabId, 'auto', 'slash_command')
-      broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId: p.tabId, mode: 'auto' })
-    } else {
-      log(`pipeline: slash command not first-of-checkpoint on tab=${p.tabId} (promptCount=${sessionPlane.getTabStatus(p.tabId)?.promptCountSinceCheckpoint ?? '?'}, sessionId=${p.runOptions?.sessionId ?? 'none'}, engineTab=${p.isEngineTab}) → preserving permission mode`)
-    }
+    // Exit plan mode on the first prompt of the checkpoint window before the
+    // resolveSlash re-submit starts its run. `/clear` already short-circuited
+    // above, so this branch never flips for it. See maybeFlipPlanToAutoForSlash.
+    maybeFlipPlanToAutoForSlash(p)
 
     // Surface a system message if the ENGINE also fails to resolve the slash.
     // The engine emits engine_command_result{commandError:'unknown_command'}

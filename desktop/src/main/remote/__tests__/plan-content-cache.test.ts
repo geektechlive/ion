@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { readPlanContentCached, readPlanRangeCached, readPlanPreviewCached, __planCacheSize, __clearPlanCache } from '../plan-content-cache'
+import { readPlanContentCached, readPlanRangeCached, readPlanPreviewCached, resolvePlanPreview, __planCacheSize, __clearPlanCache } from '../plan-content-cache'
 
 // Clean up temp files and cache state between tests.
 const tempFiles: string[] = []
@@ -168,6 +168,63 @@ describe('readPlanPreviewCached', () => {
     expect(Buffer.byteLength(preview, 'utf-8')).toBeLessThanOrEqual(PREVIEW)
     expect(totalBytes).toBe(2 * 1024 * 1024)
     expect(truncated).toBe(true)
+  })
+})
+
+// Regression (solid-running-river.md #1, Prong B): when the plan file is
+// unreadable on disk but the entry carries an inline planContent (the backfill /
+// restored-synthesis card shape), the preview must be derived from the inline
+// body instead of silently omitted. Reverting resolvePlanPreview to the
+// disk-only path makes the "unreadable file + inline" case go red (returns null
+// → snapshot emits no planContentPreview → blank iOS card).
+describe('resolvePlanPreview', () => {
+  const PREVIEW = 4096
+
+  it('reads from disk when planFilePath is readable (preferred source)', () => {
+    const content = 'Plan body on disk'
+    const filePath = makeTempFile(content)
+    const res = resolvePlanPreview({ planFilePath: filePath, planContent: 'STALE INLINE' }, PREVIEW)
+    expect(res).not.toBeNull()
+    // Disk wins over inline when both are present.
+    expect(res!.preview).toBe(content)
+    expect(res!.totalBytes).toBe(Buffer.byteLength(content, 'utf-8'))
+    expect(res!.truncated).toBe(false)
+  })
+
+  it('falls back to inline planContent when the file is unreadable (the regression)', () => {
+    const inline = 'FULL INLINE PLAN BODY'
+    const res = resolvePlanPreview(
+      { planFilePath: '/nonexistent/never/here.md', planContent: inline },
+      PREVIEW,
+    )
+    expect(res).not.toBeNull()
+    expect(res!.preview).toBe(inline)
+    expect(res!.totalBytes).toBe(Buffer.byteLength(inline, 'utf-8'))
+    expect(res!.truncated).toBe(false)
+  })
+
+  it('falls back to inline planContent when planFilePath is absent', () => {
+    const inline = 'INLINE ONLY, NO PATH'
+    const res = resolvePlanPreview({ planContent: inline }, PREVIEW)
+    expect(res).not.toBeNull()
+    expect(res!.preview).toBe(inline)
+  })
+
+  it('bounds the inline fallback to previewBytes and sets truncated', () => {
+    const big = 'Z'.repeat(10 * 1024)
+    const res = resolvePlanPreview({ planContent: big }, PREVIEW)
+    expect(res).not.toBeNull()
+    expect(Buffer.byteLength(res!.preview, 'utf-8')).toBeLessThanOrEqual(PREVIEW)
+    expect(res!.totalBytes).toBe(10 * 1024)
+    expect(res!.truncated).toBe(true)
+  })
+
+  it('returns null when neither a readable file nor an inline body exists', () => {
+    expect(resolvePlanPreview({ planFilePath: '/nonexistent/x.md' }, PREVIEW)).toBeNull()
+    expect(resolvePlanPreview({}, PREVIEW)).toBeNull()
+    expect(resolvePlanPreview(undefined, PREVIEW)).toBeNull()
+    // Empty inline string is not a renderable body.
+    expect(resolvePlanPreview({ planContent: '' }, PREVIEW)).toBeNull()
   })
 })
 

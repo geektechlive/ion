@@ -1,7 +1,24 @@
-import type { EngineBridge } from './engine-bridge'
-import type { EngineEvent, NormalizedEvent, TabStatus, EnrichedError, EngineConfig } from '../shared/types'
+// Translation layer EngineEvent→NormalizedEvent covering every engine_* wire
+// type. The switch below routes each engine_* event to a NormalizedEvent (or a
+// side-effecting handler). To keep every file under the 600-line cap, the
+// domain-clustered arms are extracted into sibling files that share the
+// TabEntry / EventEmitterContext types (defined in
+// engine-control-plane-events-types.ts and re-exported here):
+//   - engine-control-plane-thinking.ts   (thinking channel)
+//   - engine-control-plane-plan.ts       (plan-mode lifecycle)
+//   - engine-control-plane-dispatch.ts   (dispatch / agent-state telemetry)
+//   - engine-control-plane-extension.ts  (extension lifecycle / harness / misc)
+// This file retains the tool/text/message/error/permission/notify/dialog/
+// elicitation/export/compaction/stall/steer arms plus handleStatusEvent and
+// handleDeadEvent.
+import type { EngineEvent, NormalizedEvent, EnrichedError, EngineConfig } from '../shared/types'
 import { log as _log, debug as _debug, warn as _warn, error as _error } from './logger'
 import { handleExportEvent } from './engine-export-handler'
+import { handleThinkingEvent } from './engine-control-plane-thinking'
+import { handlePlanEvent } from './engine-control-plane-plan'
+import { handleDispatchEvent } from './engine-control-plane-dispatch'
+import { handleExtensionEvent } from './engine-control-plane-extension'
+import { conversationExists } from './session-meta'
 
 const TAG = 'SessionPlane'
 function log(msg: string): void { _log(TAG, msg) }
@@ -9,71 +26,12 @@ function debug(msg: string): void { _debug(TAG, msg) }
 function warn(msg: string): void { _warn(TAG, msg) }
 function error(msg: string): void { _error(TAG, msg) }
 
-export interface TabEntry {
-  tabId: string
-  status: TabStatus
-  activeRequestId: string | null
-  conversationId: string | null
-  engineSessionStarted: boolean
-  lastActivityAt: number
-  promptCount: number
-  /**
-   * Number of prompts submitted since the last freshness checkpoint.
-   *
-   * A "checkpoint" is any event that semantically restores the tab to
-   * "fresh blank session" status for the purpose of the slash-command
-   * plan→auto auto-switch guard (`isFirstPromptForTab` in slash-classify.ts).
-   * Two events advance this checkpoint:
-   *
-   *   1. `resetTabSession` — full session reset (stops the engine session,
-   *      drops the conversation id). Zeros `promptCount` too.
-   *   2. `notifyConversationCleared` — `/clear` succeeded. The engine
-   *      session and conversation id intentionally stay alive (it's a
-   *      checkpoint, not a session restart), but the LLM-visible history
-   *      has been wiped, so the next slash command should be treated as
-   *      the first prompt of a blank conversation. `promptCount` is
-   *      preserved in that case because it remains a useful "total prompts
-   *      this app boot" counter for logging.
-   *
-   * Why a separate field rather than reusing `promptCount`: callers of
-   * `getTabStatus` may still want the total prompt count (e.g. logging),
-   * so we keep both. The guard consults this checkpoint-relative counter
-   * exclusively.
-   */
-  promptCountSinceCheckpoint: number
-  /**
-   * Set `true` by `notifyConversationCleared`, cleared by `submitPrompt`.
-   *
-   * This flag disambiguates two states that look identical to the
-   * `promptCountSinceCheckpoint` counter alone:
-   *
-   *   A. Tab just cleared (`/clear` fired) — `promptCountSinceCheckpoint`
-   *      is 0, but the renderer still sends its stale `conversationId` as
-   *      `runOptions.sessionId`. The guard should treat this as fresh.
-   *   B. Tab restored from disk (app restart) — `promptCountSinceCheckpoint`
-   *      is 0, and the renderer sends the restored `conversationId` as
-   *      `runOptions.sessionId`. The guard should treat this as resumed.
-   *
-   * Without this flag the guard cannot tell A from B — both have
-   * `promptCountSinceCheckpoint === 0` and `runOptionsSessionId` set.
-   * With the flag: A has `clearedSinceLastPrompt === true`, so the guard
-   * returns "fresh" and the plan→auto switch fires. B has the flag
-   * `false` (never set after a restore), so the guard returns "not fresh".
-   */
-  clearedSinceLastPrompt: boolean
-  permissionMode: 'auto' | 'plan'
-  approvedTools: string[]
-  startedAt: number
-  toolCallCount: number
-  sawPermissionRequest: boolean
-}
-
-export interface EventEmitterContext {
-  bridge: EngineBridge
-  emit: (eventName: string, ...args: unknown[]) => void
-  setStatus: (tabId: string, newStatus: TabStatus) => void
-  checkDrain: () => void
-}
+// TabEntry and EventEmitterContext are defined in the sibling types module
+// (extracted to keep this file and its domain-split siblings under the
+// 600-line cap). Re-exported here so existing import sites that reach them
+// through this module keep resolving unchanged.
+export type { TabEntry, EventEmitterContext } from './engine-control-plane-events-types'
+import type { TabEntry, EventEmitterContext } from './engine-control-plane-events-types'
 
 export function handleEngineEvent(
   ctx: EventEmitterContext,
@@ -126,8 +84,12 @@ export function handleEngineEvent(
       break
 
     case 'engine_message_end':
+      // End of one LLM message within a multi-turn run. Carries per-message
+      // token usage (for the context bar) and seals the current assistant row
+      // (prevents the next text_chunk from appending to it).
       if (event.usage) {
         log(`message_end: tabId=${tabId} in=${event.usage.inputTokens} out=${event.usage.outputTokens} cost=$${event.usage.cost ?? 0}`)
+        // Keep the legacy usage event for the context bar (contextTokens on tab).
         ctx.emit('event', tabId, {
           type: 'usage',
           usage: {
@@ -136,6 +98,14 @@ export function handleEngineEvent(
           },
         } as NormalizedEvent)
       }
+      // Emit message_end to seal the current assistant row in the single reducer.
+      ctx.emit('event', tabId, {
+        type: 'message_end',
+        inputTokens: event.usage?.inputTokens,
+        outputTokens: event.usage?.outputTokens,
+        contextPercent: event.usage?.contextPercent,
+        cost: event.usage?.cost,
+      } as NormalizedEvent)
       break
 
     case 'engine_status':
@@ -174,66 +144,72 @@ export function handleEngineEvent(
       })
       break
 
-    case 'engine_dialog':
-      ctx.emit('event', tabId, {
-        type: 'dialog' as any,
-        dialogId: event.dialogId,
-        method: event.method,
-        title: event.title,
-        message: event.message,
-        options: event.options,
-        defaultValue: event.defaultValue,
-      } as any)
-      break
-
     case 'engine_working_message':
+      // Extension harness live-status string. Emit as normalized working_message
+      // so event-slice.ts updates engineWorkingMessages keyed by bare tabId.
+      ctx.emit('event', tabId, {
+        type: 'working_message',
+        message: event.message || '',
+      } as NormalizedEvent)
       break
 
     case 'engine_notify':
+      // Extension harness ephemeral notification. Emit as normalized notify
+      // so event-slice.ts pushes to engineNotifications keyed by bare tabId.
+      // For error-level notifications also emit an `error` NormalizedEvent so
+      // the conversation stream shows the error message.
       if (event.level === 'error') {
         ctx.emit('event', tabId, {
           type: 'error',
-          message: event.message,
+          message: event.message || '',
           isError: true,
         } as NormalizedEvent)
       }
+      ctx.emit('event', tabId, {
+        type: 'notify',
+        message: event.message || '',
+        level: event.level || 'info',
+      } as NormalizedEvent)
+      break
+
+    case 'engine_dialog':
+      // Extension harness modal prompt. Emit as normalized dialog so
+      // event-slice.ts updates engineDialogs keyed by bare tabId.
+      ctx.emit('event', tabId, {
+        type: 'dialog',
+        dialogId: event.dialogId || '',
+        method: event.method || '',
+        title: event.title || '',
+        options: event.options,
+        defaultValue: event.defaultValue,
+      } as NormalizedEvent)
+      break
+
+    case 'engine_elicitation_request':
+      // An extension called ctx.elicit(). The engine fans this to every
+      // connected client and blocks (indefinite human-wait) until one
+      // answers with an `elicitation_response` command. Translate to a
+      // normalized elicitation_request so event-slice.ts pushes it onto the
+      // active instance's elicitationQueue and the renderer can show an
+      // approval card. Without this case the event is dropped and the run
+      // parks forever (the dev-lead dispatch stall this fix targets).
+      log(
+        `elicitation_request: tabId=${tabId} requestId=${event.requestId} mode=${event.elicitMode ?? ''}`,
+      )
+      ctx.emit('event', tabId, {
+        type: 'elicitation_request',
+        requestId: event.requestId || '',
+        mode: event.elicitMode || '',
+        schema: event.schema,
+        url: event.url,
+      } as NormalizedEvent)
       break
 
     case 'engine_plan_mode_changed':
-      log(`plan_mode_changed: tabId=${tabId} enabled=${event.planModeEnabled}`)
-      // Only Enabled:true is authoritative — model-initiated EnterPlanMode
-      // confirms the session has entered plan mode and the snapshot must
-      // reflect that. Enabled:false is intentionally NOT synced here: the
-      // engine no longer emits it for ExitPlanMode (model proposal only),
-      // and the user-approval gate in the renderer's onImplement handler
-      // is the single chokepoint for the mode flip back to 'auto'. If a
-      // false event ever arrives (e.g. from a future engine path) we still
-      // forward it to the renderer but do not mutate permissionMode here.
-      if (event.planModeEnabled) {
-        if (tab.permissionMode !== 'plan') {
-          tab.permissionMode = 'plan'
-          log(`plan_mode_changed: tabId=${tabId} engine flipped to plan, syncing tab.permissionMode`)
-        }
-      } else {
-        log(`plan_mode_changed: tabId=${tabId} enabled=false ignored (mode flip deferred to user-approval chokepoint)`)
-      }
-      ctx.emit('event', tabId, event as any)
-      break
-
+    case 'engine_plan_file_written':
+    case 'engine_plan_mode_auto_exit':
     case 'engine_plan_proposal':
-      // The model has proposed a plan-mode transition (currently only
-      // kind="exit" — the model called ExitPlanMode). This is a workflow
-      // event, NOT a state transition: the actual mode change is deferred
-      // to the user-approval chokepoint in usePermissionDeniedHandlers.
-      // The desktop forwards the event to the renderer as the authoritative
-      // signal that an approval card should render; the permission_denial
-      // path on engine_status remains the fallback card-render trigger so
-      // existing logic keeps working during the migration. See
-      // docs/architecture/adr/003-state-events-vs-workflow-events.md.
-      log(
-        `plan_proposal: tabId=${tabId} kind=${event.planProposalKind} planFilePath=${event.planFilePath ?? ''} planSlug=${event.planSlug ?? ''}`,
-      )
-      ctx.emit('event', tabId, event as any)
+      handlePlanEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_stream_reset':
@@ -242,8 +218,23 @@ export function handleEngineEvent(
       break
 
     case 'engine_compacting':
-      log(`compacting: tabId=${tabId} active=${event.active}`)
-      ctx.emit('event', tabId, { type: 'compacting', active: event.active } as NormalizedEvent)
+      log(`compacting: tabId=${tabId} active=${event.active} microOnly=${event.microOnly ?? false} msgsBefore=${event.messagesBefore ?? 0} msgsAfter=${event.messagesAfter ?? 0}`)
+      // Forward the full detail field set, not just `active`. The renderer
+      // marker (event-slice.ts) and the iOS-bound marker (event-wiring-remote.ts)
+      // both read messagesBefore/messagesAfter/clearedBlocks/summary/strategy/
+      // microOnly to build the "[Compaction]" checkpoint line. Dropping them
+      // here (the prior behavior) left both markers as dead code — the fields
+      // never arrived, so the marker was never inserted.
+      ctx.emit('event', tabId, {
+        type: 'compacting',
+        active: event.active,
+        summary: event.summary,
+        messagesBefore: event.messagesBefore,
+        messagesAfter: event.messagesAfter,
+        clearedBlocks: event.clearedBlocks,
+        strategy: event.strategy,
+        microOnly: event.microOnly,
+      } as NormalizedEvent)
       break
 
     case 'engine_tool_stalled':
@@ -253,6 +244,17 @@ export function handleEngineEvent(
         toolId: event.toolId,
         toolName: event.toolName,
         elapsed: event.toolElapsed,
+      } as NormalizedEvent)
+      break
+
+    case 'engine_run_stalled':
+      // Advisory watchdog signal. The legacy path only logged this; emit as
+      // normalized run_stalled so the renderer can surface a distinct indicator.
+      debug(`run_stalled: tabId=${tabId} duration=${event.runStalledDuration} lastActivity=${event.runStalledLastActivity ?? 'unknown'}`)
+      ctx.emit('event', tabId, {
+        type: 'run_stalled',
+        stalledDuration: event.runStalledDuration,
+        lastActivity: event.runStalledLastActivity,
       } as NormalizedEvent)
       break
 
@@ -269,48 +271,24 @@ export function handleEngineEvent(
       break
 
     case 'engine_thinking_block_start':
-      // Extended thinking (issue #158), plain-conversation path. The model
-      // began a reasoning block. Translate to the normalized-stream
-      // `thinking_block_start` so event-slice.ts opens a `role: 'thinking'`
-      // row. Boundaries always arrive when reasoning happened; the per-token
-      // delta may be suppressed engine-side (summary-only path). Mirrors the
-      // extension-hosted path in engine-event-slice.ts.
-      log(`thinking_block_start: tabId=${tabId}`)
-      ctx.emit('event', tabId, { type: 'thinking_block_start' } as NormalizedEvent)
-      break
-
     case 'engine_thinking_delta':
-      // Incremental reasoning text — peer of engine_text_delta for the
-      // thinking channel. Only arrives when the engine's ThinkingConfig
-      // .StreamDeltas is on (boundaries always flow regardless). Translate to
-      // the normalized `thinking_delta` so the renderer appends it to the open
-      // thinking row.
-      log(`thinking_delta: tabId=${tabId} len=${event.thinkingText?.length ?? 0}`)
-      ctx.emit('event', tabId, {
-        type: 'thinking_delta',
-        text: event.thinkingText,
-      } as NormalizedEvent)
-      break
-
     case 'engine_thinking_block_end':
-      // The reasoning block finished. Carries a summary (elapsed seconds,
-      // token estimate, redacted flag) so the renderer can show "💭 Thought
-      // for Ns" even when deltas were suppressed. Translate to the normalized
-      // `thinking_block_end` so event-slice.ts seals the active thinking row.
-      log(
-        `thinking_block_end: tabId=${tabId} elapsed=${event.thinkingElapsedSeconds ?? '?'}s ` +
-        `tokens=${event.thinkingTotalTokens ?? '?'} redacted=${!!event.thinkingRedacted}`,
-      )
-      ctx.emit('event', tabId, {
-        type: 'thinking_block_end',
-        totalTokens: event.thinkingTotalTokens,
-        elapsedSeconds: event.thinkingElapsedSeconds,
-        redacted: event.thinkingRedacted,
-      } as NormalizedEvent)
+      handleThinkingEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_agent_state':
-      ctx.emit('event', tabId, event as any)
+    case 'engine_dispatch_start':
+    case 'engine_dispatch_end':
+      handleDispatchEvent(ctx, tabId, tab, event)
+      break
+
+    case 'engine_harness_message':
+    case 'engine_extension_died':
+    case 'engine_extension_respawned':
+    case 'engine_extension_dead_permanent':
+    case 'engine_events_dropped':
+    case 'engine_model_fallback':
+      handleExtensionEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_early_stop_decision_request':
@@ -327,12 +305,7 @@ export function handleEngineEvent(
       break
 
     case 'engine_intercept':
-      // Fire-and-forget signal: bubble up via ctx.emit so event-wiring.ts's
-      // wireSessionPlaneEvents can call handleInterceptEvent without creating
-      // a circular import through state.ts. The event carries the raw payload
-      // and tabId; the wiring layer in event-wiring.ts does the routing.
-      log(`intercept: tabId=${tabId} level=${event.interceptLevel} title=${event.interceptTitle}`)
-      ctx.emit('engine_intercept', tabId, event)
+      handleExtensionEvent(ctx, tabId, tab, event)
       break
 
     case 'engine_export':
@@ -357,50 +330,180 @@ function handleStatusEvent(
 ): void {
   if (!event.fields) return
   log(`engine_status: tabId=${tabId} state=${event.fields.state} sessionId=${event.fields.sessionId ?? 'none'} cost=$${event.fields.totalCostUsd ?? 0}`)
+  // Forward the full StatusFields snapshot to the renderer BEFORE the
+  // state-binding branches below. The renderer's `status` arm replaces
+  // inst.statusFields wholesale (snapshot semantics). This is unconditional —
+  // every engine_status, all states — so the renderer's statusFields tracks
+  // model/backend/cost/extensionName on running, idle, and cost-only heartbeat
+  // ticks alike, not just on idle (the binding/task_complete path below drops
+  // those fields). The emit is additive; the existing binding logic is unchanged.
+  log(`status: forwarding StatusFields snapshot to renderer tabId=${tabId} state=${event.fields.state} model=${event.fields.model ?? 'none'} backend=${event.fields.backend ?? 'api'}`)
+  ctx.emit('event', tabId, { type: 'status', fields: event.fields } as NormalizedEvent)
   if (event.fields.state === 'idle') {
     if (event.fields.sessionId) {
       if (!tab.conversationId) {
         // First-ever bind: adopt the engine's id (normal first-start path).
+        //
+        // This branch is now reached ONLY when the tab genuinely had no id from
+        // any source. The two start sites both seed tab.conversationId before
+        // the engine can emit this idle: ensureSession seeds it from the tracked
+        // id (plain tabs), and the ENGINE_START IPC calls
+        // sessionPlane.seedConversationId from config.sessionId (extension
+        // tabs). So a restored tab that knows its real conversation arrives here
+        // already-seeded and takes the matching-id branch below — it never
+        // adopts a pre-minted empty id. Reaching this branch means a true
+        // first-start (new tab, no persisted conversation), where adopting the
+        // engine's freshly-minted id is correct.
+        log(`engine_status: tabId=${tabId} first-bind adopting engine sessionId=${event.fields.sessionId} (tab had no tracked id)`)
         tab.conversationId = event.fields.sessionId
+        // True first-start (new tab, no persisted conversation) — a fresh mint,
+        // not a resume. Leave resumedSavedConversation false (scenario C) so a
+        // first-prompt slash command stays fresh and flips plan→auto.
         ctx.bridge.updateSessionConversationId(tabId, event.fields.sessionId)
       } else if (tab.conversationId === event.fields.sessionId) {
         // Matching id: no-op (normal heartbeat tick or stable idle).
         ctx.bridge.updateSessionConversationId(tabId, event.fields.sessionId)
       } else {
-        // Divergence: the engine has a different id. This is the post-restart
-        // pre-mint footgun (issue #230 B1). Do NOT clobber the tracked id.
-        // Drive a resume so the engine rebinds the key to the real conversation.
+        // Divergence: the engine has a different id than the one this tab
+        // tracks. There are two distinct sub-cases, and conflating them is what
+        // caused the morning data loss:
         //
-        // Carry the tab's REAL config into the resume (workingDirectory,
-        // extensions, model) rather than empty placeholders: a bare config would
-        // start a degraded session (wrong cwd, no extensions). The bridge holds
-        // the last EngineConfig used for this key; we reuse it and override only
-        // sessionId so the engine resumes the original conversation with the same
-        // working session. Falls back to a minimal config only if the bridge has
-        // no record (should not happen for a started session). (#231)
-        const priorConfig = ctx.bridge.getSessionConfig(tabId)
-        const resumeConfig: EngineConfig = priorConfig
-          ? { ...priorConfig, sessionId: tab.conversationId, forceNewConversation: false }
-          : { profileId: 'default', extensions: [], workingDirectory: '', sessionId: tab.conversationId }
-        warn(
-          `engine_status: tabId=${tabId} engine sessionId=${event.fields.sessionId} diverges from tracked conversationId=${tab.conversationId} — driving resume to restore original conversation (dir=${resumeConfig.workingDirectory || 'none'} model=${resumeConfig.model ?? 'default'} extensions=${resumeConfig.extensions.length})`,
-        )
-        ctx.bridge.updateSessionConversationId(tabId, tab.conversationId)
-        void ctx.bridge.startSession(tabId, resumeConfig)
+        //   (a) The tracked id is a REAL conversation (file exists on disk).
+        //       This is the post-restart pre-mint footgun (#230 B1): the engine
+        //       pre-minted before the client asserted the real id. Drive a
+        //       resume so the engine rebinds the key to the real conversation.
+        //
+        //   (b) The tracked id is a PHANTOM (no backing file). It was itself a
+        //       pre-mint from a PRIOR restart that was never saved. Driving a
+        //       resume to it is futile — the engine now (correctly) ignores a
+        //       fileless sessionId and pre-mints AGAIN, so re-pinning the
+        //       phantom just spins the cascade that orphaned the real history.
+        //       Instead, adopt the engine's freshly-minted id as the tab's new
+        //       identity and stop fighting. The real prior history (if any) is
+        //       in the persisted scrollback; a future save under this real id
+        //       makes it durable. (#230/#231)
+        const trackedIsReal = conversationExists(tab.conversationId)
+        if (!trackedIsReal) {
+          warn(
+            `engine_status: tabId=${tabId} tracked conversationId=${tab.conversationId} has NO backing file (phantom) — adopting engine sessionId=${event.fields.sessionId} instead of re-driving a futile resume (breaks the empty-conversation cascade)`,
+          )
+          tab.conversationId = event.fields.sessionId
+          ctx.bridge.updateSessionConversationId(tabId, event.fields.sessionId)
+        } else {
+          // (a) Real tracked conversation — drive the resume.
+          //
+          // Carry the tab's REAL config into the resume (workingDirectory,
+          // extensions, model) rather than empty placeholders: a bare config would
+          // start a degraded session (wrong cwd, no extensions). The bridge holds
+          // the last EngineConfig used for this key; we reuse it and override only
+          // sessionId so the engine resumes the original conversation with the same
+          // working session. Falls back to a minimal config only if the bridge has
+          // no record (should not happen for a started session). (#231)
+          const priorConfig = ctx.bridge.getSessionConfig(tabId)
+          const resumeConfig: EngineConfig = priorConfig
+            ? { ...priorConfig, sessionId: tab.conversationId, forceNewConversation: false }
+            : { profileId: 'default', extensions: [], workingDirectory: '', sessionId: tab.conversationId }
+          warn(
+            `engine_status: tabId=${tabId} engine sessionId=${event.fields.sessionId} diverges from tracked conversationId=${tab.conversationId} — driving resume to restore original conversation (dir=${resumeConfig.workingDirectory || 'none'} model=${resumeConfig.model ?? 'default'} extensions=${resumeConfig.extensions.length})`,
+          )
+          ctx.bridge.updateSessionConversationId(tabId, tab.conversationId)
+          void ctx.bridge.startSession(tabId, resumeConfig)
+        }
       }
     }
 
-    if (tab.status === 'completed' || tab.status === 'idle' || tab.status === 'connecting') {
-      // 'completed' / 'idle': already synthesized task_complete for this
-      // idle transition — skip duplicates from cost-only heartbeat ticks.
-      // 'connecting': submitPrompt has been called (new prompt in flight)
-      // but the engine hasn't responded with state='running' yet. Any
-      // engine_status(idle + denials) in this window is stale — the engine
-      // is about to clear its lastPermissionDenials in prompt_dispatch.
-      // Synthesizing a task_complete here would resurrect a dismissed
-      // ExitPlanMode / AskUserQuestion card.
-      log(`engine_status: skipping idle for ${tab.status} tab ${tabId}`)
+    // Session-ready idle: the engine emits engine_status(starting) → (idle)
+    // when a session is first established, BEFORE any prompt runs (see
+    // engine/internal/session/start_session.go). On the profile-launch create
+    // path the renderer set its tab to 'connecting' (createConversationTab)
+    // while the control-plane TabEntry is still 'idle'; this ready idle is the
+    // only signal that clears the renderer's 'connecting'. A never-run session
+    // is identified by activeRequestId == null && startedAt === 0 (no prompt
+    // has ever been dispatched on this tab). Forward an 'idle' status
+    // transition to the renderer — directly, because _setStatus would no-op
+    // (the control-plane TabEntry is already 'idle') — and do NOT synthesize a
+    // task_complete (that would fabricate a completed run and trip
+    // auto-move-to-done for a session that ran nothing).
+    const isReadyIdle = tab.activeRequestId == null && tab.startedAt === 0
+    if (
+      (tab.status === 'idle' || tab.status === 'connecting') &&
+      isReadyIdle
+    ) {
+      log(`engine_status: session-ready idle for ${tab.status} tab ${tabId} — forwarding idle (no task_complete)`)
+      ctx.emit('tab-status-change', tabId, 'idle', tab.status)
+      ctx.checkDrain()
       return
+    }
+
+    // Compute whether THIS idle carries a proposal that needs a user
+    // response (ExitPlanMode / AskUserQuestion) BEFORE the duplicate-skip
+    // guard. A proposal-bearing idle is the first-and-only delivery of the
+    // Plan Ready / question card trigger; it must never be silently dropped
+    // as a "duplicate heartbeat". The guard below exists to suppress
+    // cost-only heartbeat ticks and stale post-reset idles — NOT to drop the
+    // first real proposal. (Bug #2: an auto-dispatched run that flips to plan
+    // mid-run lands its ExitPlanMode denial on an idle that arrives while the
+    // tab is already 'completed'/'idle' from a heartbeat, so the unconditional
+    // skip dropped the only card trigger and the Plan Ready card never
+    // rendered. Confirmed live in desktop.log: "skipping idle for idle tab
+    // 60726597-…".)
+    const idleNeedsUserResponse = event.fields.permissionDenials?.some(
+      (d: any) => d.toolName === 'ExitPlanMode' || d.toolName === 'AskUserQuestion',
+    )
+
+    // 'connecting' is exempted from the proposal pass-through below and ALWAYS
+    // skips: a prompt has been dispatched (activeRequestId/startedAt set by
+    // submitPrompt) and the engine hasn't replied state='running' yet, OR a
+    // stale idle from a session killed by resetTabSession during the Implement
+    // flow is arriving after the new run started. In BOTH 'connecting' cases a
+    // newer run supersedes; the engine clears its lastPermissionDenials on the
+    // new prompt dispatch (prompt_dispatch.go), so a denial echoed on a
+    // 'connecting' idle is stale and must not resurrect a just-dismissed card.
+    if (tab.status === 'connecting') {
+      log(`engine_status: skipping idle for connecting tab ${tabId} (new run in flight — denials stale)`)
+      return
+    }
+
+    if (
+      (tab.status === 'completed' || tab.status === 'idle') &&
+      !idleNeedsUserResponse
+    ) {
+      // 'completed' / 'idle' with NO proposal denial: already synthesized
+      // task_complete for this idle transition — skip duplicates from
+      // cost-only heartbeat ticks. The engine re-publishes retained denials
+      // on every heartbeat (manager_heartbeat.go), so without this skip a
+      // cost-only tick would synthesize a redundant task_complete.
+      log(`engine_status: skipping idle for ${tab.status} tab ${tabId} (no proposal denials)`)
+      return
+    }
+
+    if ((tab.status === 'completed' || tab.status === 'idle') && idleNeedsUserResponse) {
+      // This idle carries a proposal denial (ExitPlanMode / AskUserQuestion)
+      // and the tab is in a settled terminal state (NOT 'connecting', so no
+      // newer run is in flight). It is the genuine card trigger for an
+      // auto-dispatched mid-run plan flip — but the engine RE-PUBLISHES the
+      // same retained denial on every heartbeat (manager_heartbeat.go), so we
+      // must surface it ONCE per distinct proposal. Dedup on a stable
+      // signature of the proposal so a heartbeat echo does not re-synthesize a
+      // task_complete (which would resurrect a card the user already
+      // dismissed). A genuinely new proposal (different tool / plan path)
+      // produces a different signature and re-fires.
+      const proposalSig = (event.fields.permissionDenials || [])
+        .filter((d: any) => d.toolName === 'ExitPlanMode' || d.toolName === 'AskUserQuestion')
+        .map((d: any) => `${d.toolName}:${d.toolInput?.planFilePath ?? d.toolUseID ?? ''}`)
+        .sort()
+        .join('|')
+      if (tab.lastSurfacedProposalSig === proposalSig) {
+        log(`engine_status: skipping proposal idle for ${tab.status} tab ${tabId} (already surfaced sig=${proposalSig} — heartbeat echo, not resurrecting dismissed card)`)
+        return
+      }
+      tab.lastSurfacedProposalSig = proposalSig
+      // Log the first delivery so the decision is reconstructable from
+      // desktop.log (logging policy: log both branches).
+      const toolNames = (event.fields.permissionDenials || [])
+        .map((d: any) => d.toolName)
+        .join(',')
+      log(`engine_status: forwarding proposal idle for ${tab.status} tab ${tabId} denials=[${toolNames}] sig=${proposalSig} (card trigger, first delivery)`)
     }
 
     const durationMs = tab.startedAt ? Date.now() - tab.startedAt : 0
@@ -443,6 +546,11 @@ function handleStatusEvent(
         isWarmup: false,
       } as NormalizedEvent)
     }
+    // A real run started: clear the surfaced-proposal dedup so the NEXT
+    // proposal produced by this new work re-surfaces even if it happens to
+    // carry an identical signature to the prior one (e.g. the model re-enters
+    // plan mode and proposes the same plan file again).
+    tab.lastSurfacedProposalSig = null
     ctx.setStatus(tabId, 'running')
   }
 }

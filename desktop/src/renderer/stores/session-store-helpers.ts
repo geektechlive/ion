@@ -2,6 +2,7 @@ import type { TabState } from '../../shared/types'
 import { usePreferencesStore } from '../preferences'
 import notificationSrc from '../../../resources/notification.mp3'
 import type { FileEditorDirState } from './session-store-types'
+import { tabHasExtensions } from '../../shared/tab-predicates'
 
 const EDITABLE_EXTS = new Set(['.md', '.txt'])
 
@@ -61,9 +62,17 @@ export async function playNotificationIfHidden(): Promise<void> {
   } catch {}
 }
 
+/**
+ * Read the user's preferred default permission mode from preferences.
+ * Used at tab/instance creation time to seed the initial mode onto the
+ * conversation instance (TabState no longer carries a permissionMode ghost
+ * field — WI-002).
+ */
+export function initialPermissionMode(): 'auto' | 'plan' {
+  return usePreferencesStore.getState().defaultPermissionMode ?? 'auto'
+}
+
 export function makeLocalTab(): TabState {
-  const prefs = usePreferencesStore.getState()
-  const permissionMode = prefs.defaultPermissionMode
   return {
     id: crypto.randomUUID(),
     conversationId: null,
@@ -87,7 +96,6 @@ export function makeLocalTab(): TabState {
     hasChosenDirectory: false,
     lastMessagePreview: null,
     additionalDirs: [],
-    permissionMode,
     bashResults: [],
     bashExecuting: false,
     bashExecId: null,
@@ -104,7 +112,6 @@ export function makeLocalTab(): TabState {
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    hasEngineExtension: false,
     engineProfileId: null,
   }
 }
@@ -124,17 +131,36 @@ export function initialModelOverride(): string | null {
 }
 
 /**
- * Blank-conversation detection. `msgCount` is the tab's active-instance
- * effective message count (`instanceMessageCount` from conversation-instance.ts);
- * callers resolve it from `conversationPanes` since message state no longer lives on
- * `TabState`. A blank conversation tab has no messages, no custom title, and is
- * anchored to `dir`.
+ * Reusable-blank-conversation detection — the new-tab DEDUP predicate.
+ *
+ * Answers: "should the new-tab action (createTab / createTabInDirectory)
+ * REUSE this existing empty tab instead of spawning a duplicate blank?" When
+ * the user requests a new tab and an untouched empty conversation tab already
+ * exists for the same directory, the action focuses it rather than stacking up
+ * a second identical blank. This never moves a conversation between tabs.
+ *
+ * `msgCount` is the tab's active-instance effective message count
+ * (`instanceMessageCount` from conversation-instance.ts); callers resolve it
+ * from `conversationPanes` since message state no longer lives on `TabState`. A
+ * reusable blank has no messages, no custom title, and is anchored to `dir`.
+ *
+ * The `!tabHasExtensions(t)` clause is IDENTITY data, not the unified-behavior
+ * divergence pattern: a harness-configured tab (carrying an `engineProfileId`)
+ * is not a generic blank, and silently retargeting "new tab" into a configured
+ * harness would be wrong. Excluding extension tabs from reuse is intended and
+ * stays in parity.
  */
-export function isBlankConversationTab(t: TabState, dir: string, msgCount: number): boolean {
-  return !t.isTerminalOnly && !t.hasEngineExtension && msgCount === 0 && !t.customTitle && t.workingDirectory === dir
+export function isReusableBlankConversationTab(t: TabState, dir: string, msgCount: number): boolean {
+  return !t.isTerminalOnly && !tabHasExtensions(t) && msgCount === 0 && !t.customTitle && t.workingDirectory === dir
 }
 
-export function isBlankTerminalTab(t: TabState, dir: string): boolean {
+/**
+ * Reusable-blank-terminal detection — the terminal-tab sibling of
+ * {@link isReusableBlankConversationTab}. Answers whether a new terminal tab
+ * request should reuse this untouched terminal-only tab for `dir` instead of
+ * spawning a duplicate.
+ */
+export function isReusableBlankTerminalTab(t: TabState, dir: string): boolean {
   return t.isTerminalOnly && !t.customTitle && t.workingDirectory === dir
 }
 

@@ -54,12 +54,13 @@ function harness() {
   // Stub connect — we don't want to actually open a socket.
   ;(bridge as any).connect = vi.fn(async () => {})
 
-  // Track dispatch calls. _sendWithResult is the start_session path;
-  // sendReconcileState is the post-start reconcile path.
-  const sendWithResultCalls: any[] = []
+  // Track dispatch calls. _sendWithData is the start_session path (it reads the
+  // engine-minted conversationId from the result Data); sendReconcileState is
+  // the post-start reconcile path.
+  const sendWithDataCalls: any[] = []
   const reconcileCalls: string[] = []
-  ;(bridge as any)._sendWithResult = vi.fn(async (msg: any) => {
-    sendWithResultCalls.push(msg)
+  ;(bridge as any)._sendWithData = vi.fn(async (msg: any) => {
+    sendWithDataCalls.push(msg)
     return { ok: true }
   })
   const origSendReconcileState = bridge.sendReconcileState.bind(bridge)
@@ -69,7 +70,7 @@ function harness() {
     try { origSendReconcileState(key) } catch { /* socket not open in tests */ }
   }
 
-  return { bridge, sendWithResultCalls, reconcileCalls }
+  return { bridge, sendWithDataCalls, reconcileCalls }
 }
 
 describe('EngineBridge.startSession post-start reconcile', () => {
@@ -78,21 +79,21 @@ describe('EngineBridge.startSession post-start reconcile', () => {
   })
 
   it('dispatches reconcile_state after a successful start_session', async () => {
-    const { bridge, sendWithResultCalls, reconcileCalls } = harness()
+    const { bridge, sendWithDataCalls, reconcileCalls } = harness()
 
     const result = await bridge.startSession('tab1:inst-a', makeConfig())
 
     expect(result.ok).toBe(true)
     // start_session dispatched exactly once.
-    expect(sendWithResultCalls.filter((m) => m.cmd === 'start_session')).toHaveLength(1)
+    expect(sendWithDataCalls.filter((m) => m.cmd === 'start_session')).toHaveLength(1)
     // reconcile_state dispatched exactly once, with the same key.
     expect(reconcileCalls).toEqual(['tab1:inst-a'])
   })
 
   it('skips reconcile_state when start_session fails', async () => {
     const { bridge, reconcileCalls } = harness()
-    // Override _sendWithResult to return a failure.
-    ;(bridge as any)._sendWithResult = vi.fn(async () => ({ ok: false, error: 'boom' }))
+    // Override _sendWithData to return a failure.
+    ;(bridge as any)._sendWithData = vi.fn(async () => ({ ok: false, error: 'boom' }))
 
     const result = await bridge.startSession('tab2:inst-b', makeConfig())
 
@@ -112,7 +113,7 @@ describe('EngineBridge.startSession post-start reconcile', () => {
   })
 
   it('reuses tracked conversationId from prior session lifecycle', async () => {
-    const { bridge, sendWithResultCalls } = harness()
+    const { bridge, sendWithDataCalls } = harness()
     // Pre-seed an entry with a conversationId (simulates a session that
     // was started before and is being re-started after a stop).
     bridge.activeSessions.set('tab4:inst-d', {
@@ -122,13 +123,13 @@ describe('EngineBridge.startSession post-start reconcile', () => {
 
     await bridge.startSession('tab4:inst-d', makeConfig())
 
-    const startMsg = sendWithResultCalls.find((m) => m.cmd === 'start_session')
+    const startMsg = sendWithDataCalls.find((m) => m.cmd === 'start_session')
     expect(startMsg).toBeDefined()
     expect(startMsg.config.sessionId).toBe('conv-xyz')
   })
 
   it('honors an explicit config.sessionId over the tracked conversationId', async () => {
-    const { bridge, sendWithResultCalls } = harness()
+    const { bridge, sendWithDataCalls } = harness()
     bridge.activeSessions.set('tab5:inst-e', {
       config: makeConfig(),
       conversationId: 'conv-tracked',
@@ -137,7 +138,22 @@ describe('EngineBridge.startSession post-start reconcile', () => {
     const config = { ...makeConfig(), sessionId: 'conv-explicit' }
     await bridge.startSession('tab5:inst-e', config)
 
-    const startMsg = sendWithResultCalls.find((m) => m.cmd === 'start_session')
+    const startMsg = sendWithDataCalls.find((m) => m.cmd === 'start_session')
     expect(startMsg.config.sessionId).toBe('conv-explicit')
+  })
+
+  it('returns the engine-minted conversationId from the start_session result and tracks it', async () => {
+    const { bridge } = harness()
+    // The engine binds the conversation id inside StartSession and returns it in
+    // the start_session result Data. startSession must surface it (so the
+    // renderer can copy it on a fresh tab) and record it on the tracked session
+    // so reconnect resume carries the same id.
+    ;(bridge as any)._sendWithData = vi.fn(async () => ({ ok: true, data: { conversationId: '1780000000000-cccccccccccc' } }))
+
+    const result = await bridge.startSession('tab6:inst-f', makeConfig())
+
+    expect(result.ok).toBe(true)
+    expect(result.conversationId).toBe('1780000000000-cccccccccccc')
+    expect(bridge.activeSessions.get('tab6:inst-f')?.conversationId).toBe('1780000000000-cccccccccccc')
   })
 })

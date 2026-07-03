@@ -1,16 +1,13 @@
 package session
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
-	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
-	"github.com/dsswift/ion/engine/internal/modelconfig"
 	"github.com/dsswift/ion/engine/internal/permissions"
 	"github.com/dsswift/ion/engine/internal/providers"
 	"github.com/dsswift/ion/engine/internal/resource"
@@ -28,369 +25,6 @@ import (
 type StartSessionResult struct {
 	Existed        bool   `json:"existed"`
 	ConversationID string `json:"conversationId,omitempty"`
-}
-
-// sessionAccessor adapts *Manager + *engineSession to the
-// extcontext.SessionAccessor interface. Each method delegates to the manager
-// and session with appropriate locking.
-type sessionAccessor struct {
-	m   *Manager
-	s   *engineSession
-	key string
-}
-
-func (a *sessionAccessor) SessionKey() string       { return a.key }
-func (a *sessionAccessor) ConversationID() string   { return a.s.conversationID }
-func (a *sessionAccessor) WorkingDirectory() string  { return a.s.config.WorkingDirectory }
-
-func (a *sessionAccessor) Emit(ev types.EngineEvent) { a.m.emit(a.key, ev) }
-
-func (a *sessionAccessor) SendAbort() { a.m.SendAbort(a.key) }
-
-// RootContext returns the session's cancellation root so extcontext-built
-// operations (ctx.llmCall, agent dispatch) derive from it and are cancelled
-// by a session-level abort. Never nil — rootContext() falls back to
-// context.Background() for test-constructed sessions. See
-// session_root_context.go.
-func (a *sessionAccessor) RootContext() context.Context { return a.s.rootContext() }
-
-func (a *sessionAccessor) SendPrompt(text string, model string, bashAllowlistAdditions []string) error {
-	overrides := buildPromptOverrides(model, bashAllowlistAdditions)
-	if len(bashAllowlistAdditions) > 0 {
-		utils.Info("PlanMode", fmt.Sprintf("sessionAccessor.SendPrompt: key=%s threading %d bash-allowlist additions for this prompt: %v", a.key, len(bashAllowlistAdditions), bashAllowlistAdditions))
-	}
-	return a.m.SendPrompt(a.key, text, overrides)
-}
-
-func (a *sessionAccessor) Elicit(info extension.ElicitationRequestInfo) (map[string]interface{}, bool, error) {
-	return a.m.elicit(a.s, a.key, info)
-}
-
-func (a *sessionAccessor) SuppressTool(name string) {
-	a.m.mu.Lock()
-	a.s.suppressedTools = append(a.s.suppressedTools, name)
-	a.m.mu.Unlock()
-}
-
-func (a *sessionAccessor) CacheExtAgentStates(agentStates []types.AgentStateUpdate) {
-	a.s.agents.CacheExtStates(agentStates)
-}
-
-func (a *sessionAccessor) RegisterAgent(name string, handle types.AgentHandle) {
-	a.s.agents.RegisterHandle(name, handle)
-}
-
-func (a *sessionAccessor) DeregisterAgent(name string) {
-	a.s.agents.DeregisterHandle(name)
-}
-
-func (a *sessionAccessor) RegisterAgentSpec(spec types.AgentSpec) {
-	a.s.agents.RegisterSpec(spec)
-}
-
-func (a *sessionAccessor) DeregisterAgentSpec(name string) {
-	a.s.agents.DeregisterSpec(name)
-}
-
-func (a *sessionAccessor) LookupAgentSpec(name string) (types.AgentSpec, bool) {
-	return a.s.agents.LookupSpec(name)
-}
-
-func (a *sessionAccessor) LookupExtDisplayName(name string) string {
-	return a.s.agents.LookupExtDisplayName(name)
-}
-
-func (a *sessionAccessor) ExtGroup() *extension.ExtensionGroup { return a.s.extGroup }
-
-func (a *sessionAccessor) ExtConfig() *extension.ExtensionConfig {
-	if a.s.extGroup != nil && !a.s.extGroup.IsEmpty() {
-		return &extension.ExtensionConfig{
-			WorkingDirectory: a.s.config.WorkingDirectory,
-		}
-	}
-	return nil
-}
-
-func (a *sessionAccessor) ProcRegistry() *extension.ProcessRegistry { return a.s.procRegistry }
-
-func (a *sessionAccessor) NewChildBackend() backend.RunBackend { return a.m.newChildBackend() }
-
-func (a *sessionAccessor) EngineConfig() *types.EngineRuntimeConfig { return a.m.config }
-
-func (a *sessionAccessor) ResolveTier(name string) string { return modelconfig.ResolveTier(name) }
-
-func (a *sessionAccessor) PermissionCheck(toolName string, input map[string]interface{}) (string, string) {
-	if a.s.permEngine == nil {
-		return "", ""
-	}
-	result := a.s.permEngine.Check(permissions.CheckInfo{
-		Tool:      toolName,
-		Input:     input,
-		Cwd:       a.s.config.WorkingDirectory,
-		SessionID: a.key,
-	})
-	return result.Decision, result.Reason
-}
-
-func (a *sessionAccessor) McpConnections() []*mcp.Connection {
-	a.m.mu.RLock()
-	defer a.m.mu.RUnlock()
-	return a.s.mcpConns
-}
-
-func (a *sessionAccessor) SearchHistory(query string, maxResults int) []extension.HistoryMatch {
-	a.m.mu.RLock()
-	requestID := a.s.requestID
-	lastModel := a.s.lastModel
-	a.m.mu.RUnlock()
-	if requestID == "" {
-		return nil
-	}
-	// resolvedBackend resolves to the inner *ApiBackend for hybrid (when the
-	// last dispatched model was non-Anthropic) or returns m.backend as-is
-	// for plain ApiBackend. CLI-routed hybrid runs and plain CliBackend
-	// return nil here — SearchHistory only operates on the API backend's
-	// in-process conversation buffer.
-	apiBackend, ok := a.m.resolvedBackend(lastModel).(*backend.ApiBackend)
-	if !ok {
-		return nil
-	}
-	convMatches := apiBackend.SearchHistory(requestID, query, maxResults)
-	if len(convMatches) == 0 {
-		return nil
-	}
-	// Convert conversation.HistoryMatch → extension.HistoryMatch
-	result := make([]extension.HistoryMatch, len(convMatches))
-	for i, m := range convMatches {
-		result[i] = extension.HistoryMatch{
-			Index:     m.Index,
-			Role:      m.Role,
-			Type:      m.Type,
-			Snippet:   m.Snippet,
-			ToolName:  m.ToolName,
-			ToolUseID: m.ToolUseID,
-		}
-	}
-	return result
-}
-
-func (a *sessionAccessor) GetSessionMemory() string {
-	a.m.mu.RLock()
-	sm := a.s.sessionMemory
-	a.m.mu.RUnlock()
-	if sm == nil {
-		return ""
-	}
-	return sm.GetMemory()
-}
-
-func (a *sessionAccessor) SetSessionMemory(content string) {
-	a.m.mu.RLock()
-	sm := a.s.sessionMemory
-	a.m.mu.RUnlock()
-	if sm == nil {
-		utils.Log("Session", "SetSessionMemory: no session memory active, ignoring")
-		return
-	}
-	sm.SetMemory(content)
-}
-
-func (a *sessionAccessor) TranslateEvent(ev types.NormalizedEvent, contextWindow int) types.EngineEvent {
-	return translateToEngineEvent(ev, contextWindow)
-}
-
-// SetPlanMode imperatively flips plan mode for this session. Used by
-// extensions via ctx.SetPlanMode. Delegates to Manager.SetPlanMode so all
-// the planFilePath-preservation and hasExitedPlanMode logic applies.
-func (a *sessionAccessor) SetPlanMode(enabled bool, source string) {
-	a.m.SetPlanMode(a.key, enabled, nil, source)
-}
-
-// GetPlanModeState returns (enabled, planFilePath) for this session.
-func (a *sessionAccessor) GetPlanModeState() (bool, string) {
-	return a.m.GetPlanModeState(a.key)
-}
-
-func (a *sessionAccessor) AppendOrUpdateAgentState(state types.AgentStateUpdate) string {
-	a.s.agents.AppendOrUpdate(state, func(existing *types.AgentStateUpdate) {
-		// Preserve and merge the structured dispatches array from previous
-		// dispatches. When the incoming state carries new dispatch entries
-		// (e.g. a re-dispatch of the same agent name), merge them with any
-		// existing entries rather than replacing.
-		var prevDispatches []interface{}
-		if existing.Metadata != nil {
-			if pd, ok := existing.Metadata["dispatches"].([]interface{}); ok {
-				prevDispatches = pd
-			}
-		}
-		existing.ID = state.ID
-		existing.Status = state.Status
-		existing.Metadata = state.Metadata
-		if len(prevDispatches) > 0 && existing.Metadata != nil {
-			if newDisp, ok := existing.Metadata["dispatches"].([]interface{}); ok {
-				existing.Metadata["dispatches"] = append(prevDispatches, newDisp...)
-			} else {
-				existing.Metadata["dispatches"] = prevDispatches
-			}
-		}
-	})
-	return state.ID
-}
-
-func (a *sessionAccessor) UpdateAgentStateByID(id string, updater func(*types.AgentStateUpdate)) {
-	a.s.agents.UpdateStateByID(id, updater)
-}
-
-func (a *sessionAccessor) EmitAgentSnapshot(reason string) {
-	snapshot := a.s.agents.MergedSnapshot()
-	utils.Log("Session", fmt.Sprintf("agent_snapshot_emitted key=%s count=%d reason=%s", a.key, len(snapshot), reason))
-	a.m.emit(a.key, types.EngineEvent{Type: "engine_agent_state", Agents: snapshot})
-}
-
-func (a *sessionAccessor) ResourceBroker() *resource.Broker       { return a.s.resourceBroker }
-func (a *sessionAccessor) GlobalResourceBroker() *resource.Broker { return a.m.globalBroker }
-
-// BroadcastNotification emits an engine_notification event with push flags
-// set so the relay forwards it to APNs when the mobile peer is offline.
-// When TargetSessionKey is set, the notification is emitted on the target
-// session's event stream instead of the caller's. The target must exist;
-// if it doesn't, the notification is emitted on the caller's session and
-// a warning is logged.
-func (a *sessionAccessor) BroadcastNotification(opts types.NotifyOpts) {
-	ev := types.EngineEvent{
-		Type:             "engine_notification",
-		Push:             true,
-		PushTitle:        opts.Title,
-		PushBody:         opts.Body,
-		NotifyKind:       opts.Kind,
-		NotifyResourceID: opts.ResourceID,
-		NotifyTitle:      opts.Title,
-		NotifyBody:       opts.Body,
-		NotifySound:      opts.Sound,
-		NotifyScope:      opts.Scope,
-	}
-
-	targetKey := opts.TargetSessionKey
-	if targetKey != "" && targetKey != a.key {
-		// Verify the target session exists.
-		a.m.mu.RLock()
-		_, exists := a.m.sessions[targetKey]
-		a.m.mu.RUnlock()
-		if exists {
-			utils.Log("session", fmt.Sprintf("BroadcastNotification: routing to target session key=%s (from %s)", targetKey, a.key))
-			a.m.emit(targetKey, ev)
-			return
-		}
-		utils.Warn("session", fmt.Sprintf("BroadcastNotification: target session %q not found, falling back to caller %s", targetKey, a.key))
-	}
-
-	a.m.emit(a.key, ev)
-}
-
-// BroadcastIntercept emits an engine_intercept event on the target session's
-// stream. This is a fire-and-forget signal — the engine attaches no semantics
-// beyond routing the event. When TargetSessionKey is set and the session
-// exists, the event is emitted on that session's stream. Otherwise it falls
-// back to the caller's session and a warning is logged.
-func (a *sessionAccessor) BroadcastIntercept(opts extension.InterceptOpts) {
-	ev := types.EngineEvent{
-		Type:              "engine_intercept",
-		InterceptLevel:    opts.Level,
-		InterceptTitle:    opts.Title,
-		InterceptMessage:  opts.Message,
-		InterceptSource:   opts.Source,
-		InterceptMetadata: opts.Metadata,
-	}
-
-	targetKey := opts.TargetSessionKey
-	if targetKey != "" && targetKey != a.key {
-		a.m.mu.RLock()
-		_, exists := a.m.sessions[targetKey]
-		a.m.mu.RUnlock()
-		if exists {
-			utils.Log("session", fmt.Sprintf("BroadcastIntercept: routing to target session key=%s (from %s)", targetKey, a.key))
-			a.m.emit(targetKey, ev)
-			return
-		}
-		utils.Warn("session", fmt.Sprintf("BroadcastIntercept: target session %q not found, falling back to caller %s", targetKey, a.key))
-	}
-
-	a.m.emit(a.key, ev)
-}
-
-func (a *sessionAccessor) ListAllSessions() []extension.SessionListEntry {
-	infos := a.m.ListSessions()
-	entries := make([]extension.SessionListEntry, len(infos))
-	for i, info := range infos {
-		entries[i] = extension.SessionListEntry{
-			Key:            info.Key,
-			HasActiveRun:   info.HasActiveRun,
-			ExtensionName:  info.ExtensionName,
-			ConversationID: info.ConversationID,
-		}
-	}
-	return entries
-}
-
-func (a *sessionAccessor) SendToSession(senderKey, targetKey, kind string, payload map[string]interface{}) error {
-	a.m.mu.RLock()
-	senderSession, senderOK := a.m.sessions[senderKey]
-	targetSession, targetOK := a.m.sessions[targetKey]
-	a.m.mu.RUnlock()
-
-	if !targetOK {
-		return fmt.Errorf("target session %q not found", targetKey)
-	}
-	if !senderOK {
-		return fmt.Errorf("sender session %q not found", senderKey)
-	}
-
-	// Enforce same extension type.
-	if senderSession.extensionName != targetSession.extensionName {
-		return fmt.Errorf("cross-session messaging requires same extension type (sender=%q target=%q)",
-			senderSession.extensionName, targetSession.extensionName)
-	}
-
-	// Check the target session has an extension group.
-	if targetSession.extGroup == nil || targetSession.extGroup.IsEmpty() {
-		return fmt.Errorf("target session %q has no extension group", targetKey)
-	}
-
-	// Fire the session_message hook on each host in the target session's
-	// extension group, using the target session's context.
-	info := extension.SessionMessageInfo{
-		SenderSessionKey: senderKey,
-		Kind:             kind,
-		Payload:          payload,
-	}
-
-	ctx := a.m.newExtContext(targetSession, targetKey)
-	for _, h := range targetSession.extGroup.Hosts() {
-		if err := h.SDK().FireSessionMessage(ctx, info); err != nil {
-			utils.Log("session", fmt.Sprintf("SendToSession: hook fire failed sender=%s target=%s kind=%s err=%v", senderKey, targetKey, kind, err))
-		}
-	}
-
-	utils.Log("session", fmt.Sprintf("SendToSession: delivered sender=%s target=%s kind=%s", senderKey, targetKey, kind))
-	return nil
-}
-
-// RunOnceCheck delegates to the Manager's runOnce registry, scoped to this
-// session's loaded extension directory.
-func (a *sessionAccessor) RunOnceCheck(operationID string, debounceMs int64) (bool, string) {
-	result := a.m.RunOnceCheck(a.key, operationID, debounceMs)
-	return result.Execute, result.Reason
-}
-
-// RunOnceComplete delegates to the Manager's runOnce registry.
-func (a *sessionAccessor) RunOnceComplete(operationID string, failed bool) {
-	a.m.RunOnceComplete(a.key, operationID, failed)
-}
-
-// newExtContext builds a fully-populated extension Context for the given session.
-// All functional callbacks are wired through the extcontext.SessionAccessor interface.
-func (m *Manager) newExtContext(s *engineSession, key string) *extension.Context {
-	return extcontext.NewExtContext(&sessionAccessor{m: m, s: s, key: key}, s.dispatchRegistry)
 }
 
 // StartSession creates a new session with the given config.
@@ -423,10 +57,18 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	// with this ID — so the conversation file will use this same ID. (#230/#231)
 	convID := resolveConversationID(bindingsPath(), key, config)
 
+	// Whether the resolved conversation already has a backing file. A genuine
+	// resume (file present) gets its binding written immediately below for
+	// restart resilience; a freshly pre-minted id (no file) DEFERS the binding
+	// until the conversation is first saved, so a started-but-never-saved
+	// session never leaves a phantom binding. (#230/#231)
+	convExists := conversation.Exists(convID, "")
+
 	s := &engineSession{
 		key:              key,
 		config:           config,
 		conversationID:   convID,
+		bindingPending:   !convExists,
 		agents:           agents.NewRegistry(),
 		childPIDs:        make(map[int]struct{}),
 		pending:          pending.New(),
@@ -477,9 +119,18 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 	m.mu.Unlock()
 
 	// Persist the key->conversationId binding for restart resilience (B2 fix
-	// for issue #230). Written immediately after session creation so a crash
-	// mid-startup still leaves the binding on disk for the next restart.
-	saveBinding(bindingsPath(), key, convID)
+	// for issue #230) ONLY for a genuine resume — a conversation whose file
+	// already exists on disk. For a freshly pre-minted id (no file yet) the
+	// binding is DEFERRED until the conversation is first saved (flushed in
+	// handleRunExit). This prevents a started-but-never-saved session from
+	// leaving a "phantom" binding that a later restart would resume into an
+	// empty conversation — the failure mode that orphaned real history across
+	// the desktop restart. (#230/#231)
+	if !s.bindingPending {
+		saveBinding(bindingsPath(), key, convID)
+	} else {
+		utils.Log("Session", fmt.Sprintf("StartSession: key=%s deferring binding for pre-minted conversationID=%s until first save", key, convID))
+	}
 
 	// Rehydrate agent dispatch state from the conversation file if the
 	// session is resuming an existing conversation. This runs before
@@ -501,11 +152,26 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 			if info := providers.GetModelInfo(convModel); info != nil {
 				ctxWindow = info.ContextWindow
 			}
+			// Seed lastContextPct from the persisted conversation so the initial
+			// idle engine_status reports the true usage instead of 0%. Without
+			// this a resumed conversation shows an empty context bar until the
+			// first prompt's usage event lands. Load the full conversation to
+			// compute usage against the resolved context window.
+			seededPct := 0
+			if conv, lerr := conversation.Load(s.conversationID, ""); lerr == nil {
+				usage := conversation.GetContextUsage(conv, ctxWindow)
+				if usage.Percent > 0 {
+					seededPct = usage.Percent
+				}
+			}
 			m.mu.Lock()
 			s.lastModel = convModel
 			s.lastContextWindow = ctxWindow
+			if seededPct > 0 {
+				s.lastContextPct = seededPct
+			}
 			m.mu.Unlock()
-			utils.Log("Session", fmt.Sprintf("StartSession: key=%s seeded lastModel=%s contextWindow=%d from conversation=%s", key, convModel, ctxWindow, s.conversationID))
+			utils.Log("Session", fmt.Sprintf("StartSession: key=%s seeded lastModel=%s contextWindow=%d contextPct=%d from conversation=%s", key, convModel, ctxWindow, seededPct, s.conversationID))
 		} else if err != nil {
 			utils.Debug("Session", fmt.Sprintf("StartSession: key=%s could not load conversation model conv=%s err=%v", key, s.conversationID, err))
 		}
@@ -612,10 +278,12 @@ func (m *Manager) StartSession(key string, config types.EngineConfig) (*StartSes
 		Type:         "engine_working_message",
 		EventMessage: "",
 	})
-	m.emit(key, types.EngineEvent{
-		Type:   "engine_status",
-		Fields: &types.StatusFields{Label: key, State: "idle", SessionID: s.conversationID},
-	})
+	// Emit the initial idle status through emitStatusSnapshot so the payload
+	// carries the seeded contextPercent / contextWindow / model rather than
+	// hardcoded zeros. On a resumed conversation lastContextPct is seeded above
+	// from the conversation file, so the desktop binds the correct usage from
+	// the first status rather than showing 0% until the first prompt.
+	m.emitStatusSnapshot(key, "start_session")
 
 	return &StartSessionResult{Existed: false, ConversationID: s.conversationID}, nil
 }

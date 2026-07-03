@@ -53,7 +53,7 @@ func TestRequestPlanModeEnter_ReusesExistingPlanFile(t *testing.T) {
 	_, _ = mgr.StartSession("enter-reuse", defaultConfig())
 
 	// Enter plan mode via the normal SendPrompt path to allocate a hash.
-	mgr.SetPlanMode("enter-reuse", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("enter-reuse", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("enter-reuse", "plan it", nil)
 
 	mgr.mu.RLock()
@@ -71,7 +71,7 @@ func TestRequestPlanModeEnter_ReusesExistingPlanFile(t *testing.T) {
 	mb.emitExit(ordered[0], &code, nil, "sess-1")
 
 	// Toggle to auto mode (user dropdown) — Part 1 preserves the path.
-	mgr.SetPlanMode("enter-reuse", false, nil, "ui_dropdown")
+	mgr.SetPlanMode("enter-reuse", false, nil, "ui_dropdown", "")
 
 	// Model calls EnterPlanMode. Must reuse the preserved path.
 	allowed, reason, planFilePath := mgr.RequestPlanModeEnter("enter-reuse")
@@ -91,7 +91,7 @@ func TestRequestPlanModeEnter_AlreadyInPlanMode(t *testing.T) {
 	mgr := NewManager(mb)
 	_, _ = mgr.StartSession("enter-dup", defaultConfig())
 
-	mgr.SetPlanMode("enter-dup", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("enter-dup", true, []string{"Read"}, "test", "")
 
 	allowed, reason, _ := mgr.RequestPlanModeEnter("enter-dup")
 	if allowed {

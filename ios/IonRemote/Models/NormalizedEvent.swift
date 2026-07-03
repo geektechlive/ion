@@ -1,3 +1,11 @@
+// @file-size-exception: Canonical desktop→iOS wire-event union. The only
+// extractable members (RemoteTabGroup) are already in their own files; the
+// remaining content is the irreducible `RemoteEvent` case list plus the nested
+// `TypeKey` and `CodingKeys` enums, which MUST stay in the primary declaration
+// (the per-family Codable extensions reference them by bare name and Swift only
+// resolves the nested types from the primary type's own file — see the comment
+// above CodingKeys). Adding the engine_dispatch_activity variant for wire parity
+// pushed it 15 lines over; splitting is not viable without breaking Codable.
 import Foundation
 
 /// Events sent from Ion to the iOS app.
@@ -35,6 +43,10 @@ enum RemoteEvent: Sendable {
     case transportReconnecting
     /// Heartbeat from the desktop with sender timestamp and queue depth.
     case heartbeat(senderTs: Double, buffered: Int)
+    /// Answer to a requestResend whose frame range was evicted from the
+    /// desktop's retransmit buffer (too old). iOS clears its pending-resend
+    /// range and falls back to the snapshot reconcile to heal that gap.
+    case resendUnavailable(fromSeq: UInt64)
     /// Desktop is prefilling input text (after rewind or fork).
     /// `instanceId` is set when the prefill targets a specific engine
     /// instance's draft (engine_rewind); nil for CLI-tab rewinds.
@@ -80,7 +92,18 @@ enum RemoteEvent: Sendable {
     case engineSteerInjected(tabId: String, instanceId: String?, messageLength: Int)
     case engineScheduleFired(tabId: String, instanceId: String?)
     case engineLlmCall(tabId: String, instanceId: String?)
-    case engineDispatchStart(tabId: String, instanceId: String?)
+    case engineDispatchStart(tabId: String, instanceId: String?, dispatchAgent: String, dispatchSessionId: String, dispatchModel: String, dispatchTask: String, dispatchDepth: Int, dispatchParentId: String, dispatchId: String)
+    /// engine_dispatch_end -- emitted when an extension-initiated dispatch completes.
+    /// Carries telemetry (exit code, elapsed, cost) and nesting identity
+    /// (dispatchDepth, dispatchParentId) for tree rendering.
+    case engineDispatchEnd(tabId: String, instanceId: String?, dispatchAgent: String, dispatchDepth: Int, dispatchParentId: String, exitCode: Int, elapsed: Double, dispatchId: String, conversationId: String?)
+    /// engine_dispatch_activity — a running dispatched (sub-)agent's intra-turn
+    /// transcript delta (tool start/end, streamed text). Folded into the
+    /// per-dispatch transcript cache keyed by dispatchAgentId (NOT conversationId);
+    /// deduped by toolId (tools) and seq (text). Never touches the main
+    /// conversation. INCREMENTAL/append-by-key — the file-backed reconcile is
+    /// the snapshot authority. Mirrors desktop_dispatch_activity.
+    case engineDispatchActivity(tabId: String, instanceId: String?, agentId: String, conversationId: String, kind: String, seq: Int, toolName: String?, toolId: String?, textDelta: String?, isError: Bool, ts: Int64?)
     case engineError(tabId: String, instanceId: String?, message: String)
     case engineNotify(tabId: String, instanceId: String?, message: String, level: String, metadata: [String: AnyCodable]?)
     case engineDialog(tabId: String, instanceId: String?, dialogId: String, method: String, title: String, options: [String]?, defaultValue: String?)
@@ -97,7 +120,9 @@ enum RemoteEvent: Sendable {
     /// adopt the convention without a wire-protocol change. `AnyCodable`
     /// is the same pass-through JSON helper used by `desktopSettingsSnapshot`.
     case engineHarnessMessage(tabId: String, instanceId: String?, message: String, source: String?, metadata: [String: AnyCodable]?)
-    case engineConversationHistory(tabId: String, instanceId: String?, messages: [Message])
+    // engineConversationHistory removed (WI-004 / #259). iOS now handles
+    // conversationHistory for every tab — the unified desktop_conversation_history
+    // response maps to conversationHistory which carries hasMore and cursor.
     case agentConversationHistory(agentName: String, conversationId: String?, messages: [Message])
     case engineModelOverride(tabId: String, instanceId: String?, model: String)
     case engineProfiles(profiles: [EngineProfile])
@@ -108,6 +133,13 @@ enum RemoteEvent: Sendable {
     /// is a proposal — the actual exit is gated by the user-approval
     /// chokepoint on the desktop (the "Implement" button).
     case enginePlanModeChanged(tabId: String, instanceId: String?, planModeEnabled: Bool, planFilePath: String?, planSlug: String?)
+    /// State event: a Write/Edit landed on the canonical plan file during plan
+    /// mode. This is the accurate trigger for the plan-lifecycle divider — the
+    /// file now exists with content, so the marker is correctly positioned and
+    /// its link resolves. `operation` is "created" (first content) or "updated"
+    /// (a revision). Distinct from enginePlanModeChanged, which only reflects
+    /// plan-mode entry/exit and no longer drives the divider.
+    case enginePlanFileWritten(tabId: String, instanceId: String?, operation: String, planFilePath: String?, planSlug: String?)
     /// Workflow event from the engine: the model has proposed a plan-mode
     /// transition (currently only kind="exit"). iOS uses this to render
     /// plan-proposal cards — the desktop is the authoritative consumer
@@ -298,10 +330,15 @@ enum RemoteEvent: Sendable {
     /// code change — the allowlist on the desktop is the single source
     /// of truth. See `DesktopSettingsModel.swift` for the higher-level
     /// model the SettingsView consumes.
+    ///
+    /// `newConversationPolicy` carries the resolved enterprise new-conversation
+    /// lock so iOS enforces the same constraint as the desktop. Nil means
+    /// no enterprise config is present (show picker / default flow).
     case desktopSettingsSnapshot(
         settings: [String: AnyCodable],
         schema: [DesktopSettingSchemaEntry],
-        groups: [DesktopSettingGroupDescriptor]
+        groups: [DesktopSettingGroupDescriptor],
+        newConversationPolicy: RemoteNewConversationPolicy?
     )
     // Git events
     case gitChangesResponse(directory: String, response: GitChangesResponse)
@@ -343,6 +380,21 @@ enum RemoteEvent: Sendable {
     /// full plan body in PlanFullScreenView or copies it to the clipboard.
     case planContent(questionId: String, planFilePath: String, offset: Int, content: String, totalBytes: Int, hasMore: Bool)
 
+    /// Desktop-forwarded context breakdown (desktop_context_breakdown). Carries
+    /// per-category token counts with provenance tier (exact / local / approximate),
+    /// context window, total tokens, and post-reconciliation unaccounted delta.
+    /// Emitted once per run after prompt assembly and again after the first
+    /// UsageEvent reconciliation. Mirrors engine_context_breakdown on the engine
+    /// wire; the desktop forwards it as desktop_context_breakdown so iOS reads
+    /// it from the same desktop↔iOS stream as all other events (plan
+    /// modest-leaping-waffle.md §9). iOS stores the payload on the active
+    /// instance's contextBreakdown field for drawer rendering.
+    case desktopContextBreakdown(
+        tabId: String,
+        instanceId: String?,
+        contextBreakdown: ContextBreakdownPayload
+    )
+
     // MARK: - Codable keys
 
     enum TypeKey: String, Codable {
@@ -366,6 +418,7 @@ enum RemoteEvent: Sendable {
         case peerDisconnected = "peer_disconnected"
         case transportReconnecting = "transport_reconnecting"
         case heartbeat = "desktop_heartbeat"
+        case resendUnavailable = "desktop_resend_unavailable"
         case error = "desktop_error"
         case inputPrefill = "desktop_input_prefill"
         case terminalOutput = "desktop_terminal_output"
@@ -393,6 +446,8 @@ enum RemoteEvent: Sendable {
         case engineScheduleFired = "desktop_schedule_fired"
         case engineLlmCall = "desktop_llm_call"
         case engineDispatchStart = "desktop_dispatch_start"
+        case engineDispatchEnd = "desktop_dispatch_end"
+        case engineDispatchActivity = "desktop_dispatch_activity"
         case engineError = "desktop_engine_error"
         case engineNotify = "desktop_notify"
         case engineDialog = "desktop_dialog"
@@ -404,11 +459,14 @@ enum RemoteEvent: Sendable {
         case engineInstanceRemoved = "desktop_instance_removed"
         case engineInstanceMoved = "desktop_instance_moved"
         case engineHarnessMessage = "desktop_harness_message"
-        case engineConversationHistory = "desktop_engine_conversation_history"
+        // engineConversationHistory TypeKey retired (WI-004 / #259).
+        // The unified response is desktop_conversation_history for every tab,
+        // which maps to the existing `conversationHistory` TypeKey.
         case agentConversationHistory = "desktop_agent_conversation_history"
         case engineModelOverride = "desktop_model_override"
         case engineProfiles = "desktop_engine_profiles"
         case enginePlanModeChanged = "desktop_plan_mode_changed"
+        case enginePlanFileWritten = "desktop_plan_file_written"
         case enginePlanProposal = "desktop_plan_proposal"
         case enginePlanModeAutoExit = "desktop_plan_mode_auto_exit"
         case engineEarlyStopDecisionRequest = "desktop_early_stop_decision_request"
@@ -442,6 +500,11 @@ enum RemoteEvent: Sendable {
         case planContent = "desktop_plan_content"
         /// Raw engine wire event for engine_plan_content (distinct from desktop_plan_content).
         case enginePlanContent = "engine_plan_content"
+        /// Desktop-forwarded context breakdown (desktop_context_breakdown).
+        /// Carries per-category token counts, provenance tiers, and reconciliation delta
+        /// from the engine's context analysis. Lockstep parity with engine_context_breakdown
+        /// (plan modest-leaping-waffle.md §9).
+        case desktopContextBreakdown = "desktop_context_breakdown"
     }
 
     // CodingKeys and the init(from:)/encode(to:) requirements must live in
@@ -486,6 +549,9 @@ enum RemoteEvent: Sendable {
         case customName, customIcon, updatedAt, remoteDisplayUpdatedAt
         // engine_plan_mode_changed — state event for plan-mode entry/exit.
         case planModeEnabled
+        // engine_plan_file_written — the model wrote the plan file. Mirrors
+        // EngineEvent.PlanWriteOperation's JSON tag ("created"/"updated").
+        case planWriteOperation
         // engine_steer_injected — mid-turn steer drain confirmation.
         // Mirrors EngineEvent.SteerMessageLength's JSON tag.
         case steerMessageLength
@@ -563,7 +629,7 @@ enum RemoteEvent: Sendable {
         // `settings` is the value map; `schema` carries per-key
         // metadata (type, group, label, description, defaultValue);
         // `groups` is the ordered list of section descriptors.
-        case settings, schema, groups
+        case settings, schema, groups, newConversationPolicy
         // Pass-through harness-defined hint map carried on the four
         // user-visible engine events (status, working_message, notify,
         // harness_message). iOS does not act on the field yet but
@@ -584,6 +650,30 @@ enum RemoteEvent: Sendable {
         // Carries metadata-only items (id, kind, title, createdAt, read).
         // Full content is fetched on demand via request_resource_content.
         case resources
+        // engine_dispatch_activity — live dispatched-agent transcript delta.
+        // Field names mirror the Go-side EngineEvent json tags verbatim
+        // (toolName / toolId already declared above and shared with the
+        // tool_call wire events). dispatchToolIsError is distinct from the
+        // generic `isError` so a dispatch tool_end does not collide with a
+        // main-conversation tool_result. dispatchActivityTs is the emit
+        // timestamp (unix millis), decoded onto the case so the mirror is
+        // complete with Go + desktop.
+        case dispatchAgentId, dispatchConversationId, dispatchActivityKind
+        case dispatchSeq, dispatchTextDelta, dispatchToolIsError, dispatchActivityTs
+        // --- engine_dispatch_start / engine_dispatch_end nesting fields ---
+        case dispatchAgent, dispatchDepth, dispatchParentId
+        case dispatchExitCode, dispatchElapsed
+        case dispatchId
+        case dispatchModel, dispatchSessionId, dispatchTask
+        // --- desktop_request_resend / desktop_resend_unavailable payload ---
+        // desktop_resend_unavailable payload — the start seq of the evicted range.
+        case fromSeq
+        // desktop_context_breakdown — per-category context usage readout forwarded
+        // from engine_context_breakdown. The whole breakdown payload decodes under
+        // a single `contextBreakdown` key using ContextBreakdownPayload (Codable).
+        // perFile / perTool / apiReportedTotal / unaccounted / model live inside
+        // the ContextBreakdownPayload struct, not as top-level CodingKeys here.
+        case contextBreakdown
     }
 }
 

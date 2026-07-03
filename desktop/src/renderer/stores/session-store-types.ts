@@ -1,4 +1,4 @@
-import type { TabState, NormalizedEvent, EnrichedError, Attachment, FileAttachment, TerminalPaneState, ConversationRef, ConversationPane, ConversationInstance, AgentStateUpdate, StatusFields, Message, ImageAttachmentPayload } from '../../shared/types'
+import type { TabState, NormalizedEvent, EnrichedError, Attachment, FileAttachment, TerminalPaneState, ConversationPane, ConversationInstance, AgentStateUpdate, StatusFields, Message, ImageAttachmentPayload } from '../../shared/types'
 import type { ResourceItem } from '../../shared/types-engine'
 
 export interface StaticInfo {
@@ -31,6 +31,20 @@ export interface State {
   isExpanded: boolean
   staticInfo: StaticInfo | null
   gitPanelOpen: boolean
+  /**
+   * Whether the Status Drawer (right-side panel) is open. Toggled by the ⓘ
+   * button in StatusBar's right cluster. When open alongside other panels
+   * (git, file explorer) the Status Drawer renders at a higher z-index and
+   * coexists — they are not mutually exclusive.
+   */
+  statusDrawerOpen: boolean
+  /**
+   * When set, the Status Drawer opens the AgentDetailPanel for this
+   * dispatch ID on mount, reconstructing the breadcrumb stack by walking
+   * dispatchParentId up through durable agentStates. Cleared when the
+   * Status Drawer is closed or the panel navigates away.
+   */
+  statusDrawerDispatchId: string | null
   terminalOpenTabIds: Set<string>
   terminalPendingCommands: Map<string, string>
   terminalPanes: Map<string, TerminalPaneState>
@@ -46,6 +60,11 @@ export interface State {
   resourceViewerGeometry: { x: number; y: number; w: number; h: number }
   agentDetailGeometry: { x: number; y: number; w: number; h: number }
   tabsReady: boolean
+  /** True while useTabRestoration's restore loop is running. The persist subscriber
+   * skips saves during this window to avoid the ~25 GUARD rejections that occur when
+   * each per-tab setState triggers a partial-state save before all tabs are loaded.
+   * Cleared after tabsReady=true. */
+  rehydrating: boolean
   initProgress: string | null
   backend: 'api' | 'cli'
   worktreeUncommittedMap: Map<string, boolean>
@@ -64,7 +83,7 @@ export interface State {
    * runloop swapped to the engine's configured `defaultModel`.
    *
    * This client's policy: display a small ⚠ glyph on the affected
-   * EngineTabStrip pill with a tooltip naming the requested and
+   * tab pill (TabStripTabPill) with a tooltip naming the requested and
    * fallback models. Clear on the next `task_complete` for that
    * instance (no wall-clock timer — clients don't invent retention
    * rules per `docs/architecture/agent-state.md`).
@@ -87,10 +106,25 @@ export interface State {
   /** IDs of resources the user has opened/viewed. Client-local read tracking. */
   readResourceIds: Set<string>
 
+  /**
+   * Live dispatched-agent transcript, keyed by dispatchAgentId (NOT
+   * conversationId). Folded incrementally from `dispatch_activity` push deltas
+   * (the agent popup's real-time stream). Keyed by dispatchAgentId because a
+   * re-dispatched agent reuses the same child conversationId while each dispatch
+   * gets a unique dispatchAgentId — convId-keying causes the two dispatch
+   * buffers to collide. The agent popup reconciles this with the file-backed
+   * snapshot via reconcileActivity (agent-dispatch-activity.ts). Append-only per
+   * dispatch while it runs; cleared lazily by the popup on a fresh reconcile.
+   * See agent-dispatch-activity.ts for the fold/reconcile contract.
+   */
+  dispatchActivity: Record<string, import('../../shared/types').Message[]>
+
   tallViewTabId: string | null
   scrollToBottomCounter: number
   settingsOpen: boolean
   settingsInitialTab: string | null
+  /** Number of FloatingPanel instances currently mounted. Used by isPreviewZoomTarget(). */
+  openFloatingPanelCount: number
 
   initStaticInfo: () => Promise<void>
   setPermissionMode: (mode: 'auto' | 'plan', source?: string) => void
@@ -115,8 +149,22 @@ export interface State {
   toggleTallView: (tabId: string) => void
   openSettings: (initialTab?: string) => void
   closeSettings: () => void
+  /** Increment the open floating panel count (call on FloatingPanel mount). */
+  incOpenFloatingPanelCount: () => void
+  /** Decrement the open floating panel count (call on FloatingPanel unmount). */
+  decOpenFloatingPanelCount: () => void
   toggleGitPanel: () => void
   closeGitPanel: () => void
+  /** Toggle the Status Drawer (the ⓘ right-side panel). */
+  toggleStatusDrawer: () => void
+  /** Close the Status Drawer and clear the pending dispatch deep-link. */
+  closeStatusDrawer: () => void
+  /**
+   * Open the Status Drawer and pre-select a specific dispatch for deep-link
+   * navigation. The drawer reconstructs the ancestor breadcrumb stack from
+   * durable agentStates (dispatchParentId walk) before presenting the panel.
+   */
+  openDispatchPreview: (dispatchId: string) => void
   toggleTerminal: (tabId: string) => void
   runInTerminal: (tabId: string, cmd: string) => void
   consumeTerminalPendingCommand: (key: string) => string | undefined
@@ -160,10 +208,45 @@ export interface State {
   addSystemMessage: (content: string) => void
   startBashCommand: (command: string, execId: string) => { toolMsgId: string; tabId: string }
   completeBashCommand: (tabId: string, toolMsgId: string, command: string, stdout: string, stderr: string, exitCode: number | null) => void
-  sendMessage: (prompt: string, projectPath?: string, extraAttachments?: Attachment[], appendSystemPrompt?: string, implementationPhase?: boolean) => void
+  /**
+   * Unified prompt submit for every conversation tab (plain or extension-backed).
+   * The single send path — `submitEnginePrompt` is gone. An extension-backed tab
+   * resolves a non-empty `extensions` list from its profile (which the main
+   * pipeline routes on and which starts the engine session with those
+   * extensions); a plain tab resolves none. Everything else is identical.
+   */
+  submit: (tabId: string, text: string, opts?: {
+    projectPath?: string
+    extraAttachments?: Attachment[]
+    appendSystemPrompt?: string
+    implementationPhase?: boolean
+    imageAttachments?: ImageAttachmentPayload[]
+    source?: 'remote'
+    resolveSlash?: boolean
+  }) => void
   submitRemotePrompt: (tabId: string, prompt: string, imageAttachments?: ImageAttachmentPayload[], resolveSlash?: boolean) => void
+  /**
+   * Move a tab to its planning/in-progress group on send, based on the tab's
+   * AUTHORITATIVE permission mode (effectivePermissionMode — reads the active
+   * instance for every tab type; tab-level permissionMode was removed in WI-002).
+   * Shared by sendMessage, submitRemotePrompt, and
+   * submit so all send paths (CLI + engine) move consistently.
+   * No-op unless autoGroupMovement is on, tabGroupMode is 'manual', and the tab
+   * is unpinned. Also cancels any pending done-move for the tab.
+   */
+  applySendAutoGroupMove: (tabId: string) => void
+  /**
+   * Unified interrupt for every conversation tab (plain or extension-backed).
+   * Aborts the run, reaps the dispatched-agent subtree when there are running
+   * children, cancels an in-flight user bash command when one is executing, and
+   * arms a 5s force-recover fallback. All three actions are data-conditioned;
+   * there is no engine-vs-plain abort fork. Replaces EngineView.handleAbort and
+   * ConversationView's inline interrupt handler.
+   */
+  interrupt: (tabId: string) => void
   submitRemoteBash: (tabId: string, command: string) => void
   respondPermission: (tabId: string, questionId: string, optionId: string) => void
+  respondElicitation: (tabId: string, requestId: string, response: Record<string, unknown> | undefined, cancelled: boolean) => void
   addDirectory: (dir: string) => void
   removeDirectory: (dir: string) => void
   setBaseDirectory: (dir: string) => void
@@ -181,25 +264,45 @@ export interface State {
   handleStatusChange: (tabId: string, newStatus: string, oldStatus: string) => void
   handleError: (tabId: string, error: EnrichedError) => void
   forceRecoverTab: (tabId: string, reason: string) => void
+  /**
+   * Auto-recover a stalled tab WITHOUT user involvement: recreate the engine
+   * session in-process (resetTabSession → next prompt re-StartSessions) and
+   * resubmit the last user prompt, so a tab the user left running keeps
+   * running. Bounded by autoRecoveryAttempts within a rolling window — once the
+   * cap is hit it falls back to forceRecoverTab with an honest message. This is
+   * the watchdog path; it is distinct from forceRecoverTab (the user-interrupt
+   * fallback, which intentionally abandons the run because the user asked to
+   * stop). Returns true if an auto-resume was attempted, false if it fell back.
+   */
+  autoRecoverStuckTab: (tabId: string) => boolean
   moveTabToGroup: (tabId: string, groupId: string) => void
   moveTabToGroupAndPin: (tabId: string, groupId: string) => void
   setTabGroupId: (tabId: string, groupId: string | null) => void
   toggleTabGroupPin: (tabId: string) => void
   setWorktreeUncommitted: (tabId: string, hasChanges: boolean) => void
-  createEngineTab: (dir?: string, profileId?: string) => string
-  handleEngineEvent: (key: string, event: any) => void
-  submitEnginePrompt: (tabId: string, text: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[], rawAttachments?: FileAttachment[], implementationPhase?: boolean) => void
+  /**
+   * Unified tab + engine-instance creation entry point (Phase 2, #256).
+   * Both plain and engine tabs are created through this path. The extension
+   * list (resolved from opts.profileId if absent) is the only variable:
+   *   - non-empty extensions => engine tab (tabHasExtensions=true)
+   *   - absent/empty          => plain tab (tabHasExtensions=false)
+   * Returns the new tab id (async: obtains a real engine-backed id from main).
+   */
+  createConversationTab: (dir: string, opts?: import('./slices/engine-slice-create').CreateConversationTabOpts) => Promise<string>
   respondEngineDialog: (tabId: string, dialogId: string, value: any) => void
+  /**
+   * Create the single engine instance for a tab (single-instance-per-tab
+   * model, conversation unification #256 phase 1). Returns the existing
+   * instance id if one already exists (no-op guard).
+   */
   addEngineInstance: (tabId: string) => string
-  removeEngineInstance: (tabId: string, instanceId: string) => void
   /**
    * Reset an engine instance's conversation to a fresh state without
    * removing the instance itself. Wipes the per-instance message
    * buffer, status, agent-state, working message, notifications,
    * dialogs, usage, permission-denied, pinned prompt, and model-override
-   * Maps. Seeds a fresh "Session started" divider into engineMessages.
-   * Used by the iOS "Implement, clear context" flow for engine tabs —
-   * the engine-instance equivalent of resetTabSession on the CLI plane.
+   * Maps. Seeds a fresh "Session started" divider. Used by the iOS
+   * "Implement, clear context" flow for engine tabs.
    */
   resetEngineInstance: (tabId: string, instanceId: string) => void
   /**
@@ -209,13 +312,16 @@ export interface State {
    * injected as a system prompt on the next send (one-shot).
    */
   rewindEngineInstance: (tabId: string, instanceId: string, messageId: string, userTurnIndex?: number) => void
-  selectEngineInstance: (tabId: string, instanceId: string) => void
-  renameEngineInstance: (tabId: string, instanceId: string, label: string) => void
-  reorderEngineInstances: (tabId: string, reordered: Array<ConversationRef & ConversationInstance>) => void
-  moveEngineInstance: (sourceTabId: string, instanceId: string, targetTabId: string) => void
-  setEngineModel: (tabId: string, modelId: string) => void
-  addEngineSystemMessage: (key: string, content: string) => void
-  setEngineDraftInput: (key: string, text: string) => void
+  addEngineSystemMessage: (tabId: string, content: string, planFilePath?: string) => void
+  /** Insert a user-role message into the active conversation instance for a
+   *  remote-originated prompt that bypassed the renderer's submit() path. Used
+   *  by the pipeline when an extension command succeeds synchronously (the
+   *  extension's ctx.sendPrompt starts the run, but no renderer submit was
+   *  ever called for the iOS prompt). Without this the desktop store has the
+   *  assistant response but no user bubble, and iOS history reads (which pull
+   *  from the renderer store) also miss it. */
+  insertRemoteUserMessage: (tabId: string, content: string, slashCommand?: string, slashArgs?: string) => void
+  setEngineDraftInput: (tabId: string, text: string) => void
   markResourceRead: (resourceId: string) => void
   markAllResourcesRead: (items: ResourceItem[]) => void
   deleteResource: (kind: string, resourceId: string) => void

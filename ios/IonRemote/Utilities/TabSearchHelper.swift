@@ -12,9 +12,8 @@ import Foundation
 ///   1. Tab display title
 ///   2. Last-message preview
 ///   3. Working directory path
-///   4. Cached conversation messages (content)
-///   5. Cached engine messages (content)
-///   6. Cached attachment names
+///   4. Conversation messages (content) — the single unified per-tab store
+///   5. Cached attachment names
 enum TabSearchHelper {
 
     /// Returns `true` when every whitespace-separated term in `query` appears
@@ -25,7 +24,6 @@ enum TabSearchHelper {
         tab: RemoteTabState,
         query: String,
         messages: [Message]?,
-        engineMessages: [Message]?,
         attachments: [TabAttachmentEntry]?
     ) -> Bool {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -42,9 +40,6 @@ enum TabSearchHelper {
 
         if let msgs = messages {
             for msg in msgs { parts.append(msg.content) }
-        }
-        if let eMsgs = engineMessages {
-            for msg in eMsgs { parts.append(msg.content) }
         }
         if let atts = attachments {
             for att in atts {

@@ -215,6 +215,21 @@ func (h *HybridBackend) Steer(requestID, message string) bool {
 	return api.Steer(requestID, message)
 }
 
+// SteerWithReason mirrors Steer but returns the typed backend verdict so the
+// session layer can distinguish "no run" from "channel full". For a CLI-routed
+// run it returns SteerResultNoRun, which the session layer treats as "not
+// API-steerable, fall back to the stdin pipe" — exactly the contract Steer's
+// false return carried, but now self-describing in logs (engine-grounding §7).
+func (h *HybridBackend) SteerWithReason(requestID, message string) SteerResult {
+	inner := h.lookup(requestID)
+	api, ok := inner.(*ApiBackend)
+	if !ok {
+		utils.Log("Hybrid", fmt.Sprintf("SteerWithReason: requestID=%s not API-routed (inner=%T), falling back to stdin", requestID, inner))
+		return SteerResultNoRun
+	}
+	return api.SteerWithReason(requestID, message)
+}
+
 // FlushConversations forwards to both inner backends. ApiBackend persists
 // in-flight conversations; CliBackend is a no-op (the subprocess persists
 // its own).

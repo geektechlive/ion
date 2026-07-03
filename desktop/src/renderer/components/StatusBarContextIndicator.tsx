@@ -20,15 +20,22 @@ export function ContextIndicator() {
       // Per-conversation model state now lives on the active instance
       // (`modelOverride` / `sessionModel`), resolved via `activeInstance`.
       const inst = tab ? activeInstance(s.conversationPanes, tab.id) : null
+      // During a live run: contextTokens is set from `usage` events; contextWindow is
+      // written from context_breakdown (added in B3/B4). When the run is idle,
+      // both go null and we fall back to the engine's last-known statusFields
+      // (the authoritative idle heartbeat source the drawer already uses).
+      const liveTokens = tab?.contextTokens ?? null
+      const liveWindow = tab?.contextWindow ?? null
+      const sfPercent = inst?.statusFields?.contextPercent ?? null
+      const sfWindow = inst?.statusFields?.contextWindow ?? null
       return {
-        contextTokens: tab?.contextTokens ?? null,
-        contextPercent: tab?.contextPercent ?? null,
-        // engineContextWindow is the window size of the model the engine
-        // actually used on the most recent turn. Distinct from the
-        // picker-selected model's nominal window. Renderers MUST use
-        // this as the denominator when recomputing percent locally;
-        // see the rationale at types-session.ts contextWindow doc.
-        engineContextWindow: tab?.contextWindow ?? null,
+        // During a live run: use the live token count + contextWindow from context_breakdown.
+        // At idle / after reload: fall back to statusFields which carry the engine's
+        // last-known fill (seeded on resume by B1/B2 engine changes).
+        contextTokens: liveTokens,
+        contextPercent: liveTokens !== null ? null : sfPercent,
+        // Denominator priority: live breakdown window > statusFields window > null (picker fallback)
+        engineContextWindow: liveWindow ?? sfWindow,
         modelOverride: inst?.modelOverride ?? null,
         sessionModel: inst?.sessionModel ?? null,
       }
@@ -38,6 +45,7 @@ export function ContextIndicator() {
   const [hover, setHover] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
   const [pos, setPos] = useState({ bottom: 0, left: 0 })
+  const toggleStatusDrawer = useSessionStore((s) => s.toggleStatusDrawer)
 
   // Resolve effective picker-model: per-tab override > session model >
   // global preferred. Used ONLY as the fallback denominator when the
@@ -55,13 +63,12 @@ export function ContextIndicator() {
   // same model the engine actually billed.
   const windowSize = engineContextWindow ?? fallbackWindow
 
-  // Local percent recomputation: when contextTokens is available, divide
-  // by the engine's reported window (anchored to the model that produced
-  // those tokens). When contextTokens is null, fall back to the engine's
-  // pre-computed contextPercent. The cap at 100 is a display guard —
-  // engine-truth math never exceeds 100% when both sides come from the
-  // same model; the cap protects against transient mismatch during
-  // the cold-start window before contextWindow has been reported.
+  // Local percent recomputation: when contextTokens is available (live run),
+  // divide by the engine's reported window (anchored to the model that produced
+  // those tokens). When contextTokens is null (idle/reload), fall back to the
+  // engine's pre-computed contextPercent from statusFields — which is seeded on
+  // session resume by the B1/B2 engine fix so idle tabs show the real last fill.
+  // The cap at 100 is a display guard against transient mismatch.
   const pct = contextTokens != null
     ? Math.min(100, Math.round((contextTokens / windowSize) * 100))
     : contextPercent
@@ -89,7 +96,8 @@ export function ContextIndicator() {
       <span
         ref={ref}
         className="text-[10px] px-0.5"
-        style={{ color, cursor: 'default' }}
+        style={{ color, cursor: 'pointer' }}
+        onClick={toggleStatusDrawer}
         onMouseEnter={handleEnter}
         onMouseLeave={() => setHover(false)}
       >

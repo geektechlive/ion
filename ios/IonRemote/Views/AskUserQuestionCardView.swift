@@ -138,16 +138,10 @@ struct AskUserQuestionCardView: View {
         submitAnswer(trimmed)
     }
 
-    /// Route the answer through the correct prompt pathway.
-    /// Engine tabs use `submitEnginePrompt` so the desktop prompt pipeline
-    /// recognises the message as engine-scoped (`isEngineTab: true`);
-    /// conversation tabs use `sendPrompt` as before.
+    /// Route the answer through the unified prompt pathway (#256). `submit`
+    /// internally dispatches engine vs plain so the card need not branch.
     private func submitAnswer(_ text: String) {
-        if viewModel.tab(for: tabId)?.hasEngineExtension == true {
-            viewModel.submitEnginePrompt(tabId: tabId, text: text)
-        } else {
-            viewModel.sendPrompt(tabId: tabId, text: text)
-        }
+        viewModel.submit(tabId: tabId, text: text)
     }
 }
 

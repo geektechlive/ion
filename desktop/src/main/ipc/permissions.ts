@@ -13,6 +13,18 @@ export function registerPermissionsIpc(): void {
     return sessionPlane.respondToPermission(tabId, questionId, optionId)
   })
 
+  ipcMain.handle(
+    IPC.RESPOND_ELICITATION,
+    (
+      _event,
+      { tabId, requestId, response, cancelled }:
+        { tabId: string; requestId: string; response?: Record<string, unknown>; cancelled: boolean },
+    ) => {
+      log(`IPC RESPOND_ELICITATION: tab=${tabId} requestId=${requestId} cancelled=${cancelled}`)
+      return sessionPlane.respondToElicitation(tabId, requestId, response, cancelled)
+    },
+  )
+
   ipcMain.handle(IPC.APPROVE_DENIED_TOOLS, (_event, { tabId, toolNames }: { tabId: string; toolNames: string[] }) => {
     log(`IPC APPROVE_DENIED_TOOLS: tab=${tabId} tools=${toolNames.join(',')}`)
     sessionPlane.approveToolsForTab(tabId, toolNames)

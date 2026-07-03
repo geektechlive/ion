@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { SpinnerGap, ArrowCircleRight } from '@phosphor-icons/react'
+import { SpinnerGap } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
-import { groupMessages, ToolGroup, AssistantMessage, MessageBubble, AgentTurnGroup, ThinkingBlock } from './conversation'
+import { groupMessages } from './conversation'
+import { TranscriptRows } from './conversation/TranscriptRows'
 import { meta, formatDuration } from './agent-panel-helpers'
 import { DispatchPager } from './DispatchPager'
 import type { DispatchInfo } from './agent-panel-helpers'
@@ -38,32 +39,54 @@ export interface ExpandedViewProps {
   dispatches: DispatchInfo[]
   selectedDispatch: number
   onSelectDispatch: (index: number) => void
+  /**
+   * When provided, the header (infoBar + pager) is handed to this slot
+   * instead of rendered inline before the messages. When absent
+   * (inline-expand path in AgentPanel), behavior is unchanged.
+   */
+  headerSlot?: (header: React.ReactNode) => React.ReactNode
 }
 
-export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFullscreen, dispatches, selectedDispatch, onSelectDispatch }: ExpandedViewProps) {
-  // In popup/fullscreen mode, use normal padding; inline mode indents past the agent label
+export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFullscreen, dispatches, selectedDispatch, onSelectDispatch, headerSlot }: ExpandedViewProps) {
   const leftPad = isFullscreen ? 12 : 148
   const unifiedTurnView = usePreferencesStore((s) => s.unifiedTurnView)
   const hasMultipleDispatches = dispatches.length > 1
-  // When pager is active, show the selected dispatch's info instead of top-level
   const activeDispatch = hasMultipleDispatches ? dispatches[selectedDispatch] : undefined
   const agentModel = activeDispatch?.model || meta<string>(agent, 'model', '')
-  const startTime = activeDispatch?.startTime ?? (agent.metadata?.startTime as number | undefined)
-  const elapsed = activeDispatch?.elapsed ?? (agent.metadata?.elapsed as number | undefined)
-  const activeStatus = activeDispatch?.status || agent.status
+  const startTime = activeDispatch
+    ? activeDispatch.startTime
+    : (agent.metadata?.startTime as number | undefined)
+  const elapsed = activeDispatch
+    ? activeDispatch.elapsed
+    : (agent.metadata?.elapsed as number | undefined)
+  const activeStatus = activeDispatch ? activeDispatch.status : agent.status
+  const dispatchIsRunning = activeDispatch
+    ? activeDispatch.status === 'running'
+    : agent.status === 'running'
   const showInfoBar = !hasMultipleDispatches && (agentModel || startTime != null || elapsed != null)
-  const dispatchTask = activeDispatch?.task || meta<string>(agent, 'task', '')
+
+  // Derive message list unconditionally (rules-of-hooks safe).
+  const messages = loadedMessages || meta(agent, 'messages', [] as any[])
+  const msgs: Message[] = loadedMessages
+    ? loadedMessages
+    : (messages as any[]).map((m: any, i: number) => ({
+        id: `${agent.name}-msg-${i}`,
+        role: m.role as any,
+        content: m.content,
+        toolName: m.toolName,
+        toolInput: '',
+        toolStatus: 'completed' as const,
+        timestamp: 0,
+      }))
+  const grouped = useMemo(() => groupMessages(msgs, { includeUser: true, unifiedTurnView }), [msgs, unifiedTurnView])
 
   const infoBar = showInfoBar ? (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
+        display: 'flex', alignItems: 'center', gap: 4,
         padding: `4px 12px 4px ${leftPad}px`,
         background: 'rgba(255,255,255,0.03)',
-        fontSize: 10,
-        color: colors.textTertiary,
+        fontSize: 10, color: colors.textTertiary,
         borderBottom: '1px solid rgba(255,255,255,0.04)',
       }}
     >
@@ -77,48 +100,21 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
     </div>
   ) : null
 
-  // Dispatch task bubble — shows the orchestrator's instruction to this agent
-  const taskBubble = dispatchTask ? (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 6,
-        margin: `6px 12px 4px ${leftPad}px`,
-        padding: 8,
-        background: 'rgba(255, 165, 0, 0.06)',
-        borderRadius: 8,
-        border: '1px solid rgba(255, 165, 0, 0.12)',
-      }}
-    >
-      <ArrowCircleRight size={14} weight="fill" style={{ color: 'rgba(255, 165, 0, 0.7)', flexShrink: 0, marginTop: 1 }} />
-      <span style={{ fontSize: 11, color: colors.textSecondary, lineHeight: 1.4, wordBreak: 'break-word' }}>
-        {dispatchTask}
-      </span>
-    </div>
-  ) : null
-
-  // Dispatch pager — shown when multiple dispatches exist
   const pager = hasMultipleDispatches ? (
     <DispatchPager dispatches={dispatches} selectedIndex={selectedDispatch} onSelect={onSelectDispatch} compact={isFullscreen} />
   ) : null
 
+  const header = <>{infoBar}{pager}</>
+  const renderedHeader = headerSlot ? headerSlot(header) : header
+
   if (loading) {
     return (
       <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-        {infoBar}
-        {pager}
-        {taskBubble}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: `8px 12px 8px ${leftPad}px`,
-            fontSize: 11,
-            color: colors.textTertiary,
-          }}
-        >
+        {renderedHeader}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: `8px 12px 8px ${leftPad}px`, fontSize: 11, color: colors.textTertiary,
+        }}>
           <SpinnerGap size={12} style={{ animation: 'spin 1s linear infinite' }} />
           Loading conversation...
         </div>
@@ -126,52 +122,17 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
     )
   }
 
-  // Use loaded messages from engine, or fall back to metadata
-  const messages = loadedMessages || meta(agent, 'messages', [] as any[])
+  // Render grouped messages via shared TranscriptRows.
   if (messages && messages.length > 0) {
-    const msgs: Message[] = loadedMessages
-      ? loadedMessages
-      : (messages as any[]).map((m: any, i: number) => ({
-          id: `${agent.name}-msg-${i}`,
-          role: m.role as any,
-          content: m.content,
-          toolName: m.toolName,
-          toolInput: '',
-          toolStatus: 'completed' as const,
-          timestamp: 0,
-        }))
-    const grouped = useMemo(() => groupMessages(msgs, { includeUser: true, unifiedTurnView }), [msgs, unifiedTurnView])
-
     return (
       <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-        {infoBar}
-        {pager}
-        {taskBubble}
-        <div
-          style={{
-            maxHeight: isFullscreen ? undefined : 200,
-            overflowY: 'auto',
-            padding: `8px 12px 8px ${leftPad}px`,
-          }}
-        >
-          {grouped.map((item, idx) => {
-            if (item.kind === 'user') {
-              return <MessageBubble key={item.message.id} message={item.message} skipMotion />
-            }
-            if (item.kind === 'assistant') {
-              return <AssistantMessage key={`a-${idx}`} message={item.message} skipMotion />
-            }
-            if (item.kind === 'tool-group') {
-              return <ToolGroup key={`tg-${idx}`} tools={item.messages} skipMotion />
-            }
-            if (item.kind === 'agent-turn') {
-              return <AgentTurnGroup key={`at-${idx}`} tools={item.tools} assistantMessages={item.assistantMessages} isActive={item.isActive} thinking={item.thinking} skipMotion />
-            }
-            if (item.kind === 'thinking') {
-              return <ThinkingBlock key={item.message.id} message={item.message} skipMotion />
-            }
-            return null
-          })}
+        {renderedHeader}
+        <div style={{
+          maxHeight: isFullscreen ? undefined : 200,
+          overflowY: 'auto',
+          padding: `8px 12px 8px ${leftPad}px`,
+        }}>
+          <TranscriptRows grouped={grouped} />
         </div>
       </div>
     )
@@ -182,21 +143,13 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
   if (fullOutput) {
     return (
       <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-        {infoBar}
-        {pager}
-        {taskBubble}
-        <div
-          style={{
-            maxHeight: isFullscreen ? undefined : 120,
-            overflowY: 'auto',
-            fontFamily: 'monospace',
-            fontSize: 11,
-            color: colors.textSecondary,
-            padding: `8px 12px 8px ${leftPad}px`,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}
-        >
+        {renderedHeader}
+        <div style={{
+          maxHeight: isFullscreen ? undefined : 120,
+          overflowY: 'auto', fontFamily: 'monospace', fontSize: 11,
+          color: colors.textSecondary, padding: `8px 12px 8px ${leftPad}px`,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        }}>
           {fullOutput}
         </div>
       </div>
@@ -205,17 +158,13 @@ export function AgentExpandedView({ agent, colors, loadedMessages, loading, isFu
 
   return (
     <div style={{ background: 'rgba(255,255,255,0.03)' }}>
-      {infoBar}
-      {pager}
-      {taskBubble}
-      <div
-        style={{
-          padding: `8px 12px 8px ${leftPad}px`,
-          fontSize: 11,
-          color: colors.textTertiary,
-        }}
-      >
-        {agent.status === 'running' ? 'Working...' : 'No conversation data available'}
+      {renderedHeader}
+      <div style={{ padding: `8px 12px 8px ${leftPad}px`, fontSize: 11, color: colors.textTertiary }}>
+        {dispatchIsRunning
+          ? 'Working...'
+          : activeDispatch
+            ? 'No transcript recorded for this dispatch'
+            : 'No conversation data available'}
       </div>
     </div>
   )

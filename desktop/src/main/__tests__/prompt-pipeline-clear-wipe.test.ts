@@ -169,7 +169,7 @@ describe('processIncomingPrompt — /clear file wipe on loaded-but-not-started t
       text: '/clear',
       reqId: 'req-wipe-sp',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       // No sessionId on runOptions — forces priority-2 path.
       runOptions: { prompt: '/clear' } as any,
     })
@@ -199,7 +199,7 @@ describe('processIncomingPrompt — /clear file wipe on loaded-but-not-started t
       text: '/clear',
       reqId: 'req-wipe-ro',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       // The renderer's send-slice populates sessionId from tab.conversationId.
       runOptions: { prompt: '/clear', sessionId: '1779509603510-e1dbeb9b1544' } as any,
     })
@@ -239,7 +239,7 @@ describe('processIncomingPrompt — /clear file wipe on loaded-but-not-started t
       reqId: 'req-wipe-rs',
       // Remote source: no runOptions, no sessionPlane entry.
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
     })
 
     // clearConversationFile must be called with the renderer-store id.
@@ -269,7 +269,7 @@ describe('processIncomingPrompt — /clear file wipe on loaded-but-not-started t
       text: '/clear',
       reqId: 'req-wipe-fresh',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       // runOptions has no sessionId.
       runOptions: { prompt: '/clear' } as any,
     })
@@ -292,7 +292,7 @@ describe('processIncomingPrompt — /clear file wipe on loaded-but-not-started t
       text: '/clear',
       reqId: 'req-wipe-err',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
       runOptions: { prompt: '/clear', sessionId: 'loaded-conv-error' } as any,
     })
 

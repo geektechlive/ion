@@ -4,17 +4,22 @@ import { usePreferencesStore } from '../preferences'
 import { IPC, type NormalizedEvent, type ImageAttachmentPayload } from '../../shared/types'
 
 /**
- * Subscribes to all ControlPlane events via IPC and routes them
- * to the Zustand store.
+ * Subscribes to the single normalized-event stream (ion:normalized-event) and
+ * routes events to the Zustand store via handleNormalizedEvent.
  *
- * text_chunk events are batched per animation frame to avoid
- * flooding React with one state update per chunk during streaming.
+ * WI-001 (single-path collapse): the raw IPC.ENGINE_EVENT subscription
+ * (the second raw stream) has been retired. Every conversation — plain and
+ * extension-hosted — flows exclusively through the normalized stream.
+ * The engine-control-plane translates all engine_* signals to NormalizedEvent
+ * variants before broadcasting; the renderer never touches raw engine events.
+ *
+ * text_chunk events are batched per animation frame to avoid flooding React
+ * with one state update per chunk during streaming.
  */
 export function useEngineEvents() {
   const handleNormalizedEvent = useSessionStore((s) => s.handleNormalizedEvent)
   const handleStatusChange = useSessionStore((s) => s.handleStatusChange)
   const handleError = useSessionStore((s) => s.handleError)
-  const handleEngineEvent = useSessionStore((s) => s.handleEngineEvent)
 
   // RAF batching for text_chunk events
   const chunkBufferRef = useRef<Map<string, string>>(new Map())
@@ -87,11 +92,6 @@ export function useEngineEvents() {
       }
     })
 
-    // Engine tab events (status, agent state, text deltas, etc.)
-    const unsubEngineEvent = window.ion.onEngineEvent((key, event) => {
-      handleEngineEvent(key, event)
-    })
-
     // Remote user messages (sent from iOS) — submit through the renderer's normal flow
     // so the tab's working directory, session ID, model, and addDirs are used automatically.
     const remoteUserMsgHandler = (_e: any, data: { tabId: string; requestId: string; prompt: string; timestamp: number; imageAttachments?: ImageAttachmentPayload[]; resolveSlash?: boolean }) => {
@@ -105,33 +105,23 @@ export function useEngineEvents() {
     }
     window.ion.on(IPC.REMOTE_BASH_COMMAND, remoteBashCommandHandler)
 
-    // Remote permission mode change (from iOS toggle or slash-command expansion) —
-    // update store without calling back to main, then re-evaluate auto group placement
+    // Remote permission mode change (from iOS toggle or slash-command expansion).
+    // WI-001: all tab types write permissionMode onto the active instance in
+    // conversationPanes. The parent tab.permissionMode is no longer written here.
     const remoteSetModeHandler = (_e: any, data: { tabId: string; mode: 'auto' | 'plan' }) => {
-      const targetTab = useSessionStore.getState().tabs.find((t) => t.id === data.tabId)
-      if (targetTab?.hasEngineExtension) {
-        // Engine tabs: write permissionMode onto the active instance in conversationPanes.
-        useSessionStore.setState((s) => {
-          const conversationPanes = new Map(s.conversationPanes)
-          const pane = conversationPanes.get(data.tabId)
-          if (!pane) return {}
-          const instanceId = pane.activeInstanceId
-          if (!instanceId) return {}
-          const idx = pane.instances.findIndex((i) => i.id === instanceId)
-          if (idx === -1) return {}
-          const instances = pane.instances.slice()
-          instances[idx] = { ...instances[idx], permissionMode: data.mode }
-          conversationPanes.set(data.tabId, { ...pane, instances })
-          return { conversationPanes }
-        })
-      } else {
-        // CLI tabs: update permissionMode on the parent tab.
-        useSessionStore.setState((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === data.tabId ? { ...t, permissionMode: data.mode } : t
-          ),
-        }))
-      }
+      useSessionStore.setState((s) => {
+        const conversationPanes = new Map(s.conversationPanes)
+        const pane = conversationPanes.get(data.tabId)
+        if (!pane) return {}
+        const instanceId = pane.activeInstanceId
+        if (!instanceId) return {}
+        const idx = pane.instances.findIndex((i) => i.id === instanceId)
+        if (idx === -1) return {}
+        const instances = pane.instances.slice()
+        instances[idx] = { ...instances[idx], permissionMode: data.mode }
+        conversationPanes.set(data.tabId, { ...pane, instances })
+        return { conversationPanes }
+      })
 
       // Re-evaluate auto group movement after the mode change
       const { autoGroupMovement, tabGroupMode, planningGroupId, inProgressGroupId } = usePreferencesStore.getState()
@@ -151,29 +141,20 @@ export function useEngineEvents() {
     }
     window.ion.on(IPC.REMOTE_SET_PERMISSION_MODE, remoteSetModeHandler)
 
-    // Remote thinking-effort change (from iOS). Write the level onto the
-    // targeted tab (bare) or its active instance (engine), mirroring the
-    // renderer's own setThinkingEffort routing. No engine call — the level is
-    // a per-prompt override read at the next submit. 'off' clears it.
+    // Remote thinking-effort change (from iOS).
+    // WI-001: write thinkingEffort onto the active instance for all tab types.
     const remoteSetThinkingHandler = (_e: any, data: { tabId: string; effort: 'off' | 'low' | 'medium' | 'high' }) => {
-      const targetTab = useSessionStore.getState().tabs.find((t) => t.id === data.tabId)
-      if (targetTab?.hasEngineExtension) {
-        useSessionStore.setState((s) => {
-          const conversationPanes = new Map(s.conversationPanes)
-          const pane = conversationPanes.get(data.tabId)
-          if (!pane?.activeInstanceId) return {}
-          const idx = pane.instances.findIndex((i) => i.id === pane.activeInstanceId)
-          if (idx === -1) return {}
-          const instances = pane.instances.slice()
-          instances[idx] = { ...instances[idx], thinkingEffort: data.effort }
-          conversationPanes.set(data.tabId, { ...pane, instances })
-          return { conversationPanes }
-        })
-      } else {
-        useSessionStore.setState((s) => ({
-          tabs: s.tabs.map((t) => (t.id === data.tabId ? { ...t, thinkingEffort: data.effort } : t)),
-        }))
-      }
+      useSessionStore.setState((s) => {
+        const conversationPanes = new Map(s.conversationPanes)
+        const pane = conversationPanes.get(data.tabId)
+        if (!pane?.activeInstanceId) return {}
+        const idx = pane.instances.findIndex((i) => i.id === pane.activeInstanceId)
+        if (idx === -1) return {}
+        const instances = pane.instances.slice()
+        instances[idx] = { ...instances[idx], thinkingEffort: data.effort }
+        conversationPanes.set(data.tabId, { ...pane, instances })
+        return { conversationPanes }
+      })
     }
     window.ion.on(IPC.REMOTE_SET_THINKING_EFFORT, remoteSetThinkingHandler)
 
@@ -208,10 +189,15 @@ export function useEngineEvents() {
     }
     window.ion.on(IPC.REMOTE_RENAME_TERMINAL_INSTANCE, remoteRenameTermInstHandler)
 
-    // Remote engine prompt (sent from iOS) — submit through the renderer's engine flow
-    // so the store adds the user message, sets status, and calls the engine bridge.
-    const remoteEnginePromptHandler = (_e: any, data: { tabId: string; text: string; appendSystemPrompt?: string; imageAttachments?: ImageAttachmentPayload[] }) => {
-      useSessionStore.getState().submitEnginePrompt(data.tabId, data.text, data.appendSystemPrompt, data.imageAttachments)
+    // Remote engine prompt (sent from iOS) — submit through the renderer's
+    // unified submit so the store adds the user message, sets status, resolves
+    // the tab's extensions (data) and dispatches the prompt. There is no
+    // separate engine submit path any more. source='remote' ensures the
+    // IPC.PROMPT handler skips its redundant desktop_message_added echo — the
+    // canonical echo was already sent by tabs-prompt.ts; a second echo with a
+    // renderer-generated id would cause a duplicate user bubble on iOS.
+    const remoteEnginePromptHandler = (_e: any, data: { tabId: string; text: string; appendSystemPrompt?: string; imageAttachments?: ImageAttachmentPayload[]; resolveSlash?: boolean }) => {
+      useSessionStore.getState().submit(data.tabId, data.text, { appendSystemPrompt: data.appendSystemPrompt, imageAttachments: data.imageAttachments, source: 'remote', resolveSlash: data.resolveSlash })
     }
     window.ion.on(IPC.REMOTE_ENGINE_PROMPT, remoteEnginePromptHandler)
 
@@ -233,7 +219,6 @@ export function useEngineEvents() {
       unsubStatus()
       unsubError()
       unsubSkill()
-      unsubEngineEvent()
       window.ion.off(IPC.REMOTE_USER_MESSAGE, remoteUserMsgHandler)
       window.ion.off(IPC.REMOTE_BASH_COMMAND, remoteBashCommandHandler)
       window.ion.off(IPC.REMOTE_SET_PERMISSION_MODE, remoteSetModeHandler)
@@ -247,7 +232,7 @@ export function useEngineEvents() {
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
       chunkBufferRef.current.clear()
     }
-  }, [handleNormalizedEvent, handleStatusChange, handleError, handleEngineEvent])
+  }, [handleNormalizedEvent, handleStatusChange, handleError])
 
   // Note: window.ion.start() is called via sessionStore.initStaticInfo() in App.tsx.
   // No duplicate call needed here.

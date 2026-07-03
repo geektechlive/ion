@@ -56,7 +56,6 @@ vi.mock('../session-store-helpers', () => ({
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
   })),

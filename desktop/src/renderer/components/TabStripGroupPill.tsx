@@ -5,13 +5,14 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import type { TabGroupView } from '../hooks/useTabGroups'
-import { checkWorktreeUncommitted, getWaitingState, shouldUseWorktree, zoomRect } from './TabStripShared'
+import { abbreviateProfileName, checkWorktreeUncommitted, getWaitingState, shouldUseWorktree, zoomRect } from './TabStripShared'
 import { StackedStatusDots } from './TabStripStatusDot'
 import { InlineRenameInput } from './TabStripInlineRenameInput'
 import { PillColorPicker } from './TabStripPillColorPicker'
 import { TabContextMenu } from './TabStripTabContextMenu'
 import { InactiveGroupMenu } from './TabStripInactiveGroupMenu'
 import { GroupPickerDropdown } from './TabStripGroupPickerDropdown'
+import { newTabInDirectory } from './new-conversation-routing'
 
 interface GroupPillProps {
   group: TabGroupView
@@ -42,6 +43,24 @@ export function GroupPill({
   const pillRef = useRef<HTMLDivElement>(null)
 
   const selectedTab = group.tabs.find((t) => t.id === group.selectedTabId) || group.tabs[0]
+
+  // Harness badge label for the active group's selected tab. Subscribe to the
+  // raw engineProfiles array (a stable reference that only changes when
+  // profiles change) and derive the label *synchronously from selectedTab* in
+  // render below. Deriving here — rather than inside the store selector closure
+  // — is deliberate: selectedTab comes from props (group.selectedTabId), not
+  // from the preferences store, so a selector that closed over selectedTab
+  // could return a value computed from a stale selectedTab when the user
+  // switches the selected tab within the group while engineProfiles is
+  // unchanged. Computing from selectedTab in the render body guarantees the
+  // badge always reflects the currently-rendered selected tab (the bug where
+  // the previous tab's extension badge persisted on a plain tab).
+  const engineProfiles = usePreferencesStore((s) => s.engineProfiles)
+  const harnessBadgeLabel: string | null = selectedTab?.engineProfileId
+    ? abbreviateProfileName(
+        engineProfiles.find((p) => p.id === selectedTab.engineProfileId)?.name,
+      )
+    : null
 
   useEffect(() => {
     if (tabMenu) checkWorktreeUncommitted(selectedTab)
@@ -153,6 +172,46 @@ export function GroupPill({
         <span className="flex-shrink-0 text-[10px] font-medium" style={{ color: colors.textSecondary, opacity: 0.5 }}>
           {group.label}
         </span>
+        {isActive && selectedTab && harnessBadgeLabel !== null && (
+          // Harness badge for the selected tab: abbreviated profile name in an
+          // accent-tinted chip. Shown iff harnessBadgeLabel is non-null (the
+          // selected tab carries an engineProfileId). Style spec mirrors the
+          // single-tab pill (TabStripTabPill.tsx): 4px radius, accent
+          // bg/border/text at 25/40/100% opacity, 9px/600 weight, flex-shrink-0.
+          <span
+            className="flex-shrink-0"
+            style={{
+              fontSize: 9,
+              fontWeight: 600,
+              color: colors.accent,
+              background: `${colors.accent}25`,
+              border: `1px solid ${colors.accent}40`,
+              borderRadius: 4,
+              padding: '1px 3px',
+              lineHeight: 1.4,
+              letterSpacing: '0.02em',
+            }}
+          >
+            {harnessBadgeLabel}
+          </span>
+        )}
+        {isActive && selectedTab?.workingDirectory && (
+          // Working directory basename for the selected tab. Mirrors the
+          // single-tab pill (TabStripTabPill.tsx): 10px/500, textSecondary
+          // (worktree green when the tab is a worktree), flex-shrink-0.
+          <span
+            className="flex-shrink-0"
+            style={{
+              fontSize: 10,
+              fontWeight: 500,
+              color: selectedTab.worktree ? colors.worktreeGreen : colors.textSecondary,
+              opacity: selectedTab.worktree ? 0.6 : 0.5,
+              cursor: 'default',
+            }}
+          >
+            {selectedTab.workingDirectory.split('/').pop() || selectedTab.workingDirectory}
+          </span>
+        )}
         {isActive && selectedTab && (
           renamingTitle ? (
             <InlineRenameInput
@@ -166,7 +225,7 @@ export function GroupPill({
               onCancel={() => setRenamingTitle(false)}
             />
           ) : (
-            <span className="truncate max-w-[100px]">
+            <span className="truncate max-w-[180px]">
               {displayTitle}
             </span>
           )
@@ -270,7 +329,18 @@ export function GroupPill({
               tab={tab}
               onRename={() => { setTabMenu(null); setRenamingTitle(true) }}
               onForkTab={tab.conversationId ? () => { useSessionStore.getState().forkTab(tab.id) } : undefined}
-              onNewTabInDir={() => useSessionStore.getState().createTabInDirectory(tab.workingDirectory, shouldUseWorktree(false))}
+              onNewTabInDir={() => {
+                // Lock-safe single path: cannot bypass the enterprise lock.
+                const { engineProfiles, defaultEngineProfileId, enterpriseNewConversationDefaults: policy } = usePreferencesStore.getState()
+                newTabInDirectory(tab.workingDirectory, {
+                  profiles: engineProfiles,
+                  defaultProfileId: defaultEngineProfileId,
+                  enterprisePolicy: policy,
+                  createTabInDir: (d, wt) => useSessionStore.getState().createTabInDirectory(d, wt),
+                  createConvTab: (d, opts) => useSessionStore.getState().createConversationTab(d, opts),
+                  shouldUseWorktree: shouldUseWorktree(false),
+                })
+              }}
               onFinishWork={() => { if (tab.worktree) useSessionStore.getState().finishWorktreeTab(tab.id) }}
               finishWorkDisabled={tab.worktree ? (worktreeUncommittedMap.has(tab.id) ? worktreeUncommittedMap.get(tab.id)! : 'checking') : undefined}
               onClose={() => setTabMenu(null)}

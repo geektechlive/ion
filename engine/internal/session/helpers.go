@@ -11,6 +11,16 @@ import (
 func (m *Manager) keyForRun(runID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// Primary: the stable runID -> key binding, set at dispatch and cleared
+	// only at terminal points. This is decoupled from engineSession.requestID,
+	// which currentSessionStatus transiently clears mid-run — a clear that
+	// previously caused the scan below to return "" and silently drop in-flight
+	// events (see run_key_binding.go for the full rationale).
+	if key := m.keyForRunBinding(runID); key != "" {
+		return key
+	}
+	// Fallback: scan sessions by the live requestID. Retained so a run that
+	// somehow has no binding (defensive) still resolves while requestID is set.
 	for _, s := range m.sessions {
 		if s.requestID == runID {
 			return s.key

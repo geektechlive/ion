@@ -104,12 +104,12 @@ extension SessionViewModel {
         // authoritative "no extension commands for this session" signal.
         // See docs/architecture/agent-state.md for the canonical
         // snapshot-replace pattern.
-        let key: String
-        if let instId = instanceId, !instId.isEmpty {
-            key = "\(tabId):\(instId)"
-        } else {
-            key = tabId
-        }
+        //
+        // Post-#256: keyed on bare tabId (single instance per tab). instanceId
+        // is vestigial; the readers (ConversationView / InputBar) key on bare
+        // tabId, so the write must match.
+        _ = instanceId
+        let key = tabId
         if commands.isEmpty {
             extensionCommands.removeValue(forKey: key)
         } else {
@@ -137,7 +137,7 @@ extension SessionViewModel {
 
     /// Handle a `engine_export` event by parking the rendered payload
     /// on `pendingExport` so a SwiftUI observer in ConversationView /
-    /// EngineView can present an iOS share sheet.
+    /// ConversationView can present an iOS share sheet.
     ///
     /// The share sheet is the right surface on iOS (no save-as dialog
     /// equivalent on touch UI) — it lets the user route to Files,

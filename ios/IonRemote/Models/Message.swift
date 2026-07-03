@@ -38,6 +38,27 @@ struct Message: Codable, Identifiable, Sendable {
     /// EngineMessageRow reads this to choose the intercept banner style.
     /// Client-only field — NOT part of the wire protocol, NOT persisted.
     var interceptLevel: String? = nil
+    /// Path to the plan file associated with a plan-lifecycle divider message.
+    /// Populated only on `role: .system` divider messages whose content starts
+    /// with "── Plan created", "── Plan updated", or "── Implementing plan"
+    /// (built by handleEnginePlanFileWritten in
+    /// SessionViewModel+EngineEvents.swift from the engine_plan_file_written
+    /// event, and carried across a history reload by the desktop history mapper
+    /// — engine-history.ts — which decodes here via the engineJSON path).
+    /// EngineMessageRow reads it to make the plan slug a tappable link that
+    /// opens the plan preview. Mirrors the desktop `Message.planFilePath`.
+    /// Decoded from the wire on the engineJSON path; not a persisted local field.
+    var planFilePath: String? = nil
+    /// Marker discriminator carried on system-role marker rows the engine yields
+    /// on historical reload: "compaction" | "plan" | "steer" (mirrors the engine
+    /// `SessionMessage.markerKind`). iOS routes marker rows by their content
+    /// sentinel (`[Compaction]` / `──`) — the desktop history mapper builds the
+    /// display content and carries `planFilePath` before iOS ever sees the row —
+    /// so this field is NOT required for rendering. It is decoded for
+    /// completeness so a client that consumes the raw engine wire directly (e.g.
+    /// the `engineJSON` agent-history path) can inspect the structured payload
+    /// for future routing without a contract change. Optional/additive.
+    var markerKind: String? = nil
 
     // MARK: - Extended-thinking summary (issue #158)
     //
@@ -76,6 +97,7 @@ struct Message: Codable, Identifiable, Sendable {
         case attachments, timestamp, source
         case isInternal = "internal"
         case slashCommand, slashArgs, slashSource
+        case planFilePath, markerKind
         // bootstrapCollapsedCount, interceptLevel, and the thinking* summary
         // fields are deliberately excluded — all are client-only render hints.
     }
@@ -140,6 +162,24 @@ extension Message {
         slashArgs = try container.decodeIfPresent(String.self, forKey: .slashArgs)
         slashSource = try container.decodeIfPresent(String.self, forKey: .slashSource)
 
+        // planFilePath on plan-lifecycle divider system messages. The desktop
+        // history mapper (engine-history.ts) carries it on the wire so a
+        // reloaded "Plan created"/"Plan updated"/"Implementing plan" divider
+        // stays clickable on iOS — matching the live handler's behavior.
+        planFilePath = try container.decodeIfPresent(String.self, forKey: .planFilePath)
+
+        // Marker discriminator (compaction/plan/steer) carried on system-role
+        // marker rows the engine yields on historical reload. Decoded for
+        // completeness — iOS routes marker rows by their content sentinel, so
+        // this is not required to render. When a raw engine plan-marker row is
+        // decoded on this path (agent history), the engine ships the plan path
+        // under `markerPlanFilePath` (not `planFilePath`); fall back to it so
+        // the divider still carries a path for the tappable slug link.
+        markerKind = try container.decodeIfPresent(String.self, forKey: .markerKind)
+        if planFilePath == nil {
+            planFilePath = try container.decodeIfPresent(String.self, forKey: .markerPlanFilePath)
+        }
+
         // Engine messages don't carry these fields
         toolInput = nil
         attachments = nil
@@ -151,6 +191,8 @@ extension Message {
         case id, role, content, toolName, toolId, toolStatus, timestamp
         case isInternal = "internal"
         case slashCommand, slashArgs, slashSource
+        case planFilePath
+        case markerKind, markerPlanFilePath
     }
 
     /// Decode an array of Message from engine wire-format JSON.

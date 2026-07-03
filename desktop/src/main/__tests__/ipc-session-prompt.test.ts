@@ -50,7 +50,6 @@ vi.mock('../state', () => ({
     resetTabSession: vi.fn(),
     cancel: vi.fn(),
     cancelTab: vi.fn(),
-    steerSession: vi.fn(),
     retry: vi.fn(),
     getHealth: vi.fn(),
     closeTab: vi.fn(),
@@ -110,7 +109,7 @@ describe('IPC.PROMPT handler', () => {
       tabId: 'tab-1',
       reqId: 'req-1',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
     }))
   })
 

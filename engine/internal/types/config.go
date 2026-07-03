@@ -19,6 +19,24 @@ type HookDef struct {
 	Handler string `json:"handler"`
 }
 
+// NewConversationDefaultsPolicy specifies default working directory and engine
+// profile for new conversations. Communicated via enterprise config so
+// administrators can set organisation-wide defaults that clients honour when the
+// user has not made their own choice (Locked=false) or cannot override
+// (Locked=true).
+//
+// BaseDirectory and EngineProfileId mirror the per-user defaultBaseDirectory
+// and defaultEngineProfileId preferences so the wire shape is consistent.
+// Empty EngineProfileId means "plain conversation" (no extension loaded).
+type NewConversationDefaultsPolicy struct {
+	BaseDirectory   string `json:"baseDirectory,omitempty"`
+	EngineProfileId string `json:"engineProfileId,omitempty"`
+	// Locked, when true, prevents the user from overriding these defaults
+	// in the client's settings UI. Clients enforce this; the engine itself is
+	// stateless with respect to user preferences.
+	Locked bool `json:"locked,omitempty"`
+}
+
 // EnterpriseConfig represents MDM/system-level sealed configuration.
 type EnterpriseConfig struct {
 	AllowedModels    []string                 `json:"allowedModels,omitempty"`
@@ -32,7 +50,13 @@ type EnterpriseConfig struct {
 	Telemetry        *TelemetryConfig         `json:"telemetry,omitempty"`
 	Network          *NetworkConfig           `json:"network,omitempty"`
 	Sandbox          *SandboxEnterpriseConfig `json:"sandbox,omitempty"`
-	CustomFields     map[string]any           `json:"customFields,omitempty"`
+	// NewConversationDefaults sets organisation-wide defaults for new-conversation
+	// working directory and engine profile. When nil, clients use the per-user
+	// defaultBaseDirectory and defaultEngineProfileId preferences. Overlay
+	// (drop-in) merges follow the additive pattern: a non-nil overlay pointer
+	// replaces the base pointer entirely.
+	NewConversationDefaults *NewConversationDefaultsPolicy `json:"newConversationDefaults,omitempty"`
+	CustomFields            map[string]any                 `json:"customFields,omitempty"`
 }
 
 // ToolRestrictions defines tool allow/deny lists.
@@ -103,6 +127,45 @@ type EngineRuntimeConfig struct {
 	// when any extension declares a job.
 	Scheduling *SchedulingConfig `json:"scheduling,omitempty"`
 	LogLevel   string            `json:"logLevel,omitempty"` // "debug", "info", "warn", "error"
+
+	// MaxDispatchDepth caps how many nested dispatch levels are allowed.
+	// The orchestrator runs at depth 0; a specialist it dispatches runs at
+	// depth 1; a sub-specialist at depth 2; etc. Dispatches at depth >=
+	// MaxDispatchDepth are rejected with ErrDispatchDepthExceeded.
+	//
+	// Zero or negative means "use the built-in default (3)", which allows
+	// depths 0, 1, and 2. There is no sentinel to disable the cap entirely
+	// (unlike MaxTurns <=0 = unlimited) because unbounded recursion is a
+	// resource hazard with no legitimate use case.
+	MaxDispatchDepth int `json:"maxDispatchDepth,omitempty"`
+
+	// AllowSelfDispatch disables the self-dispatch rail when true. The rail
+	// (default: OFF, i.e. self-dispatch blocked) prevents a dispatched agent
+	// from dispatching an agent of its OWN name -- recursive self-cloning that
+	// burns the dispatch-depth budget with no legitimate use case, the same
+	// resource-hazard category as unbounded recursion. The orchestrator
+	// (depth 0) has no agent identity and is never subject to the rail. This
+	// escape hatch exists only for the rare consumer that genuinely wants an
+	// agent to be able to re-dispatch its own name; leave it false otherwise.
+	AllowSelfDispatch bool `json:"allowSelfDispatch,omitempty"`
+
+	// MemoryLimitMB is an optional soft ceiling (in MiB) for the engine daemon's
+	// Go heap, applied at serve startup via runtime/debug.SetMemoryLimit. It is a
+	// SOFT limit: as the heap approaches it the garbage collector becomes far more
+	// aggressive, trading CPU to hold resident memory below the level where the OS
+	// memory-pressure killer (macOS jetsam / Linux OOM) would SIGKILL the whole
+	// process — taking every hosted session down at once. It is NOT a hard cap and
+	// does not cause allocation failures.
+	//
+	// Precedence at startup (see cmd/ion/memlimit.go):
+	//   1. The GOMEMLIMIT environment variable, if set — honored natively by the Go
+	//      runtime; the engine never overrides an operator's explicit env choice.
+	//   2. This field, when > 0.
+	//   3. A conservative fraction of host physical RAM (engine-derived default).
+	//
+	// Zero/absent ⇒ the engine derives the default. This is per-daemon config read
+	// once from engine.json at serve startup, alongside Limits/Timeouts/Webhooks.
+	MemoryLimitMB int `json:"memoryLimitMb,omitempty"`
 }
 
 // GetWorkspace returns the Workspace config block, or nil for a nil receiver

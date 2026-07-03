@@ -3,7 +3,6 @@ package session
 import (
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/providers"
-	"github.com/dsswift/ion/engine/internal/types"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
@@ -62,33 +61,114 @@ func (m *Manager) newChildBackend() backend.RunBackend {
 	}
 }
 
-// startChildRun dispatches a child run with an optional RunConfig, choosing
-// StartRunWithConfig when the concrete backend type supports it. This is
-// the parallel of extcontext.startChild for callers inside the session
-// package (currently prompt_agent_spawner.go) that need to thread per-run
-// config — most importantly DefaultModel — into the child run so the
-// runloop's existing fallback at runloop.go:57 can fire when the child's
-// requested model doesn't resolve to a provider.
-//
-// When cfg is nil the function degrades to plain StartRun, preserving the
-// pre-existing behaviour for callers that don't need per-run config.
-//
-// Detection is by interface assertion (configurableBackend) rather than
-// concrete type switch so that test stubs can opt in by implementing
-// StartRunWithConfig — the production *ApiBackend and *HybridBackend both
-// satisfy the interface.
-type configurableBackend interface {
-	StartRunWithConfig(requestID string, options types.RunOptions, cfg *backend.RunConfig)
+// progressBumpable is satisfied by any backend that exposes the run-progress
+// watchdog clock for refreshing. *ApiBackend implements it directly; the
+// HybridBackend's parent runs live on its inner *ApiBackend (returned by
+// InnerApi), which also implements it. CliBackend and test stubs do not, so
+// the bump degrades to a no-op for them.
+type progressBumpable interface {
+	BumpRunProgress(requestID string)
 }
 
-func startChildRun(child backend.RunBackend, reqID string, runOpts types.RunOptions, cfg *backend.RunConfig) {
-	if cfg != nil {
-		if cb, ok := child.(configurableBackend); ok {
-			cb.StartRunWithConfig(reqID, runOpts, cfg)
-			return
-		}
+// bumpParentProgress refreshes the parent run's run-progress watchdog clock for
+// the given session's active run. It is the session-side half of the dispatch
+// liveness fix: a healthy child agent's events flow on the *child* backend and
+// never reach the parent run's emit(), so the parent — parked in the deadline-
+// exempt Agent tool call — would have a stalling progress clock once the
+// self-emitted ToolStalledEvent advisory stopped counting as progress (see
+// ApiBackend.emitWithoutProgress). Calling this on every genuine child event
+// reports the child's liveness to the parent's clock.
+//
+// Resolution: read the session's current requestID under the Manager lock (the
+// same guard SendAbort uses), then ask the resolved parent backend to bump it.
+// No-op when there is no active run or the backend cannot bump (CLI / stubs).
+//
+// The bump targets the parent ApiBackend directly rather than going through
+// resolvedBackend(model): for HybridBackend the parent run is always on the
+// inner *ApiBackend (the CLI inner does not run the run-progress watchdog), so
+// InnerApi() is the correct and only target.
+func (m *Manager) bumpParentProgress(s *engineSession) {
+	if s == nil {
+		return
 	}
-	// CliBackend, generic test stubs, or any backend that doesn't carry
-	// RunConfig fall through to the plain interface method.
-	child.StartRun(reqID, runOpts)
+	m.mu.Lock()
+	rid := s.requestID
+	m.mu.Unlock()
+	if rid == "" {
+		return
+	}
+
+	target := m.backend
+	if h, ok := m.backend.(*backend.HybridBackend); ok {
+		target = h.InnerApi()
+	}
+	if pb, ok := target.(progressBumpable); ok {
+		pb.BumpRunProgress(rid)
+	}
+}
+
+// humanWaitSuspendable is satisfied by any backend that lets the run-progress
+// watchdog be paused for an intentional, indefinite human-wait (an elicitation
+// or a permission dialog awaiting a user decision). *ApiBackend implements it
+// directly; the HybridBackend's parent runs live on its inner *ApiBackend
+// (InnerApi), which also implements it. CliBackend and test stubs do not, so the
+// begin/end pair degrades to a no-op for them.
+type humanWaitSuspendable interface {
+	BeginHumanWait(requestID string)
+	EndHumanWait(requestID string)
+}
+
+// beginHumanWait tells the parent run's run-progress watchdog that the given
+// session's active run is entering an intentional, indefinite human-wait, so the
+// watchdog must not cancel it for idleness while a user decision is pending. Must
+// be paired with endHumanWait on every exit path (use defer at the call site).
+//
+// Resolution mirrors bumpParentProgress exactly: read the session's current
+// requestID under the Manager lock, resolve the parent ApiBackend (InnerApi for
+// HybridBackend — the CLI inner does not run the run-progress watchdog), and
+// forward. No-op when there is no active run or the backend cannot suspend
+// (CLI / stubs); the indefinite-human-wait guarantee for those backends is
+// enforced by their own dialog layers, not by this watchdog.
+func (m *Manager) beginHumanWait(s *engineSession) {
+	if s == nil {
+		return
+	}
+	m.mu.Lock()
+	rid := s.requestID
+	m.mu.Unlock()
+	if rid == "" {
+		return
+	}
+
+	target := m.backend
+	if h, ok := m.backend.(*backend.HybridBackend); ok {
+		target = h.InnerApi()
+	}
+	if hw, ok := target.(humanWaitSuspendable); ok {
+		hw.BeginHumanWait(rid)
+	}
+}
+
+// endHumanWait is the matched half of beginHumanWait: it tells the parent run's
+// run-progress watchdog that a human-wait span has ended, resuming the watchdog
+// (with a fresh idle window) once the run's last open human-wait closes. Safe to
+// defer; same resolution and no-op semantics as beginHumanWait.
+func (m *Manager) endHumanWait(s *engineSession) {
+	if s == nil {
+		return
+	}
+	m.mu.Lock()
+	rid := s.requestID
+	m.mu.Unlock()
+	if rid == "" {
+		return
+	}
+
+	target := m.backend
+	if h, ok := m.backend.(*backend.HybridBackend); ok {
+		target = h.InnerApi()
+	}
+	if hw, ok := target.(humanWaitSuspendable); ok {
+		hw.EndHumanWait(rid)
+	}
 }

@@ -1,7 +1,7 @@
 import { IS_REMOTE } from './engine-bridge'
 import { engineBridge } from './state'
 import { log } from './logger'
-import type { EngineDirListing, EngineHostInfo } from '../shared/types'
+import type { EngineDirListing, EngineHostInfo, NewConversationDefaultsPolicy } from '../shared/types'
 
 /** Returns the bridge singleton.
  *
@@ -65,4 +65,23 @@ export async function listEngineDirectory(
 ): Promise<{ ok: boolean; error?: string; data?: EngineDirListing }> {
   log('engine-bridge-fs', 'listEngineDirectory: path=' + path + ' showHidden=' + showHidden)
   return bridge().request<EngineDirListing>('list_directory', { path, showHidden })
+}
+
+/**
+ * Fetch the enterprise new-tab policy from the engine. The engine reads this
+ * from MDM/system-level config (macOS defaults, Linux drop-in JSON, etc.) and
+ * projects it here so the desktop can enforce the locked new-tab behavior
+ * without parsing OS-specific sources itself.
+ *
+ * Returns null when no enterprise config is present or when the engine has
+ * not yet started. The renderer treats null as "no enterprise constraint".
+ */
+export async function getEnterprisePolicyNewConversationDefaults(): Promise<NewConversationDefaultsPolicy | null> {
+  interface PolicyResponse { newConversationDefaults: NewConversationDefaultsPolicy | null }
+  const result = await bridge().request<PolicyResponse>('get_enterprise_policy')
+  if (result.ok && result.data?.newConversationDefaults) {
+    log('engine-bridge-fs', `getEnterprisePolicyNewConversationDefaults: locked=${result.data.newConversationDefaults.locked} dir=${result.data.newConversationDefaults.baseDirectory} profile=${result.data.newConversationDefaults.engineProfileId}`)
+    return result.data.newConversationDefaults
+  }
+  return null
 }

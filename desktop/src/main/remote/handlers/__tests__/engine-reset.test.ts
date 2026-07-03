@@ -4,8 +4,8 @@
  *
  * What this file covers
  * ─────────────────────
- *   1. `bridge.stopSession` is called with the compound key
- *      `${tabId}:${instanceId}` (NOT bare tabId). This is the load-bearing
+ *   1. `bridge.stopSession` is called with the bare tabId.
+ *      This is the load-bearing
  *      contract; the whole reason this handler exists is that
  *      `reset_tab_session` routes through bare tabId and silently misses
  *      engine instances.
@@ -74,7 +74,7 @@ beforeEach(() => {
 })
 
 describe('handleResetEngineSession', () => {
-  it('calls bridge.stopSession with the compound key ${tabId}:${instanceId}', async () => {
+  it('calls bridge.stopSession with the bare tabId (Phase 4b)', async () => {
     await handleResetEngineSession({
       type: 'desktop_reset_engine_session',
       tabId: 'tab-abc',
@@ -82,7 +82,7 @@ describe('handleResetEngineSession', () => {
     })
 
     expect(mocks.stopSessionMock).toHaveBeenCalledTimes(1)
-    expect(mocks.stopSessionMock).toHaveBeenCalledWith('tab-abc:inst-xyz')
+    expect(mocks.stopSessionMock).toHaveBeenCalledWith('tab-abc')
   })
 
   it('invokes the renderer resetEngineInstance action with tabId and instanceId', async () => {
@@ -126,7 +126,7 @@ describe('handleResetEngineSession', () => {
       instanceId: 'inst-xyz',
     })
 
-    expect(mocks.stopSessionMock).toHaveBeenCalledWith('tab-abc:inst-xyz')
+    expect(mocks.stopSessionMock).toHaveBeenCalledWith('tab-abc')
     expect(mocks.executeJsMock).toHaveBeenCalledTimes(1)
     // The handler did not rethrow.
   })

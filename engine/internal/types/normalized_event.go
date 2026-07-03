@@ -23,12 +23,19 @@ const (
 	EventPlanModeChanged   = "plan_mode_changed"
 	EventPlanProposal      = "plan_proposal"
 	EventPlanModeAutoExit  = "plan_mode_auto_exit"
-	EventStreamReset       = "stream_reset"
-	EventCompacting        = "compacting"
-	EventToolStalled       = "tool_stalled"
-	EventSteerInjected     = "steer_injected"
-	EventModelFallback     = "model_fallback"
-	EventRunStalled        = "run_stalled"
+	// EventPlanFileWritten is emitted the moment a Write/Edit successfully
+	// lands on the canonical plan file during plan mode. It is distinct from
+	// EventPlanModeChanged (which fires on plan-mode *entry*, before any file
+	// exists): this event fires only after the plan file actually exists on
+	// disk with content, so consumers can render a "plan created / updated"
+	// marker at the true point in the conversation and a link that resolves.
+	EventPlanFileWritten = "plan_file_written"
+	EventStreamReset     = "stream_reset"
+	EventCompacting      = "compacting"
+	EventToolStalled     = "tool_stalled"
+	EventSteerInjected   = "steer_injected"
+	EventModelFallback   = "model_fallback"
+	EventRunStalled      = "run_stalled"
 	// EventPlanContent is emitted in response to a get_plan_content command.
 	// It carries a bounded byte-range window of a plan file so remote clients
 	// can page through large plans without filesystem access to the engine host.
@@ -42,6 +49,63 @@ const (
 	EventThinkingBlockStart = "thinking_block_start"
 	EventThinkingDelta      = "thinking_delta"
 	EventThinkingBlockEnd   = "thinking_block_end"
+
+	// Extension-surface events — decode targets that consumers map to from the
+	// corresponding engine_* wire events, so every conversation (plain and
+	// extension-hosted) can flow through a single normalized-event reducer
+	// rather than a per-event-type switch. The engine emits the underlying
+	// engine_* events; these bare-named variants are the normalized shapes a
+	// consumer's normalize step produces. See
+	// engine/internal/types/normalized_event_extensions.go for the structs.
+
+	// EventMessageEnd reports the end of one LLM message within a run.
+	// Carries that message's token usage and a seal flag marking it complete.
+	EventMessageEnd = "message_end"
+
+	// EventAgentState is a complete snapshot of every agent the engine
+	// considers live at this moment. Consumers replace their local view —
+	// do not merge incrementally.
+	EventAgentState = "agent_state"
+
+	// EventHarnessMessage is a display message injected by the extension
+	// harness (e.g. a banner or inline status). Carries an optional dedupKey
+	// so consumers can suppress repeated emissions within the same session.
+	EventHarnessMessage = "harness_message"
+
+	// EventWorkingMessage is a transient activity string produced by the
+	// extension harness (e.g. "Compacting..."). It replaces the prior
+	// working-message value; an empty string clears it.
+	EventWorkingMessage = "working_message"
+
+	// EventNotify is an ephemeral notification from the extension harness. It
+	// is not part of the conversation history.
+	EventNotify = "notify"
+
+	// EventDialog is a request from the extension harness for a user response
+	// (text input or option selection).
+	EventDialog = "dialog"
+
+	// EventExtensionDied signals that an extension subprocess exited
+	// unexpectedly and the engine is attempting a respawn.
+	EventExtensionDied = "extension_died"
+
+	// EventExtensionRespawned signals that an extension subprocess was
+	// successfully restarted after a previous crash.
+	EventExtensionRespawned = "extension_respawned"
+
+	// EventExtensionDeadPermanent signals that an extension subprocess has
+	// exceeded the crash budget and will not be restarted automatically.
+	EventExtensionDeadPermanent = "extension_dead_permanent"
+
+	// EventEventsDropped signals that the event delivery buffer overflowed
+	// and some events were discarded. State may be stale.
+	EventEventsDropped = "events_dropped"
+
+	// EventContextBreakdown carries a per-category token breakdown for the
+	// active run. Emitted once after prompt assembly and again after the
+	// first UsageEvent reconciliation (with APIReportedTotal and Unaccounted
+	// populated). See ContextBreakdownEvent.
+	EventContextBreakdown = "context_breakdown"
 )
 
 // NormalizedEventData is the interface satisfied by all canonical event variants.
@@ -118,6 +182,8 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &PlanProposalEvent{}
 	case EventPlanModeAutoExit:
 		target = &PlanModeAutoExitEvent{}
+	case EventPlanFileWritten:
+		target = &PlanFileWrittenEvent{}
 	case EventStreamReset:
 		target = &StreamResetEvent{}
 	case EventCompacting:
@@ -138,6 +204,29 @@ func (e *NormalizedEvent) UnmarshalJSON(data []byte) error {
 		target = &ThinkingDeltaEvent{}
 	case EventThinkingBlockEnd:
 		target = &ThinkingBlockEndEvent{}
+	// Extension-surface events (WI-001: single-path collapse)
+	case EventMessageEnd:
+		target = &MessageEndEvent{}
+	case EventAgentState:
+		target = &AgentStateEvent{}
+	case EventHarnessMessage:
+		target = &HarnessMessageEvent{}
+	case EventWorkingMessage:
+		target = &WorkingMessageEvent{}
+	case EventNotify:
+		target = &NotifyEvent{}
+	case EventDialog:
+		target = &DialogEvent{}
+	case EventExtensionDied:
+		target = &ExtensionDiedEvent{}
+	case EventExtensionRespawned:
+		target = &ExtensionRespawnedEvent{}
+	case EventExtensionDeadPermanent:
+		target = &ExtensionDeadPermanentEvent{}
+	case EventEventsDropped:
+		target = &EventsDroppedEvent{}
+	case EventContextBreakdown:
+		target = &ContextBreakdownEvent{}
 	default:
 		return fmt.Errorf("unknown normalized event type: %q", peek.Type)
 	}
@@ -308,6 +397,40 @@ type PlanModeChangedEvent struct {
 
 func (PlanModeChangedEvent) eventType() string { return EventPlanModeChanged }
 
+// PlanFileWrittenEvent signals that a Write/Edit successfully landed on the
+// canonical plan file during plan mode. Unlike PlanModeChangedEvent — which
+// fires on plan-mode *entry*, before the model has written anything — this
+// event fires only after the plan file actually exists on disk with content.
+//
+// Consumers use it to render the "plan created / plan updated" conversation
+// marker at the accurate point in the transcript (right after the write that
+// produced or changed the plan), with a link that resolves because the file
+// now exists. Emitting the marker on plan-mode entry instead would place it
+// before any narrative and link to a file that does not yet exist.
+//
+// Operation discriminates the write:
+//   - "created" — the plan file did not exist (or was empty) before this
+//     write. The first time content lands in a plan file for the session.
+//   - "updated" — the plan file already had content before this write. A
+//     subsequent revision of an existing plan.
+//
+// The engine is the only layer that can observe this distinction reliably (it
+// stat's the file immediately before the write executes), so it carries the
+// discriminator rather than forcing each consumer to reconstruct it.
+type PlanFileWrittenEvent struct {
+	// Operation is "created" or "updated". See the type doc.
+	Operation string `json:"operation"`
+	// PlanFilePath is the absolute filesystem path of the plan file that was
+	// written. Always the canonical run plan file (stray plan-shaped targets
+	// are redirected to it before the write executes).
+	PlanFilePath string `json:"planFilePath,omitempty"`
+	// PlanSlug is the human-readable identifier portion of the plan file path
+	// (basename minus ".md"). See PlanModeChangedEvent for the legacy-hex note.
+	PlanSlug string `json:"planSlug,omitempty"`
+}
+
+func (PlanFileWrittenEvent) eventType() string { return EventPlanFileWritten }
+
 // PlanProposalEvent is a workflow-level signal emitted when the model proposes
 // a plan-mode transition that requires user approval. It is distinct from
 // PlanModeChangedEvent, which fires only on confirmed *state* transitions
@@ -455,6 +578,14 @@ func (StreamResetEvent) eventType() string { return EventStreamReset }
 // Consumers can use this to surface activity state ("Compacting...").
 // When Active is false the optional fields carry a summary of what was compacted
 // so clients can render an inline compaction marker in the conversation.
+//
+// MicroOnly is true when the completion represents a micro-compaction that
+// cleared blocks (tool_result / long assistant text) without dropping any
+// messages — i.e. MessagesBefore == MessagesAfter and the hard-truncate step
+// was skipped. It is an explicit signal so consumers do not have to infer the
+// micro-only case from MessagesBefore == MessagesAfter (a fragile heuristic).
+// A client rendering a marker should not show an "N → N messages" figure when
+// MicroOnly is true; nothing was dropped.
 type CompactingEvent struct {
 	Active         bool   `json:"active"`
 	Summary        string `json:"summary,omitempty"`
@@ -462,6 +593,7 @@ type CompactingEvent struct {
 	MessagesAfter  int    `json:"messagesAfter,omitempty"`
 	ClearedBlocks  int    `json:"clearedBlocks,omitempty"`
 	Strategy       string `json:"strategy,omitempty"`
+	MicroOnly      bool   `json:"microOnly,omitempty"`
 }
 
 func (CompactingEvent) eventType() string { return EventCompacting }
@@ -652,3 +784,6 @@ type ThinkingBlockEndEvent struct {
 }
 
 func (ThinkingBlockEndEvent) eventType() string { return EventThinkingBlockEnd }
+
+// Extension-surface NormalizedEvent types are in normalized_event_extensions.go.
+// ContextBreakdownEvent and its row type are in context_breakdown_event.go.

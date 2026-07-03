@@ -2,12 +2,23 @@ import type { TabState } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import { destroyTerminalInstance } from '../../components/TerminalPanel'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
-import { makeLocalTab, isBlankConversationTab, initialModelOverride } from '../session-store-helpers'
+import { makeLocalTab, isReusableBlankConversationTab, initialModelOverride, initialPermissionMode } from '../session-store-helpers'
 import { makeMainPane, commitInstance, activeInstance, instanceMessageCount } from '../conversation-instance'
 import { cleanupTabDeltas } from './engine-event-slice'
 import { applySetThinkingEffort } from './tab-slice-thinking'
+import { createConversationTabAction } from './engine-slice-create'
+import { evaluateCloseGuard, formatCloseGuardRefusal } from './tab-close-guard'
+import { pickNextActiveTab } from './tab-slice-next-active'
+import { applyActiveGroupMove } from './event-slice-running-move'
+import { getEffectiveTabGroups } from '../../preferences'
 
 export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
+  // Unified creation entry point (Phase 2, #256). Both plain and engine tabs
+  // go through this path. createTabInDirectory delegates here for base
+  // creation and then applies its extra options (worktree, pin, duplicate
+  // check, recent-dir tracking) on top.
+  const createConversationTab = createConversationTabAction(set, get)
+
   return {
     initStaticInfo: async () => {
       try {
@@ -29,38 +40,57 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
     setPermissionMode: (mode, source) => {
       const { activeTabId } = get()
       const activeTab = get().tabs.find((t) => t.id === activeTabId)
-      if (activeTab?.hasEngineExtension) {
-        // Engine tabs: write permissionMode directly onto the active instance.
-        const pane = get().conversationPanes.get(activeTabId)
-        const instanceId = pane?.activeInstanceId
-        if (instanceId) {
-          const compoundKey = `${activeTabId}:${instanceId}`
-          set((s) => {
-            const conversationPanes = new Map(s.conversationPanes)
-            const paneInner = conversationPanes.get(activeTabId)
-            if (!paneInner) return {}
-            const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
-            if (idx === -1) return {}
-            const instances = paneInner.instances.slice()
-            instances[idx] = { ...instances[idx], permissionMode: mode }
-            conversationPanes.set(activeTabId, { ...paneInner, instances })
-            return { conversationPanes }
-          })
-          window.ion.engineSetPlanMode(compoundKey, mode === 'plan')
+      if (!activeTab) return
+      const pane = get().conversationPanes.get(activeTabId)
+      const instanceId = pane?.activeInstanceId
+      if (instanceId) {
+        // All tab types: write permissionMode onto the active conversation instance.
+        // Extension-hosted tabs call engineSetPlanMode to notify the extension host;
+        // plain tabs call setPermissionMode so the engine CLI can react.
+        set((s) => {
+          const conversationPanes = new Map(s.conversationPanes)
+          const paneInner = conversationPanes.get(activeTabId)
+          if (!paneInner) return {}
+          const idx = paneInner.instances.findIndex((i) => i.id === instanceId)
+          if (idx === -1) return {}
+          const instances = paneInner.instances.slice()
+          instances[idx] = { ...instances[idx], permissionMode: mode }
+          conversationPanes.set(activeTabId, { ...paneInner, instances })
+          return { conversationPanes }
+        })
+        if (activeTab.engineProfileId) {
+          window.ion.engineSetPlanMode(`${activeTabId}:${instanceId}`, mode === 'plan')
+        } else {
+          // When entering plan mode, forward the instance's persisted
+          // planFilePath so the engine restores plan-file continuity if its
+          // session was replaced (rebound) and lost the in-memory path.
+          // Only meaningful on enter; on 'auto' the engine ignores it.
+          const planFilePath = mode === 'plan'
+            ? (pane?.instances.find((i) => i.id === instanceId)?.planFilePath ?? undefined)
+            : undefined
+          window.ion.setPermissionMode(activeTabId, mode, source, planFilePath || undefined)
         }
-      } else {
-        // CLI tabs: set on the parent tab as before.
-        set((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === activeTabId ? { ...t, permissionMode: mode } : t
-          ),
-        }))
-        window.ion.setPermissionMode(activeTabId, mode, source)
       }
       // Auto-switch to the plan model when entering plan mode
       const { planModelSplitEnabled, planModeModel } = usePreferencesStore.getState()
       if (planModelSplitEnabled && mode === 'plan' && planModeModel) {
         get().setTabModel(activeTabId, planModeModel)
+      }
+
+      // Re-evaluate the auto-group for a tab that is actively running/connecting:
+      // flipping plan↔auto mid-run changes which group the tab belongs in
+      // (planning vs in-progress), so move it there immediately rather than
+      // waiting for the next send/running transition. The instance permissionMode
+      // was just committed above, so `applyActiveGroupMove`'s authoritative
+      // effectivePermissionMode read reflects the new mode. Its own guards
+      // (autoGroupMovement, manual mode, not pinned, not already in target) decide
+      // whether anything moves; an idle tab is left alone since the user has not
+      // re-engaged it.
+      if (activeTab.status === 'running' || activeTab.status === 'connecting') {
+        const movedTab = get().tabs.find((t) => t.id === activeTabId)
+        if (movedTab) {
+          applyActiveGroupMove(activeTabId, movedTab, get().conversationPanes, get, 'permission_mode_change')
+        }
       }
     },
 
@@ -77,7 +107,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       const hasChosen = !!defaultBase
 
       const existingBlank = get().tabs.find(
-        (t) => isBlankConversationTab(t, startDir, instanceMessageCount(activeInstance(get().conversationPanes, t.id)))
+        (t) => isReusableBlankConversationTab(t, startDir, instanceMessageCount(activeInstance(get().conversationPanes, t.id)))
       )
       if (existingBlank) {
         const tallConv = usePreferencesStore.getState().defaultTallConversation
@@ -130,18 +160,18 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
         // Seed the single-instance `main` pane so message/draft/model state has
         // a home from creation (2A invariant). Carry the plan-model split
         // override onto the instance since modelOverride no longer lives on the tab.
-        conversationPanes: new Map(s.conversationPanes).set(tab.id, makeMainPane({ modelOverride: initialModelOverride() })),
+        conversationPanes: new Map(s.conversationPanes).set(tab.id, makeMainPane({ modelOverride: initialModelOverride(), permissionMode: initialPermissionMode() })),
         activeTabId: tab.id,
         tallViewTabId: usePreferencesStore.getState().defaultTallConversation ? tab.id : null,
         terminalTallTabId: null,
       }))
-      window.ion.setPermissionMode(tabId, tab.permissionMode, 'tab_create')
+      window.ion.setPermissionMode(tabId, initialPermissionMode(), 'tab_create')
       return tabId
     },
 
     createTabInDirectory: async (dir, useWorktree, skipDuplicateCheck, pinToGroupId) => {
       if (!skipDuplicateCheck) {
-        const existingBlank = get().tabs.find((t) => isBlankConversationTab(t, dir, instanceMessageCount(activeInstance(get().conversationPanes, t.id))))
+        const existingBlank = get().tabs.find((t) => isReusableBlankConversationTab(t, dir, instanceMessageCount(activeInstance(get().conversationPanes, t.id))))
         if (existingBlank) {
           const tallConv = usePreferencesStore.getState().defaultTallConversation
           set({
@@ -156,37 +186,29 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       usePreferencesStore.getState().addRecentBaseDirectory(dir)
       usePreferencesStore.getState().incrementDirectoryUsage(dir)
 
-      let tabId: string
-      try {
-        const res = await window.ion.createTab()
-        tabId = res.tabId
-      } catch {
-        tabId = crypto.randomUUID()
-      }
+      // Base tab + pane creation via the unified path (Phase 2, #256).
+      // createConversationTab gets the real tab ID from the main process,
+      // seeds the main pane with a session-start divider, sets active tab,
+      // and calls window.ion.setPermissionMode. We then apply the extra
+      // options that are specific to this entry point (worktree, group pin).
+      const tabId = await createConversationTab(dir, { setActive: true })
 
+      // Apply group pin if explicitly requested (iOS per-group "+" button or
+      // desktop "Move to group and pin"). Override the group placement that
+      // createConversationTab wrote (it used the default group) with the
+      // caller's requested group + pinned=true.
       const { tabGroupMode: tgm2, tabGroups: tgs2 } = usePreferencesStore.getState()
-      const defaultGroupId2 = tgm2 === 'manual' ? (tgs2.find((g) => g.isDefault)?.id || tgs2[0]?.id || null) : null
-
-      // If caller explicitly requested a pinned group (e.g. iOS per-group "+" button
-      // or desktop "Move to group and pin"), honor it: place the tab in that group
-      // and set groupPinned=true from the start so the first sendMessage's
-      // auto-movement (gated on !groupPinned in send-slice.ts) skips this tab.
       const useExplicitPin = !!pinToGroupId && tgm2 === 'manual'
-      const finalGroupId = useExplicitPin ? pinToGroupId! : defaultGroupId2
-      const finalPinned = useExplicitPin ? true : false
       if (useExplicitPin) {
-        console.log(`[tab-pin] createTabInDirectory pinToGroupId=${pinToGroupId} overriding default group ${defaultGroupId2 ?? 'none'} for tab=${tabId.slice(0, 8)}`)
+        console.log(`[tab-pin] createTabInDirectory pinToGroupId=${pinToGroupId} for tab=${tabId.slice(0, 8)}`)
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === tabId ? { ...t, groupId: pinToGroupId!, groupPinned: true } : t
+          ),
+        }))
       }
 
-      const tab: TabState = {
-        ...makeLocalTab(),
-        id: tabId,
-        workingDirectory: dir,
-        hasChosenDirectory: true,
-        groupId: finalGroupId,
-        groupPinned: finalPinned,
-      }
-
+      // Worktree setup (unchanged from prior implementation).
       if (useWorktree) {
         const { isRepo } = await window.ion.gitIsRepo(dir)
         if (isRepo) {
@@ -195,26 +217,24 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
           if (defaultBranch) {
             const result = await window.ion.gitWorktreeAdd(dir, defaultBranch)
             if (result.ok && result.worktree) {
-              tab.worktree = result.worktree
-              tab.workingDirectory = result.worktree.worktreePath
+              set((s) => ({
+                tabs: s.tabs.map((t) =>
+                  t.id === tabId
+                    ? { ...t, worktree: result.worktree!, workingDirectory: result.worktree!.worktreePath }
+                    : t
+                ),
+              }))
             }
           } else {
-            tab.pendingWorktreeSetup = true
+            set((s) => ({
+              tabs: s.tabs.map((t) =>
+                t.id === tabId ? { ...t, pendingWorktreeSetup: true } : t
+              ),
+            }))
           }
         }
       }
 
-      set((s) => ({
-        tabs: [...s.tabs, tab],
-        // Seed the single-instance `main` pane so message/draft/model state has
-        // a home from creation (2A invariant). Carry the plan-model split
-        // override onto the instance since modelOverride no longer lives on the tab.
-        conversationPanes: new Map(s.conversationPanes).set(tab.id, makeMainPane({ modelOverride: initialModelOverride() })),
-        activeTabId: tab.id,
-        tallViewTabId: usePreferencesStore.getState().defaultTallConversation ? tab.id : null,
-        terminalTallTabId: null,
-      }))
-      window.ion.setPermissionMode(tabId, tab.permissionMode, 'tab_create')
       return tabId
     },
 
@@ -235,10 +255,9 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       set((prev) => {
         const targetTab = prev.tabs.find(t => t.id === tabId)
         const isTerminalOnlyTall = targetTab?.isTerminalOnly && prefs.defaultTallTerminal
-        const shouldTall = targetTab && !targetTab.isTerminalOnly && (
-          (targetTab.hasEngineExtension && prefs.defaultTallEngine) ||
-          (!targetTab.hasEngineExtension && prefs.defaultTallConversation)
-        )
+        // One tall-default for every conversation tab — plain or
+        // extension-backed (the engine-specific default was collapsed away).
+        const shouldTall = targetTab && !targetTab.isTerminalOnly && prefs.defaultTallConversation
         return {
           activeTabId: tabId,
           isExpanded: expandOnSwitch ? true : prev.isExpanded,
@@ -269,60 +288,16 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
     closeTab: (tabId) => {
       const closingTab = get().tabs.find((t) => t.id === tabId)
-      // ─── Action-layer guard: hard-block engine tab close while
-      // orchestrator is running OR dispatched background agents are
-      // still executing. Mirrors the X-button suppression in
-      // TabStripTabPill.tsx and exists for defense-in-depth — catches
-      // keyboard shortcuts (Cmd+W → CloseTabConfirmDialog), group-pill
-      // close paths, and any future entry point we haven't enumerated.
-      //
-      // No escape hatch: there is no `force` flag. Either the tab is
-      // completely idle (no orchestrator activity, no dispatched
-      // background children) and close is allowed, or the tab is
-      // active and the user must stop it first (via the in-pane
-      // Interrupt button, or by waiting for natural completion). The
-      // user's path to close an active engine tab is: interrupt →
-      // wait for idle → close. This protects dispatched background
-      // agents from accidental SIGTERM via tab close.
-      //
-      // Internal cleanup paths (`removeEngineInstance` last-instance
-      // close, `moveEngineInstance` source-cleanup) abort the
-      // orchestrator above the call site, which propagates to
-      // children — by the time those paths reach this guard, the
-      // tab's state should already be quiescent. If a race window
-      // means agents haven't yet flipped to terminal status, the
-      // guard fires, the warn is logged, and the next snapshot tick
-      // (after agents finish aborting) allows the close.
-      //
-      // CLI tabs are intentionally NOT gated — CLI tabs have no
-      // dispatched-agent concept and their existing Cmd+W → confirm
-      // flow is correct as-is. The guard is engine-tab-only because
-      // engine tabs are where the dispatched-agent kill footgun lives.
-      if (closingTab?.hasEngineExtension) {
-        const s = get() as any
-        const pane = s.conversationPanes?.get?.(tabId)
-        if (pane && pane.instances) {
-          let orchestratorRunning = false
-          const childCounts: Array<{ id: string; count: number }> = []
-          for (const inst of pane.instances) {
-            const state = inst.statusFields?.state
-            if (state === 'running' || state === 'connecting' || state === 'starting') {
-              orchestratorRunning = true
-            }
-            const agents = inst.agentStates || []
-            const running = agents.filter((a: any) => a?.status === 'running').length
-            childCounts.push({ id: inst.id, count: running })
-          }
-          const childRunning = childCounts.some((c) => c.count > 0)
-          if (orchestratorRunning || childRunning) {
-            console.warn(
-              `[closeTab] refused engine tab close: tabId=${tabId.slice(0, 8)} ` +
-              `orchestratorRunning=${orchestratorRunning} ` +
-              `childCounts=${JSON.stringify(childCounts.map((c) => `${c.id.slice(0, 6)}:${c.count}`))}` +
-              ' — user must stop the tab (interrupt + wait for children) before closing'
-            )
-            return
-          }
+      // Action-layer guard: hard-block close while the orchestrator or any
+      // dispatched background agent is still running. TAB-TYPE-AGNOSTIC — see
+      // evaluateCloseGuard in tab-close-guard.ts for the full rationale (plain
+      // conversations can dispatch sub-agents too, so this is not engine-only).
+      if (closingTab) {
+        const pane = get().conversationPanes.get(tabId)
+        const guard = evaluateCloseGuard(pane)
+        if (guard.blocked) {
+          console.warn(formatCloseGuardRefusal(tabId, guard))
+          return
         }
       }
       if (closingTab?.worktree) {
@@ -352,7 +327,15 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
       } else {
         set({ terminalPanes: panes })
       }
-      if (closingTab?.hasEngineExtension) {
+      // Tear down per-conversation state on close. TAB-TYPE-AGNOSTIC: every
+      // conversation tab (plain or extension-hosted) is seeded a
+      // conversationPane at creation (makeMainPane), so the pane MUST be
+      // deleted for plain tabs too — gating this on tabHasExtensions leaked
+      // the pane (its main instance's messages / statusFields / agentStates)
+      // for every plain tab on close. The engine-* maps only ever hold keys
+      // for extension tabs, but deleting absent keys is harmless (each loop is
+      // prefix-guarded), so the whole block runs unconditionally.
+      if (closingTab) {
         const engineWorkingMessages = new Map(get().engineWorkingMessages)
         const engineNotifications = new Map(get().engineNotifications)
         const engineDialogs = new Map(get().engineDialogs)
@@ -422,8 +405,25 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
           return
         }
         const closedIndex = s.tabs.findIndex((t) => t.id === tabId)
-        const newActive = remaining[Math.min(closedIndex, remaining.length - 1)]
-        set({ tabs: remaining, activeTabId: newActive.id })
+        // Group-aware next-active choice: prefer the nearest remaining sibling in
+        // the closed tab's derived group, falling back to nearest-by-flat-index.
+        // See tab-slice-next-active.ts for the selection rules.
+        const { tabGroupMode, tabGroups } = usePreferencesStore.getState()
+        const newActiveId =
+          pickNextActiveTab(tabId, s.tabs, {
+            mode: tabGroupMode,
+            groups: getEffectiveTabGroups(tabGroups),
+          }) ?? remaining[Math.min(closedIndex, remaining.length - 1)].id
+        // Commit the tab removal first so selectTab's `tabs.find` resolves the
+        // new target, then route activation through selectTab — the single,
+        // authoritative tab-activation path. This hydrates a skeleton existing
+        // conversation (loadSkeletonMessages), seeds tall view, clears unread,
+        // and fires the focus notification. A prior raw `set({ activeTabId })`
+        // here bypassed all of that and left the activated tab in a limbo state
+        // (empty scrollback + plan card). activeTabId is still the closing tab
+        // at this point, so selectTab's same-id early-return does not trip.
+        set({ tabs: remaining })
+        get().selectTab(newActiveId)
       } else {
         set({ tabs: remaining })
       }
@@ -478,6 +478,7 @@ export function createTabSlice(set: StoreSet, get: StoreGet): Partial<State> {
           ...inst,
           messages: [],
           permissionQueue: [],
+          elicitationQueue: [],
           permissionDenied: null,
         }))
         const tabs = s.tabs.map((t) =>

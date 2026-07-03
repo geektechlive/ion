@@ -47,8 +47,7 @@ function makeTab(id: string) {
   return {
     id,
     title: 'Engine',
-    hasEngineExtension: true,
-    engineProfileId: null,
+    engineProfileId: 'test-profile',
     workingDirectory: '/tmp',
     hasChosenDirectory: false,
     pillIcon: 'lightning',
@@ -73,12 +72,14 @@ function makeInstance(
     permissionMode: 'auto',
     permissionDenied: null,
     permissionQueue: [],
+    elicitationQueue: [],
     conversationIds: ['conv-prior'],
     draftInput: '',
     agentStates: [],
     statusFields: null,
     planFilePath: null,
-    forkedFromConversationIds: null,
+    forkedFromConversationIds: null, dispatchTelemetry: [],
+    contextBreakdown: null,
   }
 }
 

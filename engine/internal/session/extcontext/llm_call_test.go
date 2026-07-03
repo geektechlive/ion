@@ -47,51 +47,56 @@ func (a *llmCallTestAccessor) Emitted() []types.EngineEvent {
 	copy(out, a.emitted)
 	return out
 }
-func (a *llmCallTestAccessor) SendAbort()                                                         {}
+func (a *llmCallTestAccessor) SendAbort() {}
 func (a *llmCallTestAccessor) RootContext() context.Context {
 	if a.rootCtx == nil {
 		return context.Background()
 	}
 	return a.rootCtx
 }
-func (a *llmCallTestAccessor) SendPrompt(_, _ string, _ []string) error                           { return nil }
+func (a *llmCallTestAccessor) SendPrompt(_, _ string, _ []string) error { return nil }
+func (a *llmCallTestAccessor) SteerSelfMainLoop(_ string) bool          { return false }
 func (a *llmCallTestAccessor) Elicit(_ extension.ElicitationRequestInfo) (map[string]interface{}, bool, error) {
 	return nil, false, nil
 }
-func (a *llmCallTestAccessor) SuppressTool(_ string)                            {}
-func (a *llmCallTestAccessor) CacheExtAgentStates(_ []types.AgentStateUpdate)   {}
-func (a *llmCallTestAccessor) RegisterAgent(_ string, _ types.AgentHandle)      {}
-func (a *llmCallTestAccessor) DeregisterAgent(_ string)                         {}
-func (a *llmCallTestAccessor) RegisterAgentSpec(_ types.AgentSpec)              {}
-func (a *llmCallTestAccessor) DeregisterAgentSpec(_ string)                     {}
-func (a *llmCallTestAccessor) LookupAgentSpec(_ string) (types.AgentSpec, bool) { return types.AgentSpec{}, false }
-func (a *llmCallTestAccessor) LookupExtDisplayName(_ string) string             { return "" }
-func (a *llmCallTestAccessor) ExtGroup() *extension.ExtensionGroup              { return a.extGroup }
-func (a *llmCallTestAccessor) ExtConfig() *extension.ExtensionConfig            { return nil }
-func (a *llmCallTestAccessor) ProcRegistry() *extension.ProcessRegistry         { return nil }
-func (a *llmCallTestAccessor) NewChildBackend() backend.RunBackend              { return nil }
-func (a *llmCallTestAccessor) EngineConfig() *types.EngineRuntimeConfig         { return nil }
-func (a *llmCallTestAccessor) ResolveTier(_ string) string                      { return "" }
+func (a *llmCallTestAccessor) SuppressTool(_ string)                          {}
+func (a *llmCallTestAccessor) CacheExtAgentStates(_ []types.AgentStateUpdate) {}
+func (a *llmCallTestAccessor) RegisterAgent(_ string, _ types.AgentHandle)    {}
+func (a *llmCallTestAccessor) DeregisterAgent(_ string)                       {}
+func (a *llmCallTestAccessor) RegisterAgentSpec(_ types.AgentSpec)            {}
+func (a *llmCallTestAccessor) DeregisterAgentSpec(_ string)                   {}
+func (a *llmCallTestAccessor) LookupAgentSpec(_ string) (types.AgentSpec, bool) {
+	return types.AgentSpec{}, false
+}
+func (a *llmCallTestAccessor) LookupExtDisplayName(_ string) string     { return "" }
+func (a *llmCallTestAccessor) ExtGroup() *extension.ExtensionGroup      { return a.extGroup }
+func (a *llmCallTestAccessor) ExtConfig() *extension.ExtensionConfig    { return nil }
+func (a *llmCallTestAccessor) ProcRegistry() *extension.ProcessRegistry { return nil }
+func (a *llmCallTestAccessor) NewChildBackend() backend.RunBackend      { return nil }
+func (a *llmCallTestAccessor) BumpParentProgress()                      {}
+func (a *llmCallTestAccessor) EmitDispatchCountStatus(_ string)         {}
+func (a *llmCallTestAccessor) EngineConfig() *types.EngineRuntimeConfig { return nil }
+func (a *llmCallTestAccessor) ResolveTier(_ string) string              { return "" }
 func (a *llmCallTestAccessor) PermissionCheck(_ string, _ map[string]interface{}) (string, string) {
 	return "", ""
 }
-func (a *llmCallTestAccessor) McpConnections() []*mcp.Connection             { return nil }
+func (a *llmCallTestAccessor) McpConnections() []*mcp.Connection                      { return nil }
 func (a *llmCallTestAccessor) SearchHistory(_ string, _ int) []extension.HistoryMatch { return nil }
-func (a *llmCallTestAccessor) GetSessionMemory() string                              { return "" }
-func (a *llmCallTestAccessor) SetSessionMemory(_ string)                             {}
+func (a *llmCallTestAccessor) GetSessionMemory() string                               { return "" }
+func (a *llmCallTestAccessor) SetSessionMemory(_ string)                              {}
 func (a *llmCallTestAccessor) TranslateEvent(_ types.NormalizedEvent, _ int) types.EngineEvent {
 	return types.EngineEvent{}
 }
-func (a *llmCallTestAccessor) SetPlanMode(_ bool, _ string)        {}
-func (a *llmCallTestAccessor) GetPlanModeState() (bool, string)    { return false, "" }
-func (a *llmCallTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string { return "" }
-func (a *llmCallTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate))  {}
-func (a *llmCallTestAccessor) EmitAgentSnapshot(_ string) {}
-func (a *llmCallTestAccessor) ResourceBroker() *resource.Broker       { return nil }
-func (a *llmCallTestAccessor) GlobalResourceBroker() *resource.Broker { return nil }
-func (a *llmCallTestAccessor) BroadcastNotification(_ types.NotifyOpts)        {}
-func (a *llmCallTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)    {}
-func (a *llmCallTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
+func (a *llmCallTestAccessor) SetPlanMode(_ bool, _ string)                                   {}
+func (a *llmCallTestAccessor) GetPlanModeState() (bool, string)                               { return false, "" }
+func (a *llmCallTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string       { return "" }
+func (a *llmCallTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate)) {}
+func (a *llmCallTestAccessor) EmitAgentSnapshot(_ string)                                     {}
+func (a *llmCallTestAccessor) ResourceBroker() *resource.Broker                               { return nil }
+func (a *llmCallTestAccessor) GlobalResourceBroker() *resource.Broker                         { return nil }
+func (a *llmCallTestAccessor) BroadcastNotification(_ types.NotifyOpts)                       {}
+func (a *llmCallTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)                   {}
+func (a *llmCallTestAccessor) ListAllSessions() []extension.SessionListEntry                  { return nil }
 func (a *llmCallTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil
 }

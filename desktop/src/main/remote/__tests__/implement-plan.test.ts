@@ -20,9 +20,8 @@ vi.mock('../../state', () => ({
   sessionPlane: { resetTabSession: vi.fn(), setPermissionMode: vi.fn() },
   engineBridge: {},
   activeAssistantMessages: new Map(),
-  activeToolInputs: new Map(),
   lastMessagePreview: new Map(),
-  lastForwardedEngineTabStatus: new Map(),
+  lastForwardedTabStatus: new Map(),
   extensionCommandRegistry: new Map(),
 }))
 

@@ -25,6 +25,14 @@ type exitRecord struct {
 	Status    string `json:"status"`    // "running", "clean", "panic"
 	Reason    string `json:"reason,omitempty"`
 	Stack     string `json:"stack,omitempty"`
+
+	// LastHeapBytes / LastSysBytes capture the process's memory footprint at the
+	// most recent heartbeat. When the process is later found to have died unclean
+	// (status still "running", stale beat), logPriorExit surfaces these so an OS
+	// memory-pressure kill (macOS jetsam / Linux OOM) is self-diagnosing from the
+	// breadcrumb alone — no .ips report or unified-log archaeology needed.
+	LastHeapBytes uint64 `json:"lastHeapBytes,omitempty"` // runtime MemStats.HeapAlloc
+	LastSysBytes  uint64 `json:"lastSysBytes,omitempty"`  // runtime MemStats.Sys
 }
 
 // writeRunning atomically writes the initial "running" breadcrumb for the
@@ -56,6 +64,12 @@ func beat(path string) {
 		return // do not clobber a clean/panic record
 	}
 	rec.LastBeat = time.Now().UnixMilli()
+	// Capture the current memory footprint alongside the beat so an unclean death
+	// leaves a dateable, memory-attributed breadcrumb (see exitRecord docs).
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	rec.LastHeapBytes = ms.HeapAlloc
+	rec.LastSysBytes = ms.Sys
 	if err := atomicWriteRecord(path, rec); err != nil {
 		utils.Log("breadcrumb", fmt.Sprintf("beat: %v", err))
 	}
@@ -158,9 +172,19 @@ func logPriorExit(path string) {
 		if pidDead {
 			deadStr = " pidConfirmed=dead"
 		}
+		// Surface the last-known memory footprint when present: an OS memory-
+		// pressure kill (jetsam/OOM) is by far the most common cause of an unclean
+		// death, and a high lastHeap/lastSys here is the tell. Converts the generic
+		// "SIGKILL/panic/OOM likely" note into an evidence-bearing line.
+		memStr := ""
+		if rec.LastHeapBytes > 0 || rec.LastSysBytes > 0 {
+			const bytesPerMiB = 1024 * 1024
+			memStr = fmt.Sprintf(" lastHeapMB=%d lastSysMB=%d",
+				rec.LastHeapBytes/bytesPerMiB, rec.LastSysBytes/bytesPerMiB)
+		}
 		utils.Error("breadcrumb", fmt.Sprintf(
-			"prior exit: UNCLEAN -- process died without shutdown (SIGKILL/panic/parent death/OOM likely) prevPid=%d lastBeat=%dms ago%s%s",
-			rec.Pid, ageMs, detail, deadStr,
+			"prior exit: UNCLEAN -- process died without shutdown (SIGKILL/panic/parent death/OOM likely) prevPid=%d lastBeat=%dms ago%s%s%s",
+			rec.Pid, ageMs, detail, deadStr, memStr,
 		))
 
 	default:

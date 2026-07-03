@@ -61,6 +61,7 @@ func normalizedEventVariants() map[string]NormalizedEventData {
 		EventUsage:              &UsageEvent{},
 		EventPermissionRequest:  &PermissionRequestEvent{},
 		EventPlanModeChanged:    &PlanModeChangedEvent{},
+		EventPlanFileWritten:    &PlanFileWrittenEvent{},
 		EventPlanProposal:       &PlanProposalEvent{},
 		EventPlanModeAutoExit:   &PlanModeAutoExitEvent{},
 		EventStreamReset:        &StreamResetEvent{},
@@ -73,6 +74,18 @@ func normalizedEventVariants() map[string]NormalizedEventData {
 		EventThinkingBlockStart: &ThinkingBlockStartEvent{},
 		EventThinkingDelta:      &ThinkingDeltaEvent{},
 		EventThinkingBlockEnd:   &ThinkingBlockEndEvent{},
+		// Extension-surface events (WI-001: single-path collapse)
+		EventMessageEnd:             &MessageEndEvent{},
+		EventAgentState:             &AgentStateEvent{},
+		EventHarnessMessage:         &HarnessMessageEvent{},
+		EventWorkingMessage:         &WorkingMessageEvent{},
+		EventNotify:                 &NotifyEvent{},
+		EventDialog:                 &DialogEvent{},
+		EventExtensionDied:          &ExtensionDiedEvent{},
+		EventExtensionRespawned:     &ExtensionRespawnedEvent{},
+		EventExtensionDeadPermanent: &ExtensionDeadPermanentEvent{},
+		EventEventsDropped:          &EventsDroppedEvent{},
+		EventContextBreakdown:       &ContextBreakdownEvent{},
 	}
 }
 
@@ -111,6 +124,11 @@ func buildManifest() contractManifest {
 		// new block variants land (most recently the "compact_boundary"
 		// variant — see internal/conversation/compact_boundary.go).
 		"LlmContentBlock": reflect.TypeOf(LlmContentBlock{}),
+		// ContextBreakdownPayload is the wire payload for
+		// engine_context_breakdown; ContextBreakdownCategory is a nested row.
+		// Tracked so cross-language mirrors carry the per-category context readout.
+		"ContextBreakdownPayload":  reflect.TypeOf(ContextBreakdownPayload{}),
+		"ContextBreakdownCategory": reflect.TypeOf(ContextBreakdownCategory{}),
 	}
 	for name, typ := range shared {
 		m.SharedTypes[name] = jsonFieldNames(typ)

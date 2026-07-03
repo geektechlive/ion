@@ -56,7 +56,23 @@ var (
 	logLevel     = LevelInfo
 	bytesWritten int64
 	logDir       string
+	// testSink, when non-nil, receives every formatted log line in addition
+	// to the file write. It exists purely as a test seam so unit tests can
+	// assert on log output without reading ~/.ion/engine.log. Production code
+	// never sets it. Guarded by logMu.
+	testSink func(level LogLevel, tag, msg string)
 )
+
+// SetTestSink installs a callback that receives every log message that passes
+// the current level filter, alongside the normal file write. Intended for tests
+// only; pass nil to remove. To observe Debug lines, call SetLevel(LevelDebug)
+// first. The sink runs while logMu is held, so callbacks must not call back into
+// the logger.
+func SetTestSink(fn func(level LogLevel, tag, msg string)) {
+	logMu.Lock()
+	testSink = fn
+	logMu.Unlock()
+}
 
 // SetLevel sets the minimum log level. Messages below this level are discarded.
 func SetLevel(level LogLevel) {
@@ -108,6 +124,12 @@ func logAt(level LogLevel, tag, msg string) {
 
 	if level < logLevel {
 		return
+	}
+
+	// Test seam: forward to the sink (if installed) before the file write.
+	// Runs under logMu so the sink observes a consistent ordering.
+	if testSink != nil {
+		testSink(level, tag, msg)
 	}
 
 	if logFile == nil {

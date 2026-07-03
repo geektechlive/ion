@@ -78,7 +78,7 @@ extension RemoteEvent {
             let messageLength = try container.decode(Int.self, forKey: .steerMessageLength)
             return .engineSteerInjected(tabId: tabId, instanceId: instanceId, messageLength: messageLength)
 
-        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall, .engineDispatchStart:
+        case .engineToolUpdate, .engineToolComplete, .engineScheduleFired, .engineLlmCall:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             switch type {
@@ -86,9 +86,49 @@ extension RemoteEvent {
             case .engineToolComplete: return .engineToolComplete(tabId: tabId, instanceId: instanceId)
             case .engineScheduleFired: return .engineScheduleFired(tabId: tabId, instanceId: instanceId)
             case .engineLlmCall: return .engineLlmCall(tabId: tabId, instanceId: instanceId)
-            case .engineDispatchStart: return .engineDispatchStart(tabId: tabId, instanceId: instanceId)
             default: return nil
             }
+
+        case .engineDispatchStart:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let agent = try container.decodeIfPresent(String.self, forKey: .dispatchAgent) ?? ""
+            let sessionId = try container.decodeIfPresent(String.self, forKey: .dispatchSessionId) ?? ""
+            let model = try container.decodeIfPresent(String.self, forKey: .dispatchModel) ?? ""
+            let task = try container.decodeIfPresent(String.self, forKey: .dispatchTask) ?? ""
+            let depth = try container.decodeIfPresent(Int.self, forKey: .dispatchDepth) ?? 0
+            let parentId = try container.decodeIfPresent(String.self, forKey: .dispatchParentId) ?? ""
+            let dispatchId = try container.decodeIfPresent(String.self, forKey: .dispatchId) ?? ""
+            return .engineDispatchStart(tabId: tabId, instanceId: instanceId, dispatchAgent: agent, dispatchSessionId: sessionId, dispatchModel: model, dispatchTask: task, dispatchDepth: depth, dispatchParentId: parentId, dispatchId: dispatchId)
+
+        case .engineDispatchEnd:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let agent = try container.decodeIfPresent(String.self, forKey: .dispatchAgent) ?? ""
+            let depth = try container.decodeIfPresent(Int.self, forKey: .dispatchDepth) ?? 0
+            let parentId = try container.decodeIfPresent(String.self, forKey: .dispatchParentId) ?? ""
+            let exitCode = try container.decodeIfPresent(Int.self, forKey: .dispatchExitCode) ?? 0
+            let elapsed = try container.decodeIfPresent(Double.self, forKey: .dispatchElapsed) ?? 0
+            let dispatchId = try container.decodeIfPresent(String.self, forKey: .dispatchId) ?? ""
+            let conversationId = try container.decodeIfPresent(String.self, forKey: .dispatchConversationId)
+            return .engineDispatchEnd(tabId: tabId, instanceId: instanceId, dispatchAgent: agent, dispatchDepth: depth, dispatchParentId: parentId, exitCode: exitCode, elapsed: elapsed, dispatchId: dispatchId, conversationId: conversationId)
+
+        case .engineDispatchActivity:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let agentId = try container.decodeIfPresent(String.self, forKey: .dispatchAgentId) ?? ""
+            let conversationId = try container.decodeIfPresent(String.self, forKey: .dispatchConversationId) ?? ""
+            let kind = try container.decodeIfPresent(String.self, forKey: .dispatchActivityKind) ?? ""
+            let seq = try container.decodeIfPresent(Int.self, forKey: .dispatchSeq) ?? 0
+            let toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+            let toolId = try container.decodeIfPresent(String.self, forKey: .toolId)
+            let textDelta = try container.decodeIfPresent(String.self, forKey: .dispatchTextDelta)
+            let isError = try container.decodeIfPresent(Bool.self, forKey: .dispatchToolIsError) ?? false
+            // Emit timestamp (unix millis). Decoded so the iOS mirror carries
+            // the full wire shape (Go engine_event.go + desktop both send it);
+            // tolerant-absent so legacy payloads without it still decode.
+            let ts = try container.decodeIfPresent(Int64.self, forKey: .dispatchActivityTs)
+            return .engineDispatchActivity(tabId: tabId, instanceId: instanceId, agentId: agentId, conversationId: conversationId, kind: kind, seq: seq, toolName: toolName, toolId: toolId, textDelta: textDelta, isError: isError, ts: ts)
 
         case .engineError:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -170,11 +210,9 @@ extension RemoteEvent {
             let metadata = try container.decodeIfPresent([String: AnyCodable].self, forKey: .metadata)
             return .engineHarnessMessage(tabId: tabId, instanceId: instanceId, message: message, source: source, metadata: metadata)
 
-        case .engineConversationHistory:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
-            let messages = try Message.decodeEngineArray(from: container, forKey: .messages)
-            return .engineConversationHistory(tabId: tabId, instanceId: instanceId, messages: messages)
+        // engineConversationHistory decode arm removed (WI-004 / #259).
+        // History for every tab arrives via desktop_conversation_history
+        // (TypeKey.conversationHistory), decoded in NormalizedEvent+Stream.swift.
 
         case .agentConversationHistory:
             let agentName = try container.decode(String.self, forKey: .agentName)
@@ -205,6 +243,19 @@ extension RemoteEvent {
             let planFilePath = try container.decodeIfPresent(String.self, forKey: .planFilePath)
             let planSlug = try container.decodeIfPresent(String.self, forKey: .planSlug)
             return .enginePlanModeChanged(tabId: tabId, instanceId: instanceId, planModeEnabled: planModeEnabled, planFilePath: planFilePath, planSlug: planSlug)
+
+        case .enginePlanFileWritten:
+            // State event: a Write/Edit landed on the canonical plan file. iOS
+            // inserts the plan-lifecycle divider from THIS event (the actual
+            // write), not from plan-mode entry — so the marker is correctly
+            // positioned and its link resolves. operation discriminates
+            // "created" vs "updated"; planFilePath/planSlug mirror the Go event.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let operation = try container.decodeIfPresent(String.self, forKey: .planWriteOperation) ?? "created"
+            let planFilePath = try container.decodeIfPresent(String.self, forKey: .planFilePath)
+            let planSlug = try container.decodeIfPresent(String.self, forKey: .planSlug)
+            return .enginePlanFileWritten(tabId: tabId, instanceId: instanceId, operation: operation, planFilePath: planFilePath, planSlug: planSlug)
 
         case .enginePlanProposal:
             // Workflow event: the model has proposed a plan-mode transition.
@@ -338,10 +389,15 @@ extension RemoteEvent {
             // not merge values across snapshots — same semantics as
             // engine_agent_state. See DesktopSettingsModel.swift for
             // the higher-level state struct the view binds to.
+            //
+            // `newConversationPolicy` is optional — absent/null on older desktop
+            // builds that predate #256 enterprise projection. Decodes
+            // to nil in that case (forward-compat, no picker regression).
             let settings = try container.decode([String: AnyCodable].self, forKey: .settings)
             let schema = try container.decode([DesktopSettingSchemaEntry].self, forKey: .schema)
             let groups = try container.decode([DesktopSettingGroupDescriptor].self, forKey: .groups)
-            return .desktopSettingsSnapshot(settings: settings, schema: schema, groups: groups)
+            let newConversationPolicy = try container.decodeIfPresent(RemoteNewConversationPolicy.self, forKey: .newConversationPolicy)
+            return .desktopSettingsSnapshot(settings: settings, schema: schema, groups: groups, newConversationPolicy: newConversationPolicy)
 
         case .engineIntercept:
             // Intercept event routed from the desktop after it has applied
@@ -367,6 +423,17 @@ extension RemoteEvent {
                 source: source,
                 metadata: metadata
             )
+
+        case .desktopContextBreakdown:
+            // desktop_context_breakdown — forwarded by the desktop from the engine's
+            // context-analysis pass. The full payload decodes under a single
+            // `contextBreakdown` key so the struct is self-contained and forward-
+            // compatible (new fields land in ContextBreakdownPayload without touching
+            // the CodingKeys enum here). tabId and instanceId follow the standard pattern.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let payload = try container.decode(ContextBreakdownPayload.self, forKey: .contextBreakdown)
+            return .desktopContextBreakdown(tabId: tabId, instanceId: instanceId, contextBreakdown: payload)
 
         default:
             return nil

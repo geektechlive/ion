@@ -139,7 +139,7 @@ If you forget step 2, `go test ./internal/types/` fails. If you forget step 4, d
 
 ## Providers
 
-Native: Anthropic, OpenAI (raw HTTP SSE), Google Gemini, AWS Bedrock, Azure OpenAI.
+Native: Anthropic, OpenAI (raw HTTP SSE), Google Gemini, AWS Bedrock, Azure OpenAI, Anthropic via Foundry, Anthropic via Vertex.
 OpenAI-compatible factory: Groq, Cerebras, Mistral, OpenRouter, Together, Fireworks, XAI, DeepSeek, Ollama.
 
 No SDK dependencies. Adding a provider: extend the OpenAI-compatible factory or write a native client; do not add a vendor SDK.

@@ -1,11 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
-import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, FileAttachment, SessionMeta, SessionLoadMessage, GitGraphData, GitChangesData, GitBranchInfo, GitCommitDetail, PersistedTabState, FsEntry, WorktreeInfo, WorktreeStatus, EngineConfig, EngineEvent, EngineHostInfo, EngineDirListing, RemoteTransportState, DiscoveredCommand, ImageAttachmentPayload, GitEvent, RepoSnapshot } from '../shared/types'
+import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, FileAttachment, SessionMeta, SessionLoadMessage, GitGraphData, GitChangesData, GitBranchInfo, GitCommitDetail, PersistedTabState, FsEntry, WorktreeInfo, WorktreeStatus, EngineConfig, EngineEvent, EngineHostInfo, EngineDirListing, RemoteTransportState, DiscoveredCommand, ImageAttachmentPayload, GitEvent, RepoSnapshot, NewConversationDefaultsPolicy } from '../shared/types'
 
 export interface IonAPI {
   // ─── Request-response (renderer → main) ───
   start(): Promise<{ version: string; auth: { email?: string; subscriptionType?: string; authMethod?: string }; mcpServers: string[]; projectPath: string; homePath: string }>
   createTab(): Promise<{ tabId: string }>
+  adoptTab(tabId: string): Promise<{ tabId: string }>
   prompt(tabId: string, requestId: string, options: RunOptions): Promise<void>
   cancel(requestId: string): Promise<boolean>
   steer(tabId: string, message: string): void
@@ -19,6 +20,8 @@ export interface IonAPI {
   getEngineHostInfo(): Promise<{ ok: boolean; error?: string; data?: EngineHostInfo }>
   listEngineDirectory(path: string, showHidden: boolean): Promise<{ ok: boolean; error?: string; data?: EngineDirListing }>
   engineIsRemote(): Promise<boolean>
+  /** Fetch the enterprise new-tab policy from the engine. Returns null when no enterprise config is active. */
+  getEnterprisePolicy(): Promise<NewConversationDefaultsPolicy | null>
   openExternal(url: string): Promise<boolean>
   openInVSCode(projectPath: string): Promise<boolean>
   attachFiles(): Promise<FileAttachment[] | null>
@@ -28,13 +31,16 @@ export interface IonAPI {
   transcribeAudio(audioBase64: string): Promise<{ error: string | null; transcript: string | null }>
   getDiagnostics(): Promise<any>
   respondPermission(tabId: string, questionId: string, optionId: string): Promise<boolean>
+  respondElicitation(tabId: string, requestId: string, response: Record<string, unknown> | undefined, cancelled: boolean): Promise<boolean>
   approveDeniedTools(tabId: string, toolNames: string[]): Promise<boolean>
   initSession(tabId: string): void
-  ensureEngineSession(args: { tabId: string; workingDirectory: string; conversationId?: string | null; permissionMode?: 'auto' | 'plan' }): Promise<{ ok: boolean; error?: string }>
+  ensureEngineSession(args: { tabId: string; workingDirectory: string; conversationId?: string | null; permissionMode?: 'auto' | 'plan' }): Promise<{ ok: boolean; error?: string; conversationId?: string }>
   resetTabSession(tabId: string): void
+  restartTabSession(tabId: string): void
   listSessions(projectPath?: string): Promise<SessionMeta[]>
   listAllSessions(): Promise<SessionMeta[]>
   loadSession(sessionId: string, projectPath?: string, encodedDir?: string): Promise<SessionLoadMessage[]>
+  conversationExists(sessionId: string): Promise<boolean>
   readPlan(filePath: string): Promise<{ content: string | null; fileName: string | null }>
   readImageDataUrl(filePath: string): Promise<{ dataUrl: string | null }>
   discoverCommands(projectPath: string): Promise<DiscoveredCommand[]>
@@ -48,7 +54,7 @@ export interface IonAPI {
   executeBash(id: string, command: string, cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }>
   cancelBash(id: string): void
   sendRemote(event: any): void
-  setPermissionMode(tabId: string, mode: string, source?: string): void
+  setPermissionMode(tabId: string, mode: string, source?: string, planFilePath?: string): void
   getTheme(): Promise<{ isDark: boolean }>
   onThemeChange(callback: (isDark: boolean) => void): () => void
   loadSettings(): Promise<Record<string, any>>
@@ -144,14 +150,17 @@ export interface IonAPI {
   onFileChanged(callback: (filePath: string) => void): () => void
 
   // ─── Engine operations ───
-  engineStart(key: string, config: EngineConfig): Promise<{ ok: boolean; error?: string }>
-  enginePrompt(key: string, text: string, model?: string, appendSystemPrompt?: string, imageAttachments?: ImageAttachmentPayload[], rawAttachments?: FileAttachment[], implementationPhase?: boolean, thinkingEffort?: string): Promise<{ ok: boolean; error?: string }>
-  engineSetPlanMode(key: string, enabled: boolean): void
+  engineStart(key: string, config: EngineConfig): Promise<{ ok: boolean; error?: string; conversationId?: string }>
+  engineSetPlanMode(key: string, enabled: boolean, planFilePath?: string): void
   engineAbort(key: string): Promise<void>
   engineAbortAgent(key: string, agentName: string, subtree: boolean): Promise<void>
   engineDialogResponse(key: string, dialogId: string, value: any): Promise<void>
   engineCommand(key: string, command: string, args: string): Promise<void>
   engineStop(key: string): Promise<void>
+  /** Fire get_context_breakdown for the given engine key. Fire-and-forget:
+   *  the engine emits engine_context_breakdown on its event bus; the renderer
+   *  observes the result via the existing context_breakdown normalized event. */
+  engineGetContextBreakdown(key: string): Promise<void>
   engineRemapSession(oldKey: string, newKey: string): Promise<void>
   /** Broadcast a fresh engine_conversation_history for tabId/instanceId to all
    *  connected remote devices. Called by the renderer after a rewind restart so
@@ -228,6 +237,7 @@ const api: IonAPI = {
   // ─── Request-response ───
   start: () => ipcRenderer.invoke(IPC.START),
   createTab: () => ipcRenderer.invoke(IPC.CREATE_TAB),
+  adoptTab: (tabId: string) => ipcRenderer.invoke(IPC.ADOPT_TAB, tabId),
   prompt: (tabId, requestId, options) => ipcRenderer.invoke(IPC.PROMPT, { tabId, requestId, options }),
   cancel: (requestId) => ipcRenderer.invoke(IPC.CANCEL, requestId),
   steer: (tabId, message) => ipcRenderer.send(IPC.STEER, { tabId, message }),
@@ -242,6 +252,7 @@ const api: IonAPI = {
   listEngineDirectory: (path: string, showHidden: boolean) =>
     ipcRenderer.invoke(IPC.LIST_ENGINE_DIRECTORY, path, showHidden),
   engineIsRemote: () => ipcRenderer.invoke(IPC.ENGINE_IS_REMOTE),
+  getEnterprisePolicy: () => ipcRenderer.invoke(IPC.GET_ENTERPRISE_POLICY),
   openExternal: (url) => ipcRenderer.invoke(IPC.OPEN_EXTERNAL, url),
   openInVSCode: (projectPath) => ipcRenderer.invoke(IPC.OPEN_IN_VSCODE, projectPath),
   attachFiles: () => ipcRenderer.invoke(IPC.ATTACH_FILES),
@@ -252,14 +263,18 @@ const api: IonAPI = {
   getDiagnostics: () => ipcRenderer.invoke(IPC.GET_DIAGNOSTICS),
   respondPermission: (tabId, questionId, optionId) =>
     ipcRenderer.invoke(IPC.RESPOND_PERMISSION, { tabId, questionId, optionId }),
+  respondElicitation: (tabId, requestId, response, cancelled) =>
+    ipcRenderer.invoke(IPC.RESPOND_ELICITATION, { tabId, requestId, response, cancelled }),
   approveDeniedTools: (tabId: string, toolNames: string[]) =>
     ipcRenderer.invoke(IPC.APPROVE_DENIED_TOOLS, { tabId, toolNames }),
   initSession: (tabId) => ipcRenderer.send(IPC.INIT_SESSION, tabId),
   ensureEngineSession: (args) => ipcRenderer.invoke(IPC.ENSURE_ENGINE_SESSION, args),
   resetTabSession: (tabId) => ipcRenderer.send(IPC.RESET_TAB_SESSION, tabId),
+  restartTabSession: (tabId: string) => ipcRenderer.send(IPC.RESTART_TAB_SESSION, tabId),
   listSessions: (projectPath?: string) => ipcRenderer.invoke(IPC.LIST_SESSIONS, projectPath),
   listAllSessions: () => ipcRenderer.invoke(IPC.LIST_ALL_SESSIONS),
   loadSession: (sessionId: string, projectPath?: string, encodedDir?: string) => ipcRenderer.invoke(IPC.LOAD_SESSION, { sessionId, projectPath, encodedDir }),
+  conversationExists: (sessionId: string): Promise<boolean> => ipcRenderer.invoke(IPC.CONVERSATION_EXISTS, sessionId),
   readPlan: (filePath: string) => ipcRenderer.invoke(IPC.READ_PLAN, filePath),
   readImageDataUrl: (filePath: string) => ipcRenderer.invoke(IPC.READ_IMAGE_DATA_URL, filePath),
   discoverCommands: (projectPath: string) => ipcRenderer.invoke(IPC.DISCOVER_COMMANDS, projectPath),
@@ -281,7 +296,7 @@ const api: IonAPI = {
   executeBash: (id, command, cwd) => ipcRenderer.invoke(IPC.EXECUTE_BASH, { id, command, cwd }),
   cancelBash: (id) => ipcRenderer.send(IPC.CANCEL_BASH, id),
   sendRemote: (event) => ipcRenderer.send(IPC.REMOTE_SEND, event),
-  setPermissionMode: (tabId, mode, source) => ipcRenderer.send(IPC.SET_PERMISSION_MODE, { tabId, mode, source }),
+  setPermissionMode: (tabId, mode, source, planFilePath) => ipcRenderer.send(IPC.SET_PERMISSION_MODE, { tabId, mode, source, planFilePath }),
   getTheme: () => ipcRenderer.invoke(IPC.GET_THEME),
   onThemeChange: (callback) => {
     const handler = (_e: Electron.IpcRendererEvent, isDark: boolean) => callback(isDark)
@@ -402,14 +417,14 @@ const api: IonAPI = {
 
   // ─── Engine operations ───
   engineStart: (key, config) => ipcRenderer.invoke(IPC.ENGINE_START, { key, config }),
-  enginePrompt: (key, text, model, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase, thinkingEffort) => ipcRenderer.invoke(IPC.ENGINE_PROMPT, { key, text, model, appendSystemPrompt, imageAttachments, rawAttachments, implementationPhase, thinkingEffort }),
-  engineSetPlanMode: (key, enabled) => ipcRenderer.send('ion:engine-set-plan-mode', key, enabled),
+  engineSetPlanMode: (key, enabled, planFilePath) => ipcRenderer.send('ion:engine-set-plan-mode', key, enabled, planFilePath),
   engineAbort: (key) => ipcRenderer.invoke(IPC.ENGINE_ABORT, { key }),
   engineAbortAgent: (key, agentName, subtree) =>
     ipcRenderer.invoke(IPC.ENGINE_ABORT_AGENT, { key, agentName, subtree }),
   engineDialogResponse: (key, dialogId, value) => ipcRenderer.invoke(IPC.ENGINE_DIALOG_RESPONSE, { key, dialogId, value }),
   engineCommand: (key, command, args) => ipcRenderer.invoke(IPC.ENGINE_COMMAND, { key, command, args }),
   engineStop: (key) => ipcRenderer.invoke(IPC.ENGINE_STOP, { key }),
+  engineGetContextBreakdown: (key) => ipcRenderer.invoke(IPC.ENGINE_GET_CONTEXT_BREAKDOWN, { key }),
   engineRemapSession: (oldKey, newKey) => ipcRenderer.invoke(IPC.ENGINE_REMAP_SESSION, { oldKey, newKey }),
   engineBroadcastHistory: (tabId, instanceId) => ipcRenderer.invoke(IPC.ENGINE_BROADCAST_HISTORY, { tabId, instanceId }),
   notifyTabFocus: (tabId) => ipcRenderer.send(IPC.NOTIFY_TAB_FOCUS, { tabId }),

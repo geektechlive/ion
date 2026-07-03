@@ -5,6 +5,7 @@ import { usePreferencesStore } from '../../preferences'
 import { SettingToggle } from './SettingToggle'
 import { SettingSection } from './SettingSection'
 import { SettingHeading } from './SettingHeading'
+import { deriveProfileOptions, resolveSelectedProfileOption } from './default-profile-options'
 
 export function GeneralCategory() {
   const colors = useColors()
@@ -12,6 +13,9 @@ export function GeneralCategory() {
   const setDefaultBaseDirectory = usePreferencesStore((s) => s.setDefaultBaseDirectory)
   const defaultPermissionMode = usePreferencesStore((s) => s.defaultPermissionMode)
   const setDefaultPermissionMode = usePreferencesStore((s) => s.setDefaultPermissionMode)
+  const engineProfiles = usePreferencesStore((s) => s.engineProfiles)
+  const defaultEngineProfileId = usePreferencesStore((s) => s.defaultEngineProfileId)
+  const setDefaultEngineProfileId = usePreferencesStore((s) => s.setDefaultEngineProfileId)
   const bashCommandEntry = usePreferencesStore((s) => s.bashCommandEntry)
   const setBashCommandEntry = usePreferencesStore((s) => s.setBashCommandEntry)
   const allowSettingsEdits = usePreferencesStore((s) => s.allowSettingsEdits)
@@ -137,6 +141,35 @@ export function GeneralCategory() {
             </button>
           ))}
         </div>
+      </SettingSection>
+
+      <SettingSection
+        label="Default Engine Profile for New Conversations"
+        description="Profile applied when opening a new conversation. Choose a profile to load its extensions automatically."
+      >
+        <select
+          value={resolveSelectedProfileOption(defaultEngineProfileId, engineProfiles)}
+          onChange={(e) => setDefaultEngineProfileId(e.target.value)}
+          style={{
+            width: '100%',
+            background: colors.surfacePrimary,
+            border: `1px solid ${colors.containerBorder}`,
+            borderRadius: 8,
+            padding: '8px 12px',
+            color: colors.textPrimary,
+            fontSize: 13,
+            outline: 'none',
+            cursor: 'pointer',
+            appearance: 'none',
+            WebkitAppearance: 'none',
+          }}
+        >
+          {deriveProfileOptions(engineProfiles).map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
       </SettingSection>
 
       <SettingHeading>Behavior</SettingHeading>

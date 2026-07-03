@@ -34,6 +34,11 @@ type PermissionHookServer struct {
 	mu         sync.Mutex
 	tokens     map[string]bool // active run tokens
 	onAsk      PermissionAskCallback
+	// timeouts carries the human-wait configuration. nil means "use the
+	// indefinite-wait default" (the nil-safe accessors on *TimeoutsConfig
+	// report an infinite human-wait for a nil receiver). Set via SetTimeouts
+	// from the session manager, which holds the engine config.
+	timeouts *types.TimeoutsConfig
 }
 
 // NewPermissionHookServer creates a hook server on a random local port.
@@ -113,6 +118,16 @@ func (s *PermissionHookServer) SetOnAsk(fn PermissionAskCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onAsk = fn
+}
+
+// SetTimeouts installs the human-wait configuration. nil (or an unset
+// ElicitationMs) means wait indefinitely for the user's permission decision —
+// the shipped default. A finite human-wait makes the dialog resolve to the
+// configured fail-action (PermissionTimeoutAction, default "deny") on expiry.
+func (s *PermissionHookServer) SetTimeouts(t *types.TimeoutsConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.timeouts = t
 }
 
 // Close shuts down the hook server.
@@ -213,7 +228,29 @@ func (s *PermissionHookServer) handlePreToolUse(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Block until response or timeout (5 minutes)
+	// Resolve the human-wait timeout for this permission dialog. Default is
+	// indefinite: a permission prompt waits for the user to decide and must
+	// not silently fail closed on a wall-clock deadline when the human simply
+	// stepped away. A configured finite human-wait installs a timer whose
+	// expiry applies the configured fail-action (default "deny").
+	s.mu.Lock()
+	timeouts := s.timeouts
+	s.mu.Unlock()
+	var timerCh <-chan time.Time
+	if d, finite := timeouts.HumanWait(); finite {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		timerCh = timer.C
+		utils.Log("PermissionHookServer", fmt.Sprintf("finite human-wait %s for %s (fail-action=%s)", d, questionID, timeouts.PermissionTimeoutAction()))
+	} else {
+		utils.Log("PermissionHookServer", fmt.Sprintf("indefinite human-wait for %s (waiting for user decision)", questionID))
+	}
+
+	// Block until response, request-context cancellation, or (only when a
+	// finite human-wait is configured) the timeout. r.Context() fires when
+	// the Claude CLI subprocess that issued this hook request goes away, so
+	// an indefinite wait can never truly wedge: if the run is cancelled the
+	// subprocess dies and this handler unblocks.
 	select {
 	case optionID := <-ch:
 		// Map option IDs to hook decisions
@@ -225,9 +262,14 @@ func (s *PermissionHookServer) handlePreToolUse(w http.ResponseWriter, r *http.R
 			decision = "allow"
 		}
 		writePermissionResponse(w, decision)
-	case <-time.After(5 * time.Minute):
-		utils.Log("PermissionHookServer", "permission request timed out, denying: "+questionID)
-		writePermissionResponse(w, "deny")
+	case <-r.Context().Done():
+		// Subprocess/connection gone — the run is being torn down. Do not
+		// write a decision; there is no longer anyone to receive it.
+		utils.Log("PermissionHookServer", "permission request abandoned (request context cancelled): "+questionID)
+	case <-timerCh:
+		decision := timeouts.PermissionTimeoutAction()
+		utils.Log("PermissionHookServer", fmt.Sprintf("permission request timed out, applying fail-action=%s: %s", decision, questionID))
+		writePermissionResponse(w, decision)
 	}
 }
 

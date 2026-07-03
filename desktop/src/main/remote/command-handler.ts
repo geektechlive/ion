@@ -1,10 +1,9 @@
 import { log as _log } from '../logger'
-import { sessionPlane, deviceFocusMap } from '../state'
+import { sessionPlane, deviceFocusMap, state, engineBridge } from '../state'
 import {
   handleSync,
   handleCreateTab,
   handleCreateTerminalTab,
-  handleCreateEngineTab,
   handleCloseTab,
   handlePrompt,
   handleCancel,
@@ -23,15 +22,9 @@ import {
   handleReorderTabGroups,
 } from './handlers/tab-groups'
 import {
-  handleEnginePrompt,
   handleEngineAbort,
   handleResetEngineSession,
   handleEngineDialogResponse,
-  handleEngineAddInstance,
-  handleEngineRemoveInstance,
-  handleEngineMoveInstance,
-  handleEngineSelectInstance,
-  handleLoadEngineConversation,
   handleLoadAgentConversation,
   handleEngineSetModel,
   handleVoiceConfig,
@@ -97,33 +90,60 @@ export async function handleRemoteCommand(cmd: RemoteCommand, deviceId: string):
     case 'desktop_sync': await handleSync(deviceId); break
     case 'desktop_create_tab': await handleCreateTab(cmd); break
     case 'desktop_create_terminal_tab': await handleCreateTerminalTab(cmd); break
-    case 'desktop_create_engine_tab': await handleCreateEngineTab(cmd); break
     case 'desktop_close_tab': handleCloseTab(cmd); break
-    case 'desktop_prompt': await handlePrompt(cmd); break
+    case 'desktop_prompt': await handlePrompt(cmd, deviceId); break
     case 'desktop_cancel': handleCancel(cmd); break
     case 'desktop_respond_permission':
       sessionPlane.respondToPermission(cmd.tabId, cmd.questionId, cmd.optionId)
+      break
+    case 'desktop_respond_elicitation':
+      sessionPlane.respondToElicitation(cmd.tabId, cmd.requestId, cmd.response, cmd.cancelled)
       break
     case 'desktop_set_permission_mode': await handleSetPermissionMode(cmd); break
     case 'desktop_set_thinking_effort': await handleSetThinkingEffort(cmd); break
     case 'desktop_reset_tab_session': sessionPlane.resetTabSession(cmd.tabId); break
     case 'desktop_reset_engine_session': await handleResetEngineSession(cmd); break
     case 'desktop_load_conversation': await handleLoadConversation(cmd, deviceId); break
-    case 'desktop_engine_prompt': await handleEnginePrompt(cmd, deviceId); break
+    case 'desktop_request_resend':
+      // iOS detected a forward seq gap — replay the missing frames from the
+      // retransmit buffer (or answer desktop_resend_unavailable). Synchronous.
+      state.remoteTransport?.resend(deviceId, cmd.fromSeq, cmd.toSeq)
+      break
     case 'desktop_engine_abort': handleEngineAbort(cmd); break
     case 'desktop_engine_dialog_response': handleEngineDialogResponse(cmd); break
-    case 'desktop_engine_add_instance': await handleEngineAddInstance(cmd); break
-    case 'desktop_engine_remove_instance': await handleEngineRemoveInstance(cmd); break
-    case 'desktop_engine_move_instance': await handleEngineMoveInstance(cmd); break
-    case 'desktop_engine_select_instance': await handleEngineSelectInstance(cmd); break
+    // Multi-instance commands removed (conversation unification #256 phase 1).
+    // The current iOS build no longer sends these (RemoteCommand.swift drops
+    // the send path); the cases remain as a tolerance gate for any stale
+    // paired client. The desktop no longer supports add/remove/move/select
+    // across engine instances within a single tab.
+    case 'desktop_engine_add_instance': log('ignoring deprecated desktop_engine_add_instance'); break
+    case 'desktop_engine_remove_instance': log('ignoring deprecated desktop_engine_remove_instance'); break
+    case 'desktop_engine_move_instance': log('ignoring deprecated desktop_engine_move_instance'); break
+    case 'desktop_engine_select_instance': log('ignoring deprecated desktop_engine_select_instance'); break
     case 'desktop_engine_set_model': await handleEngineSetModel(cmd); break
-    case 'desktop_load_engine_conversation': await handleLoadEngineConversation(cmd, deviceId); break
+    case 'desktop_load_engine_conversation' as 'desktop_load_conversation':
+      // Retired in WI-004 (#259). iOS now sends desktop_load_conversation for
+      // every tab. A stale paired client may still send this; route to the
+      // unified handler so it degrades gracefully rather than silently dropping.
+      log(`load_engine_conversation: routing to unified load_conversation handler (WI-004)`)
+      await handleLoadConversation({ type: 'desktop_load_conversation', tabId: (cmd as any).tabId }, deviceId)
+      break
     case 'desktop_load_agent_conversation': await handleLoadAgentConversation(cmd, deviceId); break
     case 'desktop_terminal_input': handleTerminalInput(cmd); break
     case 'desktop_terminal_resize': handleTerminalResize(cmd); break
     case 'desktop_terminal_add_instance': await handleTerminalAddInstance(cmd); break
     case 'desktop_terminal_remove_instance': await handleTerminalRemoveInstance(cmd); break
     case 'desktop_request_terminal_snapshot': await handleRequestTerminalSnapshot(cmd, deviceId); break
+    case 'desktop_request_context_breakdown': {
+      // iOS opened the status drawer and needs an on-demand context breakdown
+      // for this tab. Forward get_context_breakdown to the engine; the result
+      // arrives as engine_context_breakdown, which event-wiring.ts forwards to
+      // iOS as desktop_context_breakdown. Modeled on handleRequestTerminalSnapshot.
+      const key = cmd.tabId
+      log(`desktop_request_context_breakdown: forwarding get_context_breakdown key=${key}`)
+      engineBridge._send({ cmd: 'get_context_breakdown', key })
+      break
+    }
     case 'desktop_terminal_select_instance': await handleTerminalSelectInstance(cmd); break
     case 'desktop_rename_tab': handleRenameTab(cmd); break
     case 'desktop_rename_terminal_instance': handleRenameTerminalInstance(cmd); break

@@ -1,12 +1,34 @@
 {
   "normalizedEvents": {
+    "agent_state": [
+      "agents"
+    ],
     "compacting": [
       "active",
       "clearedBlocks",
       "messagesAfter",
       "messagesBefore",
+      "microOnly",
       "strategy",
       "summary"
+    ],
+    "context_breakdown": [
+      "aggregateCostUsd",
+      "apiReportedTotal",
+      "cacheCreationTokens",
+      "cacheReadTokens",
+      "categories",
+      "contextWindow",
+      "model",
+      "totalTokens",
+      "unaccounted"
+    ],
+    "dialog": [
+      "defaultValue",
+      "dialogId",
+      "method",
+      "options",
+      "title"
     ],
     "engine_plan_content": [
       "content",
@@ -24,10 +46,39 @@
       "retryable",
       "sessionId"
     ],
+    "events_dropped": [
+      "count"
+    ],
+    "extension_dead_permanent": [
+      "attemptNumber",
+      "extensionName"
+    ],
+    "extension_died": [
+      "extensionName"
+    ],
+    "extension_respawned": [
+      "attemptNumber",
+      "extensionName"
+    ],
+    "harness_message": [
+      "dedupKey",
+      "message",
+      "source"
+    ],
+    "message_end": [
+      "contextPercent",
+      "cost",
+      "inputTokens",
+      "outputTokens"
+    ],
     "model_fallback": [
       "fallbackModel",
       "reason",
       "requestedModel"
+    ],
+    "notify": [
+      "level",
+      "message"
     ],
     "permission_request": [
       "options",
@@ -35,6 +86,11 @@
       "toolDescription",
       "toolInput",
       "toolName"
+    ],
+    "plan_file_written": [
+      "operation",
+      "planFilePath",
+      "planSlug"
     ],
     "plan_mode_auto_exit": [
       "planFilePath",
@@ -129,6 +185,9 @@
     ],
     "usage": [
       "usage"
+    ],
+    "working_message": [
+      "message"
     ]
   },
   "engineEvent": [
@@ -151,19 +210,30 @@
     "commandError",
     "commands",
     "content",
+    "contextBreakdown",
     "defaultValue",
     "dialogId",
+    "dispatchActivityKind",
+    "dispatchActivityTs",
     "dispatchAgent",
+    "dispatchAgentId",
+    "dispatchConversationId",
     "dispatchCost",
+    "dispatchDepth",
     "dispatchElapsed",
     "dispatchExitCode",
+    "dispatchId",
     "dispatchInputTokens",
     "dispatchModel",
     "dispatchOutputTokens",
+    "dispatchParentId",
+    "dispatchSeq",
     "dispatchSessionId",
     "dispatchTask",
+    "dispatchTextDelta",
     "dispatchThinkingTokens",
     "dispatchToolCount",
+    "dispatchToolIsError",
     "earlyStopBudget",
     "earlyStopContinuationCount",
     "earlyStopCumulativeOutput",
@@ -209,6 +279,7 @@
     "messagesBefore",
     "metadata",
     "method",
+    "microOnly",
     "notifyBody",
     "notifyKind",
     "notifyResourceId",
@@ -230,6 +301,7 @@
     "planModeEnabled",
     "planProposalKind",
     "planSlug",
+    "planWriteOperation",
     "push",
     "pushBody",
     "pushTitle",
@@ -274,6 +346,24 @@
       "name",
       "status"
     ],
+    "ContextBreakdownCategory": [
+      "kind",
+      "name",
+      "path",
+      "tier",
+      "tokens"
+    ],
+    "ContextBreakdownPayload": [
+      "aggregateCostUsd",
+      "apiReportedTotal",
+      "cacheCreationTokens",
+      "cacheReadTokens",
+      "categories",
+      "contextWindow",
+      "model",
+      "totalTokens",
+      "unaccounted"
+    ],
     "EngineCommandListing": [
       "description",
       "name"
@@ -284,6 +374,7 @@
       "forceNewConversation",
       "maxTokens",
       "model",
+      "parentConversationId",
       "profileId",
       "sessionId",
       "systemHint",
@@ -294,6 +385,7 @@
     "LlmContentBlock": [
       "clearedBlocks",
       "content",
+      "contextPaths",
       "factCount",
       "id",
       "input",
@@ -333,7 +425,8 @@
       "supportsImages",
       "supportsThinking",
       "thinkingEfforts",
-      "thinkingMode"
+      "thinkingMode",
+      "tokenizer"
     ],
     "PermissionOpt": [
       "id",

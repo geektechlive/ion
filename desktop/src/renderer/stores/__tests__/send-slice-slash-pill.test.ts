@@ -9,9 +9,9 @@
  *
  * This pins the contract that makes the pill render anyway: the optimistic
  * bubble's `content` is the raw `/command args` text and carries NO
- * slashCommand metadata, so UserMessage's FALLBACK `parseSlashCommand` path
- * pills it. (The pill decision itself is unit-tested in
- * components/conversation/__tests__/UserMessage.test.ts.)
+ * slashCommand metadata, so the `MessageBubble` FALLBACK `parseSlashCommand`
+ * path pills it. (The pill decision itself is unit-tested in
+ * components/conversation/__tests__/slash-pill.test.ts.)
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -91,7 +91,6 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     workingDirectory: '/home/test',
     hasChosenDirectory: true,
     additionalDirs: [],
-    permissionMode: 'auto',
     bashResults: [],
     bashExecuting: false,
     bashExecId: null,
@@ -108,7 +107,6 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
     ...overrides,
@@ -130,7 +128,7 @@ function buildHarness(initialTab: TabState) {
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    conversationPanes: seedMainPane(initialTab.id, { permissionMode: initialTab.permissionMode }),
+    conversationPanes: seedMainPane(initialTab.id, { permissionMode: 'auto' }),
     engineModelFallbacks: new Map(),
     fileExplorerOpenDirs: new Set(),
     fileEditorOpenDirs: new Set(),
@@ -155,7 +153,7 @@ describe('sendMessage — optimistic slash bubble pills via fallback', () => {
   it('inserts a bubble whose content is the RAW /command text with no engine metadata', () => {
     const { state } = buildHarness(makeTab())
 
-    state.sendMessage('/diagram the auth flow')
+    state.submit('tab-1', '/diagram the auth flow')
 
     const inst = mainInstance(state.conversationPanes, 'tab-1')!
     const bubble = inst.messages[inst.messages.length - 1]
@@ -174,7 +172,7 @@ describe('sendMessage — optimistic slash bubble pills via fallback', () => {
   it('does NOT pill an ordinary (non-slash) optimistic bubble', () => {
     const { state } = buildHarness(makeTab())
 
-    state.sendMessage('hello world')
+    state.submit('tab-1', 'hello world')
 
     const inst = mainInstance(state.conversationPanes, 'tab-1')!
     const bubble = inst.messages[inst.messages.length - 1]

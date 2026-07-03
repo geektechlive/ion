@@ -396,7 +396,7 @@ export function GitGraphSection({
                     disabled={hasUncommittedChanges}
                     className="p-0.5 rounded transition-colors"
                     style={{
-                      color: hasUncommittedChanges ? colors.textTertiary : '#4ade80',
+                      color: hasUncommittedChanges ? colors.textTertiary : colors.worktreeGreen,
                       opacity: hasUncommittedChanges ? 0.35 : 1,
                       cursor: hasUncommittedChanges ? 'not-allowed' : 'pointer',
                     }}

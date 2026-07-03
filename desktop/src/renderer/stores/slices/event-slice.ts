@@ -1,11 +1,23 @@
+// @file-size-exception: event-slice.ts is the single-path normalized event reducer.
+// Grew by 17 lines to add context_breakdown caching (plan modest-leaping-waffle).
 import type { TabStatus, Message } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
-import { nextMsgId, playNotificationIfHidden, totalInputTokens, scheduleDoneGroupMove } from '../session-store-helpers'
-import { formatPlanCreatedDivider, formatSteerAppliedDivider } from '../../../shared/clear-divider'
+import { nextMsgId, totalInputTokens } from '../session-store-helpers'
+import { formatSteerAppliedDivider } from '../../../shared/clear-divider'
+import { buildCompactionMarkerContent } from '../../../shared/compaction-marker'
+import { captureSessionInitId } from './session-init-capture'
 import { activeInstance, commitInstance } from '../conversation-instance'
-import { maybeGenerateTabTitle } from './event-slice-titling'
 import { handleThinkingEvent, discardActiveThinking } from './event-slice-thinking'
+import { handleCrossNormalizedEvent } from './engine-event-slice-messages'
+import { maybeScheduleDoneMove } from './event-slice-done-move'
+import { maybeScheduleRunningMove } from './event-slice-running-move'
+import { handleExtensionSurfaceEvent } from './event-slice-extension-surface'
+import { handlePlanModeEvent } from './event-slice-plan-mode'
+import { buildDispatchStartEntry, applyDispatchEnd } from './engine-event-slice-helpers'
+import { maybeApplyPlanModeGroupMove } from './event-slice-plan-mode-move'
+import { handleTaskEvent } from './event-slice-task'
+import { handleErrorAction } from './event-slice-error'
 
 /** Compact a multi-line message into a single ~80-char preview for the tab strip. */
 function formatMessagePreview(content: string): string {
@@ -16,6 +28,11 @@ function formatMessagePreview(content: string): string {
 export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
     handleNormalizedEvent: (tabId, event) => {
+      // Cross-cutting events (resource snapshots, command lifecycle, notifications)
+      // flow through the normalized stream after WI-001. They are processed before
+      // the per-tab reducer and do NOT touch conversation state.
+      if (handleCrossNormalizedEvent(set, get, tabId, event)) return
+
       set((s) => {
         const { activeTabId } = s
         // Resolve the active conversation instance for this tab ONCE (1B).
@@ -28,11 +45,21 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
         // `updated`.
         const inst0 = activeInstance(s.conversationPanes, tabId)
         let messages: Message[] = inst0 ? inst0.messages.slice() : []
-        const instPatch: Partial<import('../../../shared/types-engine').ConversationInstance> = {}
+        let instPatch: Partial<import('../../../shared/types-engine').ConversationInstance> = {}
         let instTouched = false
         // permissionQueue lives on the instance now; seed the working copy
         // from the instance and write back through instPatch when it changes.
         let permissionQueue = inst0 ? inst0.permissionQueue.slice() : []
+        // elicitationQueue (extension ctx.elicit) follows the same pattern:
+        // seed from the instance, mutate on elicitation_request, commit back.
+        let elicitationQueue = inst0 ? inst0.elicitationQueue.slice() : []
+
+        // Side-effect state: collected outside tabs.map() and merged into the
+        // return patch so all store updates land in the same Zustand tick.
+        let engineWorkingMessages: Map<string, string> | undefined
+        let engineNotifications: Map<string, Array<{ id: string; message: string; level: string; timestamp: number }>> | undefined
+        let engineDialogs: Map<string, { dialogId: string; method: string; title: string; options?: string[]; defaultValue?: string } | null> | undefined
+        let engineModelFallbacks: typeof s.engineModelFallbacks | undefined
 
         const tabs = s.tabs.map((tab) => {
           if (tab.id !== tabId) return tab
@@ -60,7 +87,57 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               updated.sessionMcpServers = event.mcpServers
               updated.sessionSkills = event.skills
               updated.sessionVersion = event.version
-              if (!event.isWarmup) {
+              // WI-001: capture sessionId into the conversation chain + grow the
+              // reasoned session ledger. See captureSessionInitId for the full
+              // rationale (single authoritative capture site; cut-reason ledger).
+              if (inst0 && event.sessionId) {
+                const capture = captureSessionInitId(inst0, event.sessionId, Date.now())
+                if (capture.conversationIds) {
+                  Object.assign(instPatch, capture)
+                  if (typeof window !== 'undefined' && (window as any).__ionForceFlushTabs) {
+                    ;(window as any).__ionForceFlushTabs()
+                  }
+                }
+              }
+              // Gate the running transition on an in-flight user request.
+              //
+              // A `session_init` is emitted by the engine runloop at the start
+              // of EVERY run (engine/internal/backend/runloop.go). That includes
+              // runs the user did NOT initiate from this client: a restored
+              // extension tab re-starts its engine session on load
+              // (useTabRestoration-engine.ts → window.ion.engineStart), and the
+              // harness's session_start hook commonly fires an initial turn,
+              // producing a `session_init` with no preceding user prompt.
+              //
+              // Restored extension tabs bypass the control plane
+              // (ipc/engine.ts ENGINE_START → engineBridge.startSession with no
+              // sessionPlane.ensureTab), so the control plane's
+              // engine_status→task_complete idle mediation never runs for them.
+              // If this reducer flipped status to 'running' off that warmup
+              // session_init, nothing would ever clear it back to idle and the
+              // tab would be stuck 'running' after a restart (the
+              // reinstall/restart symptom).
+              //
+              // `isWarmup` alone is not a sufficient guard: it is a desktop-only
+              // synthesized flag (only ever set false in
+              // engine-control-plane-events.ts) — the engine never sets it, so a
+              // raw extension-tab session_init always has it undefined/false.
+              // The authoritative signal that THIS client is driving a run is
+              // the send path's own state: send-slice sets status='connecting'
+              // and activeRequestId BEFORE dispatching (send-slice.ts), so a
+              // genuine user-initiated session_init always arrives on a
+              // connecting/running tab with a non-null activeRequestId. A
+              // session_init that lands on an idle tab with no active request is
+              // a restore/reconnect warmup and must not flip to running.
+              //
+              // NOTE: this gate covers only the status flip. The conversationId
+              // capture above runs unconditionally so restored sessions still
+              // record their sessionId.
+              const hasActiveRun =
+                updated.status === 'connecting' ||
+                updated.status === 'running' ||
+                updated.activeRequestId != null
+              if (!event.isWarmup && hasActiveRun) {
                 const isTerminal = updated.status === 'failed' || updated.status === 'dead' || updated.status === 'completed'
                 if (isTerminal) break
                 updated.status = 'running'
@@ -98,19 +175,15 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               } else {
                 updated.currentActivity = 'Thinking...'
                 updated.isCompacting = false
-                // Insert a compaction marker message so the user can see when compaction happened.
-                if (event.messagesBefore || event.summary) {
-                  const parts = ['[Compaction]']
-                  if (event.strategy) parts.push(event.strategy)
-                  if (event.messagesBefore && event.messagesAfter != null) {
-                    parts.push(`${event.messagesBefore} → ${event.messagesAfter} messages`)
-                  }
-                  if (event.clearedBlocks) parts.push(`${event.clearedBlocks} blocks cleared`)
-                  let content = parts.join(' · ')
-                  if (event.summary) content += '\n\n' + event.summary
+                // Insert a compaction marker message so the user can see when
+                // compaction happened. The shared builder returns null for a
+                // pure no-op and omits the misleading "N → N messages" segment
+                // on a micro-only pass.
+                const markerContent = buildCompactionMarkerContent(event)
+                if (markerContent !== null) {
                   messages = [
                     ...messages,
-                    { id: nextMsgId(), role: 'system' as const, content, timestamp: Date.now() },
+                    { id: nextMsgId(), role: 'system' as const, content: markerContent, timestamp: Date.now() },
                   ]
                 }
               }
@@ -122,9 +195,13 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
             case 'steer_injected':
               // Engine confirmed a mid-turn steer landed in the
-              // conversation as a user turn. Append a divider system
-              // message so the CLI scrollback shows the user where the
-              // steer fell. Mirrors the engine-event-slice.ts handler.
+              // conversation as a user turn. Resolve the optimistic
+              // pending bubble (clear steerPending) and append a
+              // "Steer applied" divider so the user can see where
+              // the steer fell in the scrollback.
+              messages = messages.map((m) =>
+                m.steerPending ? { ...m, steerPending: undefined } : m,
+              )
               messages = [
                 ...messages,
                 {
@@ -213,60 +290,37 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               break
             }
 
-            case 'task_update': {
-              if (event.message?.content) {
-                const lastUserIdx = (() => {
-                  for (let i = messages.length - 1; i >= 0; i--) {
-                    if (messages[i].role === 'user') return i
-                  }
-                  return -1
-                })()
-                const hasStreamedText = messages
-                  .slice(lastUserIdx + 1)
-                  .some((m) => m.role === 'assistant' && !m.toolName)
-
-                if (!hasStreamedText) {
-                  const textContent = event.message.content
-                    .filter((b) => b.type === 'text' && b.text)
-                    .map((b) => b.text!)
-                    .join('')
-                  if (textContent) {
-                    messages = [
-                      ...messages,
-                      { id: nextMsgId(), role: 'assistant' as const, content: textContent, timestamp: Date.now() },
-                    ]
-                  }
-                }
-
-                for (const block of event.message.content) {
-                  if (block.type === 'tool_use' && block.name) {
-                    const exists: Message | undefined = messages.find(
-                      (m) => m.role === 'tool' && m.toolName === block.name && !m.content
-                    )
-                    if (!exists) {
-                      messages = [
-                        ...messages,
-                        {
-                          id: nextMsgId(),
-                          role: 'tool',
-                          content: '',
-                          toolName: block.name,
-                          toolInput: JSON.stringify(block.input, null, 2),
-                          toolStatus: 'completed',
-                          timestamp: Date.now(),
-                        },
-                      ]
-                    } else if (block.input) {
-                      const completeInput = JSON.stringify(block.input, null, 2)
-                      if (exists.toolInput !== completeInput) {
-                        messages = messages.map((m) =>
-                          m === exists ? { ...m, toolInput: completeInput } : m
-                        )
-                      }
-                    }
-                  }
-                }
+            case 'task_update':
+            case 'task_complete':
+            case 'error':
+            case 'session_dead': {
+              // Task-lifecycle + run-termination arms extracted to
+              // event-slice-task.ts (Fix 1: keep this reducer under the size
+              // cap). The handler mutates a shared context (messages, the tab
+              // `updated` patch, permissionQueue, instPatch/instTouched,
+              // engineModelFallbacks) exactly as the inline cases did; read the
+              // results back so the single commit below is unchanged.
+              const ctx = {
+                s,
+                get,
+                tabId,
+                activeTabId,
+                tab,
+                inst0,
+                messages,
+                permissionQueue,
+                elicitationQueue,
+                updated,
+                instPatch,
+                instTouched,
+                engineModelFallbacks,
               }
+              handleTaskEvent(ctx, event)
+              messages = ctx.messages
+              permissionQueue = ctx.permissionQueue
+              elicitationQueue = ctx.elicitationQueue
+              instTouched = ctx.instTouched
+              engineModelFallbacks = ctx.engineModelFallbacks
               break
             }
 
@@ -278,187 +332,18 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               break
             }
 
-            case 'task_complete':
-              console.log(`[task_complete] tab=${tabId.slice(0, 8)} instance=main prevStatus=${tab.status} prevPermMode=${tab.permissionMode} prevPermDenied=${inst0?.permissionDenied ? JSON.stringify(inst0.permissionDenied.tools.map((t) => t.toolName)) : 'null'} denials=${event.permissionDenials ? JSON.stringify(event.permissionDenials.map((d) => ({ name: d.toolName, hasInput: !!d.toolInput, inputKeys: d.toolInput ? Object.keys(d.toolInput) : [] }))) : 'none'}`)
-              updated.status = 'completed'
-              updated.activeRequestId = null
-              updated.currentActivity = ''
-              permissionQueue = []
-              if (event.sessionId) {
-                updated.conversationId = event.sessionId
-                updated.lastKnownSessionId = event.sessionId
-              }
-              updated.lastResult = {
-                totalCostUsd: event.costUsd,
-                durationMs: event.durationMs,
-                numTurns: event.numTurns,
-                usage: event.usage,
-                sessionId: event.sessionId,
-              }
-              if (event.result) {
-                const lastUserIdx2 = (() => {
-                  for (let i = messages.length - 1; i >= 0; i--) {
-                    if (messages[i].role === 'user') return i
-                  }
-                  return -1
-                })()
-                const hasAnyText = messages
-                  .slice(lastUserIdx2 + 1)
-                  .some((m) => m.role === 'assistant' && !m.toolName)
-                if (!hasAnyText) {
-                  messages = [
-                    ...messages,
-                    { id: nextMsgId(), role: 'assistant' as const, content: event.result, timestamp: Date.now() },
-                  ]
-                }
-              }
-              if (tabId !== activeTabId || !s.isExpanded) {
-                updated.hasUnread = true
-              }
-              if (event.permissionDenials && event.permissionDenials.length > 0) {
-                // The engine no longer emits PlanModeChangedEvent{Enabled:false}
-                // on the ExitPlanMode tool call, so the previous race that
-                // forced this branch to filter out "stale" ExitPlanMode
-                // denials (and to inject the synthetic "Plan mode is not
-                // active" user message) is gone. task_complete now arrives
-                // while permissionMode is still 'plan', and the approval
-                // card renders cleanly from the unfiltered denials.
-                instPatch.permissionDenied = { tools: event.permissionDenials }
-                instTouched = true
-                console.log(`[task_complete] tab=${tabId.slice(0, 8)} instance=main branch=denials permDenied set to ${JSON.stringify(event.permissionDenials.map((t) => t.toolName))} permMode=${updated.permissionMode}`)
-              } else {
-                console.log(`[task_complete] tab=${tabId.slice(0, 8)} instance=main branch=noDenials permDenied=null`)
-                instPatch.permissionDenied = null
-                instTouched = true
-              }
-              playNotificationIfHidden()
-              // Auto-move to done group on clean auto-mode completion.
-              // Scheduled with a delay so the tab is visible in the in-progress
-              // group before moving. The send-slice cancels pending done-moves
-              // if the user re-sends, so the tab stays in in-progress.
-              // Guard: only move if tab was actually running (not a stale task_complete
-              // from a killed session during resetTabSession → implement flow)
-              if (tab.status === 'running' && updated.permissionMode === 'auto' && instPatch.permissionDenied === null) {
-                const { autoGroupMovement, tabGroupMode, doneGroupId } = usePreferencesStore.getState()
-                console.log(`[auto-move:done] tab=${tabId.slice(0, 8)} autoGroup=${autoGroupMovement} tabGroupMode=${tabGroupMode} doneGroup=${doneGroupId ?? 'none'} currentGroup=${updated.groupId ?? 'none'} pinned=${updated.groupPinned}`)
-                if (autoGroupMovement && tabGroupMode === 'manual' && doneGroupId && updated.groupId !== doneGroupId) {
-                  if (updated.groupPinned) {
-                    console.log(`[auto-move:done] suppressed: tab=${tabId.slice(0, 8)} pinned=true currentGroup=${updated.groupId ?? 'none'} wouldMoveTo=${doneGroupId}`)
-                  } else {
-                    console.log(`[auto-move:done] scheduling tab=${tabId.slice(0, 8)} to done group=${doneGroupId} in 1500ms`)
-                    const capturedDoneGroupId = doneGroupId
-                    scheduleDoneGroupMove(tabId, 1500, () => {
-                      // Re-check: the tab may have started new work since the
-                      // timer was scheduled (e.g. the engine's warmup idle
-                      // fired task_complete, then state=running arrived for the
-                      // real work). Only move if the tab is actually done.
-                      const currentTab = get().tabs.find(t => t.id === tabId)
-                      if (currentTab && (currentTab.status === 'running' || currentTab.status === 'connecting')) {
-                        console.log(`[auto-move:done] cancelled: tab=${tabId.slice(0, 8)} status=${currentTab.status} (still active)`)
-                        return
-                      }
-                      console.log(`[auto-move:done] executing moveTabToGroup tab=${tabId.slice(0, 8)} → ${capturedDoneGroupId} status=${currentTab?.status ?? 'unknown'}`)
-                      get().moveTabToGroup(tabId, capturedDoneGroupId)
-                    })
-                  }
-                }
-              } else {
-                console.log(`[auto-move:done] skipped: tab=${tabId.slice(0, 8)} prevStatus=${tab.status} permMode=${updated.permissionMode} permDenied=${instPatch.permissionDenied !== null}`)
-              }
-              // Title resolution (slash short-circuit vs. LLM generation)
-              // lives in event-slice-titling.ts to keep this file under the
-              // file-size cap. The helper owns the full decision: it no-ops
-              // when a customTitle exists or the aiGeneratedTitles preference
-              // is off, skips LLM titling for slash commands, and otherwise
-              // fires the async generation. renameTab is read at call time.
-              maybeGenerateTabTitle(tabId, updated.customTitle, updated.title, messages, get().renameTab)
-              break
-
-            case 'error':
-              updated.status = 'failed'
-              updated.activeRequestId = null
-              updated.currentActivity = ''
-              permissionQueue = []
-              instPatch.permissionDenied = null
-              instTouched = true
-              messages = [
-                ...messages,
-                { id: nextMsgId(), role: 'system', content: `Error: ${event.message}`, timestamp: Date.now() },
-              ]
-              break
-
-            case 'session_dead':
-              console.warn(`[Ion] session_dead: tab=${tabId} exitCode=${(event as any).exitCode}`)
-              updated.status = 'dead'
-              updated.activeRequestId = null
-              updated.currentActivity = ''
-              permissionQueue = []
-              instPatch.permissionDenied = null
-              instTouched = true
-              messages = [
-                ...messages,
-                {
-                  id: nextMsgId(),
-                  role: 'system',
-                  content: `Session ended unexpectedly (exit ${event.exitCode})`,
-                  timestamp: Date.now(),
-                },
-              ]
-              break
-
             case 'engine_plan_mode_changed' as any:
-              // Only Enabled:true is authoritative — model-initiated
-              // EnterPlanMode confirms the session has entered plan mode.
-              // Enabled:false from a model-initiated ExitPlanMode is a
-              // *proposal* awaiting user approval, so we do NOT flip the
-              // dropdown to auto here. The user-approval chokepoint in
-              // usePermissionDeniedHandlers.onImplement is responsible for
-              // the mode flip back to 'auto'. The engine no longer emits
-              // false for the ExitPlanMode case, but this branch still
-              // guards against any future emitter.
-              if ((event as any).planModeEnabled) {
-                updated.permissionMode = 'plan'
-                // Insert a "Plan created" divider into the CLI tab's
-                // conversation so the user can see when each plan phase
-                // started. Mirrors the engine-tab path in
-                // engine-event-slice.ts.
-                messages = [
-                  ...messages,
-                  {
-                    id: nextMsgId(),
-                    role: 'system' as const,
-                    content: formatPlanCreatedDivider(new Date(), (event as any).planSlug),
-                    timestamp: Date.now(),
-                    planFilePath: (event as any).planFilePath,
-                  },
-                ]
-              }
-              if ((event as any).planFilePath) {
-                instPatch.planFilePath = (event as any).planFilePath
-                instTouched = true
-              }
-              break
-
+            case 'engine_plan_file_written' as any:
             case 'engine_plan_proposal' as any: {
-              // Workflow event from the engine: the model has proposed a
-              // plan-mode transition (currently only kind="exit"). This is
-              // NOT a state change — the engine has NOT flipped plan mode
-              // off. The approval-card render still flows through
-              // task_complete.permissionDenials below (for back-compat),
-              // but this event lets the renderer learn about the proposal
-              // *as soon as the model calls the tool*, before task_complete
-              // arrives. We record the proposed plan path on the instance so
-              // downstream UI (e.g. the implement button) has it without
-              // having to scrape it from permissionDenied entries. See
-              // docs/architecture/adr/003-state-events-vs-workflow-events.md.
-              const proposal = event as any
-              const kind = proposal.planProposalKind ?? proposal.kind
-              const path = proposal.planFilePath
-              console.log(`[plan_proposal] tab=${tabId.slice(0, 8)} instance=main kind=${kind} planFilePath=${path ?? ''} planSlug=${proposal.planSlug ?? ''}`)
-              if (path && inst0?.planFilePath !== path) {
-                instPatch.planFilePath = path
-                instTouched = true
-              }
+              // Plan-mode arms extracted to event-slice-plan-mode.ts (Fix 1:
+              // keep this reducer under the size cap). The handler mutates a
+              // shared context (messages + instPatch + instTouched) exactly as
+              // the inline cases did; read the results back so the single commit
+              // below is unchanged.
+              const ctx = { tabId, inst0, messages, instPatch, instTouched }
+              handlePlanModeEvent(ctx, event)
+              messages = ctx.messages
+              instTouched = ctx.instTouched
               break
             }
 
@@ -479,6 +364,22 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
               break
             }
 
+            case 'elicitation_request': {
+              // An extension called ctx.elicit(); the engine is parked on an
+              // indefinite human-wait until the user answers. Push onto the
+              // instance elicitationQueue so the renderer shows an approval
+              // card and respondElicitation can answer.
+              const newElicit: import('../../../shared/types-session').ElicitationRequest = {
+                requestId: event.requestId,
+                mode: event.mode,
+                schema: event.schema,
+                url: event.url,
+              }
+              elicitationQueue = [...elicitationQueue, newElicit]
+              updated.currentActivity = 'Waiting for approval'
+              break
+            }
+
             case 'rate_limit':
               if (event.status !== 'allowed') {
                 messages = [
@@ -491,6 +392,102 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
                   },
                 ]
               }
+              break
+
+            // --- WI-001: single-path collapse events ---
+            // These variants were previously handled exclusively by the raw
+            // engine_* stream in engine-event-slice.ts. They now flow through
+            // handleNormalizedEvent so every conversation (plain + extension)
+            // uses one reducer.
+
+            case 'plan_mode_auto_exit':
+            case 'model_fallback':
+            case 'agent_state':
+            case 'status':
+            case 'harness_message':
+            case 'working_message':
+            case 'notify':
+            case 'dialog':
+            case 'message_end':
+            case 'extension_died':
+            case 'extension_respawned':
+            case 'extension_dead_permanent':
+            case 'events_dropped': {              // Extension-surface arms extracted to event-slice-extension-surface.ts
+              // (Fix 1: keep this reducer under the size cap). The handler mutates
+              // a shared context (messages + engine* side-effect maps + the tab
+              // `updated` patch + instPatch/instTouched) exactly as the inline
+              // cases did, then we read the results back here so the single commit
+              // below is unchanged.
+              const ctx = {
+                s,
+                tabId,
+                inst0,
+                messages,
+                updated,
+                instPatch,
+                instTouched,
+                engineWorkingMessages,
+                engineNotifications,
+                engineDialogs,
+                engineModelFallbacks,
+              }
+              handleExtensionSurfaceEvent(ctx, event)
+              messages = ctx.messages
+              instPatch = ctx.instPatch
+              instTouched = ctx.instTouched
+              engineWorkingMessages = ctx.engineWorkingMessages
+              engineNotifications = ctx.engineNotifications
+              engineDialogs = ctx.engineDialogs
+              engineModelFallbacks = ctx.engineModelFallbacks
+              break
+            }
+
+            case 'dispatch_start': {
+              if (!inst0) break
+              instPatch.dispatchTelemetry = [...(inst0.dispatchTelemetry || []), buildDispatchStartEntry(event as any)]
+              instTouched = true
+              break
+            }
+
+            case 'dispatch_end': {
+              if (!inst0) break
+              const updated = applyDispatchEnd([...(inst0.dispatchTelemetry || [])], event as any)
+              if (updated) { instPatch.dispatchTelemetry = updated; instTouched = true }
+              break
+            }
+
+            case 'run_stalled':
+              // Advisory watchdog. Surface through currentActivity so the user
+              // can see the engine is still alive but not making progress.
+              updated.currentActivity = 'Still running...'
+              break
+
+            case 'context_breakdown':
+              // Cache the per-category breakdown on the instance so the Status
+              // Drawer can render it synchronously on open. Also write contextWindow
+              // onto the tab so the status-bar denominator is correct mid-run and
+              // survives reload.
+              instPatch = {
+                ...instPatch,
+                contextBreakdown: {
+                  categories: event.categories ?? [],
+                  contextWindow: event.contextWindow ?? 0,
+                  totalTokens: event.totalTokens ?? 0,
+                  apiReportedTotal: event.apiReportedTotal,
+                  unaccounted: event.unaccounted,
+                  cacheReadTokens: event.cacheReadTokens,
+                  cacheCreationTokens: event.cacheCreationTokens,
+                  model: event.model ?? '',
+                  aggregateCostUsd: event.aggregateCostUsd,
+                },
+              }
+              // Mirror the authoritative contextWindow from the breakdown onto the
+              // tab so StatusBarContextIndicator has the correct denominator without
+              // needing to reach into inst.statusFields.
+              if (event.contextWindow) {
+                updated.contextWindow = event.contextWindow
+              }
+              instTouched = true
               break
           }
 
@@ -509,17 +506,32 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
         // the active instance in a single set (1B). conversationPanes is replaced
         // only when the tab existed and the instance was found.
         const conversationPanes = commitInstance(s.conversationPanes, tabId, (inst) => {
-          const next = { ...inst, messages, permissionQueue }
+          const next = { ...inst, messages, permissionQueue, elicitationQueue }
           if (instTouched) {
             if ('permissionDenied' in instPatch) next.permissionDenied = instPatch.permissionDenied!
             if ('planFilePath' in instPatch) next.planFilePath = instPatch.planFilePath ?? null
             if ('sessionModel' in instPatch) next.sessionModel = instPatch.sessionModel ?? null
+            if ('permissionMode' in instPatch) next.permissionMode = instPatch.permissionMode!
+            if ('agentStates' in instPatch) next.agentStates = instPatch.agentStates!
+            if ('contextBreakdown' in instPatch) next.contextBreakdown = instPatch.contextBreakdown ?? null
+            if ('statusFields' in instPatch) next.statusFields = instPatch.statusFields!
+            if ('conversationIds' in instPatch) next.conversationIds = instPatch.conversationIds!
+            if ('sessions' in instPatch) next.sessions = instPatch.sessions!
+            if ('pendingCutReason' in instPatch) next.pendingCutReason = instPatch.pendingCutReason
           }
           return next
         })
 
-        return { tabs, conversationPanes }
+        return {
+          tabs,
+          conversationPanes,
+          ...(engineWorkingMessages !== undefined ? { engineWorkingMessages } : {}),
+          ...(engineNotifications !== undefined ? { engineNotifications } : {}),
+          ...(engineDialogs !== undefined ? { engineDialogs } : {}),
+          ...(engineModelFallbacks !== undefined ? { engineModelFallbacks } : {}),
+        }
       })
+      maybeApplyPlanModeGroupMove(tabId, event.type, get) // post-commit: re-evaluate group after plan-mode event
     },
 
     handleStatusChange: (tabId, newStatus) => {
@@ -527,70 +539,76 @@ export function createEventSlice(set: StoreSet, get: StoreGet): Partial<State> {
         console.warn(`[Ion] handleStatusChange: tab=${tabId} status=dead`)
       }
       set((s) => {
-        // permissionQueue + permissionDenied are per-conversation now; clear
-        // them on the active instance when the status becomes terminal.
+        // Capture the PRE-transition status: the auto-move-to-done decision
+        // fires only on a running→clean-terminal transition. This is the path
+        // that engine_dead clean-exit and reconnect idle flow through — neither
+        // emits task_complete, so without this the tab is stranded in the
+        // in-progress group (see event-slice-done-move.ts).
+        const prevTab = s.tabs.find((t) => t.id === tabId)
+        const prevStatus = prevTab?.status ?? 'idle'
+        // permissionQueue + permissionDenied are per-conversation now.
+        //
+        // permissionQueue is run-scoped: clear it on ANY terminal status. A
+        // live permission queue belongs to an in-flight run and is stale once
+        // the run ends, regardless of how we got to idle.
+        //
+        // permissionDenied is the plan-ready / AskUserQuestion card source and
+        // is GATED on a genuine active→terminal transition. On restore the
+        // desktop synthesizes the denial from message history
+        // (useTabRestoration-engine.ts pendingCardOutcome) onto an ALREADY-idle
+        // tab; the engine then emits passive idle snapshots every few seconds
+        // (reconcile reason=query / heartbeat). Those are idle→idle (or
+        // completed→idle) ticks, NOT a run finishing. Clearing the denial on
+        // them wiped the just-synthesized plan-ready card seconds after the
+        // user opened the conversation. We only clear the denial when the tab
+        // was actually active before this transition (running/connecting →
+        // terminal), i.e. a real run ended — which is the case the clear was
+        // meant for. A model-driven proposal arrives via task_complete on its
+        // own event and is unaffected.
+        const wasActive = prevStatus === 'running' || prevStatus === 'connecting'
         const clearQueue = newStatus === 'idle' || newStatus === 'failed' || newStatus === 'dead' || newStatus === 'completed'
-        const clearDenied = newStatus === 'idle' || newStatus === 'failed' || newStatus === 'dead'
+        const clearDenied = wasActive && (newStatus === 'idle' || newStatus === 'failed' || newStatus === 'dead')
         const conversationPanes = clearQueue
           ? commitInstance(s.conversationPanes, tabId, (inst) => ({
               ...inst,
               permissionQueue: [],
+              elicitationQueue: [],
               ...(clearDenied ? { permissionDenied: null } : {}),
             }))
           : s.conversationPanes
-        return {
-          conversationPanes,
-          tabs: s.tabs.map((t) =>
-            t.id === tabId
-              ? {
-                  ...t,
-                  status: newStatus as TabStatus,
-                  ...(newStatus === 'idle' || newStatus === 'failed' || newStatus === 'dead' || newStatus === 'completed'
-                    ? { activeRequestId: null, currentActivity: '' }
-                    : {}),
-                }
-              : t
-          ),
+        const tabs = s.tabs.map((t) =>
+          t.id === tabId
+            ? {
+                ...t,
+                status: newStatus as TabStatus,
+                ...(newStatus === 'idle' || newStatus === 'failed' || newStatus === 'dead' || newStatus === 'completed'
+                  ? { activeRequestId: null, currentActivity: '' }
+                  : {}),
+              }
+            : t
+        )
+        // Schedule the done-group move using the post-transition tab + panes.
+        // The denial state was just cleared on a clean terminal transition
+        // (clearDenied), so the committed `conversationPanes` read inside the
+        // helper reflects the correct no-denial state. The helper's own guards
+        // (prevStatus === 'running', clean terminal, auto mode, not pinned)
+        // decide whether anything is scheduled.
+        const movedTab = tabs.find((t) => t.id === tabId)
+        if (movedTab) {
+          maybeScheduleDoneMove(tabId, prevStatus, newStatus, movedTab, conversationPanes, get, 'status_change')
+          // Symmetric counterpart: when the tab transitions INTO running (via any
+          // path — resume, relaunch, reconnect, remote — not just a local send),
+          // re-evaluate its planning/in-progress group so a running tab is never
+          // stranded in the done group. The helper no-ops unless newStatus is
+          // 'running'.
+          maybeScheduleRunningMove(tabId, prevStatus, newStatus, movedTab, conversationPanes, get, 'status_change')
         }
+        return { conversationPanes, tabs }
       })
     },
 
     handleError: (tabId, error) => {
-      set((s) => {
-        const inst = activeInstance(s.conversationPanes, tabId)
-        const msgs = inst ? inst.messages : []
-        const lastMsg = msgs[msgs.length - 1]
-        const alreadyHasError = lastMsg?.role === 'system' && lastMsg.content.startsWith('Error:')
-        const nextMessages = alreadyHasError
-          ? msgs
-          : [
-              ...msgs,
-              {
-                id: nextMsgId(),
-                role: 'system' as const,
-                content: `Error: ${error.message}${error.stderrTail.length > 0 ? '\n\n' + error.stderrTail.slice(-5).join('\n') : ''}`,
-                timestamp: Date.now(),
-              },
-            ]
-        const conversationPanes = commitInstance(s.conversationPanes, tabId, (i) => ({
-          ...i,
-          messages: nextMessages,
-          permissionQueue: [],
-        }))
-        return {
-          conversationPanes,
-          tabs: s.tabs.map((t) =>
-            t.id === tabId
-              ? {
-                  ...t,
-                  status: 'failed' as TabStatus,
-                  activeRequestId: null,
-                  currentActivity: '',
-                }
-              : t
-          ),
-        }
-      })
+      handleErrorAction(set, tabId, error)
     },
   }
 }

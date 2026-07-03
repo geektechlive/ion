@@ -3,6 +3,7 @@ import { log as _log } from '../../logger'
 import { state, sessionPlane } from '../../state'
 import { processIncomingPrompt } from '../../prompt-pipeline'
 import { handleSetPermissionMode } from './tabs'
+import { planSlugFromPath } from '../../../shared/clear-divider'
 import type { RemoteCommand } from '../protocol'
 
 function log(msg: string): void {
@@ -13,8 +14,8 @@ function log(msg: string): void {
  * Handles implement_plan from iOS.
  *
  * iOS sends this command instead of building a prompt string. The desktop
- * runs the same implement pipeline that the renderer's onImplement
- * (usePermissionDeniedHandlers.ts) runs — no plan body crosses the wire.
+ * runs the same implement pipeline that the renderer's runHandleImplement
+ * (ConversationView-implement.ts) runs — no plan body crosses the wire.
  *
  * Pipeline steps (mirrors onImplement exactly):
  *   1. Resolve planFilePath from the renderer store (instance.planFilePath
@@ -41,7 +42,7 @@ export async function handleImplementPlan(
   const { tabId, questionId, instanceId, clearContext = false } = cmd
   log(`handleImplementPlan: tabId=${tabId.slice(0, 8)} questionId=${questionId.slice(0, 12)} clearContext=${clearContext}`)
 
-  // Step 1: Resolve planFilePath — same two-source lookup as onImplement lines 122-131.
+  // Step 1: Resolve planFilePath — same two-source lookup as runHandleImplement.
   let planFilePath: string | null = null
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
@@ -78,7 +79,7 @@ export async function handleImplementPlan(
   }
   log(`handleImplementPlan: planFilePath=${planFilePath ?? '<none>'}`)
 
-  // Step 2: Read plan content from disk (mirrors onImplement lines 134-142).
+  // Step 2: Read plan content from disk (mirrors runHandleImplement).
   let planContent: string | null = null
   if (planFilePath && existsSync(planFilePath)) {
     try {
@@ -88,10 +89,10 @@ export async function handleImplementPlan(
     }
   }
 
-  // Step 3: Set permission mode → auto (same as onImplement line 102).
+  // Step 3: Set permission mode → auto (same as runHandleImplement).
   await handleSetPermissionMode({ type: 'desktop_set_permission_mode', tabId, mode: 'auto' })
 
-  // Step 4: Renderer-side model switch + group auto-move (onImplement lines 105-118).
+  // Step 4: Renderer-side model switch + group auto-move (mirrors runHandleImplement).
   // These are prefs-driven so we read them from the renderer stores.
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
@@ -123,7 +124,7 @@ export async function handleImplementPlan(
   }
 
   // Step 5: clearContext branch — reset engine session before implementing.
-  // Matches onImplement lines 150-194. The main-process resetTabSession call
+  // Matches the runHandleImplement clearContext branch. The main-process resetTabSession call
   // must happen before the renderer state mutation so the engine session is
   // already gone when the store clears conversationId.
   if (clearContext) {
@@ -131,10 +132,20 @@ export async function handleImplementPlan(
   }
 
   // Step 6: Renderer store mutations — insert divider, clear plan state.
-  // Mirrors onImplement lines 159-233. Both clearContext branches handled here.
+  // Mirrors runHandleImplement. Both clearContext branches handled here.
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
     const clearCtxJs = clearContext ? 'true' : 'false'
+    // Carry the resolved plan path + slug onto the divider so the renderer
+    // (and the snapshot projection that mirrors it to iOS) renders the slug as
+    // a clickable link to the plan preview — same treatment as the desktop
+    // onImplement path and the plan-created / plan-updated dividers. Escape
+    // both values for safe string interpolation into the executeJavaScript.
+    const planSlug = planSlugFromPath(planFilePath)
+    const slugSuffix = planSlug ? ` \\u00b7 ${planSlug.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}` : ''
+    const planPathJs = planFilePath
+      ? `'${planFilePath.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+      : 'null'
     await state.mainWindow?.webContents.executeJavaScript(`
       (function() {
         try {
@@ -149,10 +160,12 @@ export async function handleImplementPlan(
           var inst = pane.instances.find(function(i) { return i.id === pane.activeInstanceId; })
             || pane.instances[0];
           if (!inst) return;
+          var planPath = ${planPathJs};
           var divider = '\\u2500\\u2500 Implementing plan at '
-            + new Date().toLocaleTimeString() + ' \\u2500\\u2500';
+            + new Date().toLocaleTimeString() + '${slugSuffix}' + ' \\u2500\\u2500';
           var newMsg = { id: 'impl-remote-' + Date.now(), role: 'system',
             content: divider, timestamp: Date.now() };
+          if (planPath) newMsg.planFilePath = planPath;
           var updatedInst = Object.assign({}, inst, {
             messages: inst.messages.concat([newMsg]),
             planFilePath: null,
@@ -208,7 +221,7 @@ export async function handleImplementPlan(
   }
 
   // Step 7: Determine tab type for processIncomingPrompt routing.
-  let isEngineTab = false
+  let hasExtensions = false
   let resolvedInstanceId: string | null = instanceId || null
   try {
     const escapedTab = tabId.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
@@ -223,18 +236,18 @@ export async function handleImplementPlan(
           ? s.conversationPanes.get('${escapedTab}')
           : (s.conversationPanes ? s.conversationPanes['${escapedTab}'] : null);
         return {
-          hasEngineExtension: !!tab.hasEngineExtension,
+          hasExtensions: !!tab.engineProfileId,
           activeInstanceId: pane ? pane.activeInstanceId : null,
         };
       })()
     `)
     if (tabInfo) {
-      isEngineTab = !!tabInfo.hasEngineExtension
+      hasExtensions = !!tabInfo.hasExtensions
       if (!resolvedInstanceId) resolvedInstanceId = tabInfo.activeInstanceId || null
     }
   } catch {}
 
-  // Step 8: Build prompt + attachment — same as onImplement lines 253-264.
+  // Step 8: Build prompt + attachment — same as runHandleImplement.
   // The plan body is resolved desktop-side; no plan text was in the command.
   const implementPrompt = planContent
     ? `Implement the following plan:\n\n${planContent}`
@@ -258,7 +271,7 @@ export async function handleImplementPlan(
     text: implementPrompt,
     reqId,
     source: 'remote',
-    isEngineTab,
+    hasExtensions,
     instanceId: resolvedInstanceId || undefined,
     implementationPhase: true,
     planFilePath: planFilePath || undefined,

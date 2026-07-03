@@ -191,6 +191,9 @@ func mergeEnterprisePartial(base, overlay *types.EnterpriseConfig) *types.Enterp
 	if overlay.Sandbox != nil {
 		result.Sandbox = overlay.Sandbox
 	}
+	if overlay.NewConversationDefaults != nil {
+		result.NewConversationDefaults = overlay.NewConversationDefaults
+	}
 	if len(overlay.CustomFields) > 0 {
 		result.CustomFields = overlay.CustomFields
 	}

@@ -143,6 +143,14 @@ type EngineEvent struct {
 	// for the legacy-hex round-trip note.
 	PlanModeSlug string `json:"planSlug,omitempty"`
 
+	// engine_plan_file_written — emitted when a Write/Edit successfully lands
+	// on the canonical plan file during plan mode. PlanModeFilePath
+	// (json:"planFilePath") and PlanModeSlug (json:"planSlug") are reused for
+	// the path + slug. PlanWriteOperation discriminates "created" (first
+	// content in the plan file) from "updated" (a revision of existing
+	// content). See PlanFileWrittenEvent for the full contract.
+	PlanWriteOperation string `json:"planWriteOperation,omitempty"`
+
 	// engine_plan_proposal — workflow-level signal emitted when the model
 	// proposes a plan-mode transition that requires user approval. Distinct
 	// from engine_plan_mode_changed, which fires only on confirmed *state*
@@ -178,6 +186,7 @@ type EngineEvent struct {
 	CompactingMessagesAfter  int    `json:"messagesAfter,omitempty"`
 	CompactingClearedBlocks  int    `json:"clearedBlocks,omitempty"`
 	CompactingStrategy       string `json:"strategy,omitempty"`
+	CompactingMicroOnly      bool   `json:"microOnly,omitempty"`
 
 	// engine_extension_died, engine_extension_respawned, engine_extension_dead_permanent
 	ExtensionName string `json:"extensionName,omitempty"`
@@ -350,6 +359,11 @@ type EngineEvent struct {
 	//   - DispatchTask:      the task string passed to the agent
 	//   - DispatchModel:     the resolved model for the dispatch
 	//   - DispatchSessionID: the child session's request ID
+	//   - DispatchDepth:     nesting depth of this dispatch (1 = direct child
+	//                        of orchestrator, 2 = grandchild, etc.)
+	//   - DispatchParentId:  dispatch ID of the parent that spawned this
+	//                        dispatch (empty for depth-1 dispatches whose
+	//                        parent is the orchestrator at depth 0)
 	//
 	// engine_dispatch_end fields:
 	//   - DispatchAgent:       the dispatched agent name
@@ -362,6 +376,8 @@ type EngineEvent struct {
 	//   - DispatchThinkingTokens: estimated reasoning tokens (subset of output;
 	//     see ThinkingBlockEndEvent.TotalTokens for the estimate caveat). Lets
 	//     cost/audit consumers separate reasoning spend from user-facing output.
+	//   - DispatchDepth:       same as dispatch_start
+	//   - DispatchParentId:    same as dispatch_start
 	DispatchAgent          string  `json:"dispatchAgent,omitempty"`
 	DispatchTask           string  `json:"dispatchTask,omitempty"`
 	DispatchModel          string  `json:"dispatchModel,omitempty"`
@@ -373,6 +389,51 @@ type EngineEvent struct {
 	DispatchOutputTokens   int     `json:"dispatchOutputTokens,omitempty"`
 	DispatchToolCount      int     `json:"dispatchToolCount,omitempty"`
 	DispatchThinkingTokens int     `json:"dispatchThinkingTokens,omitempty"`
+	DispatchDepth          int     `json:"dispatchDepth,omitempty"`
+	DispatchParentId       string  `json:"dispatchParentId,omitempty"`
+	// DispatchId carries the agentID of this dispatch on dispatch_start and
+	// dispatch_end events. Consumers can use it to correlate dispatch_start
+	// with dispatch_end without relying on positional ordering, and to match
+	// a child's dispatchParentId against its parent's dispatchId.
+	DispatchId string `json:"dispatchId,omitempty"`
+
+	// --- engine_dispatch_activity ---
+	//
+	// Emitted on the parent session's event stream for each intra-turn
+	// activity of a running dispatched (sub-)agent: a tool call starting, a
+	// tool result returning, or a chunk of streamed assistant text. The child
+	// produces these events as it works; the engine forwards them here so any
+	// consumer can render or audit the live sub-agent transcript WITHOUT
+	// waiting for the dispatch to complete.
+	//
+	// Semantics: INCREMENTAL, append-by-key. NOT a snapshot, NOT retained, NOT
+	// replayed on reconnect (distinct from engine_agent_state, which IS a
+	// snapshot — see docs/architecture/agent-state.md). The file-backed
+	// conversation transcript is the snapshot authority that heals gaps; a
+	// consumer that needs complete/sticky state reconciles from there and
+	// never from retained activity events. Sibling to model_fallback /
+	// run_stalled in being a fire-and-forget signal.
+	//
+	// Key/identity for client-side dedup against the reconcile snapshot:
+	//   - DispatchAgentID:        parent-side agent id (routes the delta to the
+	//                             right agent/dispatch row; never to the parent
+	//                             conversation's own message stream).
+	//   - DispatchConversationID: the child conversation id (reconcile keying).
+	//   - DispatchActivityKind:   "tool_start" | "tool_end" | "text".
+	//   - DispatchSeq:            monotonic per-dispatch sequence; orders deltas
+	//                             and keys a streaming-text run.
+	//   - ToolID / ToolName:      tool_start / tool_end (ToolID is durable and
+	//                             also persisted, so it survives reconcile).
+	//   - DispatchTextDelta:      text (the streamed chunk, possibly coalesced).
+	//   - DispatchToolIsError:    tool_end (true when the tool failed).
+	//   - DispatchActivityTs:     emit timestamp (unix millis).
+	DispatchAgentID        string `json:"dispatchAgentId,omitempty"`
+	DispatchConversationID string `json:"dispatchConversationId,omitempty"`
+	DispatchActivityKind   string `json:"dispatchActivityKind,omitempty"`
+	DispatchSeq            int    `json:"dispatchSeq,omitempty"`
+	DispatchTextDelta      string `json:"dispatchTextDelta,omitempty"`
+	DispatchToolIsError    bool   `json:"dispatchToolIsError,omitempty"`
+	DispatchActivityTs     int64  `json:"dispatchActivityTs,omitempty"`
 
 	// --- Resource subsystem events (D-007) ---
 	//
@@ -465,4 +526,36 @@ type EngineEvent struct {
 	ThinkingTotalTokens    int     `json:"thinkingTotalTokens,omitempty"`
 	ThinkingElapsedSeconds float64 `json:"thinkingElapsedSeconds,omitempty"`
 	ThinkingRedacted       bool    `json:"thinkingRedacted,omitempty"`
+
+	// --- engine_context_breakdown ---
+	//
+	// Per-category token breakdown for the active run, powering the Status
+	// Drawer / exact context-usage readout. Emitted once after prompt
+	// assembly and again after the first usage event reconciliation (with
+	// APIReportedTotal and Unaccounted populated on the payload). Advisory
+	// telemetry — consumers render it however they like; the engine attaches
+	// no UI semantics. See ContextBreakdownPayload for the per-field contract.
+	ContextBreakdown *ContextBreakdownPayload `json:"contextBreakdown,omitempty"`
+}
+
+// ContextBreakdownPayload is the payload for engine_context_breakdown events.
+// Mirrors the internal ContextBreakdownEvent shape. All token counts are
+// itemized per category; Tier records how each count was obtained ("exact"
+// from a provider count-tokens endpoint, "local" from the tiktoken BPE
+// encoder, or "approximate" from the char/4 heuristic).
+type ContextBreakdownPayload struct {
+	Categories       []ContextBreakdownCategory `json:"categories"`
+	ContextWindow    int                        `json:"contextWindow"`
+	TotalTokens      int                        `json:"totalTokens"`
+	APIReportedTotal int                        `json:"apiReportedTotal,omitempty"`
+	Unaccounted      int                        `json:"unaccounted,omitempty"`
+	// CacheReadTokens and CacheCreationTokens are provider-reported cache
+	// annotations. Annotation only — NOT included in TotalTokens.
+	CacheReadTokens     int    `json:"cacheReadTokens,omitempty"`
+	CacheCreationTokens int    `json:"cacheCreationTokens,omitempty"`
+	Model               string `json:"model"`
+	// AggregateCostUsd is the sum of this session's cost plus every descendant
+	// dispatch session's cost, computed on demand. Zero for sessions with no
+	// dispatches or no cost yet.
+	AggregateCostUsd float64 `json:"aggregateCostUsd,omitempty"`
 }

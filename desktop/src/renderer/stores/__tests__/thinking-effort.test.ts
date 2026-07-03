@@ -7,6 +7,16 @@
  *      global thinkingEnabled is on AND the tab's level is non-off.
  *   3. Global off → thinkingEffort omitted even when the tab has a level.
  *
+ * WI-002 parity tests (added for #259 FIX 2):
+ *   4. effectiveThinkingEffort reads the instance for both plain and
+ *      extension-hosted tabs with no tab-type fork.
+ *   5. A plain tab and an extension-hosted tab with identical pane state
+ *      produce the same thinkingEffort on send.
+ *   6. Snapshot projection parity: snapshot-project passes thinkingEffort
+ *      through for both plain and extension-hosted tab inputs.
+ *   7. Regression: a stale ghost field on the tab object is not read by
+ *      effectiveThinkingEffort.
+ *
  * Reuses the send-slice-plan-mode harness pattern. The global preference is
  * mocked per-test via the usePreferencesStore mock's mutable return.
  */
@@ -55,6 +65,7 @@ import { createTabSlice } from '../slices/tab-slice'
 import type { State } from '../session-store-types'
 import type { TabState } from '../../../shared/types'
 import { seedMainPane } from './helpers/conversation-test-helpers'
+import { effectiveThinkingEffort } from '../conversation-instance'
 
 const mockPrompt = vi.fn(async (..._args: unknown[]) => {})
 ;(globalThis as any).window = {
@@ -73,16 +84,16 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     status: 'idle', activeRequestId: null, lastEventAt: null, hasUnread: false, currentActivity: '',
     attachments: [], title: 'New Tab', customTitle: null, lastResult: null, sessionTools: [],
     sessionMcpServers: [], sessionSkills: [], sessionVersion: null, queuedPrompts: [],
-    workingDirectory: '/home/test', hasChosenDirectory: true, additionalDirs: [], permissionMode: 'auto',
+    workingDirectory: '/home/test', hasChosenDirectory: true, additionalDirs: [],
     bashResults: [], bashExecuting: false, bashExecId: null, pillColor: null, pillIcon: null,
     forkedFromSessionId: null, hasFileActivity: false, worktree: null, pendingWorktreeSetup: false,
     groupId: null, groupPinned: false, contextTokens: null, contextPercent: null, contextWindow: null,
-    isCompacting: false, isTerminalOnly: false, hasEngineExtension: false, engineProfileId: null,
+    isCompacting: false, isTerminalOnly: false, engineProfileId: null,
     lastMessagePreview: null, ...overrides,
   } as TabState
 }
 
-function buildHarness(initialTab: TabState) {
+function buildHarness(initialTab: TabState, instanceOverrides: Record<string, unknown> = {}) {
   const state: any = {
     tabs: [initialTab],
     activeTabId: initialTab.id,
@@ -97,7 +108,7 @@ function buildHarness(initialTab: TabState) {
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
-    conversationPanes: seedMainPane(initialTab.id, { permissionMode: initialTab.permissionMode }),
+    conversationPanes: seedMainPane(initialTab.id, { permissionMode: 'auto', ...instanceOverrides } as any),
     engineModelFallbacks: new Map(),
     fileExplorerOpenDirs: new Set(),
     fileEditorOpenDirs: new Set(),
@@ -118,16 +129,19 @@ function buildHarness(initialTab: TabState) {
 describe('setThinkingEffort — per-conversation isolation', () => {
   beforeEach(() => { vi.clearAllMocks(); prefState.thinkingEnabled = false })
 
-  it('writes the effort onto the active bare tab', () => {
+  it('writes the effort onto the active conversation instance', () => {
     const { state } = buildHarness(makeTab())
     state.setThinkingEffort('high')
-    expect(state.tabs.find((t: TabState) => t.id === 'tab-1')!.thinkingEffort).toBe('high')
+    const inst = state.conversationPanes.get('tab-1')?.instances.find((i: any) => i.id === 'main')
+    expect(inst?.thinkingEffort).toBe('high')
   })
 
   it('off clears the level back', () => {
-    const { state } = buildHarness(makeTab({ thinkingEffort: 'high' }))
+    // thinkingEffort lives on the instance (WI-002) — pass as instanceOverride
+    const { state } = buildHarness(makeTab(), { thinkingEffort: 'high' })
     state.setThinkingEffort('off')
-    expect(state.tabs.find((t: TabState) => t.id === 'tab-1')!.thinkingEffort).toBe('off')
+    const inst = state.conversationPanes.get('tab-1')?.instances.find((i: any) => i.id === 'main')
+    expect(inst?.thinkingEffort).toBe('off')
   })
 })
 
@@ -136,8 +150,9 @@ describe('sendMessage — thinking gating', () => {
 
   it('global ON + tab level high → thinkingEffort:high on prompt', () => {
     prefState.thinkingEnabled = true
-    const { state } = buildHarness(makeTab({ thinkingEffort: 'high' }))
-    state.sendMessage('hello')
+    // thinkingEffort lives on the instance (WI-002) — pass as instanceOverride
+    const { state } = buildHarness(makeTab(), { thinkingEffort: 'high' })
+    state.submit('tab-1', 'hello')
     expect(mockPrompt).toHaveBeenCalledTimes(1)
     const opts = mockPrompt.mock.calls[0][2] as any
     expect(opts.thinkingEffort).toBe('high')
@@ -145,17 +160,123 @@ describe('sendMessage — thinking gating', () => {
 
   it('global OFF → thinkingEffort omitted even when tab level set', () => {
     prefState.thinkingEnabled = false
-    const { state } = buildHarness(makeTab({ thinkingEffort: 'high' }))
-    state.sendMessage('hello')
+    // thinkingEffort lives on the instance (WI-002) — pass as instanceOverride
+    const { state } = buildHarness(makeTab(), { thinkingEffort: 'high' })
+    state.submit('tab-1', 'hello')
     const opts = mockPrompt.mock.calls[0][2] as any
     expect(opts.thinkingEffort).toBeUndefined()
   })
 
   it('global ON + tab level off → thinkingEffort omitted', () => {
     prefState.thinkingEnabled = true
-    const { state } = buildHarness(makeTab({ thinkingEffort: 'off' }))
-    state.sendMessage('hello')
+    const { state } = buildHarness(makeTab(), { thinkingEffort: 'off' })
+    state.submit('tab-1', 'hello')
     const opts = mockPrompt.mock.calls[0][2] as any
     expect(opts.thinkingEffort).toBeUndefined()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WI-002 parity tests (#259 FIX 2)
+//
+// These tests assert that effectiveThinkingEffort and the send-slice read path
+// behave identically for plain tabs (engineProfileId: null) and extension-hosted
+// tabs (engineProfileId: 'cos'). There must be no tab-type fork.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function makePlainTab(overrides: Partial<TabState> = {}): TabState {
+  return makeTab({ engineProfileId: null, ...overrides })
+}
+
+function makeExtensionTab(overrides: Partial<TabState> = {}): TabState {
+  return makeTab({ engineProfileId: 'cos', pillIcon: 'lightning', ...overrides })
+}
+
+describe('effectiveThinkingEffort — WI-002 parity (no tab-type fork)', () => {
+  it('plain tab: reads thinkingEffort from the active instance', () => {
+    const { state } = buildHarness(makePlainTab(), { thinkingEffort: 'high' })
+    const effort = effectiveThinkingEffort(makePlainTab(), state.conversationPanes)
+    expect(effort).toBe('high')
+  })
+
+  it('extension-hosted tab: reads thinkingEffort from the active instance', () => {
+    const { state } = buildHarness(makeExtensionTab(), { thinkingEffort: 'medium' })
+    const effort = effectiveThinkingEffort(makeExtensionTab(), state.conversationPanes)
+    expect(effort).toBe('medium')
+  })
+
+  it('plain and extension-hosted tabs return identical effort for the same pane state', () => {
+    const panesHigh = seedMainPane('tab-1', { thinkingEffort: 'high' } as any)
+    const panesOff = seedMainPane('tab-1', { thinkingEffort: 'off' } as any)
+
+    // Same pane state → identical result regardless of tab type.
+    expect(effectiveThinkingEffort(makePlainTab(), panesHigh))
+      .toBe(effectiveThinkingEffort(makeExtensionTab(), panesHigh))
+
+    expect(effectiveThinkingEffort(makePlainTab(), panesOff))
+      .toBe(effectiveThinkingEffort(makeExtensionTab(), panesOff))
+  })
+
+  it('missing pane returns safe off default without throwing', () => {
+    expect(effectiveThinkingEffort(makePlainTab(), new Map())).toBe('off')
+    expect(effectiveThinkingEffort(makeExtensionTab(), new Map())).toBe('off')
+  })
+
+  it('ghost field on tab object is not read (regression: no TabState.thinkingEffort fallback)', () => {
+    // Before WI-002, ThinkingEffort was stored on TabState. After WI-002 it is
+    // only on the instance. If someone reintroduces a tab-level fallback, this
+    // test catches it: the ghost field says 'high' but the instance says 'off'.
+    const tabWithGhost = { ...makePlainTab(), thinkingEffort: 'high' } as any
+    const offPanes = seedMainPane('tab-1', { thinkingEffort: 'off' } as any)
+    expect(effectiveThinkingEffort(tabWithGhost, offPanes)).toBe('off')
+  })
+})
+
+describe('sendMessage thinking-effort — WI-002 parity: plain == extension-hosted', () => {
+  beforeEach(() => { vi.clearAllMocks(); mockPrompt.mockResolvedValue(undefined); prefState.thinkingEnabled = true })
+
+  it('plain tab with high effort sends thinkingEffort:high', () => {
+    const { state } = buildHarness(makePlainTab(), { thinkingEffort: 'high' })
+    state.submit('tab-1', 'hello')
+    const opts = mockPrompt.mock.calls[0][2] as any
+    expect(opts.thinkingEffort).toBe('high')
+  })
+
+  it('extension-hosted tab with high effort sends thinkingEffort:high', () => {
+    const { state } = buildHarness(makeExtensionTab(), { thinkingEffort: 'high' })
+    state.submit('tab-1', 'hello')
+    const opts = mockPrompt.mock.calls[0][2] as any
+    expect(opts.thinkingEffort).toBe('high')
+  })
+
+  it('plain and extension-hosted tabs send identical thinkingEffort for the same instance state', () => {
+    vi.clearAllMocks()
+    mockPrompt.mockResolvedValue(undefined)
+    const { state: plainState } = buildHarness(makePlainTab(), { thinkingEffort: 'medium' })
+    plainState.submit('tab-1', 'hello')
+    const plainOpts = mockPrompt.mock.calls[0]?.[2] as any
+
+    vi.clearAllMocks()
+    mockPrompt.mockResolvedValue(undefined)
+    const { state: extState } = buildHarness(makeExtensionTab(), { thinkingEffort: 'medium' })
+    extState.submit('tab-1', 'hello')
+    const extOpts = mockPrompt.mock.calls[0]?.[2] as any
+
+    expect(plainOpts.thinkingEffort).toBe(extOpts.thinkingEffort)
+  })
+
+  it('plain tab with off effort omits thinkingEffort (matches extension-hosted behavior)', () => {
+    const { state } = buildHarness(makePlainTab(), { thinkingEffort: 'off' })
+    state.submit('tab-1', 'hello')
+    const opts = mockPrompt.mock.calls[0][2] as any
+    expect(opts.thinkingEffort).toBeUndefined()
+  })
+
+  it('extension-hosted tab with off effort omits thinkingEffort (matches plain behavior)', () => {
+    const { state } = buildHarness(makeExtensionTab(), { thinkingEffort: 'off' })
+    state.submit('tab-1', 'hello')
+    const opts = mockPrompt.mock.calls[0][2] as any
+    expect(opts.thinkingEffort).toBeUndefined()
+  })
+})
+

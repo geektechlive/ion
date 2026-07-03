@@ -134,11 +134,30 @@ extension TransportManager {
             return
         }
 
-        // Dedup: drop if seq <= lastReceivedSeq
+        // Dedup vs. gap-recovery. A frame at/below lastReceivedSeq is normally a
+        // duplicate and dropped — EXCEPT a replayed frame filling a gap we asked
+        // the desktop to resend: its original (lower) seq is in pendingResendSeqs,
+        // so we accept it and mark that seq filled. Frames not in the pending set
+        // keep the normal dedup.
         if wire.seq > 0, wire.seq <= lastReceivedSeq {
-            return
-        }
-        if wire.seq > 0 {
+            if pendingResendSeqs.contains(wire.seq) {
+                pendingResendSeqs.remove(wire.seq)
+                let stillMissing = pendingResendSeqs.count
+                ionLog.info("wire resend frame applied seq=\(wire.seq) (\(stillMissing) still missing)")
+                // fall through to decrypt/apply this replayed frame
+            } else {
+                return // genuine duplicate
+            }
+        } else if wire.seq > 0 {
+            // Forward frame. Detect a gap and request resend of the missing range
+            // so the live stream self-heals at the wire (the snapshot reconcile is
+            // the slower backstop for ranges the desktop can no longer replay).
+            if lastReceivedSeq > 0, wire.seq > lastReceivedSeq + 1 {
+                let expected = lastReceivedSeq + 1
+                let got = wire.seq
+                ionLog.warning("wire seq forward gap: expected \(expected), got \(got) — \(got - expected) frame(s) lost; requesting resend")
+                requestResendForGap(fromSeq: expected, toSeq: got - 1)
+            }
             lastReceivedSeq = wire.seq
         }
 
@@ -199,6 +218,39 @@ extension TransportManager {
             return
         }
 
+        // Intercept gap-recovery control events before yielding to consumers.
+        // desktop_resend_unavailable means the desktop could not replay the
+        // requested range (evicted); drop the pending range so we stop expecting
+        // those frames and let the snapshot reconcile heal the gap. The event is
+        // still yielded so the ViewModel can log/observe it.
+        if case .resendUnavailable(let fromSeq) = event {
+            ionLog.warning("resend unavailable fromSeq=\(fromSeq) — clearing pending range; snapshot reconcile will heal")
+            pendingResendSeqs.removeAll()
+        }
+
         eventContinuation.yield(event)
+    }
+
+    /// Record the missing seq range and request a resend from the desktop,
+    /// coalescing a burst of gaps within a short window into one request. Caps
+    /// the tracked range so a huge gap (e.g. a long offline period) does not
+    /// balloon the pending set — beyond the cap we rely on the snapshot reconcile.
+    func requestResendForGap(fromSeq: UInt64, toSeq: UInt64) {
+        guard toSeq >= fromSeq else { return }
+        // Cap the range we track/ask for; a very large gap is better healed by
+        // the snapshot reconcile than by replaying thousands of frames.
+        let maxRange: UInt64 = 256
+        let cappedTo = min(toSeq, fromSeq &+ maxRange &- 1)
+        for s in fromSeq...cappedTo { pendingResendSeqs.insert(s) }
+
+        // Debounce: coalesce bursts into one request.
+        let now = Date()
+        guard now.timeIntervalSince(lastResendRequestAt) >= 0.15 else { return }
+        lastResendRequestAt = now
+
+        ionLog.info("requesting resend [\(fromSeq),\(cappedTo)]")
+        Task { [weak self] in
+            try? await self?.send(.requestResend(fromSeq: fromSeq, toSeq: cappedTo))
+        }
     }
 }

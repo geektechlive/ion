@@ -43,7 +43,7 @@ export async function handleLoadAttachments(
           if (!store) return null;
           var s = store.getState();
           var tab = s.tabs.find(function(t) { return t.id === '${escapedTabId}'; });
-          if (!tab || tab.hasEngineExtension) return null;
+          if (!tab || tab.engineProfileId) return null;
           // Skeleton detection on the unified container: the main instance has
           // empty messages but a positive persisted messageCount.
           var pane = s.conversationPanes ? s.conversationPanes.get('${escapedTabId}') : null;

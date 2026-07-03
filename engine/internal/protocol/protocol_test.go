@@ -127,6 +127,21 @@ func TestParseClientCommand_ValidCommands(t *testing.T) {
 			line: `{"cmd":"shutdown"}`,
 			cmd:  "shutdown",
 		},
+		{
+			// get_enterprise_policy is stateless (no key/fields). It must be in
+			// the validCommands allowlist AND pass field validation, or the
+			// engine rejects it as "invalid command" before dispatch — which
+			// would make the enterprise new-tab-lock RPC unreachable over the
+			// wire even though the dispatch handler exists.
+			name: "get_enterprise_policy",
+			line: `{"cmd":"get_enterprise_policy","requestId":"r1"}`,
+			cmd:  "get_enterprise_policy",
+		},
+		{
+			name: "get_enterprise_policy without requestId",
+			line: `{"cmd":"get_enterprise_policy"}`,
+			cmd:  "get_enterprise_policy",
+		},
 	}
 
 	for _, tt := range tests {

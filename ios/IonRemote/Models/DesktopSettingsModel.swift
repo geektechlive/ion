@@ -8,6 +8,22 @@ import Foundation
 // Per-desktop scoping
 // ───────────────────
 // iOS shows projected settings for the currently-connected desktop only.
+
+/// Wire shape for the enterprise new-conversation policy projected via
+/// `desktop_settings_snapshot.newConversationPolicy`. Mirrors `NewConversationDefaultsPolicy`
+/// in `desktop/src/shared/types-session.ts`.
+///
+/// When non-nil AND `locked=true`, the iOS new-conversation flow must skip
+/// both directory picker and profile picker and open directly with
+/// `baseDirectory` and `engineProfileId` (empty string = plain conversation).
+struct RemoteNewConversationPolicy: Codable, Equatable, Sendable {
+    /// Mandated working directory. Empty string = no constraint.
+    let baseDirectory: String
+    /// Mandated engine profile id. Empty string = plain conversation.
+    let engineProfileId: String
+    /// When true, the user cannot override these values on iOS.
+    let locked: Bool
+}
 // SessionViewModel keeps a single `desktopSettings: DesktopSettingsState?`
 // optional; every `desktopSettingsSnapshot` event REPLACES that field in
 // full (snapshot semantics — never merge). Switching transports clears

@@ -2,10 +2,95 @@ import type { TabStatus, Attachment } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
 import { nextMsgId, playNotificationIfHidden, cancelDoneGroupMove } from '../session-store-helpers'
-import { activeInstance, commitInstance } from '../conversation-instance'
+import { activeInstance, commitInstance, effectivePermissionMode, effectiveThinkingEffort } from '../conversation-instance'
+import { applyActiveGroupMove } from './event-slice-running-move'
+import { parseSlash } from '../../../main/slash-parse'
 
 export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
+    /**
+     * Move a tab to planning/in-progress on send, based on its AUTHORITATIVE
+     * permission mode (effectivePermissionMode resolves instance-vs-parent so
+     * engine tabs are handled correctly). Cancels any pending done-move first.
+     * Shared by every send path (CLI sendMessage / submitRemotePrompt and engine
+     * submitEnginePrompt) so group movement is consistent across tab types.
+     *
+     * The group-selection logic lives in `applyActiveGroupMove`
+     * (event-slice-running-move.ts) so the SAME decision fires from the running
+     * transition (`maybeScheduleRunningMove`) too — a tab that starts running via
+     * any non-send path (resume, relaunch, reconnect, remote) re-evaluates its
+     * group identically.
+     */
+    applySendAutoGroupMove: (tabId) => {
+      const tab = get().tabs.find((t) => t.id === tabId)
+      if (!tab) return
+
+      // Cancel any pending done-group move from a prior task_complete, so a fast
+      // re-send keeps the tab in in-progress instead of being yanked to done.
+      if (cancelDoneGroupMove(tabId)) {
+        console.log(`[auto-move:send] cancelled pending done-move for tab=${tabId.slice(0, 8)}`)
+      }
+
+      applyActiveGroupMove(tabId, tab, get().conversationPanes, get, 'send')
+    },
+
+    /**
+     * Unified interrupt for EVERY conversation tab — plain or extension-backed.
+     * There is no engine-vs-plain abort fork: the three actions below are all
+     * DATA-conditioned, never tab-type-conditioned.
+     *   1. Always send the abort (engineBridge.sendAbort under the hood — the
+     *      single wire path both the old engineAbort and stopTab reached).
+     *   2. Reap the dispatched-agent subtree IFF this tab has running children
+     *      (data: any agentStates entry with status 'running' on the active
+     *      instance). A plain conversation that dispatched background agents has
+     *      running children too, so this is keyed on the data, not the tab type.
+     *   3. Cancel an in-flight user bash command IFF tab.bashExecId is set.
+     * Plus the 5s force-recover fallback so the UI is always usable even if the
+     * engine never confirms idle. Folds together the abort logic that used to
+     * live separately in EngineView.handleAbort and ConversationView's interrupt.
+     */
+    interrupt: (tabId) => {
+      const tab = get().tabs.find((t) => t.id === tabId)
+      if (!tab) return
+      const inst = activeInstance(get().conversationPanes, tabId)
+      const hasRunningChildren = (inst?.agentStates ?? []).some((a) => a.status === 'running')
+      console.log(`[interrupt] tab=${tabId.slice(0, 8)} status=${tab.status} hasRunningChildren=${hasRunningChildren} bashExecId=${tab.bashExecId ?? 'none'}`)
+
+      // 1. In-flight user bash takes precedence — cancel it and stop. (A bash
+      //    command and an agent run are mutually exclusive on a tab.)
+      if (tab.bashExecId) {
+        console.log(`[interrupt] cancelling bash: execId=${tab.bashExecId}`)
+        window.ion.cancelBash(tab.bashExecId)
+        return
+      }
+
+      // 2. Always abort the run. sendAbort is safe when no run is active (it
+      //    warns and returns), covering the case where the desktop's status is
+      //    stale while the engine still has a live run.
+      console.log(`[interrupt] aborting run: tab=${tabId}`)
+      window.ion.engineAbort(tabId).catch(() => {})
+
+      // 3. Reap descendant agents (external processes) that might outlive the
+      //    parent run's cancellation cascade — only when there are running
+      //    children to reap.
+      if (hasRunningChildren) {
+        console.log(`[interrupt] reaping agent subtree: tab=${tabId}`)
+        window.ion.engineAbortAgent(tabId, '', true).catch(() => {})
+      }
+
+      // 4. 5s fallback: if the engine never confirms idle, force-recover the tab
+      //    so the interrupt button always produces a usable UI within 5 seconds.
+      setTimeout(() => {
+        const cur = get().tabs.find((t) => t.id === tabId)
+        if (cur && (cur.status === 'running' || cur.status === 'connecting')) {
+          get().forceRecoverTab(
+            tabId,
+            'Engine did not respond to interrupt within 5s. Tab reset locally.',
+          )
+        }
+      }, 5_000)
+    },
+
     startBashCommand: (command, execId) => {
       const { activeTabId } = get()
       const toolMsgId = nextMsgId()
@@ -70,48 +155,39 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
       playNotificationIfHidden()
     },
 
-    sendMessage: (prompt, projectPath, extraAttachments, appendSystemPrompt, implementationPhase) => {
-      const { activeTabId, tabs, staticInfo } = get()
-      const tab = tabs.find((t) => t.id === activeTabId)
-      const resolvedPath = projectPath || (tab?.hasChosenDirectory ? tab.workingDirectory : (staticInfo?.homePath || tab?.workingDirectory || '~'))
+    /**
+     * Unified prompt submit for EVERY conversation tab — plain or
+     * extension-backed. This is the single send path; `submitEnginePrompt` is
+     * gone. There is no engine-vs-plain fork: the only difference is DATA — an
+     * extension-backed tab resolves a non-empty `extensions` list from its
+     * profile (which the main pipeline routes on and which starts the engine
+     * session with those extensions), a plain tab resolves none. Everything
+     * else — optimistic insert, status lifecycle, mid-turn steer, rewind
+     * context, pinned prompt, plan-mode sync — runs identically for both.
+     *
+     * `opts` carries the optional fields the old two actions split between
+     * positional args; all default to undefined.
+     */
+    submit: (tabId, text, opts = {}) => {
+      const { tabs, staticInfo } = get()
+      const { projectPath, extraAttachments, appendSystemPrompt, implementationPhase, imageAttachments, source, resolveSlash } = opts
+      const tab = tabs.find((t) => t.id === tabId)
       if (!tab) return
+      const resolvedPath = projectPath || (tab.hasChosenDirectory ? tab.workingDirectory : (staticInfo?.homePath || tab.workingDirectory || '~'))
 
-      // Per-conversation state (scrollback, modelOverride, planFilePath) lives
-      // on the active instance now. Snapshot it BEFORE the set() below so the
-      // fork-context priorMessages read reflects the pre-send history (excludes
-      // the user message we're about to append).
-      const sendInst = activeInstance(get().conversationPanes, activeTabId)
+      // Snapshot the active instance BEFORE the set() below so the fork-context
+      // priorMessages read reflects pre-send history and the model/planFilePath
+      // reads are pre-mutation.
+      const sendInst = activeInstance(get().conversationPanes, tabId)
 
       if (tab.status === 'connecting') {
-        console.log(`[sendMessage] blocked: tab=${tab.id.slice(0, 8)} status=connecting, dropping prompt len=${prompt.length}`)
+        console.log(`[submit] blocked: tab=${tab.id.slice(0, 8)} status=connecting, dropping prompt len=${text.length}`)
         return
       }
 
-      const effectiveMode = tab.permissionMode
-
-      // Cancel any pending done-group move from a prior task_complete.
-      // Without this, a fast re-send would move the tab to in-progress,
-      // but the pending timer would fire and move it right back to done.
-      const cancelled = cancelDoneGroupMove(tab.id)
-      if (cancelled) {
-        console.log(`[auto-move:send] cancelled pending done-move for tab=${tab.id.slice(0, 8)}`)
-      }
-
-      // Auto group movement: move tab based on effective permission mode
-      const { autoGroupMovement, tabGroupMode, planningGroupId, inProgressGroupId } = usePreferencesStore.getState()
-      console.log(`[auto-move:send] tab=${tab.id.slice(0, 8)} mode=${effectiveMode} autoGroup=${autoGroupMovement} tabGroupMode=${tabGroupMode} pinned=${tab.groupPinned} currentGroup=${tab.groupId ?? 'none'} inProgressGroup=${inProgressGroupId ?? 'none'} planningGroup=${planningGroupId ?? 'none'}`)
-      if (autoGroupMovement && tabGroupMode === 'manual' && !tab.groupPinned) {
-        if (effectiveMode === 'plan' && planningGroupId && tab.groupId !== planningGroupId) {
-          console.log(`[auto-move:send] moving tab=${tab.id.slice(0, 8)} to planning group=${planningGroupId}`)
-          get().moveTabToGroup(tab.id, planningGroupId)
-        } else if (effectiveMode === 'auto' && inProgressGroupId && tab.groupId !== inProgressGroupId) {
-          console.log(`[auto-move:send] moving tab=${tab.id.slice(0, 8)} to in-progress group=${inProgressGroupId}`)
-          get().moveTabToGroup(tab.id, inProgressGroupId)
-        }
-      } else if (autoGroupMovement && tabGroupMode === 'manual' && tab.groupPinned) {
-        const wouldMoveTo = effectiveMode === 'plan' ? planningGroupId : inProgressGroupId
-        console.log(`[auto-move] suppressed: tab=${tab.id.slice(0, 8)} pinned=true currentGroup=${tab.groupId ?? 'none'} wouldMoveTo=${wouldMoveTo ?? 'none'}`)
-      }
+      // Auto group movement (+ pending done-move cancel) — every tab moves
+      // consistently. Reads the authoritative per-tab permission mode internally.
+      get().applySendAutoGroupMove(tab.id)
 
       const isBusy = tab.status === 'running'
       const requestId = crypto.randomUUID()
@@ -121,7 +197,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         ...(extraAttachments || []),
       ]
 
-      let fullPrompt = prompt
+      let fullPrompt = text
       if (tab.bashResults.length > 0) {
         const bashCtx = tab.bashResults.map((b) => {
           const parts = [`$ ${b.command}`]
@@ -140,29 +216,29 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
 
       const needsTitle = tab.title === 'New Tab' || tab.title === 'Resumed Session'
       const title = needsTitle
-        ? (prompt.length > 40 ? prompt.substring(0, 37) + '...' : prompt)
+        ? (text.length > 40 ? text.substring(0, 37) + '...' : text)
         : tab.title
 
       set((s) => {
-        // Append the user message onto the active conversation instance, and
-        // (on a fresh run) clear any pending denial there. Tab-level fields
-        // (status, title, attachments, etc.) stay on the tab.
+        // Optimistic user message onto the active instance; pinned prompt for
+        // every tab (the view renders it iff present — harmless for plain).
         const userMessage = {
           id: nextMsgId(),
           role: 'user' as const,
-          content: prompt,
+          content: text,
           attachments: msgAttachments.length > 0 ? msgAttachments : undefined,
           timestamp: Date.now(),
         }
-        const conversationPanes = commitInstance(s.conversationPanes, activeTabId, (inst) => ({
+        const conversationPanes = commitInstance(s.conversationPanes, tabId, (inst) => ({
           ...inst,
           messages: [...inst.messages, userMessage],
-          // On a fresh (non-busy) send, clear the pending denial card — the
-          // user is moving past the question/plan card.
+          // On a fresh (non-busy) send, clear the pending denial card.
           ...(isBusy ? {} : { permissionDenied: null }),
         }))
+        const enginePinnedPrompt = new Map(s.enginePinnedPrompt)
+        enginePinnedPrompt.set(tabId, text)
         const tabs = s.tabs.map((t) => {
-          if (t.id !== activeTabId) return t
+          if (t.id !== tabId) return t
           const withEffectiveBase = t.hasChosenDirectory
             ? t
             : {
@@ -170,7 +246,7 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
                 hasChosenDirectory: true,
                 workingDirectory: resolvedPath,
               }
-          if (isBusy) {
+          if (isBusy && !implementationPhase) {
             return {
               ...withEffectiveBase,
               title,
@@ -193,11 +269,12 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
           scrollToBottomCounter: s.scrollToBottomCounter + 1,
           tabs,
           conversationPanes,
+          enginePinnedPrompt,
         }
       })
 
-      if (isBusy) {
-        window.ion.steer(activeTabId, fullPrompt)
+      if (isBusy && !implementationPhase) {
+        window.ion.steer(tabId, fullPrompt)
         return
       }
 
@@ -216,22 +293,51 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
           effectiveSystemPrompt = effectiveSystemPrompt
             ? `${effectiveSystemPrompt}\n\n${forkCtx}`
             : forkCtx
-          console.log(`[store] rewind context injected: tabId=${activeTabId?.slice(0, 8)}:main priorMessages=${priorMessages.length} transcriptLen=${transcript.length} forkedFromSessionId=${tab.forkedFromSessionId?.slice(0, 16)}`)
+          console.log(`[submit] rewind context injected: tabId=${tabId.slice(0, 8)} priorMessages=${priorMessages.length} transcriptLen=${transcript.length}`)
         }
       }
 
-      const currentMode = get().tabs.find(t => t.id === activeTabId)?.permissionMode ?? tab.permissionMode
-      window.ion.setPermissionMode(activeTabId, currentMode, 'prompt_sync')
+      // Permission mode is read from the AUTHORITATIVE per-tab location
+      // (effectivePermissionMode resolves instance-vs-parent), then synced to
+      // the engine session before the prompt so plan/auto is consistent for
+      // every tab type.
+      const currentMode = effectivePermissionMode(tab, get().conversationPanes)
+      // Slash-aware prompt_sync. A slash command is a "run this task" intent,
+      // incompatible with plan mode — the main-process pipeline flips plan→auto
+      // for it (prompt-pipeline-slash.ts:maybeFlipPlanToAutoForSlash). If we
+      // re-asserted `plan` here for a slash prompt, that prompt_sync set_plan_mode
+      // would RE-ARM plan mode on the same prompt the flip is trying to disarm,
+      // and the two policies fight (the bug that ran /align in plan mode). So when
+      // the outgoing text is a slash invocation we sync `auto` instead of `plan`,
+      // removing the re-arm rather than racing it. `/clear` is excluded: it is a
+      // checkpoint, not a task, and the pipeline never flips it — re-asserting the
+      // real mode keeps clear from silently leaving plan mode.
+      const isSlashPrompt = (() => {
+        const parsed = parseSlash(text.trim())
+        return parsed !== null && parsed.command !== 'clear'
+      })()
+      const syncMode = isSlashPrompt ? 'auto' : currentMode
+      // Forward the instance's planFilePath on a plan-mode sync so the engine
+      // restores plan-file continuity even before the prompt is dispatched (the
+      // prompt below also carries it). Only meaningful when entering/asserting
+      // plan mode; dropped on 'auto'.
+      window.ion.setPermissionMode(tabId, syncMode, 'prompt_sync', syncMode === 'plan' ? (sendInst?.planFilePath || undefined) : undefined)
 
       let extensions: string[] | undefined
-      if (tab.hasEngineExtension && tab.engineProfileId) {
+      if (tab.engineProfileId) {
         const profile = usePreferencesStore.getState().engineProfiles.find((p) => p.id === tab.engineProfileId)
         if (profile?.extensions?.length) {
           extensions = profile.extensions
         }
       }
 
-      window.ion.prompt(activeTabId, requestId, {
+      // Thinking effort: read from the active instance via the unified seam
+      // (effectiveThinkingEffort), gated by the global thinkingEnabled toggle.
+      const thinkingEnabled = usePreferencesStore.getState().thinkingEnabled
+      const instEffort = effectiveThinkingEffort(tab, get().conversationPanes)
+      const thinkingEffort = thinkingEnabled && instEffort && instEffort !== 'off' ? instEffort : undefined
+
+      window.ion.prompt(tabId, requestId, {
         prompt: fullPrompt,
         projectPath: resolvedPath,
         sessionId: tab.conversationId || undefined,
@@ -240,10 +346,21 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         appendSystemPrompt: effectiveSystemPrompt,
         extensions,
         implementationPhase,
-        thinkingEffort: usePreferencesStore.getState().thinkingEnabled && tab.thinkingEffort && tab.thinkingEffort !== 'off' ? tab.thinkingEffort : undefined,
+        imageAttachments,
+        thinkingEffort,
         planFilePath: sendInst?.planFilePath || undefined,
+        // Forward remote-source marker so the IPC.PROMPT handler skips the
+        // redundant desktop_message_added echo — iOS already received the
+        // canonical echo from tabs-prompt.ts and a second echo with a
+        // different id would cause a duplicate user bubble.
+        source,
+        // Forward the engine-resolve-slash flag from REMOTE_ENGINE_PROMPT so
+        // the pipeline short-circuits to submitAsPrompt instead of
+        // re-dispatching the extension command (which corrupts the
+        // command-await FIFO queue and causes a 5s timeout + lost prompt).
+        resolveSlash,
       }).catch((err: Error) => {
-        get().handleError(activeTabId, {
+        get().handleError(tabId, {
           message: err.message,
           stderrTail: [],
           exitCode: null,
@@ -263,24 +380,9 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         return
       }
 
-      // Cancel any pending done-group move from a prior task_complete
-      const cancelledRemote = cancelDoneGroupMove(tab.id)
-      if (cancelledRemote) {
-        console.log(`[auto-move:send] cancelled pending done-move for tab=${tab.id.slice(0, 8)} (remote)`)
-      }
-
-      // Auto group movement for remote prompts
-      const { autoGroupMovement, tabGroupMode, planningGroupId, inProgressGroupId: ipGroupId } = usePreferencesStore.getState()
-      if (autoGroupMovement && tabGroupMode === 'manual' && !tab.groupPinned) {
-        if (tab.permissionMode === 'plan' && planningGroupId && tab.groupId !== planningGroupId) {
-          get().moveTabToGroup(tab.id, planningGroupId)
-        } else if (tab.permissionMode === 'auto' && ipGroupId && tab.groupId !== ipGroupId) {
-          get().moveTabToGroup(tab.id, ipGroupId)
-        }
-      } else if (autoGroupMovement && tabGroupMode === 'manual' && tab.groupPinned) {
-        const wouldMoveTo = tab.permissionMode === 'plan' ? planningGroupId : ipGroupId
-        console.log(`[auto-move] suppressed: tab=${tab.id.slice(0, 8)} pinned=true currentGroup=${tab.groupId ?? 'none'} wouldMoveTo=${wouldMoveTo ?? 'none'}`)
-      }
+      // Auto group movement (+ pending done-move cancel) — shared path; reads
+      // the authoritative per-tab permission mode internally.
+      get().applySendAutoGroupMove(tab.id)
 
       const resolvedPath = tab.hasChosenDirectory
         ? tab.workingDirectory
@@ -332,11 +434,21 @@ export function createSendSlice(set: StoreSet, get: StoreGet): Partial<State> {
         return
       }
 
-      const currentMode = get().tabs.find(t => t.id === tabId)?.permissionMode ?? tab.permissionMode
-      window.ion.setPermissionMode(tabId, currentMode, 'prompt_sync')
+      const currentMode = effectivePermissionMode(tab, get().conversationPanes)
+      // Slash-aware prompt_sync — same reasoning as the local sendMessage path
+      // above: a slash command (other than /clear) must not re-arm plan mode, so
+      // we sync `auto` for it instead of re-asserting `plan`. This keeps an
+      // iOS-originated slash command on the same plan→auto path as a desktop one.
+      const isSlashPrompt = (() => {
+        const parsed = parseSlash(prompt.trim())
+        return parsed !== null && parsed.command !== 'clear'
+      })()
+      const syncMode = isSlashPrompt ? 'auto' : currentMode
+      // Same plan-file-continuity sync as the local sendMessage path above.
+      window.ion.setPermissionMode(tabId, syncMode, 'prompt_sync', syncMode === 'plan' ? (remoteInst?.planFilePath || undefined) : undefined)
 
       let remoteExtensions: string[] | undefined
-      if (tab.hasEngineExtension && tab.engineProfileId) {
+      if (tab.engineProfileId) {
         const profile = usePreferencesStore.getState().engineProfiles.find((p) => p.id === tab.engineProfileId)
         if (profile?.extensions?.length) {
           remoteExtensions = profile.extensions

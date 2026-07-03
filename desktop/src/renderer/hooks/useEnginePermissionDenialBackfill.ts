@@ -61,7 +61,7 @@ export function useEnginePermissionDenialBackfill(): void {
 
       for (const [tabId, pane] of state.conversationPanes) {
         for (const inst of pane.instances) {
-          const key = `${tabId}:${inst.id}`
+          const key = tabId
           if (processedKeys.has(key)) continue
           const sessionIds = inst.conversationIds
           const sessionId = sessionIds[sessionIds.length - 1]

@@ -207,3 +207,96 @@ func TestSteer_MultipleSteersDrainCorrectly(t *testing.T) {
 		t.Errorf("expected at least 1 SteerInjectedEvent, got %d", steerCount)
 	}
 }
+
+// TestSteerWithReason_Delivered asserts the typed verdict for a live run with
+// space in its steer channel: SteerWithReason returns SteerResultDelivered and
+// the message is buffered (not dropped) for the next drain.
+func TestSteerWithReason_Delivered(t *testing.T) {
+	setupTestProvider([][]types.LlmStreamEvent{
+		// A tool turn keeps the run live long enough to accept a steer while
+		// the loop is parked inside executeTools — the same window a parent is
+		// in while awaiting dispatched sub-agents (which execute as tools).
+		toolUseResponse("Bash", "tool-1", map[string]any{"command": "echo hi"}, 10, 5),
+		textResponse("done", 10, 5),
+	})
+
+	b := NewApiBackend()
+	requestID := "steer-reason-delivered"
+	c := collectEvents(b, requestID)
+
+	b.StartRun(requestID, types.RunOptions{
+		Prompt:           "park on a tool",
+		ProjectPath:      "/tmp",
+		Model:            testModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
+	})
+
+	// The buffered channel (cap 4) accepts the steer immediately even while
+	// the run is mid-tool; it is drained at the post-tool-results checkpoint
+	// after the tool (sub-agent) returns.
+	if got := b.SteerWithReason(requestID, "redirect while parked"); got != SteerResultDelivered {
+		t.Fatalf("expected SteerResultDelivered, got %s", got)
+	}
+
+	if !waitForExit(c, 5*time.Second) {
+		t.Fatal("timed out waiting for exit")
+	}
+
+	// And the steer must have actually been injected (drained) after the tool.
+	c.mu.Lock()
+	evs := append([]types.NormalizedEvent(nil), c.normalized...)
+	c.mu.Unlock()
+	found := false
+	for _, ev := range evs {
+		if _, ok := ev.Data.(*types.SteerInjectedEvent); ok {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected SteerInjectedEvent after the parked-on-tool steer was drained")
+	}
+}
+
+// TestSteerWithReason_NoRun asserts the typed verdict for an unknown / inactive
+// run: SteerWithReason returns SteerResultNoRun. The bare Steer wrapper must
+// agree by returning false.
+func TestSteerWithReason_NoRun(t *testing.T) {
+	b := NewApiBackend()
+
+	if got := b.SteerWithReason("no-such-run", "hello"); got != SteerResultNoRun {
+		t.Fatalf("expected SteerResultNoRun, got %s", got)
+	}
+	if b.Steer("no-such-run", "hello") {
+		t.Error("expected Steer to return false for an unknown run")
+	}
+}
+
+// TestSteerWithReason_ChannelFull asserts the typed verdict when the steer
+// channel is saturated. We construct an activeRun with a zero-capacity steer
+// channel and register it directly so the non-blocking send fails immediately,
+// exercising the channel-full branch deterministically.
+func TestSteerWithReason_ChannelFull(t *testing.T) {
+	b := NewApiBackend()
+	const requestID = "steer-reason-full"
+
+	// A zero-capacity channel with no receiver: every non-blocking send hits
+	// the default branch (channel full).
+	run := &activeRun{
+		requestID: requestID,
+		steerCh:   make(chan string), // cap 0, no drainer
+	}
+	b.mu.Lock()
+	b.activeRuns[requestID] = run
+	b.mu.Unlock()
+
+	if got := b.SteerWithReason(requestID, "overflow"); got != SteerResultChannelFull {
+		t.Fatalf("expected SteerResultChannelFull, got %s", got)
+	}
+	if b.Steer(requestID, "overflow") {
+		t.Error("expected Steer to return false when the channel is full")
+	}
+
+	b.mu.Lock()
+	delete(b.activeRuns, requestID)
+	b.mu.Unlock()
+}

@@ -157,7 +157,10 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 		totalOutputToks int
 	)
 
-	sseCh, sseErr := ParseSSEStream(resp.Body)
+	rawCh, rawErr := ParseSSEStream(resp.Body)
+	// Per-event idle deadline + heartbeat (see sse_idle.go): a stream that
+	// returns headers then goes silent is caught fast and retried.
+	sseCh, sseErr := streamWithIdle(rawCh, rawErr, "openai", opts.Model, "", nil)
 	for sse := range sseCh {
 		if sse.Data == "" {
 			continue
@@ -475,6 +478,16 @@ func formatOpenAIMessages(system string, messages []types.LlmMessage) []map[stri
 					text := b.Summary
 					if text == "" {
 						text = "[Previous conversation compacted]"
+					}
+					parts = append(parts, map[string]any{"type": "text", "text": text})
+				case "context_injection":
+					// Flatten the engine-internal nested-context marker to a
+					// plain text part so the model still sees the rendered
+					// "# Context from <path>" body. See the matching case in
+					// anthropic.go formatAnthropicBlock for rationale.
+					text := b.Text
+					if text == "" {
+						text = "[Nested context loaded]"
 					}
 					parts = append(parts, map[string]any{"type": "text", "text": text})
 				}

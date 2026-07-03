@@ -81,6 +81,7 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
     'toolName',
   ],
   plan_mode_changed: ['enabled', 'planFilePath', 'planSlug'],
+  plan_file_written: ['operation', 'planFilePath', 'planSlug'],
   plan_proposal: ['kind', 'planFilePath', 'planSlug'],
   plan_mode_auto_exit: [
     'planFilePath',
@@ -91,7 +92,7 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
     'stopReason',
   ],
   stream_reset: [],
-  compacting: ['active', 'clearedBlocks', 'messagesAfter', 'messagesBefore', 'strategy', 'summary'],
+  compacting: ['active', 'clearedBlocks', 'messagesAfter', 'messagesBefore', 'microOnly', 'strategy', 'summary'],
   tool_stalled: ['elapsed', 'toolId', 'toolName'],
   steer_injected: ['messageLength'],
   model_fallback: ['fallbackModel', 'reason', 'requestedModel'],
@@ -100,6 +101,30 @@ const TS_NORMALIZED_EVENTS: Record<string, string[]> = {
   thinking_block_start: [],
   thinking_delta: ['text'],
   thinking_block_end: ['elapsedSeconds', 'redacted', 'totalTokens'],
+  // Extension-surface events (WI-001: single-path collapse)
+  message_end: ['contextPercent', 'cost', 'inputTokens', 'outputTokens'],
+  agent_state: ['agents'],
+  harness_message: ['dedupKey', 'message', 'source'],
+  working_message: ['message'],
+  notify: ['level', 'message'],
+  dialog: ['defaultValue', 'dialogId', 'method', 'options', 'title'],
+  extension_died: ['extensionName'],
+  extension_respawned: ['attemptNumber', 'extensionName'],
+  extension_dead_permanent: ['attemptNumber', 'extensionName'],
+  events_dropped: ['count'],
+  // Per-category token breakdown. Emitted after prompt assembly and again
+  // after first usage-event reconciliation. Tier encodes the resolution path.
+  context_breakdown: [
+    'aggregateCostUsd',
+    'apiReportedTotal',
+    'cacheCreationTokens',
+    'cacheReadTokens',
+    'categories',
+    'contextWindow',
+    'model',
+    'totalTokens',
+    'unaccounted',
+  ],
 }
 
 // ─── TS SharedTypes field map ───
@@ -141,6 +166,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'forceNewConversation',
     'maxTokens',
     'model',
+    'parentConversationId',
     'profileId',
     'sessionId',
     'systemHint',
@@ -171,6 +197,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
     'supportsThinking',
     'thinkingEfforts',
     'thinkingMode',
+    'tokenizer',
   ],
   ProviderEntry: [
     'apiKeyRef',
@@ -183,6 +210,21 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
   // The desktop's prompt pipeline reads this off the wire to populate a
   // routing-hint cache keyed by session — see desktop/src/main/prompt-pipeline.ts.
   EngineCommandListing: ['description', 'name'],
+  // Per-category token breakdown category row (one entry per category in
+  // ContextBreakdownPayload.categories). Mirrors Go's ContextBreakdownCategory.
+  ContextBreakdownCategory: ['kind', 'name', 'path', 'tier', 'tokens'],
+  // Wire payload for engine_context_breakdown. Mirrors Go's ContextBreakdownPayload.
+  ContextBreakdownPayload: [
+    'aggregateCostUsd',
+    'apiReportedTotal',
+    'cacheCreationTokens',
+    'cacheReadTokens',
+    'categories',
+    'contextWindow',
+    'model',
+    'totalTokens',
+    'unaccounted',
+  ],
   // Wire shape for content blocks carried inside LlmMessage payloads.
   // The compact_boundary variant (gentle-knitting-cup plan) added the
   // optional summary / trigger / messages* / clearedBlocks / tokensBefore
@@ -191,6 +233,7 @@ const TS_SHARED_TYPES: Record<string, string[]> = {
   LlmContentBlock: [
     'clearedBlocks',
     'content',
+    'contextPaths',
     'factCount',
     'id',
     'input',
@@ -322,3 +365,40 @@ describe('Contract sync: SharedTypes', () => {
     ).toEqual([])
   })
 })
+
+// ─── EngineEvent dispatch fields ───
+// The EngineEvent union (engine/internal/types/engine_event.go) carries all
+// dispatch telemetry fields. This suite pins the fields consumed by
+// dispatch_start / dispatch_end normalized events so drift between Go and
+// TS/Swift is caught at PR time.
+
+describe('Contract sync: EngineEvent dispatch fields', () => {
+  // Fields that the engine emits on dispatch_start / dispatch_end events and
+  // that the desktop (and iOS) decode. Any field absent from the Go manifest
+  // means the engine stopped emitting it (breaking change); any field present
+  // in the manifest but not in this set is a new Go field the desktop hasn't
+  // yet adopted (tracked as a gap comment).
+  const DISPATCH_FIELDS_CONSUMED: string[] = [
+    'dispatchAgent',
+    'dispatchConversationId',
+    'dispatchCost',
+    'dispatchDepth',
+    'dispatchElapsed',
+    'dispatchExitCode',
+    'dispatchId',
+    'dispatchModel',
+    'dispatchParentId',
+    'dispatchSessionId',
+    'dispatchTask',
+  ]
+
+  it('all consumed dispatch fields are present in the Go EngineEvent manifest', () => {
+    const goFields = new Set(manifest.engineEvent)
+    const missing = DISPATCH_FIELDS_CONSUMED.filter((f) => !goFields.has(f))
+    expect(
+      missing,
+      `Go EngineEvent is missing dispatch fields consumed by desktop/iOS: ${missing.join(', ')}`,
+    ).toEqual([])
+  })
+})
+

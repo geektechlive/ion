@@ -30,7 +30,6 @@ vi.mock('../session-store-helpers', () => ({
     lastEventAt: null,
     hasUnread: false,
     currentActivity: '',
-    permissionMode: 'auto' as const,
     attachments: [],
     customTitle: null,
     lastResult: null,
@@ -58,7 +57,6 @@ vi.mock('../session-store-helpers', () => ({
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
   })),
@@ -139,7 +137,6 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     workingDirectory: '/home/test',
     hasChosenDirectory: true,
     additionalDirs: [],
-    permissionMode: 'auto',
     bashResults: [],
     bashExecuting: false,
     bashExecId: null,
@@ -156,7 +153,6 @@ function makeTab(overrides: Partial<TabState> = {}): TabState {
     contextWindow: null,
     isCompacting: false,
     isTerminalOnly: false,
-    hasEngineExtension: false,
     engineProfileId: null,
     lastMessagePreview: null,
     ...overrides,
@@ -188,7 +184,6 @@ function buildHarness(
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     conversationPanes: seedMainPane(initialTab.id, {
-      permissionMode: initialTab.permissionMode,
       ...instanceOverrides,
     }),
     engineModelFallbacks: new Map(),
@@ -226,21 +221,76 @@ describe('prompt_sync parity — setPermissionMode before prompt', () => {
   })
 
   it('sendMessage calls setPermissionMode with current plan mode', () => {
-    const tab = makeTab({ permissionMode: 'plan' })
-    const { state } = buildHarness(tab)
+    // permissionMode lives on the instance (WI-002) — pass as instanceOverride
+    const { state } = buildHarness(makeTab(), { permissionMode: 'plan' })
 
-    state.sendMessage('hello')
+    state.submit('tab-1', 'hello')
 
-    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync')
+    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync', undefined)
   })
 
   it('submitRemotePrompt calls setPermissionMode with current plan mode', () => {
-    const tab = makeTab({ permissionMode: 'plan' })
-    const { state } = buildHarness(tab)
+    // permissionMode lives on the instance (WI-002) — pass as instanceOverride
+    const { state } = buildHarness(makeTab(), { permissionMode: 'plan' })
 
     state.submitRemotePrompt('tab-1', 'hello')
 
-    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync')
+    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync', undefined)
+  })
+
+  it('forwards the instance planFilePath on the plan-mode prompt_sync (continuity)', () => {
+    // Plan-file continuity: when the tab is in plan mode and the instance has
+    // a persisted planFilePath, the prompt_sync setPermissionMode call carries
+    // it as the 4th arg so the engine restores the existing plan even before
+    // the prompt is dispatched. Pre-fix this arg was absent (undefined).
+    const { state } = buildHarness(makeTab(), { permissionMode: 'plan', planFilePath: '/plans/simple-sailing-pine.md' })
+
+    state.submit('tab-1', 'hello')
+
+    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync', '/plans/simple-sailing-pine.md')
+  })
+
+  it('does NOT forward planFilePath on an auto prompt_sync (engine ignores it)', () => {
+    const { state } = buildHarness(makeTab(), { permissionMode: 'auto', planFilePath: '/plans/simple-sailing-pine.md' })
+
+    state.submit('tab-1', 'hello')
+
+    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'auto', 'prompt_sync', undefined)
+  })
+
+  // ── slash-aware prompt_sync (the /align-in-plan-mode regression) ──────────────
+  // A slash command is a "run this task" intent that the main-process pipeline
+  // flips plan→auto for. The renderer's prompt_sync re-assert must NOT re-arm
+  // `plan` for a slash prompt, or it fights (and beats) the flip. So a slash
+  // command on a plan-mode tab must sync `auto`, not `plan`.
+
+  it('sendMessage syncs AUTO (not plan) when the prompt is a slash command', () => {
+    const { state } = buildHarness(makeTab(), { permissionMode: 'plan', planFilePath: '/plans/p.md' })
+
+    state.submit('tab-1', '/align')
+
+    // Must be auto — and must NOT have been called with 'plan' for this prompt.
+    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'auto', 'prompt_sync', undefined)
+    expect(mockSetPermissionMode).not.toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync', expect.anything())
+  })
+
+  it('submitRemotePrompt syncs AUTO (not plan) when the prompt is a slash command', () => {
+    const { state } = buildHarness(makeTab(), { permissionMode: 'plan', planFilePath: '/plans/p.md' })
+
+    state.submitRemotePrompt('tab-1', '/align')
+
+    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'auto', 'prompt_sync', undefined)
+    expect(mockSetPermissionMode).not.toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync', expect.anything())
+  })
+
+  it('sendMessage still syncs PLAN for /clear (a checkpoint, not a task)', () => {
+    // /clear is excluded from the slash-aware skip: the pipeline never flips it,
+    // so re-asserting the real mode keeps clear from silently leaving plan mode.
+    const { state } = buildHarness(makeTab(), { permissionMode: 'plan', planFilePath: '/plans/p.md' })
+
+    state.submit('tab-1', '/clear')
+
+    expect(mockSetPermissionMode).toHaveBeenCalledWith('tab-1', 'plan', 'prompt_sync', '/plans/p.md')
   })
 })
 
@@ -256,7 +306,7 @@ describe('permissionDenied clearing on new prompt', () => {
       permissionDenied: { tools: [{ toolName: 'ExitPlanMode', toolUseId: 'tu1' }] } as any,
     })
 
-    state.sendMessage('amend')
+    state.submit('tab-1', 'amend')
 
     expect(mainInstance(state.conversationPanes, 'tab-1')?.permissionDenied).toBeNull()
   })
@@ -283,7 +333,7 @@ describe('planFilePath forwarding from tab state', () => {
     const tab = makeTab()
     const { state } = buildHarness(tab, { planFilePath: '/plans/test.md' })
 
-    state.sendMessage('impl')
+    state.submit('tab-1', 'impl')
 
     expect(mockPrompt).toHaveBeenCalledTimes(1)
     const args = mockPrompt.mock.calls[0] as unknown as any[]

@@ -1,9 +1,9 @@
 /**
  * Pure slash-command PILL resolution for user message bubbles.
  *
- * Extracted from UserMessage.tsx so the pill decision is unit-testable
- * without pulling React / react-markdown / framer-motion into a node-env
- * test. UserMessage.tsx and QueuedMessage import from here.
+ * Extracted so the pill decision is unit-testable without pulling React /
+ * react-markdown / framer-motion into a node-env test. `MessageBubble` (user
+ * bubbles) and `QueuedMessage` import from here.
  *
  * The pill is INDEPENDENT of `enableClaudeCompat` — slash commands are an
  * engine-owned concept, so gating the pill on Claude-compat was the wrong
