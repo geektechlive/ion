@@ -62,7 +62,10 @@ fi
 # Written/refreshed on every install so updates propagate.
 PLIST_TEMPLATE="$SCRIPT_DIR/../packaging/launchd/$PLIST_FILENAME"
 PLIST_DEST="$LAUNCH_AGENTS_DIR/$PLIST_FILENAME"
-if [[ -f "$PLIST_TEMPLATE" ]]; then
+# Jarvis-managed hosts run the engine under their own LaunchAgent
+# (com.dsswift.ion); ION_SKIP_LAUNCHD=1 skips the com.ion.engine plist so a
+# second engine is never bootstrapped alongside it.
+if [[ -f "$PLIST_TEMPLATE" && -z "${ION_SKIP_LAUNCHD:-}" ]]; then
     echo "==> Installing LaunchAgent plist to $PLIST_DEST..."
     mkdir -p "$LAUNCH_AGENTS_DIR"
     # Replace every $HOME literal in the template with the real home directory.
