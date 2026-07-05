@@ -130,8 +130,10 @@ vi.mock('../settings-store', () => ({
   SETTINGS_DEFAULTS: { enableClaudeCompat: true },
 }))
 
+// Attachment-encoding cases live in prompt-pipeline-attachments.test.ts; this
+// file uses a passthrough stub so non-attachment tests are unaffected.
 vi.mock('../remote/attachment-encoder', () => ({
-  encodeImageAttachments: (text: string, _atts: any[]) => ({ encoded: [], rewrittenText: text }),
+  encodeAttachments: (text: string, _atts: any[]) => ({ encoded: [], rewrittenText: text }),
 }))
 
 // Pull in the SUT AFTER mocks are set up.
@@ -595,6 +597,4 @@ describe('processIncomingPrompt — /clear with no engine session (unknown_comma
     expect(calls.every((s: string) => !s.includes('Unknown command'))).toBe(true)
   })
 })
-
-// /clear file-wipe tests (loaded-but-not-started tab) live in the companion
-// file prompt-pipeline-clear-wipe.test.ts to keep both files under 600 lines.
+// /clear file-wipe tests live in prompt-pipeline-clear-wipe.test.ts (file-size cap).

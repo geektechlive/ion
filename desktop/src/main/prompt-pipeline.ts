@@ -97,7 +97,8 @@ import { state, sessionPlane, engineBridge } from './state'
 import { broadcast } from './broadcast'
 import { parseSlash, type ParsedSlash } from './slash-parse'
 import { handleSlash as handleSlashBranch } from './prompt-pipeline-slash'
-import { encodeImageAttachments } from './remote/attachment-encoder'
+import { encodeAttachments } from './remote/attachment-encoder'
+import { IS_REMOTE } from './engine-bridge'
 import type { ImageAttachmentPayload } from '../shared/types'
 import { ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER } from './prompt-pipeline-prose'
 import { emitRemoteMessageAdded, insertRendererSystemMessage, clearConnectingStatus } from './prompt-pipeline-renderer'
@@ -345,7 +346,7 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
       const ctx = attachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
       fullPrompt = `${ctx}\n\n${fullPrompt}`
     }
-    const { encoded, rewrittenText } = encodeImageAttachments(fullPrompt, attachments)
+    const { encoded, rewrittenText } = encodeAttachments(fullPrompt, attachments, { isRemote: IS_REMOTE })
     log(`pipeline: submit prompt via REMOTE_USER_MESSAGE tab=${p.tabId} textLen=${rewrittenText.length} encodedImages=${encoded.length}`)
     broadcast(IPC.REMOTE_USER_MESSAGE, {
       tabId: p.tabId,
@@ -372,6 +373,20 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
   if (!p.runOptions) {
     log(`pipeline: WARNING desktop-source prompt missing runOptions — cannot submit tab=${p.tabId}`)
     return
+  }
+  // Desktop composer attachments: the renderer prepended [Attached ...]
+  // markers into runOptions.prompt and passed the raw paths through
+  // (rawAttachments -> p.attachments). Encode them here -- identical
+  // treatment to the remote branch above -- so PDFs/images reach the
+  // engine as wire bytes instead of client-local path markers.
+  const desktopAttachments = p.attachments || []
+  if (desktopAttachments.length > 0) {
+    const { encoded, rewrittenText } = encodeAttachments(p.runOptions.prompt, desktopAttachments, { isRemote: IS_REMOTE })
+    p.runOptions.prompt = rewrittenText
+    if (encoded.length > 0) {
+      p.runOptions.imageAttachments = [...(p.runOptions.imageAttachments || []), ...encoded]
+    }
+    log(`pipeline: desktop attachments encoded tab=${p.tabId} raw=${desktopAttachments.length} encoded=${encoded.length}`)
   }
   if (!p.runOptions.enterPlanModeDescription) {
     p.runOptions.enterPlanModeDescription = ENTER_PLAN_MODE_DESCRIPTION

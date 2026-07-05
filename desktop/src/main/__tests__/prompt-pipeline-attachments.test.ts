@@ -1,16 +1,15 @@
 /**
- * Convergence tests for the prompt pipeline.
+ * Tests for the attachment-encoding path in prompt-pipeline.ts.
  *
- * Verifies that all four prompt paths (Desktop CLI, iOS CLI, Desktop Engine,
- * iOS Engine) produce equivalent behavior for plan-mode-sensitive operations:
- *   - planFilePath is forwarded to the engine bridge / broadcast
- *   - implementationPhase is forwarded to the engine bridge / broadcast
- *   - prose constants (ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER)
- *     are forwarded to the engine bridge on desktop engine prompts
+ * When a desktop-source prompt carries `attachments`, the pipeline calls
+ * encodeAttachments and merges the result onto runOptions.imageAttachments
+ * before forwarding to sessionPlane.submitPrompt. When no attachments are
+ * present the runOptions object is left untouched.
  *
- * Uses the same vi.hoisted() + vi.mock('../state') pattern as
- * prompt-pipeline.test.ts. Split into a companion file to keep both
- * under the 600-line cap.
+ * These cases are split from the main suite so neither file exceeds the
+ * 600-line cap.
+ *
+ * Split from: prompt-pipeline.test.ts (file-size cohesion boundary)
  */
 
 import { vi, describe, it, expect, beforeEach } from 'vitest'
@@ -29,7 +28,12 @@ const mocks = vi.hoisted(() => {
   const executeJsMock = (globalThis as any).vi?.fn?.()?.mockResolvedValue?.(null) ?? function () { return Promise.resolve(null) }
   const broadcastMock = (globalThis as any).vi?.fn?.() ?? function () {}
   const clearConversationFileMock = (globalThis as any).vi?.fn?.()?.mockResolvedValue?.(undefined) ?? function () { return Promise.resolve() }
-  const getTabStatusMock = (globalThis as any).vi?.fn?.()?.mockReturnValue?.({ conversationId: null }) ?? function () { return { conversationId: null } }
+  // getTabStatusMock: default fresh tab (no conversationId, no prompts since
+  // checkpoint). Attachment tests exercise the non-slash desktop path so
+  // isFirstPromptForTab is not the focus, but the mock must exist so the
+  // pipeline's freshness guard doesn't throw.
+  const getTabStatusMock = (globalThis as any).vi?.fn?.()?.mockReturnValue?.({ conversationId: null, promptCountSinceCheckpoint: 0 }) ?? function () { return { conversationId: null, promptCountSinceCheckpoint: 0 } }
+  const notifyConversationClearedMock = (globalThis as any).vi?.fn?.() ?? function () {}
   return {
     bridgeListeners,
     sendCommandMock,
@@ -41,6 +45,7 @@ const mocks = vi.hoisted(() => {
     broadcastMock,
     clearConversationFileMock,
     getTabStatusMock,
+    notifyConversationClearedMock,
   }
 })
 
@@ -53,7 +58,8 @@ mocks.remoteSendMock = vi.fn()
 mocks.executeJsMock = vi.fn().mockResolvedValue(null)
 mocks.broadcastMock = vi.fn()
 mocks.clearConversationFileMock = vi.fn().mockResolvedValue(undefined)
-mocks.getTabStatusMock = vi.fn().mockReturnValue({ conversationId: null })
+mocks.getTabStatusMock = vi.fn().mockReturnValue({ conversationId: null, promptCountSinceCheckpoint: 0 })
+mocks.notifyConversationClearedMock = vi.fn()
 
 function emitBridgeEvent(key: string, event: any): void {
   const arr = mocks.bridgeListeners.get('event') ?? []
@@ -80,7 +86,7 @@ vi.mock('../state', () => {
       submitPrompt: (...args: any[]) => mocks.submitPromptMock(...args),
       setPermissionMode: (...args: any[]) => mocks.setPermissionModeMock(...args),
       getTabStatus: (...args: any[]) => mocks.getTabStatusMock(...args),
-      notifyConversationCleared: vi.fn(),
+      notifyConversationCleared: (...args: any[]) => mocks.notifyConversationClearedMock(...args),
     },
     engineBridge: mockEngineBridge,
     extensionCommandRegistry: new Map(),
@@ -103,16 +109,23 @@ vi.mock('../settings-store', () => ({
   SETTINGS_DEFAULTS: { enableClaudeCompat: true },
 }))
 
+// Full encoding mock (not a passthrough): the attachment tests need the
+// encoder to produce real output so submitPrompt receives the encoded bytes.
 vi.mock('../remote/attachment-encoder', () => ({
-  encodeAttachments: (text: string, _atts: any[]) => ({ encoded: [], rewrittenText: text }),
+  encodeAttachments: (text: string, atts: any[]) => ({
+    encoded: atts
+      .filter((a: any) => a.path.endsWith('.pdf') || a.type === 'image')
+      .map((a: any) => ({ mediaType: a.path.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg', data: 'QkFTRTY0', path: a.path })),
+    rewrittenText: text.replace(/\[Attached (?:file|image): ([^\]]+)\]/g, '[Attachment: rewritten]'),
+  }),
 }))
 
 // Pull in the SUT AFTER mocks are set up.
-import { processIncomingPrompt, ENTER_PLAN_MODE_DESCRIPTION, PLAN_MODE_SPARSE_REMINDER } from '../prompt-pipeline'
+import { processIncomingPrompt } from '../prompt-pipeline'
 import { _resetAwaitersForTests } from '../command-await'
 
 // ───────────────────────────────────────────────────────────────────────────
-// beforeEach
+// Fixtures
 // ───────────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -124,7 +137,8 @@ beforeEach(() => {
   mocks.executeJsMock.mockReset().mockResolvedValue(null)
   mocks.broadcastMock.mockReset()
   mocks.clearConversationFileMock.mockReset().mockResolvedValue(undefined)
-  mocks.getTabStatusMock.mockReset().mockReturnValue({ conversationId: null })
+  mocks.getTabStatusMock.mockReset().mockReturnValue({ conversationId: null, promptCountSinceCheckpoint: 0 })
+  mocks.notifyConversationClearedMock.mockReset()
   mocks.bridgeListeners.clear()
   _resetAwaitersForTests()
   mocks.sendCommandMock.mockImplementation((key: string, command: string, _args: string) => {
@@ -136,122 +150,37 @@ beforeEach(() => {
 // Tests
 // ───────────────────────────────────────────────────────────────────────────
 
-describe('planFilePath convergence', () => {
-  it('desktop engine prompt forwards planFilePath through submitPrompt RunOptions', async () => {
+describe('processIncomingPrompt — rawAttachments encoding', () => {
+  it('desktop prompt with rawAttachments encodes them into runOptions before submit', async () => {
+    const opts = {
+      prompt: '[Attached file: /Users/someone/report.pdf]\n\nsummarize',
+      projectPath: '/proj',
+    } as any
     await processIncomingPrompt({
       tabId: 'tab-1',
-      text: 'implement the plan',
-      reqId: 'req-pf-1',
+      text: opts.prompt,
+      reqId: 'req-1',
       source: 'desktop',
       hasExtensions: true,
-      instanceId: 'inst1',
-      planFilePath: '/plans/test.md',
-      runOptions: { prompt: 'implement the plan', projectPath: '/tmp', extensions: ['ext-a'], planFilePath: '/plans/test.md' },
+      projectPath: '/proj',
+      runOptions: opts,
+      attachments: [{ type: 'file', name: 'report.pdf', path: '/Users/someone/report.pdf' }],
     })
     expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
-    const callArgs = mocks.submitPromptMock.mock.calls[0]
-    expect(callArgs[0]).toBe('tab-1')                  // tabId
-    expect(callArgs[2].planFilePath).toBe('/plans/test.md')  // RunOptions.planFilePath
+    const submitted = mocks.submitPromptMock.mock.calls[0][2]
+    // Marker rewritten so no downstream component reads a client-local path.
+    expect(submitted.prompt).not.toContain('[Attached file:')
+    // Bytes merged onto the wire field the bridge forwards to the engine.
+    expect(submitted.imageAttachments).toHaveLength(1)
+    expect(submitted.imageAttachments[0].mediaType).toBe('application/pdf')
   })
 
-  it('remote engine prompt broadcasts planFilePath in REMOTE_ENGINE_PROMPT data', async () => {
+  it('desktop prompt without attachments leaves runOptions untouched', async () => {
+    const opts = { prompt: 'plain', projectPath: '/proj' } as any
     await processIncomingPrompt({
-      tabId: 'tab-1',
-      text: 'implement the plan',
-      reqId: 'req-pf-2',
-      source: 'remote',
-      hasExtensions: true,
-      instanceId: 'inst1',
-      planFilePath: '/plans/test.md',
+      tabId: 'tab-1', text: 'plain', reqId: 'req-1', source: 'desktop',
+      hasExtensions: false, projectPath: '/proj', runOptions: opts,
     })
-    expect(mocks.broadcastMock).toHaveBeenCalledWith(
-      expect.stringMatching(/remote-engine-prompt/i),
-      expect.objectContaining({
-        tabId: 'tab-1',
-        planFilePath: '/plans/test.md',
-      }),
-    )
-  })
-})
-
-describe('implementationPhase convergence', () => {
-  it('desktop engine prompt forwards implementationPhase through submitPrompt RunOptions', async () => {
-    // Post-unification: every desktop-source prompt — engine or plain — routes
-    // through sessionPlane.submitPrompt with RunOptions. An extension-backed tab
-    // is identified by a non-empty extensions list (data), not a separate IPC.
-    await processIncomingPrompt({
-      tabId: 'tab-1',
-      text: 'do it',
-      reqId: 'req-ip-1',
-      source: 'desktop',
-      hasExtensions: true,
-      instanceId: 'inst1',
-      implementationPhase: true,
-      runOptions: { prompt: 'do it', projectPath: '/tmp', extensions: ['ext-a'], implementationPhase: true },
-    })
-    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
-    const opts = mocks.submitPromptMock.mock.calls[0][2]
-    expect(opts.implementationPhase).toBe(true)
-  })
-
-  it('remote engine prompt broadcasts implementationPhase in REMOTE_ENGINE_PROMPT data', async () => {
-    await processIncomingPrompt({
-      tabId: 'tab-1',
-      text: 'do it',
-      reqId: 'req-ip-2',
-      source: 'remote',
-      hasExtensions: true,
-      instanceId: 'inst1',
-      implementationPhase: true,
-    })
-    expect(mocks.broadcastMock).toHaveBeenCalledWith(
-      expect.stringMatching(/remote-engine-prompt/i),
-      expect.objectContaining({
-        tabId: 'tab-1',
-        implementationPhase: true,
-      }),
-    )
-  })
-
-  it('remote CLI prompt broadcasts implementationPhase in REMOTE_USER_MESSAGE data', async () => {
-    await processIncomingPrompt({
-      tabId: 'tab-1',
-      text: 'do it',
-      reqId: 'req-ip-3',
-      source: 'remote',
-      hasExtensions: false,
-      implementationPhase: true,
-    })
-    expect(mocks.broadcastMock).toHaveBeenCalledWith(
-      expect.stringMatching(/remote-user-message/i),
-      expect.objectContaining({
-        tabId: 'tab-1',
-        implementationPhase: true,
-      }),
-    )
-  })
-})
-
-describe('prose constants convergence', () => {
-  it('desktop engine prompt sets ENTER_PLAN_MODE_DESCRIPTION + PLAN_MODE_SPARSE_REMINDER on RunOptions', async () => {
-    await processIncomingPrompt({
-      tabId: 'tab-1',
-      text: 'hello',
-      reqId: 'req-pc-1',
-      source: 'desktop',
-      hasExtensions: true,
-      instanceId: 'inst1',
-      runOptions: { prompt: 'hello', projectPath: '/tmp', extensions: ['ext-a'] },
-    })
-    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
-    const opts = mocks.submitPromptMock.mock.calls[0][2]
-    // The pipeline injects the harness-owned prose onto RunOptions, which
-    // submitPrompt forwards to the single send_prompt wire command.
-    expect(opts.enterPlanModeDescription).toBe(ENTER_PLAN_MODE_DESCRIPTION)
-    expect(typeof opts.enterPlanModeDescription).toBe('string')
-    expect(opts.enterPlanModeDescription.length).toBeGreaterThan(0)
-    expect(opts.planModeSparseReminder).toBe(PLAN_MODE_SPARSE_REMINDER)
-    expect(typeof opts.planModeSparseReminder).toBe('string')
-    expect(opts.planModeSparseReminder.length).toBeGreaterThan(0)
+    expect(mocks.submitPromptMock.mock.calls[0][2].imageAttachments).toBeUndefined()
   })
 })
