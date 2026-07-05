@@ -20,6 +20,10 @@ const maxInlineAttachmentBytes = 24 * 1024 * 1024
 // the harness before_prompt resolver leaves in the prompt after materializing
 // the referenced file to an absolute path. Mirrors attachmentResolver.ts
 // MARKER_RE.
+// Note: `plan` markers are captured by this regex but are intentionally NOT
+// consumed by the document-block builder — the `kind != "file"` guard in the
+// loop body passes them through untouched so the model still sees the marker
+// text and can act on the plan context via the Read tool.
 var attachmentMarkerRe = regexp.MustCompile(`\[Attached (file|image|plan): ([^\]]+)\]`)
 
 // buildCliUserContent turns the resolved prompt plus pre-encoded image
