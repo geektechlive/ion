@@ -78,7 +78,7 @@ extension SessionViewModel {
                 // lastSpokenEngineMessageCount so repeated idle events (reconnects,
                 // upstream re-delivery) don't re-speak the same response.
                 if status == .idle {
-                    let key = engineCompoundKey(tabId: tabId)
+                    let key = tabId
                     let msgs = engineInstance(tabId: tabId, instanceId: activeEngineInstance[tabId])?.messages ?? []
                     let prevCount = lastSpokenEngineMessageCount[key] ?? 0
                     if let last = msgs.last(where: { $0.role == .assistant }),

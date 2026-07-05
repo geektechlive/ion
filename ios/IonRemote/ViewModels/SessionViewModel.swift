@@ -126,7 +126,8 @@ final class SessionViewModel {
     // Engine state (per engine tab)
     var engineDialogs: [String: EngineDialogInfo?] = [:]
     var enginePinnedPrompt: [String: String] = [:]
-    var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
+    var engineConversationLoaded: Set<String> = []               // tabIds that have loaded history
+    var engineTurnHasText: Set<String> = []                      // tabIds where current LLM sub-turn produced text
     var lastSpokenEngineMessageCount: [String: Int] = [:]        // compoundKey -> message count at last TTS call
     // Agent dispatch conversation history (per conversationId for dispatch pager)
     var agentConversationMessages: [String: [Message]] = [:]     // conversationId -> messages (merged: snapshot + live push)
