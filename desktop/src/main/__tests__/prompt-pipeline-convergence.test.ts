@@ -28,7 +28,6 @@ const mocks = vi.hoisted(() => {
   const remoteSendMock = (globalThis as any).vi?.fn?.() ?? function () {}
   const executeJsMock = (globalThis as any).vi?.fn?.()?.mockResolvedValue?.(null) ?? function () { return Promise.resolve(null) }
   const broadcastMock = (globalThis as any).vi?.fn?.() ?? function () {}
-  const expandSlashMock = (globalThis as any).vi?.fn?.() ?? function () {}
   const clearConversationFileMock = (globalThis as any).vi?.fn?.()?.mockResolvedValue?.(undefined) ?? function () { return Promise.resolve() }
   const getTabStatusMock = (globalThis as any).vi?.fn?.()?.mockReturnValue?.({ conversationId: null }) ?? function () { return { conversationId: null } }
   return {
@@ -40,7 +39,6 @@ const mocks = vi.hoisted(() => {
     remoteSendMock,
     executeJsMock,
     broadcastMock,
-    expandSlashMock,
     clearConversationFileMock,
     getTabStatusMock,
   }
@@ -54,7 +52,6 @@ mocks.setPermissionModeMock = vi.fn()
 mocks.remoteSendMock = vi.fn()
 mocks.executeJsMock = vi.fn().mockResolvedValue(null)
 mocks.broadcastMock = vi.fn()
-mocks.expandSlashMock = vi.fn().mockResolvedValue({ expanded: false })
 mocks.clearConversationFileMock = vi.fn().mockResolvedValue(undefined)
 mocks.getTabStatusMock = vi.fn().mockReturnValue({ conversationId: null })
 
@@ -101,10 +98,6 @@ vi.mock('../logger', () => ({
   error: vi.fn(),
 }))
 
-vi.mock('../cli-compat/slash-expand', () => ({
-  expandSlashCommand: (...args: any[]) => mocks.expandSlashMock(...args),
-}))
-
 vi.mock('../settings-store', () => ({
   readSettings: () => ({ enableClaudeCompat: true }),
   SETTINGS_DEFAULTS: { enableClaudeCompat: true },
@@ -130,7 +123,6 @@ beforeEach(() => {
   mocks.remoteSendMock.mockReset()
   mocks.executeJsMock.mockReset().mockResolvedValue(null)
   mocks.broadcastMock.mockReset()
-  mocks.expandSlashMock.mockReset().mockResolvedValue({ expanded: false })
   mocks.clearConversationFileMock.mockReset().mockResolvedValue(undefined)
   mocks.getTabStatusMock.mockReset().mockReturnValue({ conversationId: null })
   mocks.bridgeListeners.clear()
@@ -145,21 +137,21 @@ beforeEach(() => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('planFilePath convergence', () => {
-  it('desktop engine prompt forwards planFilePath to sendPrompt (9th arg)', async () => {
+  it('desktop engine prompt forwards planFilePath through submitPrompt RunOptions', async () => {
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: 'implement the plan',
       reqId: 'req-pf-1',
       source: 'desktop',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst1',
       planFilePath: '/plans/test.md',
+      runOptions: { prompt: 'implement the plan', projectPath: '/tmp', extensions: ['ext-a'], planFilePath: '/plans/test.md' },
     })
-    expect(mocks.sendPromptMock).toHaveBeenCalledTimes(1)
-    // sendPrompt signature: (key, text, model, appendSys, images, implPhase, enterDesc, sparseReminder, planFilePath)
-    const args = mocks.sendPromptMock.mock.calls[0]
-    expect(args[0]).toBe('tab-1:inst1')         // key
-    expect(args[8]).toBe('/plans/test.md')       // planFilePath (9th positional)
+    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
+    const callArgs = mocks.submitPromptMock.mock.calls[0]
+    expect(callArgs[0]).toBe('tab-1')                  // tabId
+    expect(callArgs[2].planFilePath).toBe('/plans/test.md')  // RunOptions.planFilePath
   })
 
   it('remote engine prompt broadcasts planFilePath in REMOTE_ENGINE_PROMPT data', async () => {
@@ -168,7 +160,7 @@ describe('planFilePath convergence', () => {
       text: 'implement the plan',
       reqId: 'req-pf-2',
       source: 'remote',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst1',
       planFilePath: '/plans/test.md',
     })
@@ -183,19 +175,23 @@ describe('planFilePath convergence', () => {
 })
 
 describe('implementationPhase convergence', () => {
-  it('desktop engine prompt forwards implementationPhase to sendPrompt (6th arg)', async () => {
+  it('desktop engine prompt forwards implementationPhase through submitPrompt RunOptions', async () => {
+    // Post-unification: every desktop-source prompt — engine or plain — routes
+    // through sessionPlane.submitPrompt with RunOptions. An extension-backed tab
+    // is identified by a non-empty extensions list (data), not a separate IPC.
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: 'do it',
       reqId: 'req-ip-1',
       source: 'desktop',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst1',
       implementationPhase: true,
+      runOptions: { prompt: 'do it', projectPath: '/tmp', extensions: ['ext-a'], implementationPhase: true },
     })
-    expect(mocks.sendPromptMock).toHaveBeenCalledTimes(1)
-    const args = mocks.sendPromptMock.mock.calls[0]
-    expect(args[5]).toBe(true)   // implementationPhase (6th positional)
+    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
+    const opts = mocks.submitPromptMock.mock.calls[0][2]
+    expect(opts.implementationPhase).toBe(true)
   })
 
   it('remote engine prompt broadcasts implementationPhase in REMOTE_ENGINE_PROMPT data', async () => {
@@ -204,7 +200,7 @@ describe('implementationPhase convergence', () => {
       text: 'do it',
       reqId: 'req-ip-2',
       source: 'remote',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst1',
       implementationPhase: true,
     })
@@ -223,7 +219,7 @@ describe('implementationPhase convergence', () => {
       text: 'do it',
       reqId: 'req-ip-3',
       source: 'remote',
-      isEngineTab: false,
+      hasExtensions: false,
       implementationPhase: true,
     })
     expect(mocks.broadcastMock).toHaveBeenCalledWith(
@@ -237,23 +233,25 @@ describe('implementationPhase convergence', () => {
 })
 
 describe('prose constants convergence', () => {
-  it('desktop engine prompt passes ENTER_PLAN_MODE_DESCRIPTION and PLAN_MODE_SPARSE_REMINDER', async () => {
+  it('desktop engine prompt sets ENTER_PLAN_MODE_DESCRIPTION + PLAN_MODE_SPARSE_REMINDER on RunOptions', async () => {
     await processIncomingPrompt({
       tabId: 'tab-1',
       text: 'hello',
       reqId: 'req-pc-1',
       source: 'desktop',
-      isEngineTab: true,
+      hasExtensions: true,
       instanceId: 'inst1',
+      runOptions: { prompt: 'hello', projectPath: '/tmp', extensions: ['ext-a'] },
     })
-    expect(mocks.sendPromptMock).toHaveBeenCalledTimes(1)
-    const args = mocks.sendPromptMock.mock.calls[0]
-    // enterPlanModeDescription (7th arg) and planModeSparseReminder (8th arg)
-    expect(args[6]).toBe(ENTER_PLAN_MODE_DESCRIPTION)
-    expect(typeof args[6]).toBe('string')
-    expect(args[6].length).toBeGreaterThan(0)
-    expect(args[7]).toBe(PLAN_MODE_SPARSE_REMINDER)
-    expect(typeof args[7]).toBe('string')
-    expect(args[7].length).toBeGreaterThan(0)
+    expect(mocks.submitPromptMock).toHaveBeenCalledTimes(1)
+    const opts = mocks.submitPromptMock.mock.calls[0][2]
+    // The pipeline injects the harness-owned prose onto RunOptions, which
+    // submitPrompt forwards to the single send_prompt wire command.
+    expect(opts.enterPlanModeDescription).toBe(ENTER_PLAN_MODE_DESCRIPTION)
+    expect(typeof opts.enterPlanModeDescription).toBe('string')
+    expect(opts.enterPlanModeDescription.length).toBeGreaterThan(0)
+    expect(opts.planModeSparseReminder).toBe(PLAN_MODE_SPARSE_REMINDER)
+    expect(typeof opts.planModeSparseReminder).toBe('string')
+    expect(opts.planModeSparseReminder.length).toBeGreaterThan(0)
   })
 })

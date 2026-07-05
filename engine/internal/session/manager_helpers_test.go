@@ -18,10 +18,21 @@ type mockBackend struct {
 	onNorm       func(string, types.NormalizedEvent)
 	onExitF      func(string, *int, *string, string)
 	onErrF       func(string, error)
+
+	// Human-wait recording (satisfies humanWaitSuspendable). beginHumanWait /
+	// endHumanWait on the Manager resolve to the backend and call these; the
+	// per-requestID counter lets tests assert the begin/end bracket landed on
+	// the right run.
+	humanWaitBegin map[string]int
+	humanWaitEnd   map[string]int
 }
 
 func newMockBackend() *mockBackend {
-	return &mockBackend{started: make(map[string]types.RunOptions)}
+	return &mockBackend{
+		started:        make(map[string]types.RunOptions),
+		humanWaitBegin: make(map[string]int),
+		humanWaitEnd:   make(map[string]int),
+	}
 }
 
 func (m *mockBackend) StartRun(requestID string, opts types.RunOptions) {
@@ -51,6 +62,27 @@ func (m *mockBackend) IsRunning(requestID string) bool {
 func (m *mockBackend) WriteToStdin(_ string, _ interface{}) error { return nil }
 
 func (m *mockBackend) FlushConversations() {}
+
+// BeginHumanWait / EndHumanWait satisfy humanWaitSuspendable so a Manager wired
+// to this mock can be asserted to bracket its human-waits onto the right
+// requestID.
+func (m *mockBackend) BeginHumanWait(requestID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.humanWaitBegin[requestID]++
+}
+
+func (m *mockBackend) EndHumanWait(requestID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.humanWaitEnd[requestID]++
+}
+
+func (m *mockBackend) humanWaitCounts(requestID string) (begin, end int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.humanWaitBegin[requestID], m.humanWaitEnd[requestID]
+}
 
 func (m *mockBackend) OnNormalized(fn func(string, types.NormalizedEvent)) {
 	m.mu.Lock()
@@ -135,6 +167,8 @@ func defaultConfig() types.EngineConfig {
 }
 
 func intPtr(v int) *int { return &v }
+
+func strPtr(v string) *string { return &v }
 
 // eventCollector captures events emitted by the manager.
 type eventCollector struct {

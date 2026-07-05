@@ -44,6 +44,8 @@ func main() {
 		cmdRpc()
 	case "upgrade":
 		cmdUpgrade()
+	case "install-assets":
+		cmdInstallAssets()
 	case "version":
 		fmt.Printf("ion-engine %s\n", version)
 	default:
@@ -74,6 +76,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  record --output          Record session to NDJSON")
 	fmt.Fprintln(os.Stderr, "  rpc                      JSON-RPC over stdin/stdout")
 	fmt.Fprintln(os.Stderr, "  upgrade                  Upgrade to latest release")
+	fmt.Fprintln(os.Stderr, "  install-assets           Install SDK, ion-meta, and canonical docs to ~/.ion")
 	fmt.Fprintln(os.Stderr, "  version                  Show version")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Options:")

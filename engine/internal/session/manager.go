@@ -31,6 +31,20 @@ type Manager struct {
 	backend  backend.RunBackend
 	config   *types.EngineRuntimeConfig
 
+	// runKeyBindings maps an active run's requestID -> its session key,
+	// independent of engineSession.requestID. It exists because event routing
+	// (keyForRun) must not be coupled to the transient requestID field, which
+	// currentSessionStatus clears mid-run when the backend momentarily
+	// "disclaims" a still-live run (manager.go currentSessionStatus). When that
+	// clear races an in-flight emit, the requestID-scan lookup returns "" and the
+	// event — including the one-shot PlanModeChangedEvent{Enabled:true} — is
+	// silently dropped before reaching consumers. This binding is the stable
+	// runID->key link: set at dispatch (prompt_dispatch.go), consulted first by
+	// keyForRun, and cleared only at the authoritative terminal points
+	// (handleRunExit and the early-abort paths that never start a run). Guarded
+	// by m.mu, exactly like sessions. See run_key_binding.go for the accessors.
+	runKeyBindings map[string]string
+
 	onEvent func(string, types.EngineEvent)
 
 	// childBackendOverride is a test-only seam: when non-nil, newChildBackend
@@ -43,13 +57,17 @@ type Manager struct {
 
 	// Status-heartbeat fields. heartbeatStop is closed by Shutdown to
 	// terminate the per-Manager goroutine that periodically re-emits
-	// engine_status for every attached session. Lifecycle is tied to
+	// engine_status for every attached session. heartbeatDone is closed
+	// by the goroutine itself (via defer) once it has returned, so
+	// Shutdown can block until the goroutine is fully gone rather than
+	// relying on a sleep-and-hope wait. Lifecycle is tied to
 	// NewManager / Shutdown: the goroutine starts in NewManager (so any
 	// Manager that hosts sessions has heartbeats by default) and
 	// terminates in Shutdown. heartbeatInterval is configurable so tests
 	// can opt into a short cadence without busy-waiting on a 30 s ticker.
 	// See manager_heartbeat.go for the implementation.
 	heartbeatStop     chan struct{}
+	heartbeatDone     chan struct{}
 	heartbeatStopOnce sync.Once
 	heartbeatInterval time.Duration
 
@@ -127,10 +145,12 @@ const DefaultSessionStatusHeartbeatInterval = 30 * time.Second
 func NewManager(b backend.RunBackend) *Manager {
 	m := &Manager{
 		sessions:          make(map[string]*engineSession),
+		runKeyBindings:    make(map[string]string),
 		backend:           b,
 		watchers:          newWatcherPool(),
 		globalBroker:      resource.NewBroker(),
 		heartbeatStop:     make(chan struct{}),
+		heartbeatDone:     make(chan struct{}),
 		heartbeatInterval: DefaultSessionStatusHeartbeatInterval,
 		runOnce:           newRunOnceRegistry(),
 	}
@@ -324,6 +344,9 @@ func (m *Manager) StopSession(key string) error {
 	// Cancel active run
 	if s.requestID != "" {
 		m.backend.Cancel(s.requestID)
+		// Terminal point: clear the runID -> key routing binding alongside
+		// requestID, under the lock StopSession already holds.
+		m.unbindRunLocked(s.requestID)
 		s.requestID = ""
 	}
 
@@ -452,10 +475,14 @@ func (m *Manager) StopAll() error {
 // multi-call Shutdown is safe.
 func (m *Manager) Shutdown() {
 	// Stop the heartbeat before tearing down sessions so the goroutine
-	// cannot observe a partially-shutdown Manager.
+	// cannot observe a partially-shutdown Manager. Wait on heartbeatDone
+	// so Shutdown does not return while the goroutine is still mid-tick;
+	// that eliminates the sleep-and-hope race in tests and in production
+	// teardown sequences that immediately inspect state after Shutdown.
 	m.heartbeatStopOnce.Do(func() {
 		close(m.heartbeatStop)
 	})
+	<-m.heartbeatDone
 
 	_ = m.StopAll()
 	m.asyncMu.Lock()
@@ -610,6 +637,20 @@ func (m *Manager) ResourceBroker(key string) *resource.Broker {
 // persists for the Manager's lifetime, not per-session.
 func (m *Manager) GlobalResourceBroker() *resource.Broker {
 	return m.globalBroker
+}
+
+// SessionWorkingDir returns the working directory for the session identified
+// by key, or the empty string when no session is found. Used by the
+// get_plan_content handler to resolve the valid plan directory for the
+// session so it can enforce the path-containment security check.
+func (m *Manager) SessionWorkingDir(key string) string {
+	m.mu.RLock()
+	s, ok := m.sessions[key]
+	m.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return s.config.WorkingDirectory
 }
 
 // ReconcileState re-emits the current agent states and status for the given

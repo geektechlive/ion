@@ -76,7 +76,11 @@ func (h *Host) handleExtNotification(method string, raw []byte) {
 		fn := h.onSendMessage
 		h.notifMu.RUnlock()
 		if fn != nil && notif.Params.Text != "" {
-			fn(notif.Params.Text)
+			// The ext/send_message notification shape carries text only (no
+			// model / bash-allowlist fields), so the payload is text-only here.
+			// Extensions that need per-prompt model or bash grants use the
+			// ext/send_prompt request, which carries the full payload below.
+			fn(SendPromptPayload{Text: notif.Params.Text})
 		}
 	case "log":
 		// Native SDK logging channel. Routes structured log calls (and
@@ -147,6 +151,11 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 	}
 	// runOnce dedup RPCs live in host_rpc_run_once.go.
 	if h.handleRunOnceRPC(method, id, raw) {
+		return
+	}
+	// Steer RPCs (ext/steer_dispatch, ext/steer_self) live in
+	// host_rpc_steer.go to keep this file under the 800-line cap.
+	if h.handleSteerRPC(ctx, method, id, raw) {
 		return
 	}
 	switch method {
@@ -325,6 +334,7 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 					data, _ := json.Marshal(info)
 					h.sendNotification("dispatch_plan_proposal", data)
 				}
+				req.Params.OnChildQuestion = h.makeOnChildQuestion(agentName)
 
 				// Dispatch in a goroutine; respond immediately with stub.
 				go func() {
@@ -340,6 +350,9 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 				}()
 			} else {
 				// Foreground dispatch: run in goroutine, send response when done.
+				// Wire OnChildQuestion so foreground child questions block-and-resume.
+				agentName := req.Params.Name
+				req.Params.OnChildQuestion = h.makeOnChildQuestion(agentName)
 				go func() {
 					result, err := ctx.DispatchAgent(req.Params)
 					if err != nil {
@@ -450,11 +463,15 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			h.sendResponse(id, json.RawMessage(data), nil)
 		}()
 
+	case "ext/answer_dispatch_question":
+		h.handleAnswerDispatchQuestion(id, raw)
+
 	case "ext/send_prompt":
 		var req struct {
 			Params struct {
-				Text  string `json:"text"`
-				Model string `json:"model,omitempty"`
+				Text                   string   `json:"text"`
+				Model                  string   `json:"model,omitempty"`
+				BashAllowlistAdditions []string `json:"bashAllowlistAdditions,omitempty"`
 			} `json:"params"`
 		}
 		if err := json.Unmarshal(raw, &req); err != nil {
@@ -466,10 +483,11 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			return
 		}
 		if ctx != nil && ctx.SendPrompt != nil {
-			// Active hook context: use hook-aware path (supports model override, recursion guard).
-			utils.Debug("extension", fmt.Sprintf("ext/send_prompt: hook ctx path model=%q", req.Params.Model))
+			// Active hook context: use hook-aware path (supports model override,
+			// per-prompt bash-allowlist additions, recursion guard).
+			utils.Debug("extension", fmt.Sprintf("ext/send_prompt: hook ctx path model=%q bashAllowlistAdditions=%d", req.Params.Model, len(req.Params.BashAllowlistAdditions)))
 			go func() {
-				if err := ctx.SendPrompt(req.Params.Text, req.Params.Model); err != nil {
+				if err := ctx.SendPrompt(req.Params.Text, req.Params.Model, req.Params.BashAllowlistAdditions); err != nil {
 					h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: err.Error()})
 					return
 				}
@@ -479,7 +497,11 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 		}
 		// No active hook context (e.g. called from a timer/scheduler): fall back to
 		// the session-level SendPrompt wired by the session manager via onSendMessage.
-		// Model override is not supported on this path.
+		// The fallback path now carries the FULL payload (model override +
+		// bash-allowlist additions), identical to the active-hook path above —
+		// onSendMessage takes a SendPromptPayload, and both session wiring sites
+		// build PromptOverrides from it via the shared buildPromptOverrides helper.
+		// There is no per-feature divergence between the two dispatch paths.
 		h.notifMu.RLock()
 		fn := h.onSendMessage
 		h.notifMu.RUnlock()
@@ -488,12 +510,13 @@ func (h *Host) handleExtRequest(method string, id int64, raw []byte) {
 			h.sendResponse(id, nil, &jsonrpcError{Code: -32000, Message: "sendPrompt not available: no active session"})
 			return
 		}
-		if req.Params.Model != "" {
-			utils.Debug("extension", fmt.Sprintf("ext/send_prompt: fallback path, dropping model override %q", req.Params.Model))
-		}
-		utils.Debug("extension", "ext/send_prompt: fallback path via onSendMessage")
+		utils.Info("extension", fmt.Sprintf("ext/send_prompt: fallback path via onSendMessage forwarding full payload model=%q bashAllowlistAdditions=%d", req.Params.Model, len(req.Params.BashAllowlistAdditions)))
 		go func() {
-			fn(req.Params.Text)
+			fn(SendPromptPayload{
+				Text:                   req.Params.Text,
+				Model:                  req.Params.Model,
+				BashAllowlistAdditions: req.Params.BashAllowlistAdditions,
+			})
 			h.sendResponse(id, json.RawMessage(`{"ok":true}`), nil)
 		}()
 

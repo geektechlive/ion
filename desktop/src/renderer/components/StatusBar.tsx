@@ -8,6 +8,7 @@ import { BackendIndicator } from './StatusBarBackendIndicator'
 import { ModelPicker } from './StatusBarModelPicker'
 import { ContextIndicator } from './StatusBarContextIndicator'
 import { PermissionModePicker } from './StatusBarPermissionModePicker'
+import { ThinkingPicker } from './StatusBarThinkingPicker'
 import { AttachmentsButton } from './StatusBarAttachmentsButton'
 import { OpenWithPicker } from './StatusBarOpenWithPicker'
 import { TallViewToggle } from './StatusBarTallViewToggle'
@@ -15,7 +16,6 @@ import { DirectoryPicker } from './StatusBarDirectoryPicker'
 import { GitButton } from './StatusBarGitButton'
 import { StatusBarEngineIdentity } from './StatusBarEngineIdentity'
 import { StatusBarEngineState } from './StatusBarEngineState'
-import { StatusBarEngineCost } from './StatusBarEngineCost'
 
 // Re-export sibling components for any consumer importing from StatusBar.tsx
 export { BackendIndicator } from './StatusBarBackendIndicator'
@@ -29,7 +29,6 @@ export { DirectoryPicker } from './StatusBarDirectoryPicker'
 export { GitButton } from './StatusBarGitButton'
 export { StatusBarEngineIdentity } from './StatusBarEngineIdentity'
 export { StatusBarEngineState } from './StatusBarEngineState'
-export { StatusBarEngineCost } from './StatusBarEngineCost'
 export { compactPath } from './StatusBarShared'
 
 /* ─── StatusBar ───
@@ -146,17 +145,17 @@ export function StatusBar() {
 
         <PermissionModePicker />
 
+        {/* Per-conversation extended-thinking control. Self-hides when the
+            global thinkingEnabled setting is off or the model doesn't support
+            reasoning. */}
+        <ThinkingPicker />
+
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
         <AttachmentsButton />
       </div>
 
-      {/* Right cluster — cost (engine) + tall view + open in CLI + git */}
+      {/* Right cluster — tall view + open in CLI + git */}
       <div className="flex items-center gap-1.5 flex-shrink-0">
-        {/* Engine cost — engine-only; self-gates to null on
-            conversation tabs. Pinned to the left of the right cluster
-            so the tall/open-with/git icons stay anchored to the right
-            edge. */}
-        <StatusBarEngineCost />
         <TallViewToggle />
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
         <OpenWithPicker />

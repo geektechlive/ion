@@ -4,8 +4,14 @@ import SwiftUI
 //
 // Extracted from TabListView.swift to keep that file under the 600-line
 // Swift cap (CLAUDE.md → "When a file exceeds the cap"). The sheet shows a
-// list of recent / default-base directories and offers three creation
-// modes per row (conversation tab, terminal tab, engine tab).
+// list of recent / default-base directories and offers two creation
+// modes per row (conversation + optional profile routing, and terminal).
+//
+// Post-#256: the separate engine bolt button is gone. "New Conversation"
+// (the plain `+` button) now routes through `resolveNewConversationAction`
+// in the caller (TabListView) and creates either a plain tab, a profiled
+// engine tab, or presents the profile picker — all without a separate
+// "New Engine" affordance. The terminal button is unchanged.
 //
 // `pendingPinToGroupId` is the wiring for the per-group "+" button feature:
 // when the sheet is presented from a group header's `+` (instead of the
@@ -13,18 +19,16 @@ import SwiftUI
 // forward it as `pinToGroupId` on the createTab command so the desktop
 // places the new tab inside that group with groupPinned=true from the
 // start, suppressing the first-prompt auto-movement that would otherwise
-// yank the tab away from the user's explicit group choice. The engine and
-// terminal creation paths do NOT carry pinToGroupId — they have their own
-// commands (createEngineTab, createTerminalTab) which would need their
-// own additive extensions; the issue we're solving here is specifically
-// for conversation tabs, which is the primary use of the per-group `+`.
+// yank the tab away from the user's explicit group choice.
 struct TabListNewTabSheet: View {
     let directories: [(label: String, fullPath: String)]
     let pendingPinToGroupId: String?
     @Binding var isPresented: Bool
-    let onCreateConversationTab: (_ dir: String, _ pinToGroupId: String?) -> Void
+    /// Called when the user taps the "New Conversation" (+) button for a
+    /// directory. The caller applies `resolveNewConversationAction` routing
+    /// and creates the tab (plain or profiled) or shows the profile picker.
+    let onNewConversation: (_ dir: String, _ pinToGroupId: String?) -> Void
     let onCreateTerminalTab: (_ dir: String) -> Void
-    let onCreateEngineTab: (_ dir: String) -> Void
 
     var body: some View {
         NavigationStack {
@@ -34,14 +38,16 @@ struct TabListNewTabSheet: View {
                         Text(dir.label)
                             .lineLimit(1)
                         Spacer()
+                        // New Conversation: routes through smart picker in caller.
                         Button {
                             isPresented = false
-                            onCreateConversationTab(dir.fullPath, pendingPinToGroupId)
+                            onNewConversation(dir.fullPath, pendingPinToGroupId)
                         } label: {
                             Image(systemName: "plus")
                         }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.circle)
+                        // Terminal: unchanged.
                         Button {
                             isPresented = false
                             onCreateTerminalTab(dir.fullPath)
@@ -50,15 +56,6 @@ struct TabListNewTabSheet: View {
                         }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.circle)
-                        Button {
-                            isPresented = false
-                            onCreateEngineTab(dir.fullPath)
-                        } label: {
-                            Image(systemName: "bolt")
-                        }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.circle)
-                        .tint(.orange)
                     }
                 }
             }

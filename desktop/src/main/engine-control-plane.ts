@@ -1,9 +1,11 @@
 import { EventEmitter } from 'events'
-import { randomUUID } from 'crypto'
 import { EngineBridge } from './engine-bridge'
 import { engineIsRemote, getEngineHostInfo, listEngineDirectory } from './engine-bridge-fs'
 import { log as _log, warn as _warn, error as _error } from './logger'
 import { handleEngineEvent, type TabEntry, type EventEmitterContext } from './engine-control-plane-events'
+import { makeEmptyTab, registerNewTab, registerAdoptedTab, resetTabEntry, restartTabEntry } from './engine-control-plane-tab'
+import { performUnifiedInterrupt } from './engine-control-plane-interrupt'
+import * as historyReads from './engine-control-plane-history'
 import { readSettings, SETTINGS_DEFAULTS } from './settings-store'
 import { resolveBashAllowlistFromSettings } from './plan-mode-bash-allowlist'
 import type {
@@ -72,10 +74,16 @@ export class EngineControlPlane extends EventEmitter {
   }
 
   createTab(): string {
-    const tabId = randomUUID()
-    log(`createTab: tabId=${tabId}`)
-    this.tabs.set(tabId, makeEmptyTab(tabId))
-    return tabId
+    return registerNewTab(this.tabs)
+  }
+
+  /**
+   * Register a tab under a persisted, durable id (restore path) instead of
+   * minting one, so the session key is invariant across restarts. See
+   * registerAdoptedTab in engine-control-plane-tab.ts.
+   */
+  adoptTab(tabId: string): string {
+    return registerAdoptedTab(this.tabs, tabId)
   }
 
   hasTab(tabId: string): boolean {
@@ -94,20 +102,16 @@ export class EngineControlPlane extends EventEmitter {
   }
 
   resetTabSession(tabId: string): void {
-    const tab = this.tabs.get(tabId)
-    if (!tab) return
-    log(`resetTabSession: tabId=${tabId}`)
-    this.bridge.stopSession(tabId)
-    tab.conversationId = null
-    tab.engineSessionStarted = false
-    tab.promptCount = 0
-    // Full session reset advances the freshness checkpoint: the next
-    // slash command on this tab is the first prompt of a blank session.
-    tab.promptCountSinceCheckpoint = 0
-    tab.clearedSinceLastPrompt = false
-    tab.activeRequestId = null
-    tab.status = 'idle'         // Prevent stale events from the dying session
-    tab.startedAt = 0           // from triggering task_complete synthesis
+    resetTabEntry(this.tabs, tabId, (id) => this.bridge.stopSession(id))
+  }
+
+  /**
+   * Power-cycle a tab's engine session WITHOUT cutting a new conversation
+   * (preserves conversationId). The correct primitive for stuck-tab recovery.
+   * See restartTabEntry in engine-control-plane-tab.ts.
+   */
+  restartTabSession(tabId: string): void {
+    restartTabEntry(this.tabs, tabId, (id) => this.bridge.stopSession(id))
   }
 
   closeTab(tabId: string): void {
@@ -146,7 +150,40 @@ export class EngineControlPlane extends EventEmitter {
     tab.clearedSinceLastPrompt = true
   }
 
-  setPermissionMode(tabId: string, mode: 'auto' | 'plan', source?: string): void {
+  /**
+   * Seed a tab's tracked conversationId before its engine session starts.
+   *
+   * The extension-hosted restore path starts the engine via the ENGINE_START
+   * IPC, which calls EngineBridge.startSession directly and bypasses
+   * ensureSession (the plain-tab start site that already seeds conversationId at
+   * engine-control-plane.ts ~218). Without this seed the control-plane TabEntry
+   * for a freshly-restored extension tab has no conversationId, so the
+   * engine_status first-bind branch in handleStatusEvent adopts whatever id the
+   * engine emits — including an empty pre-minted id on a restore that failed to
+   * supply one. Seeding the real id here ARMS the divergence guard so a
+   * post-restart pre-mint idle is rejected (resume-driven) instead of adopted.
+   *
+   * Only seeds when the tab currently has no conversationId, so it never
+   * clobbers an already-tracked id (idempotent; a no-op on warm starts).
+   */
+  seedConversationId(tabId: string, conversationId: string): void {
+    if (!conversationId) return
+    this.ensureTab(tabId)
+    const tab = this.tabs.get(tabId)!
+    if (tab.conversationId) {
+      log(`seedConversationId: tabId=${tabId} already tracks conversationId=${tab.conversationId} — ignoring seed=${conversationId}`)
+      return
+    }
+    tab.conversationId = conversationId
+    // A caller-supplied id means we are resuming a SAVED conversation, not a
+    // fresh mint. Mark it so the slash plan→auto freshness guard treats the
+    // next prompt as resumed (scenario B), not fresh (scenario C). See the
+    // resumedSavedConversation doc in engine-control-plane-events.ts.
+    tab.resumedSavedConversation = true
+    log(`seedConversationId: tabId=${tabId} seeded conversationId=${conversationId} (arms divergence guard, resumedSavedConversation=true)`)
+  }
+
+  setPermissionMode(tabId: string, mode: 'auto' | 'plan', source?: string, planFilePath?: string): void {
     this.ensureTab(tabId)
     const tab = this.tabs.get(tabId)!
     tab.permissionMode = mode
@@ -159,7 +196,12 @@ export class EngineControlPlane extends EventEmitter {
     // inline guard collapsed [] to undefined, which silently demoted an
     // explicit user clear to a no-op on the engine side.
     const bashCmds = mode === 'plan' ? resolveBashAllowlistFromSettings() : undefined
-    this.bridge.sendSetPlanMode(tabId, mode === 'plan', undefined, source, bashCmds)
+    // planFilePath restores plan-file continuity when ENTERING plan mode: the
+    // engine re-adopts this path (if it exists on disk) so the next prompt
+    // reuses the conversation's existing plan instead of allocating a fresh
+    // slug. Only forwarded on 'plan'; the engine ignores it on disable.
+    const restorePath = mode === 'plan' ? planFilePath : undefined
+    this.bridge.sendSetPlanMode(tabId, mode === 'plan', undefined, source, bashCmds, restorePath)
   }
 
   approveToolsForTab(tabId: string, toolNames: string[]): void {
@@ -212,7 +254,12 @@ export class EngineControlPlane extends EventEmitter {
     // start for this tab.
     if (opts.conversationId && !tab.conversationId) {
       tab.conversationId = opts.conversationId
-      log(`ensureSession: tabId=${tabId} seeded tracked conversationId=${opts.conversationId} from caller`)
+      // Caller supplied the id → resuming a saved conversation (scenario B).
+      // Mark it so the slash plan→auto freshness guard treats this as resumed,
+      // not as a fresh mint. See resumedSavedConversation in
+      // engine-control-plane-events.ts.
+      tab.resumedSavedConversation = true
+      log(`ensureSession: tabId=${tabId} seeded tracked conversationId=${opts.conversationId} from caller (resumedSavedConversation=true)`)
     }
     if (opts.permissionMode) tab.permissionMode = opts.permissionMode
 
@@ -241,6 +288,22 @@ export class EngineControlPlane extends EventEmitter {
       return result
     }
     tab.engineSessionStarted = true
+    // Capture the engine-minted conversation id at start time. The engine binds
+    // the id inside StartSession and returns it in the start_session result, so
+    // it is available before any run emits session_init/engine_status. Recording
+    // it here (when the tab has none yet) makes the snapshot and the divergence
+    // guard see the real id immediately — mirrors the engine_status capture in
+    // engine-control-plane-events.ts. Only set when unset so a later
+    // engine_status with the same id is a no-op and a resume keeps the tracked id.
+    if (result.conversationId && !tab.conversationId) {
+      tab.conversationId = result.conversationId
+      // Deliberately do NOT set tab.resumedSavedConversation here: this is an
+      // engine-MINTED id for a brand-new session (scenario C), not a resume.
+      // Leaving the flag false keeps a first-prompt slash command fresh so it
+      // flips plan→auto. See resumedSavedConversation in
+      // engine-control-plane-events.ts.
+      log(`ensureSession: tabId=${tabId} captured minted conversationId=${result.conversationId} at start (resumedSavedConversation stays false — fresh mint)`)
+    }
     log(`ensureSession: tabId=${tabId} engine session live (conversationId=${tab.conversationId ?? 'none'})`)
     if (tab.permissionMode === 'plan') {
       this.bridge.sendSetPlanMode(tabId, true, undefined, 'session_start')
@@ -345,7 +408,7 @@ export class EngineControlPlane extends EventEmitter {
 
     this._setStatus(tabId, 'running')
 
-    let result = await this.bridge.sendPrompt(tabId, options.prompt, options.model, options.appendSystemPrompt, options.imageAttachments, options.implementationPhase, options.enterPlanModeDescription, options.planModeSparseReminder, options.planFilePath)
+    let result = await this.bridge.sendPrompt(tabId, options.prompt, options.model, options.appendSystemPrompt, options.imageAttachments, options.implementationPhase, options.enterPlanModeDescription, options.planModeSparseReminder, options.planFilePath, undefined, options.thinkingEffort, options.resolveSlash)
 
     if (!result.ok && result.error?.includes('not found')) {
       warn(`sendPrompt session lost, re-creating: tabId=${tabId}`)
@@ -364,7 +427,7 @@ export class EngineControlPlane extends EventEmitter {
         thinking: config.thinking,
       })
       if (startResult.ok) {
-        result = await this.bridge.sendPrompt(tabId, options.prompt, options.model, options.appendSystemPrompt, undefined, options.implementationPhase, options.enterPlanModeDescription, options.planModeSparseReminder, options.planFilePath)
+        result = await this.bridge.sendPrompt(tabId, options.prompt, options.model, options.appendSystemPrompt, undefined, options.implementationPhase, options.enterPlanModeDescription, options.planModeSparseReminder, options.planFilePath, undefined, options.thinkingEffort, options.resolveSlash)
       } else {
         error(`session re-create failed: tabId=${tabId} err=${startResult.error}`)
         result = startResult
@@ -401,15 +464,9 @@ export class EngineControlPlane extends EventEmitter {
       warn(`cancelTab: tab=${tabId} not found in control plane`)
       return false
     }
-    log(`cancelTab: tab=${tabId}, sending abort`)
-    this.bridge.sendAbort(tabId)
+    log(`cancelTab: tab=${tabId}, unified interrupt (abort + reap subtree)`)
+    performUnifiedInterrupt(this.bridge, tabId)
     return true
-  }
-
-  steerSession(tabId: string, message: string): void {
-    if (!this.tabs.has(tabId)) return
-    log(`steerSession: tab=${tabId} len=${message.length}`)
-    this.bridge.sendSteer(tabId, message)
   }
 
   async retry(tabId: string, requestId: string, options: RunOptions): Promise<void> {
@@ -417,8 +474,14 @@ export class EngineControlPlane extends EventEmitter {
   }
 
   respondToPermission(tabId: string, questionId: string, optionId: string): boolean {
-    if (!this.tabs.has(tabId)) return false
+    if (!this.tabs.has(tabId)) { log(`respondToPermission: dropped — unknown/dead tab tabId=${tabId} questionId=${questionId}`); return false }
     this.bridge.sendPermissionResponse(tabId, questionId, optionId)
+    return true
+  }
+
+  respondToElicitation(tabId: string, requestId: string, response: Record<string, unknown> | undefined, cancelled: boolean): boolean {
+    if (!this.tabs.has(tabId)) { log(`respondToElicitation: dropped — unknown/dead tab tabId=${tabId} requestId=${requestId} cancelled=${cancelled}`); return false }
+    this.bridge.sendElicitationResponse(tabId, requestId, response, cancelled)
     return true
   }
 
@@ -451,23 +514,19 @@ export class EngineControlPlane extends EventEmitter {
   }
 
   async listStoredSessions(limit?: number): Promise<any[]> {
-    return this.bridge.listStoredSessions(limit)
+    return historyReads.listStoredSessions(this.bridge, limit)
   }
-
   async loadSessionHistory(sessionId: string): Promise<any[]> {
-    return this.bridge.loadSessionHistory(sessionId)
+    return historyReads.loadSessionHistory(this.bridge, sessionId)
   }
-
   async loadChainHistory(sessionIds: string[]): Promise<any[]> {
-    return this.bridge.loadChainHistory(sessionIds)
+    return historyReads.loadChainHistory(this.bridge, sessionIds)
   }
-
   async getConversation(conversationId: string, offset = 0, limit = 50): Promise<any> {
-    return this.bridge.getConversation(conversationId, offset, limit)
+    return historyReads.getConversation(this.bridge, conversationId, offset, limit)
   }
-
   async saveSessionLabel(sessionId: string, label: string): Promise<{ ok: boolean; error?: string }> {
-    return this.bridge.saveSessionLabel(sessionId, label)
+    return historyReads.saveSessionLabel(this.bridge, sessionId, label)
   }
 
   async drain(hasExternalWork?: () => boolean): Promise<void> {
@@ -515,23 +574,3 @@ export class EngineControlPlane extends EventEmitter {
     this.drainExternalCheck = null
   }
 }
-
-function makeEmptyTab(tabId: string): TabEntry {
-  return {
-    tabId,
-    status: 'idle',
-    activeRequestId: null,
-    conversationId: null,
-    engineSessionStarted: false,
-    lastActivityAt: Date.now(),
-    promptCount: 0,
-    promptCountSinceCheckpoint: 0,
-    clearedSinceLastPrompt: false,
-    permissionMode: 'auto',
-    approvedTools: [],
-    startedAt: 0,
-    toolCallCount: 0,
-    sawPermissionRequest: false,
-  }
-}
-

@@ -30,6 +30,14 @@ type PromptOverrides struct {
 	// to false. See the field comment on types.RunOptions for the full
 	// rationale.
 	ImplementationPhase bool
+	// ThinkingEffort forwards the client's ClientCommand.ThinkingEffort onto
+	// the run's RunOptions.Thinking for this prompt. One of "low"|"medium"|
+	// "high"; "" or "off" means no thinking directive for this prompt
+	// (overriding any session default to off). The live per-conversation
+	// control: a client changes the level and it applies on the next prompt
+	// with no session restart. Mirrors ImplementationPhase's per-prompt
+	// override semantics.
+	ThinkingEffort string
 	// EnterPlanModeDescription forwards the client's harness-supplied
 	// description prose for the EnterPlanMode sentinel tool. When
 	// non-empty, the engine uses this string verbatim as the tool's
@@ -83,6 +91,13 @@ type PromptOverrides struct {
 	// CompactMemoryEnabled overrides whether the background session memory
 	// summarizer is active. nil means "use engine default".
 	CompactMemoryEnabled *bool
+
+	// ResolveSlash signals that the prompt Text is a slash-command invocation
+	// the engine should resolve and expand (see protocol.ClientCommand.ResolveSlash
+	// and types.RunOptions.ResolveSlash). When true, SendPrompt resolves the
+	// invocation against the conventional roots, rewrites the LLM-visible prompt
+	// to the expanded body, and persists the raw invocation as the display turn.
+	ResolveSlash bool
 }
 
 // SendPrompt dispatches a prompt to the session's backend run.
@@ -126,8 +141,24 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 
 	requestID := fmt.Sprintf("%s-%d", key, time.Now().UnixMilli())
 	s.requestID = requestID
+	// Bind runID -> key for event routing, independent of the transient
+	// s.requestID (which currentSessionStatus may clear mid-run). Held under
+	// m.mu here, same as the s.requestID assignment above. Cleared at the
+	// terminal points: handleRunExit and the early-abort paths below.
+	m.bindRunLocked(requestID, key)
 	s.cliTurnNumber = 0
 	s.cliTurnActive = false
+
+	// Re-arm the session cancellation root if a prior abort (SendAbort) or a
+	// stalled-run cancellation left it cancelled. Done under the manager lock,
+	// at the new-run seam, BEFORE opts.ParentCtx = s.rootContext() below — so
+	// this run derives from a LIVE root instead of a dead one. Without this a
+	// session that was ever aborted is wedged: every subsequent run would be
+	// born cancelled and exit instantly with signal=cancelled, recoverable only
+	// by restarting the engine. The busy-guard above (s.requestID != "") means
+	// no run is in flight here, so re-creating the root cannot orphan a live
+	// descendant. No-op when the root is still live. See session_root_context.go.
+	s.rearmRootContextIfCancelled()
 
 	if s.planMode && s.planFilePath == "" {
 		// Try to restore a persisted plan file path from the client
@@ -166,6 +197,44 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	if planModeReentry {
 		opts.PlanModeReentry = true
 		utils.Info("PlanMode", fmt.Sprintf("key=%s reentry detected, planFile=%s", key, s.planFilePath))
+	}
+
+	// Slash-command resolution + expansion. When the client flagged this prompt
+	// as a slash invocation, resolve the template across the conventional roots
+	// and rewrite opts.Prompt to the EXPANDED body; the runloop persists the raw
+	// invocation as the display turn. An unresolved invocation aborts the prompt
+	// with an unknown_command result (no run starts) so the consumer can surface
+	// it, matching the command-dispatch contract. Extension commands are NOT
+	// handled here — those route through SendCommand; this path owns the
+	// .md/skill/template resolution that was formerly a per-consumer fallback.
+	if overrides != nil && overrides.ResolveSlash {
+		resolved, failedCmd := m.resolveSlashIntoOpts(s, key, &opts)
+		if !resolved {
+			m.mu.Unlock()
+			s.requestID = ""
+			m.unbindRun(requestID)
+			m.emitUnknownCommand(key, failedCmd)
+			return nil
+		}
+	}
+
+	// Extension-command slash provenance. When an extension command handler
+	// (dispatchCommand → cmd.Execute → ctx.sendPrompt) initiated this prompt,
+	// the session carries pendingSlashInvocation with the raw command/args.
+	// Consume it so the run loop persists the raw invocation as the display
+	// turn (with slashCommand/slashArgs provenance) instead of the expanded
+	// body. Only applies when resolveSlashIntoOpts did NOT already set the
+	// fields (the pending is the fallback for the extension-command path).
+	if s.pendingSlashInvocation != nil && opts.ResolvedSlashCommand == "" {
+		opts.ResolvedSlashCommand = s.pendingSlashInvocation.Command
+		opts.ResolvedSlashArgs = s.pendingSlashInvocation.Args
+		opts.ResolvedSlashSource = s.pendingSlashInvocation.Source
+		utils.Log("Session", fmt.Sprintf("SendPrompt[%s]: applied pending slash invocation command=%s argsLen=%d",
+			key, opts.ResolvedSlashCommand, len(opts.ResolvedSlashArgs)))
+		s.pendingSlashInvocation = nil
+	} else if s.pendingSlashInvocation != nil {
+		// resolveSlashIntoOpts already set the fields; discard the pending.
+		s.pendingSlashInvocation = nil
 	}
 	m.applyConfigDefaults(&opts)
 	resolveModelTier(&opts)
@@ -215,6 +284,21 @@ func (m *Manager) SendPrompt(key, text string, overrides *PromptOverrides) (retE
 	mcpConns := s.mcpConns
 	m.mu.Unlock()
 	utils.Log("Session", fmt.Sprintf("SendPrompt[%s]: lock released", key))
+
+	// context: fork — run the resolved command's expanded body as a forked
+	// sub-agent instead of inlining it into this conversation. The parent
+	// conversation still records the raw invocation as the display turn (so the
+	// user sees what they ran), then the child runs with its own context/token
+	// budget and streams its events on the parent's stream. Returns without
+	// starting an inline run on the parent.
+	if opts.ResolvedSlashContext == "fork" {
+		m.forkResolvedSlash(s, key, &opts)
+		s.requestID = ""
+		// Forked to a sub-agent — no inline run started on the parent, so
+		// clear the routing binding set at dispatch.
+		m.unbindRun(requestID)
+		return nil
+	}
 
 	m.fireBeforeAgentStart(s, key, extGroup, skipExtensions, &opts)
 
@@ -329,6 +413,7 @@ func (m *Manager) enqueueIfBusy(s *engineSession, key, text string, overrides *P
 		pp.noExtensions = overrides.NoExtensions
 		pp.attachments = overrides.Attachments
 		pp.implementationPhase = overrides.ImplementationPhase
+		pp.thinkingEffort = overrides.ThinkingEffort
 	}
 	s.promptQueue = append(s.promptQueue, pp)
 	utils.Log("Session", fmt.Sprintf("prompt queued for %s (%d in queue)", key, len(s.promptQueue)))

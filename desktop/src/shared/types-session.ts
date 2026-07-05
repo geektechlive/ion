@@ -1,4 +1,16 @@
+// @file-size-exception: types-session.ts is a shared type barrel; enterprise
+// policy types were added in #256. Next split: extract enterprise types into
+// types-enterprise.ts when the file grows by another ~80 lines.
 import type { UsageData } from './types-events'
+
+// ─── Thinking ───
+
+/**
+ * Per-conversation extended-thinking effort. 'off' = no thinking directive;
+ * other levels map to the engine's effort dial (resolved per-model). Stored
+ * per-tab and per-instance, applied live on the next prompt.
+ */
+export type ThinkingEffort = 'off' | 'low' | 'medium' | 'high'
 
 // ─── Tab Grouping ───
 
@@ -31,6 +43,26 @@ export interface PermissionRequest {
   instanceId?: string
 }
 
+/**
+ * A live extension elicitation awaiting a user decision for a conversation.
+ * Produced when an extension calls `ctx.elicit()`; the engine fans an
+ * `engine_elicitation_request` event to every client. The client renders a
+ * card from `mode` + `schema` and answers with an `elicitation_response`
+ * command carrying the `requestId`. Distinct from `PermissionRequest`
+ * (tool-call permission) and from `permissionDenied` (the plan-ready /
+ * AskUserQuestion fallback card).
+ */
+export interface ElicitationRequest {
+  /** Engine-assigned id echoed back in the elicitation_response command. */
+  requestId: string
+  /** Renderer selector ("approval", "select", ...). May be empty. */
+  mode: string
+  /** Harness-defined description of what is being requested. */
+  schema?: Record<string, unknown>
+  /** Optional deep-link URL for web flows. */
+  url?: string
+}
+
 export interface FileAttachment {
   id: string
   type: 'image' | 'file'
@@ -58,10 +90,30 @@ export interface TabState {
   historicalSessionIds: string[]
   /** Most recent non-null conversationId; never cleared. Recovery fallback when conversationId is null. */
   lastKnownSessionId: string | null
+  /**
+   * Transient: the conversationId a deliberate checkpoint cut (clear-context)
+   * just left behind, to be recorded as the next session's on-disk `parentId`.
+   * Set when clear-context nulls conversationId; consumed once by the next
+   * engine start (passed as EngineConfig.parentConversationId), then cleared.
+   * Never persisted — it only bridges the cut to the subsequent start.
+   */
+  pendingParentConversationId?: string | null
   status: TabStatus
   activeRequestId: string | null
   /** Wall-clock ms of last engine-originated event for this tab. Drives the stuck-tab watchdog. Not persisted. */
   lastEventAt: number | null
+  /**
+   * Auto-recovery bookkeeping for the stuck-tab watchdog. When a running tab
+   * goes silent past the recovery threshold, the watchdog automatically
+   * recreates the engine session and resubmits the last prompt (in-process, no
+   * engine restart). These two fields bound that automatic resume so a truly
+   * dead provider cannot drive an infinite stall→resume loop: attempts are
+   * counted within a rolling window, and once the cap is hit the watchdog stops
+   * auto-resuming and surfaces an honest, actionable message instead. Not
+   * persisted — recovery is a live-session concern that resets on restart.
+   */
+  autoRecoveryAttempts?: number
+  autoRecoveryWindowStartedAt?: number | null
   hasUnread: boolean
   currentActivity: string
   attachments: FileAttachment[]
@@ -88,8 +140,6 @@ export interface TabState {
   hasChosenDirectory: boolean
   /** Extra directories accessible via --add-dir (session-preserving) */
   additionalDirs: string[]
-  /** Per-tab permission mode: 'auto' auto-approves, 'plan' uses CLI plan mode */
-  permissionMode: 'auto' | 'plan'
   /** Pending bash command results to send as context with next prompt */
   bashResults: Array<{ command: string; stdout: string; stderr: string }>
   /** Whether a bash command is currently executing in this tab */
@@ -140,14 +190,10 @@ export interface TabState {
   /** Terminal-focused tab with no conversation */
   isTerminalOnly: boolean
   /**
-   * True when this conversation hosts an engine extension (multi-instance UI,
-   * profiles, sub-conversations). This is NOT a backend flag — it does not
-   * imply a CLI vs API backend (those are orthogonal; ~99% of conversations
-   * run on the API backend). It names ONLY the presence of an engine extension
-   * running inside the conversation.
+   * Engine profile ID used for this tab (references EngineProfile.id).
+   * Non-null/non-empty means the tab has extensions loaded (derived via
+   * `tabHasExtensions()` from shared/tab-predicates.ts).
    */
-  hasEngineExtension: boolean
-  /** Engine profile ID used for this tab (references EngineProfile.id) */
   engineProfileId: string | null
   /** Short single-line preview of the last visible message (~80 chars), used
    *  as a tab-pill subtitle to help distinguish multiple Jarvis sessions. */
@@ -156,7 +202,7 @@ export interface TabState {
 
 export interface Message {
   id: string
-  role: 'user' | 'assistant' | 'tool' | 'system' | 'harness'
+  role: 'user' | 'assistant' | 'tool' | 'system' | 'harness' | 'thinking'
   content: string
   toolName?: string
   toolInput?: string
@@ -190,6 +236,23 @@ export interface Message {
    */
   planFilePath?: string
   /**
+   * Engine-provided slash-command metadata for rendering a command PILL.
+   * Populated from `SessionMessage.slashCommand` (and siblings) returned by
+   * `load_session_history` when the displayed user turn was a slash
+   * invocation. When `slashCommand` is non-empty, `content` already holds
+   * the RAW invocation (the engine stored the raw invocation as the display
+   * turn; the expanded body lives only in the LLM history). The renderer
+   * renders the pill from these fields rather than re-parsing `content`.
+   * Client-render fields — round-trip the engine's values; persisted
+   * alongside the message (see serialize-conversation-pane.ts and
+   * types-persistence.ts) so the pill survives app restart.
+   */
+  slashCommand?: string
+  /** Slash args (the text after `/name`), from `SessionMessage.slashArgs`. */
+  slashArgs?: string
+  /** Origin of the resolved template: "extension"|"ion"|"claude"|"skill"|"project". */
+  slashSource?: string
+  /**
    * Intercept level carried from `engine_intercept.interceptLevel`.
    * Populated only on `role: 'harness'` messages pushed by the
    * `engine_intercept` handler in engine-event-slice.ts.
@@ -205,6 +268,61 @@ export interface Message {
    * opens a fresh assistant message instead of appending to this one.
    */
   sealed?: boolean
+  /**
+   * Local UI state only -- NOT a wire protocol field, NOT persisted.
+   * Set to true on the optimistic user bubble created by the mid-turn
+   * steer path (submit → window.ion.steer). Stays true while
+   * the steer is buffered in the engine runloop (e.g. during a tool
+   * stall). The renderer shows a "queued" indicator while this is set.
+   *
+   * Resolved in one of two ways:
+   *   - steer_injected arrives → the bubble becomes a normal user message
+   *     and a "Steer applied" divider is appended (steerPending cleared).
+   *   - engine_dead arrives before steer_injected → the bubble is marked
+   *     steerFailed so the renderer can show an error affordance.
+   */
+  steerPending?: boolean
+  /**
+   * Local UI state only -- NOT a wire protocol field, NOT persisted.
+   * Set to true when the engine died before the buffered steer was drained.
+   * The renderer shows an error affordance instead of the pending indicator.
+   */
+  steerFailed?: boolean
+  // ─── Extended-thinking fields (issue #158) ───
+  // Populated ONLY on `role: 'thinking'` messages, which the renderer
+  // synthesizes from the engine's `engine_thinking_block_start` /
+  // `engine_thinking_delta` / `engine_thinking_block_end` event trio.
+  // A thinking block is OPTIONAL per turn; most turns carry none. The
+  // ThinkingBlock component (rendered above the tool row in a turn)
+  // reads these to pick one of three render states:
+  //   - Live:         thinkingActive=true (between start and end). Pulse
+  //                   indicator + tail of `content` streaming in.
+  //   - Historical:   thinkingActive=false with non-empty `content`
+  //                   (deltas were captured). Collapsed → tail; expand →
+  //                   full text.
+  //   - Summary-only: thinkingActive=false with empty `content` — deltas
+  //                   were disabled engine-side, the block was redacted,
+  //                   or the message was rehydrated from persistence
+  //                   without text. Renders the elapsed/token summary (or
+  //                   the redacted affordance) and never promises text.
+  // All three are local UI state derived from engine events; none are
+  // part of the Go wire contract. Thinking messages are intentionally
+  // dropped from persistence (see serialize-conversation-pane.ts) so the
+  // tabs file does not balloon with streamed reasoning text; a rehydrated
+  // conversation simply has no thinking rows, which is the correct
+  // summary-absent default.
+  /** True while the block is streaming (between block_start and block_end). */
+  thinkingActive?: boolean
+  /** Wall-clock seconds the reasoning block took, from block_end. */
+  thinkingElapsedSeconds?: number
+  /** Token count the model spent reasoning, from block_end (when present). */
+  thinkingTotalTokens?: number
+  /**
+   * True when the engine reported the block as encrypted/redacted
+   * reasoning with no readable text. The ThinkingBlock renders a
+   * "🔒 redacted reasoning" affordance rather than an empty block.
+   */
+  thinkingRedacted?: boolean
 }
 
 export interface RunResult {
@@ -251,6 +369,12 @@ export interface RunOptions {
    * contract instead of in prompt prose.
    */
   implementationPhase?: boolean
+  /**
+   * Per-prompt extended-thinking effort for this CLI/conversation prompt.
+   * 'off'/undefined → no thinking directive. Threaded to send_prompt as
+   * `thinkingEffort`; read from the tab's level, gated by thinkingEnabled.
+   */
+  thinkingEffort?: string
   /**
    * Harness-supplied description prose for the EnterPlanMode sentinel
    * tool that the engine injects during auto-mode runs. The desktop
@@ -302,6 +426,21 @@ export interface RunOptions {
    * unchanged.
    */
   planFilePath?: string
+  /**
+   * When true, the engine treats `prompt` as a slash invocation
+   * (`/name args`): it resolves the command template across its own command
+   * roots (`.ion/commands`, `.claude/commands`, skills, project roots),
+   * expands it ($ARGUMENTS substitution + frontmatter), feeds the EXPANDED
+   * body to the model, and persists the RAW invocation as the displayed user
+   * turn. Default/omitted → plain message (unchanged behavior).
+   *
+   * The desktop sets this only on the slash re-submit path
+   * (`prompt-pipeline.ts:handleSlash`) after the engine disclaims a slash with
+   * `unknown_command` — handing the raw invocation back so the engine owns
+   * resolution + expansion (local `.md` expansion is retired). Sent on the
+   * wire only when truthy (mirrors the engine's omitempty `resolveSlash`).
+   */
+  resolveSlash?: boolean
 }
 
 /** Pre-encoded image bytes that ride alongside a user prompt. */
@@ -391,6 +530,33 @@ export interface SessionLoadMessage {
   attachments?: Attachment[]
   timestamp: number
   internal?: boolean
+  /** Engine-provided slash-command metadata (see Message.slashCommand). */
+  slashCommand?: string
+  slashArgs?: string
+  slashSource?: string
+  /**
+   * Marker payload fields (additive, omitempty on the wire). Set only when
+   * `role === 'system'` and this row is a persisted marker entry (compaction,
+   * plan, steer) the engine's `flattenEntries` replays on historical reload.
+   * The engine emits structured data, not display strings; the desktop formats
+   * the divider content from these fields using its existing formatters (see
+   * shared/session-message-mapper.ts). `markerKind` discriminates the family.
+   * Mirror of `types.SessionMessage.Marker*` in engine/internal/types/types.go.
+   */
+  markerKind?: string
+  /** Compaction marker fields (markerKind === 'compaction'). */
+  markerMessagesBefore?: number
+  markerMessagesAfter?: number
+  markerClearedBlocks?: number
+  markerStrategy?: string
+  markerMicroOnly?: boolean
+  markerSummary?: string
+  /** Plan marker fields (markerKind === 'plan'). */
+  markerPlanOperation?: string
+  markerPlanFilePath?: string
+  markerPlanSlug?: string
+  /** Steer marker fields (markerKind === 'steer'). */
+  markerMessageLength?: number
 }
 
 // ─── Terminal Multiplexing ───
@@ -421,66 +587,13 @@ export interface TerminalPaneState {
 }
 
 // ─── Git Types ───
-
-export interface GitCommit {
-  hash: string
-  fullHash: string
-  parents: string[]
-  authorName: string
-  authorDate: string
-  subject: string
-  refs: GitRef[]
-}
-
-export interface GitRef {
-  name: string
-  type: 'head' | 'remote' | 'tag'
-  isCurrent: boolean
-}
-
-export interface GitCommitDetail {
-  filesChanged: number
-  insertions: number
-  deletions: number
-}
-
-export interface GitCommitFile {
-  path: string
-  status: 'added' | 'modified' | 'deleted' | 'renamed'
-  oldPath?: string
-}
-
-export interface GitGraphData {
-  commits: GitCommit[]
-  isGitRepo: boolean
-  totalCount: number
-}
-
-export type GitConflictKind = 'UU' | 'AA' | 'DD' | 'AU' | 'UA' | 'DU' | 'UD'
-
-export interface GitChangedFile {
-  path: string
-  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked' | 'conflict'
-  staged: boolean
-  oldPath?: string
-  conflictKind?: GitConflictKind
-  isSubmodule?: boolean
-}
-
-export interface GitChangesData {
-  files: GitChangedFile[]
-  branch: string
-  isGitRepo: boolean
-  ahead: number
-  behind: number
-}
-
-export interface GitBranchInfo {
-  name: string
-  isCurrent: boolean
-  upstream: string | null
-  isRemote: boolean
-}
+//
+// Git types live in types-git.ts (extracted to keep this file under the
+// 600-line cap). Re-exported here so existing import paths keep working.
+export type {
+  GitCommit, GitRef, GitCommitDetail, GitCommitFile, GitGraphData,
+  GitConflictKind, GitChangedFile, GitChangesData, GitBranchInfo,
+} from './types-git'
 
 // ─── Worktree Types ───
 
@@ -541,6 +654,27 @@ export interface EngineHostInfo {
   hostname: string
   os: string
   pathSep: string
+}
+
+/**
+ * Wire shape for the engine's get_enterprise_policy RPC response.
+ * Mirrors Go's NewConversationDefaultsPolicy in internal/types/config.go.
+ * null means no enterprise config or no NewConversationDefaults section.
+ */
+export interface NewConversationDefaultsPolicy {
+  /** Mandated working directory for new tabs. Empty string = no constraint. */
+  baseDirectory: string
+  /**
+   * Mandated engine profile id. Empty string = plain conversation (no
+   * extension). Must match an id in the user's engineProfiles list.
+   */
+  engineProfileId: string
+  /**
+   * When true, the user cannot change baseDirectory or engineProfileId.
+   * The desktop skips both the directory picker and the profile picker and
+   * opens the conversation directly with these values.
+   */
+  locked: boolean
 }
 
 // ─── Remote Control Types ───

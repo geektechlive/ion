@@ -1,33 +1,17 @@
 import type { PersistedTabState } from '../../shared/types'
 import { usePreferencesStore } from '../preferences'
 import { serializeTerminalBuffer } from '../components/TerminalInstance'
-import { serializeConversationPane } from './serialize-conversation-pane'
-import { UNIFIED_SCHEMA_VERSION } from '../../main/tab-migration-unify'
+import { serializeConversationPane, isExtensionErrorMessage, resolvePersistedLastKnownSessionId } from './serialize-conversation-pane'
+import { activeInstance } from './conversation-instance'
+import { SPLIT_SCHEMA_VERSION } from '../../main/tab-migration-split'
 import type { useSessionStore as UseSessionStoreType } from './sessionStore'
 
 type Store = typeof UseSessionStoreType
 
-/**
- * Extension error messages are operational diagnostics, not conversation
- * content. They should never be persisted — they clutter restored conversations
- * with stale errors from previous sessions. This predicate identifies them so
- * they can be stripped on save and restore.
- */
-export function isExtensionErrorMessage(m: { role: string; content: string }): boolean {
-  if (m.role !== 'system') return false
-  const c = m.content
-  // extension subprocess died — hooks disabled until restart
-  if (c.startsWith('Error: extension') && c.includes('subprocess died')) return true
-  // Extension X crashed N times in 60s and will not be restarted
-  if (c.includes('crashed') && c.includes('will not be restarted')) return true
-  // extension hook session_start failed: jsonrpc error ...
-  if (c.startsWith('Error: extension hook') && c.includes('failed:')) return true
-  // extension load failed: ...
-  if (c.startsWith('Error: extension load failed')) return true
-  // extension X respawn failed: ...
-  if (c.startsWith('Error: extension') && c.includes('respawn failed')) return true
-  return false
-}
+// isExtensionErrorMessage is defined in serialize-conversation-pane.ts and
+// re-exported here for backward compatibility with call sites that import it
+// from session-store-persistence.
+export { isExtensionErrorMessage, resolvePersistedLastKnownSessionId }
 
 function persistTabs(useSessionStore: Store): void {
   const { tabs, activeTabId } = useSessionStore.getState()
@@ -44,25 +28,43 @@ function persistTabs(useSessionStore: Store): void {
     .map((t) => {
       const pane = terminalPanes.get(t.id)
       // Conversation state is persisted as the unified conversationPane
-      // (schemaVersion 2). A plain conversation serializes its single `main`
-      // instance (count only — content reloads from the conversation file); an
-      // extension-hosted conversation serializes content per instance. The old
-      // split shape (flat fields + engine* maps) is no longer written.
+      // (schemaVersion 2). Whether to persist message content (vs. count-only)
+      // is determined by a data fact — does the instance contain renderer-only
+      // rows (harness, system) that cannot be reloaded from the engine
+      // conversation file? No tab-type branch; see serialize-conversation-pane.ts.
       const convoPane = serializeConversationPane(conversationPanes.get(t.id), {
-        hasEngineExtension: !!t.hasEngineExtension,
         tabIdForLog: t.id,
       })
+      // Extension-hosted tab metadata (profile id) is written so restoration can
+      // restart the engine session with the correct profile.
+      const isEngine = t.engineProfileId != null && t.engineProfileId !== ''
+      // Preserve the last real conversation id in lastKnownSessionId so a
+      // transient empty / engine-minted conversationId never erases the tab's
+      // ability to resume its original conversation on the next restore. Reads
+      // from the active instance's conversation chain as a last source.
+      const inst = activeInstance(conversationPanes, t.id)
+      const persistedLastKnown = resolvePersistedLastKnownSessionId({
+        conversationId: t.conversationId,
+        lastKnownSessionId: t.lastKnownSessionId,
+        historicalSessionIds: t.historicalSessionIds,
+        instanceConversationIds: inst?.conversationIds,
+      })
       return {
+        // Persist the durable tab identity. The session key == tabId, and the
+        // engine binding store is keyed on it; writing it here is what lets
+        // restore reuse the same key across restarts instead of minting a fresh
+        // one (which fragmented conversations into disjoint files). See
+        // PersistedTab.id in types-persistence.ts.
+        id: t.id,
         conversationId: t.conversationId,
         title: t.customTitle || t.title,
         customTitle: t.customTitle,
         workingDirectory: t.workingDirectory,
         hasChosenDirectory: t.hasChosenDirectory,
         additionalDirs: t.additionalDirs,
-        permissionMode: t.permissionMode,
         ...(convoPane ? { conversationPane: convoPane } : {}),
         ...(t.historicalSessionIds.length > 0 ? { historicalSessionIds: t.historicalSessionIds } : {}),
-        ...(t.lastKnownSessionId ? { lastKnownSessionId: t.lastKnownSessionId } : {}),
+        ...(persistedLastKnown ? { lastKnownSessionId: persistedLastKnown } : {}),
         ...(t.bashResults.length > 0 ? { bashResults: t.bashResults } : {}),
         ...(t.pillColor ? { pillColor: t.pillColor } : {}),
         ...(t.pillIcon ? { pillIcon: t.pillIcon } : {}),
@@ -72,10 +74,15 @@ function persistTabs(useSessionStore: Store): void {
         ...(t.groupPinned ? { groupPinned: true } : {}),
         ...(t.queuedPrompts.length > 0 ? { queuedPrompts: t.queuedPrompts } : {}),
         ...(t.contextTokens ? { contextTokens: t.contextTokens } : {}),
+        // Persist contextWindow alongside contextTokens so the status-bar
+        // denominator is correct after reload (B4). Without this the indicator
+        // recomputes pct as N / picker-model-window, which diverges whenever the
+        // model the engine ran differs from the user's picker selection.
+        ...(t.contextWindow ? { contextWindow: t.contextWindow } : {}),
         ...(t.lastMessagePreview ? { lastMessagePreview: t.lastMessagePreview } : {}),
         ...(t.lastEventAt ? { lastEventAt: t.lastEventAt } : {}),
         ...(t.isTerminalOnly ? { isTerminalOnly: true } : {}),
-        ...(t.hasEngineExtension ? { hasEngineExtension: true, engineProfileId: t.engineProfileId } : {}),
+        ...(isEngine ? { hasEngineExtension: true, engineProfileId: t.engineProfileId } : {}),
         ...(pane && pane.instances.length > 0 ? { terminalInstances: pane.instances } : {}),
         ...(pane && pane.instances.length > 0 ? (() => {
           const buffers: Record<string, string> = {}
@@ -118,7 +125,7 @@ function persistTabs(useSessionStore: Store): void {
   }
 
   const data: PersistedTabState = {
-    schemaVersion: UNIFIED_SCHEMA_VERSION,
+    schemaVersion: SPLIT_SCHEMA_VERSION,
     activeSessionId: activeTab?.conversationId || null,
     activeTabIndex,
     tabs: persistedTabs,
@@ -166,27 +173,41 @@ function scanForStuckTabs(useSessionStore: Store): void {
   if (!tabRecoveryEnabled) return
   const thresholdMs = tabRecoveryTimeoutSec * 1000
   const now = Date.now()
-  const { tabs, forceRecoverTab } = useSessionStore.getState()
+  const { tabs, autoRecoverStuckTab } = useSessionStore.getState()
   for (const t of tabs) {
     if (t.status !== 'running' && t.status !== 'connecting') continue
     if (!t.activeRequestId) continue
     if (t.lastEventAt === null) continue
     if (now - t.lastEventAt <= thresholdMs) continue
-    forceRecoverTab(t.id, `Tab idle for ${Math.round((now - t.lastEventAt) / 1000)}s with no engine activity. The engine may have hung; sending stop and resetting the tab. You can resume the conversation.`)
+    // Auto-heal: recreate the engine session in-process and resubmit the last
+    // prompt so the work continues without user involvement (the user expected
+    // background work to keep running). Bounded internally; falls back to a
+    // plain reset + honest message after the attempt cap. This replaces the old
+    // behavior of aborting and telling the user to "resume" — which they could
+    // not meaningfully do, and which abandoned the work.
+    autoRecoverStuckTab(t.id)
   }
 }
 
 export function setupPersistence(useSessionStore: Store): void {
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   useSessionStore.subscribe((state, prev) => {
+    // Skip all saves while the tab-restoration loop is running. Each per-tab
+    // setState during rehydration fires this subscriber, but the partial state
+    // (1..N-1 tabs loaded) always trips the GUARD (on-disk has N tabs, incoming
+    // has fewer) producing a chain of "refusing save" rejections. The GUARD
+    // remains as a backstop; this flag prevents the storm at the source.
+    // rehydrating is cleared alongside tabsReady=true after the loop completes.
+    if (state.rehydrating) return
+
     if (state.tabs !== prev.tabs || state.activeTabId !== prev.activeTabId || state.fileEditorStates !== prev.fileEditorStates || state.isExpanded !== prev.isExpanded || state.fileEditorOpenDirs !== prev.fileEditorOpenDirs || state.editorGeometry !== prev.editorGeometry || state.planGeometry !== prev.planGeometry || state.agentDetailGeometry !== prev.agentDetailGeometry || state.terminalPanes !== prev.terminalPanes || state.conversationPanes !== prev.conversationPanes) {
       // Flush immediately when permissionDenied changes on any tab — this
       // state must survive a crash or force-quit (e.g. the desktop is killed
       // while an engine run is in progress and the AskUserQuestion / ExitPlanMode
       // denial is never written to the conversation file). Per-conversation
-      // permissionDenied now lives on the instance for EVERY tab (normal tabs
+      // permissionDenied now lives on the instance for EVERY tab (all tabs
       // use their `main` instance), so the single conversationPanes scan below covers
-      // both CLI and engine tabs.
+      // every tab uniformly.
       //
       // IMPORTANT: compare per-instance permissionDenied precisely — NOT
       // `state.conversationPanes !== prev.conversationPanes`. The Map identity changes on
@@ -207,18 +228,21 @@ export function setupPersistence(useSessionStore: Store): void {
           return false
         })()
 
-      // Flush immediately when a CLI tab captures its first conversationId.
-      // The engine event slice already does this for engine tabs via
-      // __ionForceFlushTabs (engine-event-slice.ts:126–142). For CLI tabs,
-      // session_init sets conversationId inside the Zustand reducer
-      // (event-slice.ts), and the normal 100ms debounce creates a window
-      // where a hard kill (SIGUSR1 drain → app.exit, laptop lid close)
-      // drops the session ID — making the tab irrecoverable on restart
-      // (conversationId: null → sessionless blank tab path).
+      // Flush immediately when any tab captures or updates its conversationId.
+      // Two cases require immediate persist:
+      //   1. First capture: tab goes from no conversationId → sessionId (new session or
+      //      first engine status event). The debounce creates a crash window here.
+      //   2. Changed sessionId: engine restarts mid-conversation and emits a new sessionId
+      //      (engine tab restart, reconnect). The prior sessionId was written on the debounced
+      //      timer; if the engine crashes between the old and new id, the tab recovers to the
+      //      old conversation. Writing immediately closes that window.
+      // For all tab types, __ionForceFlushTabs (event-slice.ts, session_init handler)
+      // also fires on sessionId capture, providing a second guarantee. The subscriber
+      // here acts as a backstop when __ionForceFlushTabs isn't registered yet at startup.
       const conversationIdCaptured =
         state.tabs !== prev.tabs && state.tabs.some((t, i) => {
           const p = prev.tabs[i]
-          return p && t.id === p.id && !p.conversationId && !!t.conversationId
+          return p && t.id === p.id && t.conversationId !== p.conversationId && !!t.conversationId
         })
 
       if (permissionDeniedChanged || conversationIdCaptured) {

@@ -2,6 +2,7 @@ import React, { useEffect, useCallback, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Paperclip, Camera, Lightning } from '@phosphor-icons/react'
 import { GitPanel } from './components/GitPanel'
+import { StatusDrawer } from './components/StatusDrawer'
 import { TabStrip } from './components/TabStrip'
 import { ConversationView } from './components/ConversationView'
 import { InputBar, useBashModeStore } from './components/InputBar'
@@ -9,7 +10,6 @@ import { StatusBar } from './components/StatusBar'
 import { SettingsDialog } from './components/SettingsDialog'
 import { TerminalPanel } from './components/TerminalPanel'
 import { TerminalBigScreen } from './components/TerminalBigScreen'
-import { EngineView } from './components/EngineView'
 import { ConversationErrorBoundary } from './components/conversation'
 import { FileExplorer } from './components/FileExplorer'
 import { FileEditor } from './components/FileEditor'
@@ -33,6 +33,7 @@ import { useColors, spacing } from './theme'
 import { usePreferencesStore } from './preferences'
 import { useUpdateStore } from './stores/update-store'
 import { setupModelSync } from './stores/model-store'
+
 
 const TRANSITION = { duration: 0.26, ease: [0.4, 0, 0.1, 1] as const }
 
@@ -121,12 +122,20 @@ export default function App() {
   const isTerminalTall = useSessionStore((s) => s.terminalTallTabId === s.activeTabId)
   const isTerminalBigScreen = useSessionStore((s) => s.terminalBigScreenTabId === s.activeTabId)
   const gitPanelOpen = useSessionStore((s) => s.gitPanelOpen)
+  const statusDrawerOpen = useSessionStore((s) => s.statusDrawerOpen)
   const activeTabId = useSessionStore((s) => s.activeTabId)
   const tabsReady = useSessionStore((s) => s.tabsReady)
   const activeTab = useSessionStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
   const isTerminalOnly = activeTab?.isTerminalOnly || false
-  const isEngine = activeTab?.hasEngineExtension || false
-  const isEngineTall = useSessionStore((s) => s.tallViewTabId === s.activeTabId && (s.tabs.find((t) => t.id === s.activeTabId)?.hasEngineExtension || false))
+  // A conversation tab is any non-terminal tab. The unified ConversationView is
+  // mounted for all of them (plain or extension-backed), so the card-shell uses
+  // the expanded geometry whenever a conversation is shown — there is no longer
+  // an engine-specific layout fork.
+  const isConversation = !!activeTab && !isTerminalOnly
+  // Tall mode for the active conversation tab. `isTallView` (above) already
+  // tracks tallViewTabId === activeTabId for every tab type; `isTall` aliases it
+  // for the conversation body height (replaces the old engine-only tall flag).
+  const isTall = isTallView && isConversation
   const terminalOpen = useSessionStore((s) => s.terminalOpenTabIds.has(s.activeTabId))
   const explorerOpen = useSessionStore((s) => s.fileExplorerOpenDirs.has(s.tabs.find((t) => t.id === s.activeTabId)?.workingDirectory || ''))
   const editorOpen = useSessionStore((s) => {
@@ -158,6 +167,20 @@ export default function App() {
     }
   }, [editorOpen, activeTab ? editorDirForTab(activeTab) : undefined])
 
+  // Fire get_context_breakdown when the status drawer opens so the breakdown
+  // panel always shows current data — even for idle or freshly-loaded historical
+  // conversations that have not sent a prompt yet. The engine emits
+  // engine_context_breakdown on its event bus; the existing context_breakdown
+  // handler in event-wiring.ts populates activeInstance.contextBreakdown and
+  // the drawer re-renders synchronously.
+  useEffect(() => {
+    if (!statusDrawerOpen || !activeTabId || activeTabId === '') return
+    window.ion.engineGetContextBreakdown(activeTabId).catch(() => {
+      // Fire-and-forget. Failure is non-fatal: the drawer renders whatever
+      // cached breakdown it has (possibly none for brand-new sessions).
+    })
+  }, [statusDrawerOpen, activeTabId])
+
   // Layout dimensions — three width tiers based on expandedUI + ultraWide
   //   ultraWide OFF: collapsed 460 / expanded 700
   //   ultraWide ON:  collapsed 700 / expanded 910
@@ -167,7 +190,6 @@ export default function App() {
   const cardExpandedWidth = expandedUI ? fullWidth : baseWidth
   const cardCollapsedWidth = expandedUI ? (fullWidth - 30) : (baseWidth - 30)
   const cardCollapsedMargin = 15
-  const bodyMaxHeightNormal = expandedUI ? 520 : 400
 
   const winHeight = useWindowHeight()
   const inputRowRef = useRef<HTMLDivElement>(null)
@@ -177,7 +199,7 @@ export default function App() {
   // NON_INPUT_OVERHEAD covers tab strip (~40px) + card border/margins (~12px) + safety buffer (~38px)
   const NON_INPUT_OVERHEAD = 90
   const tallBodyMax = winHeight - NON_INPUT_OVERHEAD - inputRowHeight
-  const bodyMaxHeight = isTallView ? tallBodyMax : bodyMaxHeightNormal
+
 
   const handleMainUIMouseDown = useCallback(() => {
     if (useSessionStore.getState().fileEditorFocused) {
@@ -259,13 +281,13 @@ export default function App() {
             data-ion-ui
             className="overflow-hidden flex flex-col"
             animate={{
-              width: isExpanded || isTerminalOnly || isTerminalTall || isEngine ? cardExpandedWidth : cardCollapsedWidth,
-              marginBottom: isExpanded || isTerminalOnly || isTerminalTall || isEngine ? 10 : -14,
-              marginLeft: isExpanded || isTerminalOnly || isTerminalTall || isEngine ? 0 : cardCollapsedMargin,
-              marginRight: isExpanded || isTerminalOnly || isTerminalTall || isEngine ? 0 : cardCollapsedMargin,
-              background: isExpanded || isTerminalOnly || isTerminalTall || isEngine ? colors.containerBg : colors.containerBgCollapsed,
+              width: isExpanded || isTerminalOnly || isTerminalTall || isConversation ? cardExpandedWidth : cardCollapsedWidth,
+              marginBottom: isExpanded || isTerminalOnly || isTerminalTall || isConversation ? 10 : -14,
+              marginLeft: isExpanded || isTerminalOnly || isTerminalTall || isConversation ? 0 : cardCollapsedMargin,
+              marginRight: isExpanded || isTerminalOnly || isTerminalTall || isConversation ? 0 : cardCollapsedMargin,
+              background: isExpanded || isTerminalOnly || isTerminalTall || isConversation ? colors.containerBg : colors.containerBgCollapsed,
               borderColor: colors.containerBorder,
-              boxShadow: isExpanded || isTerminalOnly || isTerminalTall || isEngine ? colors.cardShadow : colors.cardShadowCollapsed,
+              boxShadow: isExpanded || isTerminalOnly || isTerminalTall || isConversation ? colors.cardShadow : colors.cardShadowCollapsed,
             }}
             transition={TRANSITION}
             style={{
@@ -273,7 +295,7 @@ export default function App() {
               borderStyle: 'solid',
               borderRadius: 20,
               position: 'relative',
-              zIndex: isExpanded || isTerminalOnly || isTerminalTall || isEngine ? 20 : 10,
+              zIndex: isExpanded || isTerminalOnly || isTerminalTall || isConversation ? 20 : 10,
             }}
           >
             {tabsReady && (<>
@@ -282,11 +304,17 @@ export default function App() {
               <TabStrip />
             </div>
 
-            {/* Engine tab: custom engine view */}
-            {isEngine && activeTab && (
-              <div style={{ height: isEngineTall ? tallBodyMax : 420 }}>
+            {/* Unified conversation view for EVERY non-terminal tab — plain
+                or extension-backed. There is no separate engine view; the one
+                ConversationView renders all features from data (agent panel,
+                dialog, toasts, pinned prompt, search, todo, queue, activity)
+                and self-hides engine-only chrome when its data is empty. Uses
+                the always-present fixed-height geometry for all conversations
+                (no collapse-to-0). */}
+            {!isTerminalOnly && !isTerminalTall && activeTab && (
+              <div style={{ height: isTall ? tallBodyMax : 420 }}>
                 <ConversationErrorBoundary>
-                  <EngineView tabId={activeTabId} />
+                  <ConversationView tabId={activeTabId} />
                 </ConversationErrorBoundary>
               </div>
             )}
@@ -303,25 +331,6 @@ export default function App() {
               <div style={{ height: tallBodyMax }}>
                 <TerminalPanel tabId={activeTabId} cwd={activeTab.workingDirectory} />
               </div>
-            )}
-
-            {/* Body — chat history (hidden when terminal-only, engine, or terminal-tall) */}
-            {!isTerminalOnly && !isEngine && !isTerminalTall && (
-              <motion.div
-                initial={false}
-                animate={{
-                  height: isExpanded ? 'auto' : 0,
-                  opacity: isExpanded ? 1 : 0,
-                }}
-                transition={TRANSITION}
-                className="overflow-hidden"
-              >
-                <div style={{ maxHeight: bodyMaxHeight, display: 'flex', flexDirection: 'column' }}>
-                  <ConversationErrorBoundary>
-                    <ConversationView />
-                  </ConversationErrorBoundary>
-                </div>
-              </motion.div>
             )}
             {/* Unified status bar. Single instance, always rendered at
                 the bottom of the active tab body regardless of tab
@@ -432,6 +441,27 @@ export default function App() {
                 }}
               >
                 <GitPanel />
+              </motion.div>
+            )}
+          </AnimatePresence>
+          {/* Status Drawer — right-side panel, toggled by ⓘ in StatusBar */}
+          <AnimatePresence>
+            {tabsReady && statusDrawerOpen && (
+              <motion.div
+                data-ion-ui
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                transition={TRANSITION}
+                style={{
+                  position: 'absolute',
+                  left: '100%',
+                  bottom: 60,
+                  marginLeft: gitPanelOpen ? 296 : 8,
+                  zIndex: 26,
+                }}
+              >
+                <StatusDrawer />
               </motion.div>
             )}
           </AnimatePresence>

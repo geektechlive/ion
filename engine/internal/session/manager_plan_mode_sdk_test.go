@@ -29,7 +29,7 @@ func TestGetPlanModeState_AfterEnable(t *testing.T) {
 	mgr := NewManager(mb)
 	_, _ = mgr.StartSession("gpm-enable", defaultConfig())
 
-	mgr.SetPlanMode("gpm-enable", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("gpm-enable", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("gpm-enable", "plan it", nil)
 
 	enabled, path := mgr.GetPlanModeState("gpm-enable")
@@ -46,7 +46,7 @@ func TestGetPlanModeState_AfterToggle(t *testing.T) {
 	mgr := NewManager(mb)
 	_, _ = mgr.StartSession("gpm-toggle", defaultConfig())
 
-	mgr.SetPlanMode("gpm-toggle", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("gpm-toggle", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("gpm-toggle", "plan it", nil)
 
 	mgr.mu.RLock()
@@ -54,7 +54,7 @@ func TestGetPlanModeState_AfterToggle(t *testing.T) {
 	mgr.mu.RUnlock()
 
 	// Toggle off — path is preserved (Part 1 behaviour).
-	mgr.SetPlanMode("gpm-toggle", false, nil, "ui_dropdown")
+	mgr.SetPlanMode("gpm-toggle", false, nil, "ui_dropdown", "")
 
 	enabled, path := mgr.GetPlanModeState("gpm-toggle")
 	if enabled {
@@ -130,7 +130,7 @@ func TestSessionAccessor_GetPlanMode(t *testing.T) {
 	mgr := NewManager(mb)
 	_, _ = mgr.StartSession("sa-get", defaultConfig())
 
-	mgr.SetPlanMode("sa-get", true, []string{"Read"}, "test")
+	mgr.SetPlanMode("sa-get", true, []string{"Read"}, "test", "")
 	_ = mgr.SendPrompt("sa-get", "plan it", nil)
 
 	mgr.mu.RLock()

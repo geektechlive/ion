@@ -3,39 +3,78 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { CaretRight, ArrowsOutSimple, ArrowsInSimple } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
-import { meta, isAgentVisible, sortAgents, getLabelBg, getStatusSuffix, getDispatches, sliceMessagesForDispatch } from './agent-panel-helpers'
+import { useSessionStore } from '../stores/sessionStore'
+import { meta, isAgentVisible, isRootLevelAgent, sortAgents, getLabelBg, getStatusSuffix, getDispatches, selectAgentDepths, dispatchKey } from './agent-panel-helpers'
+import { reconcileActivity } from './agent-dispatch-activity'
+import { mapConversationMessages } from './agent-conversation-mapper'
 import { AgentExpandedView } from './AgentExpandedView'
 import { AgentDetailPanel } from './AgentDetailPanel'
+import { useAgentPanelResize, DEFAULT_PANEL_HEIGHT } from './agent-panel-resize'
 import type { AgentStateUpdate } from '../../shared/types'
 import type { Message } from '../../shared/types'
-
-const DEFAULT_PANEL_HEIGHT = 200
-const MIN_PANEL_HEIGHT = 80
-const MAX_PANEL_PCT = 0.8
+import type { DispatchInfo, DispatchTelemetryEntry } from '../../shared/types-engine'
 
 interface Props {
   agents: AgentStateUpdate[]
+  /** Flat dispatch telemetry entries for deriving nesting depth. */
+  dispatchTelemetry?: DispatchTelemetryEntry[]
   isFullscreen?: boolean
   onToggleFullscreen?: () => void
   /** Custom panel height in pixels (rows container). Undefined = default. */
   panelHeight?: number
   /** Called when the user drags the resize handle to a new height. */
   onPanelHeightChange?: (height: number) => void
+  /**
+   * Main-conversation scope: show only the orchestrator's ROOT dispatches
+   * (agents whose dispatch telemetry has no parent). Sub-dispatched (depth-2+)
+   * agents are excluded so they never surface in the main panel. The embedded
+   * popup panel leaves this false — its agent set is already child-scoped.
+   */
+  rootOnly?: boolean
+  /**
+   * Sub-dispatch scope: this panel renders a tier BELOW the orchestrator
+   * (inside the dispatch-preview popup). Visibility is a top-level-only concept
+   * (`isAgentVisible`); sub-dispatched agents always show regardless of their
+   * `visibility` metadata, so the visibility filter is bypassed here. The main
+   * conversation panel leaves this false to preserve always/sticky/ephemeral.
+   */
+  subDispatch?: boolean
+  /**
+   * When provided, clicking an agent row escalates to this callback instead of
+   * opening AgentPanel's own internal detail popup. The dispatch-preview popup
+   * passes this so a click drills one tier down and pushes onto its breadcrumb
+   * stack, rather than spawning a second floating panel.
+   */
+  onOpenDispatch?: (dispatch: DispatchInfo, agent: AgentStateUpdate) => void
+  /**
+   * Render the panel chrome (the "Agents (N)" header) even when there are zero
+   * agents. The dispatch-preview popup sets this so the embedded panel is always
+   * present in the preview; the main conversation panel leaves it false so a
+   * conversation with no agents shows no empty panel.
+   */
+  alwaysRender?: boolean
 }
 
-export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeight, onPanelHeightChange }: Props) {
+export function AgentPanel({ agents, dispatchTelemetry, isFullscreen, onToggleFullscreen, panelHeight, onPanelHeightChange, rootOnly, subDispatch, onOpenDispatch, alwaysRender }: Props) {
   const colors = useColors()
   const agentPanelDefaultOpen = usePreferencesStore((s) => s.agentPanelDefaultOpen)
   const agentDetailPopup = usePreferencesStore((s) => s.agentDetailPopup)
+  // Live push transcript, keyed by child conversationId. Folded from
+  // dispatch_activity deltas in the engine-event slice; reconciled with the
+  // file-backed snapshot below.
+  const dispatchActivity = useSessionStore((s) => s.dispatchActivity)
+  // Keyed by DISPATCH ID (not agent name): two dispatches of the same agent
+  // name must maintain independent expand state. Falls back to the agent name
+  // when the agent carries no dispatch (extension-roster rows, pre-fix state).
   const [agentExpanded, setAgentExpanded] = useState<Map<string, boolean>>(new Map())
   const [panelCollapsed, setPanelCollapsed] = useState(true)
   // Keyed by conversationId — each dispatch's conversation is loaded independently
   const [convMessages, setConvMessages] = useState<Map<string, Message[]>>(new Map())
   const [convLoading, setConvLoading] = useState<Map<string, boolean>>(new Map())
-  // Track which dispatch index is selected per agent name
+  // Track which dispatch index is selected, keyed by DISPATCH ID (see above).
   const [selectedDispatch, setSelectedDispatch] = useState<Map<string, number>>(new Map())
-  // Popup state — which agent (by name) is shown in the floating detail panel
-  const [popupAgentName, setPopupAgentName] = useState<string | null>(null)
+  // Popup state — which dispatch (by dispatch id) is shown in the floating panel
+  const [popupDispatchId, setPopupDispatchId] = useState<string | null>(null)
   const prevVisibleCount = useRef(0)
   // Tracks whether the user manually toggled the panel this "session"
   // (since agents last appeared). Reset when agents go from 0→N so the
@@ -43,7 +82,31 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
   const userToggled = useRef(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
-  const visible = sortAgents(agents.filter(isAgentVisible))
+  // Visibility scoping:
+  //  - subDispatch tiers (inside the popup): visibility metadata does not apply
+  //    to sub-dispatched agents, so every agent shows (skip isAgentVisible).
+  //  - main conversation: apply the always/sticky/ephemeral visibility filter.
+  const visibilityFiltered = subDispatch ? agents : agents.filter(isAgentVisible)
+  // Root scoping (main conversation only): when rootOnly, drop any agent that
+  // is a nested dispatch (a specialist dispatched by another dispatched agent).
+  // Each agent-state pill carries its own dispatch attribution
+  // (dispatchDepth / dispatchParentId, stamped in dispatch_agent.go), so the
+  // filter is per-instance: it correctly hides a depth-2 dispatch of an agent
+  // name even when the SAME name is also dispatched at root level by the
+  // orchestrator. (The earlier name-based telemetry heuristic could not
+  // distinguish those and leaked the nested instance into the main panel.)
+  // Agents with no attribution (extension-roster rows, pre-fix persisted state)
+  // are treated as root-level and stay visible — see isRootLevelAgent.
+  const scoped = rootOnly
+    ? visibilityFiltered.filter(isRootLevelAgent)
+    : visibilityFiltered
+  const visible = sortAgents(scoped)
+
+  // Derive per-agent nesting depth from flat dispatch telemetry.
+  const agentDepths = React.useMemo(
+    () => selectAgentDepths(dispatchTelemetry || []),
+    [dispatchTelemetry],
+  )
 
   // When agents transition from none→some, apply the user's default
   // preference (open or collapsed). When they go back to none, reset
@@ -63,21 +126,19 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
     prevVisibleCount.current = visible.length
   }, [visible.length, agentPanelDefaultOpen])
 
-  const loadSingleConversation = useCallback(async (convId: string) => {
-    if (!convId || convMessages.has(convId)) return
+  /** Force-refetch a conversation, bypassing the "already loaded" guard.
+   *  Used by the live poller so an open popup's running dispatch keeps
+   *  pulling newly persisted messages as the child agent works. The child
+   *  conversation file grows incrementally on disk (the engine saves after
+   *  every assistant turn and tool result), so each refetch returns a longer
+   *  transcript until the dispatch reaches a terminal state. */
+  const refetchConversation = useCallback(async (convId: string) => {
+    if (!convId) return
     setConvLoading(prev => { const next = new Map(prev); next.set(convId, true); return next })
     try {
       console.log(`[AgentPanel] fetching conversation: convId=${convId}`)
       const data = await window.ion.getConversation(convId, 0, 200)
-      const msgs: Message[] = (data.messages || []).map((m: any, i: number) => ({
-        id: `${convId.slice(0, 8)}-${i}`,
-        role: m.role,
-        content: m.content,
-        toolName: m.toolName || '',
-        toolInput: m.toolInput || '',
-        toolStatus: 'completed' as const,
-        timestamp: m.timestamp || 0,
-      }))
+      const msgs: Message[] = mapConversationMessages(data.messages || [])
       console.log(`[AgentPanel] loaded ${msgs.length} messages for convId=${convId}`)
       setConvMessages(prev => { const next = new Map(prev); next.set(convId, msgs); return next })
     } catch (err) {
@@ -85,14 +146,22 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
     } finally {
       setConvLoading(prev => { const next = new Map(prev); next.set(convId, false); return next })
     }
-  }, [convMessages])
+  }, [])
+
+  /** One-shot load: fetch the conversation only if it hasn't been loaded
+   *  yet. The live poller uses refetchConversation to force a refresh. */
+  const loadSingleConversation = useCallback(async (convId: string) => {
+    if (!convId || convMessages.has(convId)) return
+    return refetchConversation(convId)
+  }, [convMessages, refetchConversation])
 
   /** Load the conversation for the selected dispatch of an agent,
    *  then lazily preload the remaining dispatches in the background. */
   const loadAgentDispatch = useCallback((agent: AgentStateUpdate) => {
     const dispatches = getDispatches(agent)
     if (dispatches.length === 0) return
-    const idx = selectedDispatch.get(agent.name) ?? dispatches.length - 1
+    const dispKey = dispatches.at(-1)?.id ?? agent.name
+    const idx = selectedDispatch.get(dispKey) ?? dispatches.length - 1
     const convId = dispatches[idx]?.conversationId
     if (convId) {
       // Load the selected dispatch first, then preload the rest.
@@ -113,7 +182,7 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
   // conversation ID to the accumulated list.
   useEffect(() => {
     for (const agent of visible) {
-      const isExpanded = agentExpanded.get(agent.name)
+      const isExpanded = agentExpanded.get(dispatchKey(agent))
       const isTerminal = agent.status === 'done' || agent.status === 'error'
       const hasAnyConvId = getDispatches(agent).some(d => d.conversationId)
       if (isExpanded && isTerminal && hasAnyConvId) {
@@ -124,19 +193,59 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
 
   // Auto-close popup when the agent disappears from the visible set
   useEffect(() => {
-    if (popupAgentName && !visible.find(a => a.name === popupAgentName)) {
-      setPopupAgentName(null)
+    if (popupDispatchId && !visible.find(a => getDispatches(a).at(-1)?.id === popupDispatchId)) {
+      setPopupDispatchId(null)
     }
-  }, [visible, popupAgentName])
+  }, [visible, popupDispatchId])
 
   // Live streaming for popup — re-fetch when dispatch signature changes
-  const popupAgent = popupAgentName ? visible.find(a => a.name === popupAgentName) : null
+  const popupAgent = popupDispatchId ? visible.find(a => getDispatches(a).at(-1)?.id === popupDispatchId) : null
   const popupDispatchSig = popupAgent
     ? `${getDispatches(popupAgent).map(d => d.conversationId).join(',')}|${popupAgent.status}|${getDispatches(popupAgent).length}`
     : ''
   useEffect(() => {
     if (popupAgent) loadAgentDispatch(popupAgent)
   }, [popupDispatchSig]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Slow reconcile for the open popup — the live transcript is carried in real
+  // time by the dispatch_activity push path (folded into the store, reconciled
+  // in resolveDispatchData). This timer is the CORRECTNESS BACKSTOP, not the
+  // streaming path: it re-fetches the file-backed snapshot on a slow cadence so
+  // any gap from a dropped delta or reconnect self-heals (the snapshot replaces
+  // the cached list and reconcileActivity re-applies surviving push entries).
+  // A final reconcile fires once when the dispatch reaches a terminal state so
+  // the popup shows the complete persisted transcript regardless of whether the
+  // last few deltas landed.
+  const popupDispatches = popupAgent ? getDispatches(popupAgent) : []
+  const popupSelIdx = popupAgent
+    ? (selectedDispatch.get(dispatchKey(popupAgent)) ?? popupDispatches.length - 1)
+    : -1
+  const popupSelDispatch = popupSelIdx >= 0 ? popupDispatches[popupSelIdx] : undefined
+  const popupSelConvId = popupSelDispatch?.conversationId || ''
+  // Treat the dispatch as running when its own status is running, or (when the
+  // structured entry has no status yet) when the agent itself is running.
+  const popupSelRunning = popupAgent
+    ? (popupSelDispatch?.status
+        ? popupSelDispatch.status === 'running'
+        : popupAgent.status === 'running')
+    : false
+  const RECONCILE_INTERVAL_MS = 12000
+  useEffect(() => {
+    if (!popupDispatchId || !popupSelConvId || !popupSelRunning) return
+    const timer = setInterval(() => {
+      refetchConversation(popupSelConvId)
+    }, RECONCILE_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [popupDispatchId, popupSelConvId, popupSelRunning, refetchConversation])
+  // One final reconcile when the running dispatch transitions to terminal, so
+  // the popup converges on the complete persisted transcript.
+  const prevPopupRunning = useRef(false)
+  useEffect(() => {
+    if (popupDispatchId && popupSelConvId && prevPopupRunning.current && !popupSelRunning) {
+      refetchConversation(popupSelConvId)
+    }
+    prevPopupRunning.current = popupSelRunning
+  }, [popupDispatchId, popupSelConvId, popupSelRunning, refetchConversation])
 
   /** Check if any conversation is currently loading for an agent. */
   const isAgentLoading = useCallback((agent: AgentStateUpdate): boolean => {
@@ -147,34 +256,73 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
   /** Resolve dispatch data for a given agent (used by both inline and popup). */
   const resolveDispatchData = useCallback((agent: AgentStateUpdate) => {
     const dispatches = getDispatches(agent)
-    const dispIdx = selectedDispatch.get(agent.name) ?? dispatches.length - 1
+    const dispKey = dispatches.at(-1)?.id ?? agent.name
+    const dispIdx = selectedDispatch.get(dispKey) ?? dispatches.length - 1
     const activeConvId = dispatches[dispIdx]?.conversationId || ''
     const rawMsgs = activeConvId ? convMessages.get(activeConvId) : undefined
     const activeDispatch = dispatches[dispIdx]
-    const sharesConvId = activeDispatch && dispatches.some(d => d.id !== activeDispatch.id && d.conversationId === activeConvId && activeConvId)
-    const slicedMsgs = rawMsgs && sharesConvId ? sliceMessagesForDispatch(rawMsgs, activeDispatch, dispatches) : rawMsgs
     const isLoading = activeConvId ? convLoading.get(activeConvId) || false : false
-    return { dispatches, dispIdx, slicedMsgs, isLoading }
-  }, [selectedDispatch, convMessages, convLoading])
+    // Reconcile the file-backed snapshot (rawMsgs) with the live push
+    // transcript (dispatchActivity). The snapshot is authoritative and heals
+    // any gap; push entries the snapshot does not yet cover (the live in-flight
+    // partial) are appended so the popup streams in real time. When no snapshot
+    // has loaded yet, the push entries alone drive the popup.
+    // Look up by dispatchAgentId (activeDispatch.id) so two dispatches that
+    // share a conversationId read from separate push buffers. convId-keying
+    // caused dispatch 1's entries to appear in dispatch 2's popup.
+    const pushMsgs = activeDispatch?.id ? dispatchActivity?.[activeDispatch.id] : undefined
+    let mergedMsgs = rawMsgs
+    if (pushMsgs && pushMsgs.length > 0) {
+      mergedMsgs = reconcileActivity(rawMsgs ?? [], {
+        order: pushMsgs.map((_, i) => `idx:${i}`),
+        entries: Object.fromEntries(pushMsgs.map((m, i) => [`idx:${i}`, { key: `idx:${i}`, seq: i, ts: m.timestamp ?? 0, message: m }])),
+      })
+    }
+    return { dispatches, dispIdx, slicedMsgs: mergedMsgs, isLoading }
+  }, [selectedDispatch, convMessages, convLoading, dispatchActivity])
 
   const toggleAgent = (name: string, agent: AgentStateUpdate) => {
+    // Per-agent UI state (expand/select/popup) is keyed by the agent's most
+    // recent dispatch id, not its name, so two dispatches of the same agent
+    // name maintain independent state. Falls back to the name for agents with
+    // no dispatch.
+    const key = dispatchKey(agent)
+    // Escalation mode: when an onOpenDispatch handler is provided (the embedded
+    // sub-dispatch panel inside the dispatch-preview popup), clicking a row
+    // drills one tier down via the parent popup's breadcrumb stack instead of
+    // opening AgentPanel's own floating detail panel. Resolve the agent's
+    // selected dispatch (default: most recent) and hand it up.
+    if (onOpenDispatch) {
+      const dispatches = getDispatches(agent)
+      if (dispatches.length > 0) {
+        const idx = selectedDispatch.get(key) ?? dispatches.length - 1
+        const dispatch = dispatches[idx]
+        if (dispatch) {
+          onOpenDispatch(dispatch, agent)
+          return
+        }
+      }
+      return
+    }
+
     // Popup mode: open floating panel instead of inline expand
     if (agentDetailPopup) {
       const hasContent = getDispatches(agent).length > 0 || meta(agent, 'fullOutput', '') || agent.status === 'running'
       if (hasContent) {
         // Default to the most recent dispatch if not already selected
         const dispatches = getDispatches(agent)
-        if (dispatches.length > 0 && !selectedDispatch.has(name)) {
-          setSelectedDispatch(prev => { const next = new Map(prev); next.set(name, dispatches.length - 1); return next })
+        const mostRecentDispatch = dispatches.at(-1)
+        if (dispatches.length > 0 && !selectedDispatch.has(key)) {
+          setSelectedDispatch(prev => { const next = new Map(prev); next.set(key, dispatches.length - 1); return next })
         }
-        setPopupAgentName(name)
+        setPopupDispatchId(mostRecentDispatch?.id ?? name)
         loadAgentDispatch(agent)
         return
       }
     }
 
     // Inline expand mode (original behavior)
-    const isCurrentlyExpanded = agentExpanded.get(name) || false
+    const isCurrentlyExpanded = agentExpanded.get(key) || false
     // If already expanded and a conversation is loading, ignore the click.
     // This prevents the user from accidentally collapsing the panel and
     // restarting the same slow fetch by clicking impatiently.
@@ -182,48 +330,29 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
     const willExpand = !isCurrentlyExpanded
     setAgentExpanded((prev) => {
       const next = new Map(prev)
-      next.set(name, willExpand)
+      next.set(key, willExpand)
       return next
     })
     if (willExpand) {
       // Default to the most recent dispatch (last in array)
       const dispatches = getDispatches(agent)
-      if (dispatches.length > 0 && !selectedDispatch.has(name)) {
-        setSelectedDispatch(prev => { const next = new Map(prev); next.set(name, dispatches.length - 1); return next })
+      if (dispatches.length > 0 && !selectedDispatch.has(key)) {
+        setSelectedDispatch(prev => { const next = new Map(prev); next.set(key, dispatches.length - 1); return next })
       }
       loadAgentDispatch(agent)
     }
   }
 
-  // Drag-to-resize handler
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    const startY = e.clientY
-    const startHeight = panelHeight ?? DEFAULT_PANEL_HEIGHT
-    const maxHeight = window.innerHeight * MAX_PANEL_PCT
+  // Drag-to-resize handler (mechanics extracted to keep this file under cap).
+  const handleDragStart = useAgentPanelResize(panelHeight, onPanelHeightChange)
 
-    const onMouseMove = (ev: MouseEvent) => {
-      // Dragging up (negative deltaY) should increase panel height
-      const deltaY = startY - ev.clientY
-      const newHeight = Math.max(MIN_PANEL_HEIGHT, Math.min(maxHeight, startHeight + deltaY))
-      onPanelHeightChange?.(Math.round(newHeight))
-    }
-
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-
-    document.body.style.cursor = 'ns-resize'
-    document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-  }, [panelHeight, onPanelHeightChange])
-
-  // All hooks above — safe to return early now
-  if (agents.length === 0) return null
+  // All hooks above — safe to return early now.
+  // The main-conversation panel self-hides when the conversation has no agents
+  // (so a plain conversation shows no empty panel). The dispatch-preview popup
+  // passes alwaysRender so its embedded panel is always present — showing
+  // "Agents (0)" before the lead dispatches anyone, then populating as
+  // specialists spawn (the user requires the preview to always carry the panel).
+  if (agents.length === 0 && !alwaysRender) return null
 
   const running = visible.filter(a => a.status === 'running').length
   const effectiveHeight = panelHeight ?? DEFAULT_PANEL_HEIGHT
@@ -337,12 +466,15 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
             }}
           >
             {visible.map((agent) => {
-              const isExpanded = agentExpanded.get(agent.name) || false
+              const key = dispatchKey(agent)
+              const isExpanded = agentExpanded.get(key) || false
               const suffix = getStatusSuffix(agent)
               const { dispatches, dispIdx, slicedMsgs: loadedMsgs, isLoading } = resolveDispatchData(agent)
+              const nestDepth = agentDepths.get(getDispatches(agent).at(-1)?.id ?? '') ?? 0
+              const nestIndent = nestDepth > 1 ? (nestDepth - 1) * 16 : 0
 
               return (
-                <div key={agent.name}>
+                <div key={key}>
                   <div
                     data-ion-ui
                     onClick={() => toggleAgent(agent.name, agent)}
@@ -352,6 +484,7 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
                       height: 22,
                       cursor: 'pointer',
                       userSelect: 'none',
+                      paddingLeft: nestIndent || undefined,
                     }}
                   >
                     {/* Colored label */}
@@ -423,7 +556,7 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
                           dispatches={dispatches}
                           selectedDispatch={dispIdx}
                           onSelectDispatch={(idx) => {
-                            setSelectedDispatch(prev => { const next = new Map(prev); next.set(agent.name, idx); return next })
+                            setSelectedDispatch(prev => { const next = new Map(prev); next.set(key, idx); return next })
                             const convId = dispatches[idx]?.conversationId
                             if (convId) loadSingleConversation(convId)
                           }}
@@ -447,11 +580,13 @@ export function AgentPanel({ agents, isFullscreen, onToggleFullscreen, panelHeig
           dispatches={popupData.dispatches}
           selectedDispatch={popupData.dispIdx}
           onSelectDispatch={(idx) => {
-            setSelectedDispatch(prev => { const next = new Map(prev); next.set(popupAgent.name, idx); return next })
+            setSelectedDispatch(prev => { const next = new Map(prev); next.set(dispatchKey(popupAgent), idx); return next })
             const convId = popupData.dispatches[idx]?.conversationId
             if (convId) loadSingleConversation(convId)
           }}
-          onClose={() => setPopupAgentName(null)}
+          onClose={() => setPopupDispatchId(null)}
+          dispatchTelemetry={dispatchTelemetry}
+          allAgents={agents}
         />
       )}
     </div>

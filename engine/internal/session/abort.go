@@ -11,15 +11,32 @@ import (
 // dispatched child agents so they do not continue running standalone.
 func (m *Manager) SendAbort(key string) {
 	utils.Info("Session", fmt.Sprintf("SendAbort: key=%s", key))
-	m.mu.RLock()
+	m.mu.Lock()
 	s, ok := m.sessions[key]
 	if !ok {
-		m.mu.RUnlock()
+		m.mu.Unlock()
 		utils.Warn("Session", fmt.Sprintf("SendAbort: session not found for key=%s", key))
 		return
 	}
 	rid := s.requestID
-	m.mu.RUnlock()
+	// Discard any prompts queued behind the in-flight run. Pressing Stop
+	// means "abandon the pending work", so prompts the user queued *before*
+	// the abort must not be resurrected when the cancelled run unwinds and
+	// handleRunExit drains the queue. This mirrors StopSession, which also
+	// nils promptQueue. A prompt the user types *after* this abort re-queues
+	// onto the now-empty queue and is dispatched once by handleRunExit's
+	// existing drain — that is the intended hold-and-dispatch behavior.
+	//
+	// We deliberately do NOT clear s.requestID here: the run goroutine and
+	// its cancel watchdog own the requestID lifecycle and clear it via
+	// handleRunExit on real exit. Clearing it out from under them would
+	// desync the backend's per-run watchdog / terminal-status contract and
+	// risk a double dispatch.
+	if dropped := len(s.promptQueue); dropped > 0 {
+		utils.Info("Session", fmt.Sprintf("SendAbort: dropping %d queued prompt(s) for key=%s", dropped, key))
+		s.promptQueue = nil
+	}
+	m.mu.Unlock()
 
 	// Cancel the session's cancellation root first. This cascades through
 	// the Go context tree to every descendant that derived from it — the

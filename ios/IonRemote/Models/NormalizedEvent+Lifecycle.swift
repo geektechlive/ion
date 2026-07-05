@@ -78,6 +78,10 @@ extension RemoteEvent {
             let buffered = try container.decodeIfPresent(Int.self, forKey: .buffered) ?? 0
             return .heartbeat(senderTs: senderTs, buffered: buffered)
 
+        case .resendUnavailable:
+            let fromSeq = try container.decodeIfPresent(UInt64.self, forKey: .fromSeq) ?? 0
+            return .resendUnavailable(fromSeq: fromSeq)
+
         case .error:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let message = try container.decode(String.self, forKey: .message)
@@ -172,6 +176,11 @@ extension RemoteEvent {
             try container.encode(TypeKey.heartbeat, forKey: .type)
             try container.encode(senderTs, forKey: .ts)
             try container.encode(buffered, forKey: .buffered)
+            return true
+
+        case .resendUnavailable(let fromSeq):
+            try container.encode(TypeKey.resendUnavailable, forKey: .type)
+            try container.encode(fromSeq, forKey: .fromSeq)
             return true
 
         case .requestDiagnosticLogs:

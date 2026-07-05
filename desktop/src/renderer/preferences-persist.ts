@@ -9,7 +9,7 @@ export function saveSettings(s: Record<string, unknown>): void {
 
 export function getAllSettings(get: () => PreferencesState): Record<string, unknown> {
   const s = get()
-  return { themeMode: s.themeMode, selectedTheme: s.selectedTheme, soundEnabled: s.soundEnabled, expandedUI: s.expandedUI, ultraWide: s.ultraWide, defaultBaseDirectory: s.defaultBaseDirectory, recentBaseDirectories: s.recentBaseDirectories, directoryUsageCounts: s.directoryUsageCounts, preferredOpenWith: s.preferredOpenWith, defaultPermissionMode: s.defaultPermissionMode, expandOnTabSwitch: s.expandOnTabSwitch, bashCommandEntry: s.bashCommandEntry, gitPanelSplitRatio: s.gitPanelSplitRatio, gitPanelChangesOpen: s.gitPanelChangesOpen, gitPanelGraphOpen: s.gitPanelGraphOpen, expandToolResults: s.expandToolResults, terminalFontFamily: s.terminalFontFamily, terminalFontSize: s.terminalFontSize, closeExplorerOnFileOpen: s.closeExplorerOnFileOpen, openMarkdownInPreview: s.openMarkdownInPreview, editorWordWrap: s.editorWordWrap, editorFontSize: s.editorFontSize, conversationFontSize: s.conversationFontSize, gitOpsMode: s.gitOpsMode, worktreeCompletionStrategy: s.worktreeCompletionStrategy, worktreeBranchDefaults: s.worktreeBranchDefaults, worktreeSkipPrTitle: s.worktreeSkipPrTitle, allowSettingsEdits: s.allowSettingsEdits, enableClaudeCompat: s.enableClaudeCompat, enableEarlyStopContinuation: s.enableEarlyStopContinuation, showTodoList: s.showTodoList, agentPanelDefaultOpen: s.agentPanelDefaultOpen, agentDetailPopup: s.agentDetailPopup, unifiedTurnView: s.unifiedTurnView, aiGeneratedTitles: s.aiGeneratedTitles, hideOnExternalLaunch: s.hideOnExternalLaunch, keepExplorerOnCollapse: s.keepExplorerOnCollapse, keepTerminalOnCollapse: s.keepTerminalOnCollapse, keepGitPanelOnCollapse: s.keepGitPanelOnCollapse, tabGroupMode: s.tabGroupMode, tabGroups: s.tabGroups, autoGroupOrder: s.autoGroupOrder, stashedManualGroups: s.stashedManualGroups, stashedManualTabAssignments: s.stashedManualTabAssignments, inProgressGroupId: s.inProgressGroupId, doneGroupId: s.doneGroupId, planningGroupId: s.planningGroupId, autoGroupMovement: s.autoGroupMovement, commitCommand: s.commitCommand, gitChangesTreeView: s.gitChangesTreeView, quickTools: s.quickTools, uiZoom: s.uiZoom, remoteEnabled: s.remoteEnabled, relayUrl: s.relayUrl, relayApiKey: s.relayApiKey, lanServerPort: s.lanServerPort, pairedDevices: s.pairedDevices, remoteDisplay: s.remoteDisplay, engineDefaultModel: s.engineDefaultModel, engineProfiles: s.engineProfiles, preferredModel: s.preferredModel, defaultTallConversation: s.defaultTallConversation, defaultTallTerminal: s.defaultTallTerminal, defaultTallEngine: s.defaultTallEngine, tabRecoveryEnabled: s.tabRecoveryEnabled, tabRecoveryTimeoutSec: s.tabRecoveryTimeoutSec, planModelSplitEnabled: s.planModelSplitEnabled, planModeModel: s.planModeModel, implementModeModel: s.implementModeModel, planModeAllowedBashCommands: s.planModeAllowedBashCommands, showImplementClearContext: s.showImplementClearContext }
+  return { themeMode: s.themeMode, selectedTheme: s.selectedTheme, soundEnabled: s.soundEnabled, expandedUI: s.expandedUI, ultraWide: s.ultraWide, defaultBaseDirectory: s.defaultBaseDirectory, recentBaseDirectories: s.recentBaseDirectories, directoryUsageCounts: s.directoryUsageCounts, preferredOpenWith: s.preferredOpenWith, defaultPermissionMode: s.defaultPermissionMode, expandOnTabSwitch: s.expandOnTabSwitch, bashCommandEntry: s.bashCommandEntry, gitPanelSplitRatio: s.gitPanelSplitRatio, gitPanelChangesOpen: s.gitPanelChangesOpen, gitPanelGraphOpen: s.gitPanelGraphOpen, expandToolResults: s.expandToolResults, terminalFontFamily: s.terminalFontFamily, terminalFontSize: s.terminalFontSize, closeExplorerOnFileOpen: s.closeExplorerOnFileOpen, openMarkdownInPreview: s.openMarkdownInPreview, editorWordWrap: s.editorWordWrap, editorFontSize: s.editorFontSize, conversationFontSize: s.conversationFontSize, previewFontSize: s.previewFontSize, gitOpsMode: s.gitOpsMode, worktreeCompletionStrategy: s.worktreeCompletionStrategy, worktreeBranchDefaults: s.worktreeBranchDefaults, worktreeSkipPrTitle: s.worktreeSkipPrTitle, allowSettingsEdits: s.allowSettingsEdits, enableClaudeCompat: s.enableClaudeCompat, enableEarlyStopContinuation: s.enableEarlyStopContinuation, showTodoList: s.showTodoList, agentPanelDefaultOpen: s.agentPanelDefaultOpen, agentDetailPopup: s.agentDetailPopup, unifiedTurnView: s.unifiedTurnView, aiGeneratedTitles: s.aiGeneratedTitles, hideOnExternalLaunch: s.hideOnExternalLaunch, keepExplorerOnCollapse: s.keepExplorerOnCollapse, keepTerminalOnCollapse: s.keepTerminalOnCollapse, keepGitPanelOnCollapse: s.keepGitPanelOnCollapse, tabGroupMode: s.tabGroupMode, tabGroups: s.tabGroups, autoGroupOrder: s.autoGroupOrder, stashedManualGroups: s.stashedManualGroups, stashedManualTabAssignments: s.stashedManualTabAssignments, inProgressGroupId: s.inProgressGroupId, doneGroupId: s.doneGroupId, planningGroupId: s.planningGroupId, autoGroupMovement: s.autoGroupMovement, commitCommand: s.commitCommand, gitChangesTreeView: s.gitChangesTreeView, quickTools: s.quickTools, uiZoom: s.uiZoom, remoteEnabled: s.remoteEnabled, relayUrl: s.relayUrl, relayApiKey: s.relayApiKey, lanServerPort: s.lanServerPort, pairedDevices: s.pairedDevices, streamThinkingToRemote: s.streamThinkingToRemote, thinkingEnabled: s.thinkingEnabled, remoteDisplay: s.remoteDisplay, engineDefaultModel: s.engineDefaultModel, defaultEngineProfileId: s.defaultEngineProfileId, engineProfiles: s.engineProfiles, preferredModel: s.preferredModel, defaultTallConversation: s.defaultTallConversation, defaultTallTerminal: s.defaultTallTerminal, tabRecoveryEnabled: s.tabRecoveryEnabled, tabRecoveryTimeoutSec: s.tabRecoveryTimeoutSec, planModelSplitEnabled: s.planModelSplitEnabled, planModeModel: s.planModeModel, implementModeModel: s.implementModeModel, planModeAllowedBashCommands: s.planModeAllowedBashCommands, showImplementClearContext: s.showImplementClearContext, gitWatcherIgnoredDirectories: s.gitWatcherIgnoredDirectories, excludedResourceKinds: s.excludedResourceKinds, keyboardShortcuts: s.keyboardShortcuts }
 }
 
 /** Returns effective tab groups: custom groups if any exist, otherwise built-in defaults */
@@ -62,6 +62,7 @@ export function loadPersistedSettings(
     const wordWrap = typeof disk.editorWordWrap === 'boolean' ? disk.editorWordWrap : true
     const editorFontSize = typeof disk.editorFontSize === 'number' ? Math.max(8, Math.min(24, Math.round(disk.editorFontSize))) : 12
     const conversationFontSize = typeof disk.conversationFontSize === 'number' ? Math.max(8, Math.min(24, Math.round(disk.conversationFontSize))) : 13
+    const previewFontSize = typeof disk.previewFontSize === 'number' ? Math.max(8, Math.min(24, Math.round(disk.previewFontSize))) : 13
     const gitOpsMode = (disk.gitOpsMode === 'manual' || disk.gitOpsMode === 'worktree') ? disk.gitOpsMode : 'manual'
     const wtStrategy = (disk.worktreeCompletionStrategy === 'merge-ff' || disk.worktreeCompletionStrategy === 'merge' || disk.worktreeCompletionStrategy === 'pr') ? disk.worktreeCompletionStrategy : 'merge-ff'
     const wtDefaults = (disk.worktreeBranchDefaults && typeof disk.worktreeBranchDefaults === 'object' && !Array.isArray(disk.worktreeBranchDefaults)) ? disk.worktreeBranchDefaults as Record<string, string> : {}
@@ -97,6 +98,15 @@ export function loadPersistedSettings(
     const relayApiKey = typeof disk.relayApiKey === 'string' ? disk.relayApiKey : ''
     const lanServerPort = typeof disk.lanServerPort === 'number' ? disk.lanServerPort : 19837
     const pairedDevices = Array.isArray(disk.pairedDevices) ? (disk.pairedDevices as RemotePairedDevice[]).filter((d: any) => d && typeof d.id === 'string' && typeof d.name === 'string') : []
+    // streamThinkingToRemote: when on, the desktop forwards the engine's
+    // per-token thinking_delta stream to remote clients (iOS); when off,
+    // only the block boundaries are forwarded (low-bandwidth projection).
+    // Default true.
+    const streamThinkingToRemote = typeof disk.streamThinkingToRemote === 'boolean' ? disk.streamThinkingToRemote : true
+    // thinkingEnabled: global gate for extended thinking. Default false
+    // (opt-in; thinking bills as output tokens). When on, the per-conversation
+    // thinking control appears and prompts may carry a thinkingEffort.
+    const thinkingEnabled = typeof disk.thinkingEnabled === 'boolean' ? disk.thinkingEnabled : false
     const remoteDisplay = (disk.remoteDisplay && typeof disk.remoteDisplay === 'object' && !Array.isArray(disk.remoteDisplay))
       ? {
           customName: typeof (disk.remoteDisplay as any).customName === 'string' && (disk.remoteDisplay as any).customName.trim().length > 0
@@ -111,11 +121,16 @@ export function loadPersistedSettings(
         }
       : null
     const engineDefaultModel = typeof disk.engineDefaultModel === 'string' ? disk.engineDefaultModel : ''
+    const defaultEngineProfileId = typeof disk.defaultEngineProfileId === 'string' ? disk.defaultEngineProfileId : ''
     const preferredModel = typeof disk.preferredModel === 'string' && disk.preferredModel ? disk.preferredModel : 'claude-opus-4-6'
     const engineProfiles: EngineProfile[] = Array.isArray(disk.engineProfiles) ? (disk.engineProfiles as any[]).filter((p: any) => p && typeof p.id === 'string' && typeof p.name === 'string') : []
-    const defaultTallConversation = typeof disk.defaultTallConversation === 'boolean' ? disk.defaultTallConversation : false
+    // Migration: the engine-specific tall default was collapsed into the single
+    // defaultTallConversation (every conversation tab — plain or extension-backed
+    // — shares one tall default). Carry a legacy disk.defaultTallEngine=true
+    // forward by OR-ing it in, so a user who had engine-tall on keeps tall.
+    const legacyDefaultTallEngine = typeof disk.defaultTallEngine === 'boolean' ? disk.defaultTallEngine : false
+    const defaultTallConversation = (typeof disk.defaultTallConversation === 'boolean' ? disk.defaultTallConversation : false) || legacyDefaultTallEngine
     const defaultTallTerminal = typeof disk.defaultTallTerminal === 'boolean' ? disk.defaultTallTerminal : false
-    const defaultTallEngine = typeof disk.defaultTallEngine === 'boolean' ? disk.defaultTallEngine : false
     const tabRecoveryEnabled = typeof disk.tabRecoveryEnabled === 'boolean' ? disk.tabRecoveryEnabled : true
     const tabRecoveryTimeoutSec = typeof disk.tabRecoveryTimeoutSec === 'number' ? Math.max(30, Math.min(600, Math.round(disk.tabRecoveryTimeoutSec))) : 120
     const planModelSplitEnabled = typeof disk.planModelSplitEnabled === 'boolean' ? disk.planModelSplitEnabled : false
@@ -129,6 +144,19 @@ export function loadPersistedSettings(
     const planBashCmds = Array.isArray(disk.planModeAllowedBashCommands)
       ? (disk.planModeAllowedBashCommands as unknown[]).filter((c): c is string => typeof c === 'string')
       : ['gh']
+    // gitWatcherIgnoredDirectories: paths where the git file watcher is
+    // suppressed. An explicit empty array means "watch everywhere". Falls back
+    // to the default ['~/.ion'] when the key is absent or not an array.
+    const gitWatcherIgnoredDirs = Array.isArray(disk.gitWatcherIgnoredDirectories)
+      ? (disk.gitWatcherIgnoredDirectories as unknown[]).filter((v): v is string => typeof v === 'string')
+      : ['~/.ion']
+    // excludedResourceKinds: kinds the user hid from the global notification
+    // tray. Blocklist — an absent key or non-array means "exclude nothing"
+    // (default []), so every kind shows. Conversation-scoped resources are
+    // unaffected; they always render in the attachments panel.
+    const excludedResourceKinds = Array.isArray(disk.excludedResourceKinds)
+      ? (disk.excludedResourceKinds as unknown[]).filter((v): v is string => typeof v === 'string')
+      : []
     // selectedTheme: theme-registry id (Persisted in disk JSON). Falls
     // back to the default ion-dark theme when the saved id is unknown
     // or malformed; theme registry handles unknown-id graceful render.
@@ -139,7 +167,14 @@ export function loadPersistedSettings(
     // extra clear-context action per-plan. The reset behavior is not a
     // global toggle.
     const showImplementClearContext = typeof disk.showImplementClearContext === 'boolean' ? disk.showImplementClearContext : false
-    setState({ themeMode: mode, selectedTheme, isDark: resolved, soundEnabled: sound, expandedUI: expanded, ultraWide, defaultBaseDirectory: baseDir, recentBaseDirectories: recentDirs, directoryUsageCounts: dirUsageCounts, preferredOpenWith: openWith, expandOnTabSwitch: expandTabSwitch, bashCommandEntry: bashCmd, gitPanelSplitRatio: splitRatio, gitPanelChangesOpen: changesOpen, gitPanelGraphOpen: graphOpen, expandToolResults: expandTools, terminalFontFamily: termFont, terminalFontSize: termSize, editorFontSize, conversationFontSize, closeExplorerOnFileOpen: closeExplorer, openMarkdownInPreview: mdPreview, editorWordWrap: wordWrap, gitOpsMode, worktreeCompletionStrategy: wtStrategy, worktreeBranchDefaults: wtDefaults, worktreeSkipPrTitle: wtSkipPr, allowSettingsEdits: allowSettings, enableClaudeCompat: enableCompat, enableEarlyStopContinuation: enableEarlyStop, showTodoList: showTodo, agentPanelDefaultOpen, agentDetailPopup, unifiedTurnView, aiGeneratedTitles: aiTitles, hideOnExternalLaunch: hideExternal, tabGroupMode: tabGroupMode as TabGroupMode, tabGroups, autoGroupOrder, stashedManualGroups, stashedManualTabAssignments, inProgressGroupId, doneGroupId, planningGroupId, autoGroupMovement, commitCommand, gitChangesTreeView: changesTreeView, keepExplorerOnCollapse: keepExplorer, keepTerminalOnCollapse: keepTerminal, keepGitPanelOnCollapse: keepGitPanel, defaultPermissionMode: permMode, quickTools, uiZoom, remoteEnabled, relayUrl, relayApiKey, lanServerPort, pairedDevices, remoteDisplay, engineDefaultModel, engineProfiles, preferredModel, defaultTallConversation, defaultTallTerminal, defaultTallEngine, tabRecoveryEnabled, tabRecoveryTimeoutSec, planModelSplitEnabled, planModeModel, implementModeModel, planModeAllowedBashCommands: planBashCmds, showImplementClearContext })
+    // keyboardShortcuts: user overrides (command id -> chord string).
+    // Only non-default entries are stored. On load: must be an object
+    // of string->string; drop any malformed entries; ignore unknown ids
+    // (tolerant load — a stale or forward config doesn't crash).
+    const keyboardShortcuts = (disk.keyboardShortcuts && typeof disk.keyboardShortcuts === 'object' && !Array.isArray(disk.keyboardShortcuts))
+      ? Object.fromEntries(Object.entries(disk.keyboardShortcuts as Record<string, unknown>).filter(([k, v]) => typeof k === 'string' && typeof v === 'string')) as Record<string, string>
+      : {}
+    setState({ themeMode: mode, selectedTheme, isDark: resolved, soundEnabled: sound, expandedUI: expanded, ultraWide, defaultBaseDirectory: baseDir, recentBaseDirectories: recentDirs, directoryUsageCounts: dirUsageCounts, preferredOpenWith: openWith, expandOnTabSwitch: expandTabSwitch, bashCommandEntry: bashCmd, gitPanelSplitRatio: splitRatio, gitPanelChangesOpen: changesOpen, gitPanelGraphOpen: graphOpen, expandToolResults: expandTools, terminalFontFamily: termFont, terminalFontSize: termSize, editorFontSize, conversationFontSize, previewFontSize, closeExplorerOnFileOpen: closeExplorer, openMarkdownInPreview: mdPreview, editorWordWrap: wordWrap, gitOpsMode, worktreeCompletionStrategy: wtStrategy, worktreeBranchDefaults: wtDefaults, worktreeSkipPrTitle: wtSkipPr, allowSettingsEdits: allowSettings, enableClaudeCompat: enableCompat, enableEarlyStopContinuation: enableEarlyStop, showTodoList: showTodo, agentPanelDefaultOpen, agentDetailPopup, unifiedTurnView, aiGeneratedTitles: aiTitles, hideOnExternalLaunch: hideExternal, tabGroupMode: tabGroupMode as TabGroupMode, tabGroups, autoGroupOrder, stashedManualGroups, stashedManualTabAssignments, inProgressGroupId, doneGroupId, planningGroupId, autoGroupMovement, commitCommand, gitChangesTreeView: changesTreeView, keepExplorerOnCollapse: keepExplorer, keepTerminalOnCollapse: keepTerminal, keepGitPanelOnCollapse: keepGitPanel, defaultPermissionMode: permMode, quickTools, uiZoom, remoteEnabled, relayUrl, relayApiKey, lanServerPort, pairedDevices, streamThinkingToRemote, thinkingEnabled, remoteDisplay, engineDefaultModel, defaultEngineProfileId, engineProfiles, preferredModel, defaultTallConversation, defaultTallTerminal, tabRecoveryEnabled, tabRecoveryTimeoutSec, planModelSplitEnabled, planModeModel, implementModeModel, planModeAllowedBashCommands: planBashCmds, showImplementClearContext, gitWatcherIgnoredDirectories: gitWatcherIgnoredDirs, excludedResourceKinds, keyboardShortcuts })
     applyTheme(resolved)
     if (uiZoom !== 1) document.documentElement.style.zoom = String(uiZoom)
   })

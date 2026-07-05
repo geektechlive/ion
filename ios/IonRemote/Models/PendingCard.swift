@@ -65,4 +65,39 @@ enum PendingCard {
         }
         return .found(lastTool)
     }
+
+    /// Synthesize a `PermissionRequest` for a restored pending card, or nil when
+    /// no card should be shown (per `outcome`). This is the shared synthesis used
+    /// by every conversation view — plain and engine — so a plan/ask card
+    /// survives a history reload identically on both. Post-#256 the engine view
+    /// no longer relies solely on the live `permissionQueue`; it restores cards
+    /// from history the same way plain tabs do.
+    ///
+    /// The synthesized request uses a `"restored-<toolId>"` questionId so the
+    /// dismissal-suppression set (`dismissedRestoredCards`) can key on it, and
+    /// parses the tool's stored `toolInput` JSON into the AnyCodable map the
+    /// card views expect.
+    static func restoredCard(for messages: [Message]) -> PermissionRequest? {
+        let lastTool: Message
+        switch outcome(for: messages) {
+        case .found(let tool):
+            lastTool = tool
+        case .none, .suppressedByUser, .suppressedByClear:
+            return nil
+        }
+
+        var toolInput: [String: AnyCodable]?
+        if let inputStr = lastTool.toolInput,
+           let data = inputStr.data(using: .utf8),
+           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            toolInput = dict.mapValues { AnyCodable($0) }
+        }
+
+        return PermissionRequest(
+            questionId: "restored-\(lastTool.id)",
+            toolName: lastTool.toolName ?? "",
+            toolInput: toolInput,
+            options: []
+        )
+    }
 }

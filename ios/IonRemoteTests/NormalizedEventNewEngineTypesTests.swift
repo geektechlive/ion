@@ -20,7 +20,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineToolUpdate() throws {
         let json = """
-        {"type":"engine_tool_update","tabId":"t1","instanceId":"i1"}
+        {"type":"desktop_tool_update","tabId":"t1","instanceId":"i1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineToolUpdate(let tabId, let instanceId) = event {
@@ -45,7 +45,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineToolUpdateWithoutInstanceId() throws {
         let json = """
-        {"type":"engine_tool_update","tabId":"t1"}
+        {"type":"desktop_tool_update","tabId":"t1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineToolUpdate(let tabId, let instanceId) = event {
@@ -60,7 +60,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineToolComplete() throws {
         let json = """
-        {"type":"engine_tool_complete","tabId":"t1","instanceId":"i1"}
+        {"type":"desktop_tool_complete","tabId":"t1","instanceId":"i1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineToolComplete(let tabId, let instanceId) = event {
@@ -85,7 +85,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineToolCompleteWithoutInstanceId() throws {
         let json = """
-        {"type":"engine_tool_complete","tabId":"t1"}
+        {"type":"desktop_tool_complete","tabId":"t1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineToolComplete(let tabId, let instanceId) = event {
@@ -100,7 +100,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineScheduleFired() throws {
         let json = """
-        {"type":"engine_schedule_fired","tabId":"t1","instanceId":"i1"}
+        {"type":"desktop_schedule_fired","tabId":"t1","instanceId":"i1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineScheduleFired(let tabId, let instanceId) = event {
@@ -125,7 +125,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineScheduleFiredWithoutInstanceId() throws {
         let json = """
-        {"type":"engine_schedule_fired","tabId":"t1"}
+        {"type":"desktop_schedule_fired","tabId":"t1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineScheduleFired(let tabId, let instanceId) = event {
@@ -140,7 +140,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineLlmCall() throws {
         let json = """
-        {"type":"engine_llm_call","tabId":"t1","instanceId":"i1"}
+        {"type":"desktop_llm_call","tabId":"t1","instanceId":"i1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineLlmCall(let tabId, let instanceId) = event {
@@ -165,7 +165,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineLlmCallWithoutInstanceId() throws {
         let json = """
-        {"type":"engine_llm_call","tabId":"t1"}
+        {"type":"desktop_llm_call","tabId":"t1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         if case .engineLlmCall(let tabId, let instanceId) = event {
@@ -180,24 +180,38 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineDispatchStart() throws {
         let json = """
-        {"type":"engine_dispatch_start","tabId":"t1","instanceId":"i1"}
+        {"type":"desktop_dispatch_start","tabId":"t1","instanceId":"i1","dispatchAgent":"agent-a","dispatchSessionId":"sess-1","dispatchModel":"opus","dispatchTask":"do stuff","dispatchDepth":1,"dispatchParentId":"parent-x","dispatchId":"id-1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .engineDispatchStart(let tabId, let instanceId) = event {
+        if case .engineDispatchStart(let tabId, let instanceId, let agent, let sessionId, let model, let task, let depth, let parentId, let dispatchId) = event {
             XCTAssertEqual(tabId, "t1")
             XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(agent, "agent-a")
+            XCTAssertEqual(sessionId, "sess-1")
+            XCTAssertEqual(model, "opus")
+            XCTAssertEqual(task, "do stuff")
+            XCTAssertEqual(depth, 1)
+            XCTAssertEqual(parentId, "parent-x")
+            XCTAssertEqual(dispatchId, "id-1")
         } else {
             XCTFail("Expected engineDispatchStart, got \(event)")
         }
     }
 
     func testRoundTripEngineDispatchStart() throws {
-        let original = RemoteEvent.engineDispatchStart(tabId: "t1", instanceId: "i1")
+        let original = RemoteEvent.engineDispatchStart(tabId: "t1", instanceId: "i1", dispatchAgent: "agent-b", dispatchSessionId: "sess-2", dispatchModel: "sonnet", dispatchTask: "review", dispatchDepth: 2, dispatchParentId: "p-123", dispatchId: "id-2")
         let data = try encoder.encode(original)
         let decoded = try decoder.decode(RemoteEvent.self, from: data)
-        if case .engineDispatchStart(let tabId, let instanceId) = decoded {
+        if case .engineDispatchStart(let tabId, let instanceId, let agent, let sessionId, let model, let task, let depth, let parentId, let dispatchId) = decoded {
             XCTAssertEqual(tabId, "t1")
             XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(agent, "agent-b")
+            XCTAssertEqual(sessionId, "sess-2")
+            XCTAssertEqual(model, "sonnet")
+            XCTAssertEqual(task, "review")
+            XCTAssertEqual(depth, 2)
+            XCTAssertEqual(parentId, "p-123")
+            XCTAssertEqual(dispatchId, "id-2")
         } else {
             XCTFail("Round-trip engineDispatchStart failed")
         }
@@ -205,14 +219,37 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineDispatchStartWithoutInstanceId() throws {
         let json = """
-        {"type":"engine_dispatch_start","tabId":"t1"}
+        {"type":"desktop_dispatch_start","tabId":"t1"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
-        if case .engineDispatchStart(let tabId, let instanceId) = event {
+        if case .engineDispatchStart(let tabId, let instanceId, let agent, _, _, _, let depth, let parentId, _) = event {
             XCTAssertEqual(tabId, "t1")
             XCTAssertNil(instanceId)
+            XCTAssertEqual(agent, "")
+            XCTAssertEqual(depth, 0)
+            XCTAssertEqual(parentId, "")
         } else {
             XCTFail("Expected engineDispatchStart, got \(event)")
+        }
+    }
+
+    // MARK: - engine_dispatch_end
+
+    func testDecodeEngineDispatchEnd() throws {
+        let json = """
+        {"type":"desktop_dispatch_end","tabId":"t1","instanceId":"i1","dispatchAgent":"agent-a","dispatchDepth":1,"dispatchParentId":"","dispatchExitCode":0,"dispatchElapsed":2.5}
+        """.data(using: .utf8)!
+        let event = try decoder.decode(RemoteEvent.self, from: json)
+        if case .engineDispatchEnd(let tabId, let instanceId, let agent, let depth, let parentId, let exitCode, let elapsed, _, _) = event {
+            XCTAssertEqual(tabId, "t1")
+            XCTAssertEqual(instanceId, "i1")
+            XCTAssertEqual(agent, "agent-a")
+            XCTAssertEqual(depth, 1)
+            XCTAssertEqual(parentId, "")
+            XCTAssertEqual(exitCode, 0)
+            XCTAssertEqual(elapsed, 2.5, accuracy: 0.01)
+        } else {
+            XCTFail("Expected engineDispatchEnd, got \(event)")
         }
     }
 
@@ -220,7 +257,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineExport() throws {
         let json = """
-        {"type":"engine_export","tabId":"t1","instanceId":"i1","message":"# Conversation\\n\\nHello world","exportFormat":"markdown"}
+        {"type":"desktop_export","tabId":"t1","instanceId":"i1","message":"# Conversation\\n\\nHello world","exportFormat":"markdown"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         guard case .engineExport(let tabId, let instanceId, let message, let exportFormat) = event else {
@@ -258,7 +295,7 @@ final class NormalizedEventNewEngineTypesTests: XCTestCase {
 
     func testDecodeEngineExportWithoutInstanceId() throws {
         let json = """
-        {"type":"engine_export","tabId":"t1","message":"plain text"}
+        {"type":"desktop_export","tabId":"t1","message":"plain text"}
         """.data(using: .utf8)!
         let event = try decoder.decode(RemoteEvent.self, from: json)
         guard case .engineExport(let tabId, let instanceId, let message, let exportFormat) = event else {

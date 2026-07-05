@@ -135,10 +135,19 @@ describe('projectable-settings allowlist', () => {
     expect(orphans, `keys with no defaults: ${orphans.join(', ')}`).toEqual([])
   })
 
-  it('every entry declares a group that exists in PROJECTABLE_GROUP_ORDER', () => {
-    const validGroups = new Set(PROJECTABLE_GROUP_ORDER)
+  it('every entry declares a known group (in PROJECTABLE_GROUP_LABELS)', () => {
+    // The group must be a RECOGNIZED group — one with a label — not
+    // necessarily a PROJECTED one. Some entries (e.g. keyboardShortcuts under
+    // 'advanced') are intentionally allowlisted for validation/enterprise
+    // deployment but deliberately kept OUT of PROJECTABLE_GROUP_ORDER because
+    // iOS has no editing surface for them. Such an entry has a valid group
+    // (with a label) but is never projected — that is by design, documented at
+    // the keyboardShortcuts entry in projectable-settings-data.ts. Validating
+    // against the label set (not the projected order) catches a genuinely bogus
+    // group while permitting the intentional non-projected case.
+    const knownGroups = new Set(Object.keys(PROJECTABLE_GROUP_LABELS))
     for (const entry of PROJECTABLE_SETTINGS) {
-      expect(validGroups.has(entry.group as any), `entry ${entry.key} group=${entry.group}`).toBe(true)
+      expect(knownGroups.has(entry.group as string), `entry ${entry.key} group=${entry.group}`).toBe(true)
     }
   })
 
@@ -164,9 +173,24 @@ describe('projectable-settings allowlist', () => {
     // Settings dialog categories 1:1. Locking the IDs here means a
     // desktop rename of one of these categories triggers this test —
     // forcing the projection groups to be kept in sync.
-    const expected = new Set(['general', 'ai', 'appearance', 'tabs', 'git', 'quicktools'])
+    const expected = new Set(['general', 'ai', 'appearance', 'tabs', 'git', 'quicktools', 'notifications'])
     const actual = new Set<string>(PROJECTABLE_GROUP_ORDER)
     expect(actual).toEqual(expected)
+  })
+
+  it('projects streamThinkingToRemote as a default-on boolean in the General group (issue #158)', () => {
+    // Low-bandwidth mode facet 1. The setting MUST be projected so iOS
+    // can see/toggle it (the desktop UI lives in the Remote category, but
+    // `remote` is not on the iOS allowlist — pairing/transport is iOS-
+    // local — so the iOS-visible home is General). Default ON: the phone
+    // receives the reasoning stream unless the user opts out.
+    const entry = PROJECTABLE_SETTINGS.find((s) => s.key === 'streamThinkingToRemote')
+    expect(entry, 'streamThinkingToRemote must be on the allowlist').toBeTruthy()
+    expect(entry?.type).toBe('boolean')
+    expect(entry?.group).toBe('general')
+    expect(entry?.defaultValue).toBe(true)
+    // The group must be a real, projected group (general is in the order).
+    expect(PROJECTABLE_GROUP_ORDER).toContain(entry!.group)
   })
 })
 
@@ -315,6 +339,15 @@ describe('validateSettingValue', () => {
   it('accepts a boolean for a boolean key', () => {
     expect(validateSettingValue('enableEarlyStopContinuation', true)).toBeNull()
     expect(validateSettingValue('enableEarlyStopContinuation', false)).toBeNull()
+  })
+
+  it('accepts/rejects values for streamThinkingToRemote like any boolean (issue #158)', () => {
+    expect(validateSettingValue('streamThinkingToRemote', true)).toBeNull()
+    expect(validateSettingValue('streamThinkingToRemote', false)).toBeNull()
+    // Non-booleans rejected so the iOS write cannot drift the type.
+    expect(validateSettingValue('streamThinkingToRemote', 'true')).not.toBeNull()
+    expect(validateSettingValue('streamThinkingToRemote', 1)).not.toBeNull()
+    expect(validateSettingValue('streamThinkingToRemote', null)).not.toBeNull()
   })
 
   it('rejects a non-boolean for a boolean key', () => {

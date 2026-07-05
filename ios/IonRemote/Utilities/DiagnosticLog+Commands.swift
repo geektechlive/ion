@@ -11,8 +11,12 @@ extension DiagnosticLog {
         case .sync:
             log("CMD: sync")
 
-        case .createTab(let dir, let pinToGroupId):
-            log("CMD: createTab dir=\(dir?.suffix(30) ?? "nil") pinToGroup=\(pinToGroupId?.prefix(8) ?? "nil")")
+        case .createTab(let dir, let pinToGroupId, let profileId, _):
+            if let profileId {
+                log("CMD: createTab(engine) dir=\(dir?.suffix(30) ?? "nil") profile=\(profileId) pinToGroup=\(pinToGroupId?.prefix(8) ?? "nil")")
+            } else {
+                log("CMD: createTab dir=\(dir?.suffix(30) ?? "nil") pinToGroup=\(pinToGroupId?.prefix(8) ?? "nil")")
+            }
 
         case .createTerminalTab(let dir):
             log("CMD: createTerminalTab dir=\(dir?.suffix(30) ?? "nil")")
@@ -25,8 +29,12 @@ extension DiagnosticLog {
         case .resetEngineSession(let tabId, let instanceId):
             log("CMD: resetEngineSession tabId=\(tabId.prefix(8)) instanceId=\(instanceId.prefix(8))")
 
-        case .prompt(let tabId, let text, _, let clientMsgId, let attachments, _):
-            log("CMD: prompt tabId=\(tabId.prefix(8)) len=\(text.count) msgId=\(clientMsgId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
+        case .prompt(let tabId, let text, _, let clientMsgId, let attachments, _, let instanceId):
+            if let instanceId {
+                log("CMD: prompt(engine) tabId=\(tabId.prefix(8)) len=\(text.count) inst=\(instanceId.prefix(8)) att=\(attachments?.count ?? 0)")
+            } else {
+                log("CMD: prompt tabId=\(tabId.prefix(8)) len=\(text.count) msgId=\(clientMsgId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
+            }
 
         case .cancel(let tabId):
             log("CMD: cancel tabId=\(tabId.prefix(8))")
@@ -34,11 +42,20 @@ extension DiagnosticLog {
         case .respondPermission(let tabId, let qId, let optId):
             log("CMD: respondPermission tabId=\(tabId.prefix(8)) qId=\(qId.prefix(8)) opt=\(optId)")
 
+        case .respondElicitation(let tabId, let requestId, _, let cancelled):
+            log("CMD: respondElicitation tabId=\(tabId.prefix(8)) requestId=\(requestId.prefix(12)) cancelled=\(cancelled)")
+
         case .setPermissionMode(let tabId, let mode):
             log("CMD: setPermissionMode tabId=\(tabId.prefix(8)) mode=\(mode.rawValue)")
 
+        case .setThinkingEffort(let tabId, let effort):
+            log("CMD: setThinkingEffort tabId=\(tabId.prefix(8)) effort=\(effort)")
+
         case .loadConversation(let tabId, let before):
             log("CMD: loadConversation tabId=\(tabId.prefix(8)) before=\(before?.prefix(8) ?? "nil")")
+
+        case .requestResend(let fromSeq, let toSeq):
+            log("CMD: requestResend [\(fromSeq),\(toSeq)]")
 
         case .terminalInput(let tabId, let instId, let data):
             log("CMD: terminalInput tabId=\(tabId.prefix(8)) inst=\(instId.prefix(8)) len=\(data.count)")
@@ -57,6 +74,8 @@ extension DiagnosticLog {
 
         case .requestTerminalSnapshot(let tabId):
             log("CMD: requestTerminalSnapshot tabId=\(tabId.prefix(8))")
+        case .requestContextBreakdown(let tabId):
+            log("CMD: requestContextBreakdown tabId=\(tabId.prefix(8))")
 
         case .renameTab(let tabId, let title):
             log("CMD: renameTab tabId=\(tabId.prefix(8)) title=\(title?.prefix(20) ?? "nil")")
@@ -76,35 +95,13 @@ extension DiagnosticLog {
         case .unpair:
             log("CMD: unpair")
 
-        case .createEngineTab(let dir, let profileId):
-            log("CMD: createEngineTab dir=\(dir?.suffix(30) ?? "nil") profile=\(profileId ?? "nil")")
-
-        case .enginePrompt(let tabId, let text, let instId, let attachments, _):
-            log("CMD: enginePrompt tabId=\(tabId.prefix(8)) len=\(text.count) inst=\(instId?.prefix(8) ?? "nil") att=\(attachments?.count ?? 0)")
-
         case .engineAbort(let tabId, let instId):
             log("CMD: engineAbort tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
 
         case .engineDialogResponse(let tabId, let dId, _, let instId):
             log("CMD: engineDialogResponse tabId=\(tabId.prefix(8)) dId=\(dId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
 
-        case .engineAddInstance(let tabId):
-            log("CMD: engineAddInstance tabId=\(tabId.prefix(8))")
-
-        case .engineRemoveInstance(let tabId, let instId):
-            log("CMD: engineRemoveInstance tabId=\(tabId.prefix(8)) inst=\(instId.prefix(8))")
-
-        case .engineRenameInstance(let tabId, let instId, let label):
-            log("CMD: engineRenameInstance tabId=\(tabId.prefix(8)) inst=\(instId.prefix(8)) label=\(label)")
-
-        case .engineSelectInstance(let tabId, let instId):
-            log("CMD: engineSelectInstance tabId=\(tabId.prefix(8)) inst=\(instId.prefix(8))")
-
-        case .engineMoveInstance(let srcTabId, let instId, let tgtTabId):
-            log("CMD: engineMoveInstance src=\(srcTabId.prefix(8)) inst=\(instId.prefix(8)) tgt=\(tgtTabId.prefix(8))")
-
-        case .loadEngineConversation(let tabId, let instId):
-            log("CMD: loadEngineConversation tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        // loadEngineConversation removed (WI-004 / #259) — no log case needed.
 
         case .loadAgentConversation(let conversationIds):
             log("CMD: loadAgentConversation ids=\(conversationIds.count)")
@@ -227,6 +224,12 @@ extension DiagnosticLog {
 
         case .deleteResource(let kind, let resourceId):
             log("CMD: deleteResource kind=\(kind) resourceId=\(resourceId.prefix(12))")
+
+        case .implementPlan(let tabId, let questionId, let instanceId, let clearContext):
+            log("CMD: implementPlan tabId=\(tabId.prefix(8)) qId=\(questionId.prefix(12)) inst=\(instanceId?.prefix(8) ?? "nil") clearContext=\(clearContext)")
+
+        case .requestPlanContent(let tabId, let questionId, let planFilePath, let offset, let length):
+            log("CMD: requestPlanContent tabId=\(tabId.prefix(8)) qId=\(questionId.prefix(12)) path=\(planFilePath.suffix(30)) offset=\(offset) len=\(length)")
         }
     }
 }

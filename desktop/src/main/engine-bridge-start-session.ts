@@ -58,7 +58,7 @@ export async function startSession(
   bridge: EngineBridge,
   key: string,
   config: EngineConfig,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; conversationId?: string }> {
   const entry = bridge.activeSessions.get(key)
   // If we have a tracked conversationId from a previous session lifecycle,
   // inject it into the config so the engine can resume the conversation.
@@ -76,7 +76,22 @@ export async function startSession(
   bridge.activeSessions.set(key, { config, conversationId: entry?.conversationId })
 
   await bridge.connect()
-  const result = await bridge._sendWithResult({ cmd: 'start_session', key, config })
+  // _sendWithData (not _sendWithResult): the engine mints/binds the conversation
+  // id inside StartSession and returns it in the start_session result Data
+  // (engine/internal/session/start_session.go → StartSessionResult.ConversationID,
+  // dispatch.go sendResult). Reading it here lets the desktop surface the real
+  // engine id at tab-creation time, before any run emits session_init — without
+  // it the "Copy session id" affordance has nothing to copy on a fresh tab.
+  const result = await bridge._sendWithData<{ conversationId?: string }>({ cmd: 'start_session', key, config })
+  const conversationId = result.data?.conversationId
+
+  // Persist the minted/resumed id on the tracked session so reconnect resume and
+  // the divergence guard see it immediately. updateSessionConversationId is the
+  // existing setter (also called from the engine_status capture path); reuse it.
+  if (result.ok && conversationId) {
+    bridge.updateSessionConversationId(key, conversationId)
+    log(`startSession: key=${key} captured conversationId=${conversationId} from start_session result`)
+  }
 
   // Post-start reconcile handshake. See the docblock at the top of this
   // file for the full rationale — the short version is "tell the engine
@@ -89,7 +104,7 @@ export async function startSession(
   } else {
     log(`startSession: key=${key} skipping reconcile (start failed: ${result.error ?? 'unknown'})`)
   }
-  return result
+  return { ok: result.ok, error: result.error, conversationId }
 }
 
 /**

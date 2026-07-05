@@ -10,14 +10,15 @@ extension RemoteCommand {
         switch self {
         case .sync:
             try container.encode(TypeKey.sync, forKey: .type)
-        case .createTab(let workingDirectory, let pinToGroupId):
+        case .createTab(let workingDirectory, let pinToGroupId, let profileId, let extensions):
             try container.encode(TypeKey.createTab, forKey: .type)
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
-            // Only emit `pinToGroupId` when caller actually requested a pin,
-            // so the wire payload for the unmodified "Add tab" flow stays
-            // identical to the pre-feature version (helps when bisecting
-            // any future protocol-level diffs).
+            // Only emit optional fields when the caller actually supplied them,
+            // so the wire payload for the plain "Add tab" flow stays identical
+            // to the pre-merge version (helps bisect any future protocol diffs).
             try container.encodeIfPresent(pinToGroupId, forKey: .pinToGroupId)
+            try container.encodeIfPresent(profileId, forKey: .profileId)
+            try container.encodeIfPresent(extensions, forKey: .extensions)
         case .closeTab(let tabId):
             try container.encode(TypeKey.closeTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -31,7 +32,7 @@ extension RemoteCommand {
             try container.encode(tabId, forKey: .tabId)
             try container.encode(instanceId, forKey: .instanceId)
 
-        case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments, let implementationPhase):
+        case .prompt(let tabId, let text, let origin, let clientMsgId, let attachments, let implementationPhase, let instanceId):
             try container.encode(TypeKey.prompt, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(text, forKey: .text)
@@ -39,6 +40,10 @@ extension RemoteCommand {
             try container.encodeIfPresent(clientMsgId, forKey: .clientMsgId)
             try container.encodeIfPresent(attachments, forKey: .attachments)
             try container.encodeIfPresent(implementationPhase, forKey: .implementationPhase)
+            // `instanceId` is absent on plain CLI prompts; present when the
+            // iOS client is targeting a specific engine instance (merged from
+            // the former desktop_engine_prompt command shape, #256).
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
         case .cancel(let tabId):
             try container.encode(TypeKey.cancel, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -48,14 +53,28 @@ extension RemoteCommand {
             try container.encode(tabId, forKey: .tabId)
             try container.encode(questionId, forKey: .questionId)
             try container.encode(optionId, forKey: .optionId)
+        case .respondElicitation(let tabId, let requestId, let response, let cancelled):
+            try container.encode(TypeKey.respondElicitation, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encodeIfPresent(response, forKey: .response)
+            try container.encode(cancelled, forKey: .cancelled)
         case .setPermissionMode(let tabId, let mode):
             try container.encode(TypeKey.setPermissionMode, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encode(mode, forKey: .mode)
+        case .setThinkingEffort(let tabId, let effort):
+            try container.encode(TypeKey.setThinkingEffort, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(effort, forKey: .effort)
         case .loadConversation(let tabId, let before):
             try container.encode(TypeKey.loadConversation, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
             try container.encodeIfPresent(before, forKey: .before)
+        case .requestResend(let fromSeq, let toSeq):
+            try container.encode(TypeKey.requestResend, forKey: .type)
+            try container.encode(fromSeq, forKey: .fromSeq)
+            try container.encode(toSeq, forKey: .toSeq)
         case .createTerminalTab(let workingDirectory):
             try container.encode(TypeKey.createTerminalTab, forKey: .type)
             try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
@@ -91,6 +110,10 @@ extension RemoteCommand {
             try container.encode(TypeKey.requestTerminalSnapshot, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
 
+        case .requestContextBreakdown(let tabId):
+            try container.encode(TypeKey.requestContextBreakdown, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+
         case .renameTab(let tabId, let customTitle):
             try container.encode(TypeKey.renameTab, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -122,19 +145,6 @@ extension RemoteCommand {
         case .unpair:
             try container.encode(TypeKey.unpair, forKey: .type)
 
-        case .createEngineTab(let workingDirectory, let profileId):
-            try container.encode(TypeKey.createEngineTab, forKey: .type)
-            try container.encodeIfPresent(workingDirectory, forKey: .workingDirectory)
-            try container.encodeIfPresent(profileId, forKey: .profileId)
-
-        case .enginePrompt(let tabId, let text, let instanceId, let attachments, let implementationPhase):
-            try container.encode(TypeKey.enginePrompt, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encode(text, forKey: .text)
-            try container.encodeIfPresent(instanceId, forKey: .instanceId)
-            try container.encodeIfPresent(attachments, forKey: .attachments)
-            try container.encodeIfPresent(implementationPhase, forKey: .implementationPhase)
-
         case .engineAbort(let tabId, let instanceId):
             try container.encode(TypeKey.engineAbort, forKey: .type)
             try container.encode(tabId, forKey: .tabId)
@@ -147,36 +157,7 @@ extension RemoteCommand {
             try container.encode(value, forKey: .value)
             try container.encodeIfPresent(instanceId, forKey: .instanceId)
 
-        case .engineAddInstance(let tabId):
-            try container.encode(TypeKey.engineAddInstance, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-
-        case .engineRemoveInstance(let tabId, let instanceId):
-            try container.encode(TypeKey.engineRemoveInstance, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encode(instanceId, forKey: .instanceId)
-
-        case .engineRenameInstance(let tabId, let instanceId, let label):
-            try container.encode(TypeKey.engineRenameInstance, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encode(instanceId, forKey: .instanceId)
-            try container.encode(label, forKey: .label)
-
-        case .engineSelectInstance(let tabId, let instanceId):
-            try container.encode(TypeKey.engineSelectInstance, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encode(instanceId, forKey: .instanceId)
-
-        case .engineMoveInstance(let sourceTabId, let instanceId, let targetTabId):
-            try container.encode(TypeKey.engineMoveInstance, forKey: .type)
-            try container.encode(sourceTabId, forKey: .sourceTabId)
-            try container.encode(instanceId, forKey: .instanceId)
-            try container.encode(targetTabId, forKey: .targetTabId)
-
-        case .loadEngineConversation(let tabId, let instanceId):
-            try container.encode(TypeKey.loadEngineConversation, forKey: .type)
-            try container.encode(tabId, forKey: .tabId)
-            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+        // loadEngineConversation case removed in WI-004 / #259. Encode path retired.
 
         case .loadAgentConversation(let conversationIds):
             try container.encode(TypeKey.loadAgentConversation, forKey: .type)
@@ -407,6 +388,30 @@ extension RemoteCommand {
             try container.encode(TypeKey.deleteResource, forKey: .type)
             try container.encode(kind, forKey: .kind)
             try container.encode(resourceId, forKey: .resourceId)
+
+        case .implementPlan(let tabId, let questionId, let instanceId, let clearContext):
+            // iOS → desktop: trigger the implement pipeline for an ExitPlanMode
+            // permission entry. No plan body on the wire — desktop resolves the
+            // plan from disk and drives the full onImplement pipeline internally.
+            // clearContext is omitted when false to keep the wire slim.
+            try container.encode(TypeKey.implementPlan, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(questionId, forKey: .questionId)
+            try container.encodeIfPresent(instanceId, forKey: .instanceId)
+            if clearContext {
+                try container.encode(true, forKey: .clearContext)
+            }
+
+        case .requestPlanContent(let tabId, let questionId, let planFilePath, let offset, let length):
+            // iOS → desktop: request a bounded byte-range window of the plan
+            // file. Desktop replies with a plan_content event. length=0 signals
+            // "use server default (64 KB)".
+            try container.encode(TypeKey.requestPlanContent, forKey: .type)
+            try container.encode(tabId, forKey: .tabId)
+            try container.encode(questionId, forKey: .questionId)
+            try container.encode(planFilePath, forKey: .planFilePath)
+            try container.encode(offset, forKey: .offset)
+            try container.encode(length, forKey: .length)
         }
     }
 }

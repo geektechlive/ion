@@ -9,20 +9,27 @@ enum ConversationItem: Identifiable {
     case user(Message)
     case assistant(Message)
     case system(Message)
+    /// Extended-thinking reasoning block (issue #158). Rendered as its own
+    /// collapsed-by-default row (ThinkingRowView) inline in turn order,
+    /// before the assistant text it preceded.
+    case thinking(Message)
     case toolGroup([Message])
     case compaction(Message)
-    case agentTurn(tools: [Message], assistantMessages: [Message], isActive: Bool)
+    case agentTurn(tools: [Message], assistantMessages: [Message], isActive: Bool, thinking: Message?)
 
     var id: String {
         switch self {
         case .user(let m):      return m.id
         case .assistant(let m): return m.id
         case .system(let m):    return m.id
+        case .thinking(let m):  return m.id
         case .toolGroup(let msgs):
             // Stable ID based on the first tool in the group.
             return "tg-\(msgs.first?.id ?? "empty")"
         case .compaction(let m): return m.id
-        case .agentTurn(let tools, let assistants, _):
+        case .agentTurn(let tools, let assistants, _, _):
+            // thinking intentionally excluded from identity anchor — the turn
+            // is identified by its tools/assistants, not by reasoning content.
             let anchor = tools.first?.id ?? assistants.first?.id ?? "empty"
             return "at-\(anchor)"
         }
@@ -64,6 +71,7 @@ private func groupConversationItemsClassic(_ messages: [Message]) -> [Conversati
             switch msg.role {
             case .user:      result.append(.user(msg))
             case .assistant: result.append(.assistant(msg))
+            case .thinking:  result.append(.thinking(msg))
             case .system, .harness:
                 if msg.content.hasPrefix("[Compaction]") {
                     result.append(.compaction(msg))
@@ -80,22 +88,41 @@ private func groupConversationItemsClassic(_ messages: [Message]) -> [Conversati
 
 /// Unified turn grouping: accumulate tool + assistant messages between user
 /// boundaries and emit `.agentTurn` when tools are present.
+/// Thinking blocks are hoisted into the turn header when tools are present,
+/// matching the desktop's `flushTurn` behavior in `tool-helpers.ts:150-178`.
 private func groupConversationItemsUnified(_ messages: [Message]) -> [ConversationItem] {
     var result: [ConversationItem] = []
     var turnTools: [Message] = []
     var turnAssistants: [Message] = []
+    // The thinking row for the current turn, if the model reasoned this turn.
+    // Hoisted into the agentTurn header when tools are present. When there
+    // are no tools it is emitted standalone before the assistant messages,
+    // mirroring desktop tool-helpers.ts:163-173.
+    var turnThinking: Message? = nil
 
     func flushTurn() {
         if !turnTools.isEmpty {
             let isActive = turnTools.contains { $0.toolStatus == .running }
-            result.append(.agentTurn(tools: turnTools, assistantMessages: turnAssistants, isActive: isActive))
+            result.append(.agentTurn(
+                tools: turnTools,
+                assistantMessages: turnAssistants,
+                isActive: isActive,
+                thinking: turnThinking
+            ))
         } else {
+            // No tools — emit thinking standalone first (if any), then each
+            // assistant message. Thinking precedes assistant output, matching
+            // the engine's block_start → text ordering within a turn.
+            if let t = turnThinking {
+                result.append(.thinking(t))
+            }
             for m in turnAssistants {
                 result.append(.assistant(m))
             }
         }
         turnTools = []
         turnAssistants = []
+        turnThinking = nil
     }
 
     for msg in messages {
@@ -113,6 +140,19 @@ private func groupConversationItemsUnified(_ messages: [Message]) -> [Conversati
         if msg.role == .user {
             flushTurn()
             result.append(.user(msg))
+            continue
+        }
+
+        // Capture the turn's thinking row to hoist into the turn header.
+        // If a turn somehow produced a second thinking row before flushing,
+        // emit the prior one standalone so neither is lost, then keep the
+        // newest as the turn's header block (mirroring desktop
+        // tool-helpers.ts:187-196).
+        if msg.role == .thinking {
+            if let prior = turnThinking {
+                result.append(.thinking(prior))
+            }
+            turnThinking = msg
             continue
         }
 

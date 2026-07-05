@@ -90,7 +90,7 @@ extension SessionViewModel {
                 DiagnosticLog.log("LAN-CONNECT: auth OK \(device.name)")
                 await MainActor.run {
                     self.connectionState = .connected
-                    self.send(.sync)
+                    self.send(.sync, intent: .automaticEssential)
                 }
             } else {
                 ionLog.error("connectLAN: auth FAILED for \(device.name)")
@@ -228,6 +228,7 @@ extension SessionViewModel {
         // commands waiting for the previous transport must not fire
         // against the next one.
         clearPendingOnConnected()
+        clearPendingEssential()
         tearDownTransport()
         wipeTransientState()
     }
@@ -270,9 +271,6 @@ extension SessionViewModel {
         connectionState = .disconnected
         tabs = []
         tabIds = []
-        liveText = [:]
-        messages = [:]
-        messageCountByTab = [:]
         loadingConversation = []
         conversationLoaded = []
         conversationHasMore = [:]
@@ -284,7 +282,6 @@ extension SessionViewModel {
         terminalInstances = [:]
         activeTerminalInstance = [:]
         terminalInstanceLabels = [:]
-        engineWorkingMessages = [:]
         engineDialogs = [:]
         enginePinnedPrompt = [:]
         engineConversationLoaded = []
@@ -296,6 +293,7 @@ extension SessionViewModel {
         // doesn't briefly render the previous desktop's settings while
         // the new pairing's initial snapshot is in flight.
         desktopSettings = nil
+        enterpriseNewConversationPolicy = nil
         pendingCloseTabIds = []
         pendingInputByTab = [:]
         awaitingLocalTabCreation = false
@@ -447,8 +445,8 @@ extension SessionViewModel {
                 self.activeDeviceId = nil
                 self.hasConnectedBefore = false
                 UserDefaults.standard.set(false, forKey: "hasConnectedBefore")
-                self.liveText = [:]
-                self.messages = [:]
+                self.conversationInstances = [:]
+                self.activeEngineInstance = [:]
                 self.loadingConversation = []
                 self.conversationLoaded = []
                 self.conversationHasMore = [:]

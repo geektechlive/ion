@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { X, GearSix, GitBranch, Columns, PaintBrush, WifiHigh, Lightning, Brain, Faders, MagnifyingGlass } from '@phosphor-icons/react'
+import { X, GearSix, GitBranch, Columns, PaintBrush, WifiHigh, Lightning, Brain, Faders, MagnifyingGlass, Bell, Keyboard } from '@phosphor-icons/react'
 import { useColors } from '../theme'
 import { usePopoverLayer } from './PopoverLayer'
 import { GeneralCategory } from './settings/GeneralCategory'
@@ -10,8 +10,10 @@ import { GitCategory } from './settings/GitCategory'
 import { TabsPanelsCategory } from './settings/TabsPanelsCategory'
 import { AppearanceCategory } from './settings/AppearanceCategory'
 import { QuickToolsCategory } from './settings/QuickToolsCategory'
+import { NotificationsCategory } from './settings/NotificationsCategory'
 import { RemoteCategory } from './settings/RemoteCategory'
 import { AdvancedCategory } from './settings/AdvancedCategory'
+import { KeyboardShortcutsCategory } from './settings/KeyboardShortcutsCategory'
 import { searchSettings } from './settings/settings-search-index'
 import type { Icon } from '@phosphor-icons/react'
 
@@ -29,6 +31,8 @@ const CATEGORIES: Category[] = [
   { id: 'tabs', label: 'Tabs & Panels', icon: Columns, component: TabsPanelsCategory },
   { id: 'git', label: 'Git', icon: GitBranch, component: GitCategory },
   { id: 'quicktools', label: 'Quick Tools', icon: Lightning, component: QuickToolsCategory },
+  { id: 'shortcuts', label: 'Keyboard', icon: Keyboard, component: KeyboardShortcutsCategory },
+  { id: 'notifications', label: 'Notifications', icon: Bell, component: NotificationsCategory },
   { id: 'remote', label: 'Remote', icon: WifiHigh, component: RemoteCategory },
   { id: 'advanced', label: 'Advanced', icon: Faders, component: AdvancedCategory },
 ]

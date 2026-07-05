@@ -50,7 +50,6 @@ vi.mock('../state', () => ({
     resetTabSession: vi.fn(),
     cancel: vi.fn(),
     cancelTab: vi.fn(),
-    steerSession: vi.fn(),
     retry: vi.fn(),
     getHealth: vi.fn(),
     closeTab: vi.fn(),
@@ -66,10 +65,6 @@ vi.mock('../terminal-manager-instance', () => ({
 
 vi.mock('../remote/snapshot', () => ({
   getRemoteTabStates: vi.fn(),
-}))
-
-vi.mock('../cli-compat/slash-expand', () => ({
-  expandSlashCommand: vi.fn(),
 }))
 
 vi.mock('../settings-store', () => ({
@@ -114,7 +109,7 @@ describe('IPC.PROMPT handler', () => {
       tabId: 'tab-1',
       reqId: 'req-1',
       source: 'desktop',
-      isEngineTab: false,
+      hasExtensions: false,
     }))
   })
 
@@ -149,7 +144,7 @@ describe('IPC.PROMPT handler', () => {
       options: { prompt: 'typed in desktop' },
     })
     expect(mocks.remoteSend).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'message_added',
+      type: 'desktop_message_added',
       tabId: 'tab-4',
       message: expect.objectContaining({ id: 'req-4', role: 'user', content: 'typed in desktop' }),
     }))

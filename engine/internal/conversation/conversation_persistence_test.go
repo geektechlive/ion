@@ -112,6 +112,49 @@ func TestLoadNotFound(t *testing.T) {
 	}
 }
 
+// TestExists pins the cheap file-presence probe used by resolve-time guards to
+// distinguish a real resumable conversation from a fileless "phantom" id.
+func TestExists(t *testing.T) {
+	dir := t.TempDir()
+
+	// Empty id and a never-saved id are not present.
+	if Exists("", dir) {
+		t.Error("Exists(\"\") should be false")
+	}
+	if Exists("never-saved", dir) {
+		t.Error("Exists for a never-saved id should be false (phantom)")
+	}
+
+	// A saved split-format conversation is present.
+	conv := CreateConversation("real-1", "system", "test-model")
+	AddUserMessage(conv, "hi")
+	if err := Save(conv, dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !Exists("real-1", dir) {
+		t.Error("Exists for a saved conversation should be true")
+	}
+
+	// An orphan .llm.jsonl alone is NOT a valid split (matches Load's
+	// both-files requirement) — Exists must report false.
+	orphan := filepath.Join(dir, "orphan-1.llm.jsonl")
+	if err := os.WriteFile(orphan, []byte(`{"meta":true,"id":"orphan-1"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write orphan: %v", err)
+	}
+	if Exists("orphan-1", dir) {
+		t.Error("Exists for an orphan .llm.jsonl (no .tree.jsonl) should be false")
+	}
+
+	// A legacy .jsonl file is present.
+	legacy := filepath.Join(dir, "legacy-1.jsonl")
+	if err := os.WriteFile(legacy, []byte(`{"meta":true,"id":"legacy-1"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+	if !Exists("legacy-1", dir) {
+		t.Error("Exists for a legacy .jsonl conversation should be true")
+	}
+}
+
 func TestMigrateConversationV0(t *testing.T) {
 	raw := map[string]any{
 		"id":        "v0-test",

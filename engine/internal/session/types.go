@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/dsswift/ion/engine/internal/backend"
+	"github.com/dsswift/ion/engine/internal/conversation"
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/mcp"
 	"github.com/dsswift/ion/engine/internal/permissions"
@@ -38,6 +39,11 @@ type pendingPrompt struct {
 	// flag and the engine would inject EnterPlanMode against the user's
 	// already-approved intent.
 	implementationPhase bool
+	// thinkingEffort carries the client's ClientCommand.ThinkingEffort
+	// through the queue so a queued prompt's live thinking level survives
+	// queueing on a busy session. Without it, a prompt queued behind a
+	// running turn would lose its selected effort.
+	thinkingEffort string
 }
 
 // engineSession holds the state for a single session managed by the Manager.
@@ -75,6 +81,16 @@ type engineSession struct {
 	rootCancel context.CancelFunc
 
 	conversationID string
+	// bindingPending is true when this session's conversationID was freshly
+	// pre-minted (no backing file existed at StartSession) and therefore its
+	// key->conversationId binding has NOT yet been written to the sidecar. The
+	// binding is deferred until the conversation is first saved to disk — a
+	// session that starts but never completes a turn never leaves a "phantom"
+	// binding that a later restart would try (and fail) to resume. Flushed in
+	// handleRunExit once conversation.Exists confirms the file landed. For a
+	// genuine resume (file already present at StartSession) this is false and
+	// the binding is written immediately. (#230/#231 phantom-binding fix)
+	bindingPending bool
 	// cliSessionID is the claude-native session UUID captured from CLI run
 	// exits (the backend reports it via SessionInitEvent/TaskCompleteEvent →
 	// emitExit → handleRunExit). It is the ONLY value fed to `claude
@@ -186,4 +202,13 @@ type engineSession struct {
 	// zero-cost compaction recovery. Created in StartSession, nil when the
 	// feature is not enabled or the session has no conversation ID.
 	sessionMemory *SessionMemory
+
+	// pendingSlashInvocation carries the raw command/args for a slash command
+	// dispatched via the extension command registry (dispatchCommand). When an
+	// extension command handler calls ctx.sendPrompt(expandedBody), the engine's
+	// SendPrompt picks up this field so the run loop can persist the raw
+	// invocation as the display turn (via AddUserMessageWithInvocation) and
+	// attach slashCommand/slashArgs provenance. Consumed (cleared) on the next
+	// SendPrompt so it applies exactly once.
+	pendingSlashInvocation *conversation.SlashInvocation
 }

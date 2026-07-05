@@ -82,7 +82,7 @@ export function createEngineRewindActions(set: StoreSet, get: StoreGet): Partial
       }
 
       const targetMessage = inst.messages[idx]
-      const key = `${tabId}:${instanceId}`
+      const key = tabId
       const priorConvIds = inst.conversationIds.length > 0 ? [...inst.conversationIds] : null
       console.log(`[engine] rewindEngineInstance: key=${key} msgIdx=${idx} totalMsgs=${inst.messages.length} keepMsgs=${idx} priorConvIds=${JSON.stringify(priorConvIds)} targetMsgLen=${targetMessage.content.length}`)
 
@@ -151,6 +151,7 @@ export function createEngineRewindActions(set: StoreSet, get: StoreGet): Partial
             permissionMode: i.permissionMode, // preserve permission mode across rewind
             permissionDenied: restoredDenied,
             permissionQueue: [],
+            elicitationQueue: [],
             conversationIds: [],
             draftInput: targetMessage.content,
             agentStates: [],

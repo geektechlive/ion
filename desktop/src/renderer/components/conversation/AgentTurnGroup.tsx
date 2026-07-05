@@ -5,6 +5,7 @@ import { useColors } from '../../theme'
 import { usePreferencesStore } from '../../preferences'
 import { ToolGroup } from './ToolGroup'
 import { AssistantMessage } from './AssistantMessage'
+import { ThinkingBlock } from './ThinkingBlock'
 import { CopyButton } from './CopyButton'
 import type { Message } from '../../../shared/types'
 
@@ -14,6 +15,12 @@ interface AgentTurnGroupProps {
   tools: Message[]
   assistantMessages: Message[]
   isActive: boolean
+  /**
+   * Optional extended-thinking row for this turn (issue #158). Rendered as
+   * the turn's top group, ABOVE the collapsible tool row. undefined when
+   * the model did not reason this turn (the common case).
+   */
+  thinking?: Message
   skipMotion?: boolean
 }
 
@@ -21,6 +28,7 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
   tools,
   assistantMessages,
   isActive,
+  thinking,
   skipMotion,
 }: AgentTurnGroupProps) {
   const colors = useColors()
@@ -67,28 +75,8 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
 
   const inner = (
     <div className="group/turn relative">
-      {/* Collapsible activity panel */}
-      {activityHeader}
-
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            key="tools-panel"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.15 }}
-            style={{ overflow: 'hidden' }}
-          >
-            <div
-              className="ml-1 pl-3 mb-1"
-              style={{ borderLeft: `1px solid ${colors.timelineLine}` }}
-            >
-              <ToolGroup tools={tools} skipMotion />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Extended-thinking row — top of the turn, above assistant text. */}
+      {thinking && <ThinkingBlock message={thinking} skipMotion={skipMotion} />}
 
       {/* Assistant text (always visible, rendered sequentially) */}
       {assistantMessages.length > 0 && (
@@ -109,6 +97,29 @@ export const AgentTurnGroup = React.memo(function AgentTurnGroup({
           )}
         </div>
       )}
+
+      {/* Collapsible activity panel — rendered below assistant text */}
+      {activityHeader}
+
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="tools-panel"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.15 }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div
+              className="ml-1 pl-3 mb-1"
+              style={{ borderLeft: `1px solid ${colors.timelineLine}` }}
+            >
+              <ToolGroup tools={tools} skipMotion embedded />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 

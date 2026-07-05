@@ -3,7 +3,8 @@ import type { TabGroup } from '../shared/types'
 import { applyTheme, syncTokensToCss, darkColors, lightColors, getTheme, type ColorPalette } from './theme-tokens'
 import type { PreferencesState, ThemeMode } from './preferences-types'
 import { saveSettings, getAllSettings, getEffectiveTabGroups, INITIAL_SAVED, loadPersistedSettings } from './preferences-persist'
-
+import { parseChord } from './shortcuts/chord'
+import { SHORTCUT_CATALOG } from './shortcuts/shortcut-catalog'
 export type { ThemeMode, PreferencesState } from './preferences-types'
 export { getEffectiveTabGroups } from './preferences-persist'
 
@@ -35,6 +36,7 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   editorWordWrap: saved.editorWordWrap,
   editorFontSize: saved.editorFontSize,
   conversationFontSize: saved.conversationFontSize,
+  previewFontSize: saved.previewFontSize,
   gitOpsMode: saved.gitOpsMode,
   worktreeCompletionStrategy: saved.worktreeCompletionStrategy,
   worktreeBranchDefaults: saved.worktreeBranchDefaults,
@@ -69,13 +71,17 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   relayApiKey: saved.relayApiKey,
   lanServerPort: saved.lanServerPort,
   pairedDevices: saved.pairedDevices,
+  streamThinkingToRemote: saved.streamThinkingToRemote,
+  thinkingEnabled: saved.thinkingEnabled,
   remoteDisplay: saved.remoteDisplay,
   engineDefaultModel: saved.engineDefaultModel,
   engineProfiles: saved.engineProfiles,
   preferredModel: saved.preferredModel,
+  defaultEngineProfileId: saved.defaultEngineProfileId,
+  // Enterprise policy: starts null, loaded from engine at startup.
+  enterpriseNewConversationDefaults: null,
   defaultTallConversation: saved.defaultTallConversation,
   defaultTallTerminal: saved.defaultTallTerminal,
-  defaultTallEngine: saved.defaultTallEngine,
   tabRecoveryEnabled: saved.tabRecoveryEnabled,
   tabRecoveryTimeoutSec: saved.tabRecoveryTimeoutSec,
   planModelSplitEnabled: saved.planModelSplitEnabled,
@@ -83,6 +89,9 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   implementModeModel: saved.implementModeModel,
   planModeAllowedBashCommands: saved.planModeAllowedBashCommands,
   showImplementClearContext: saved.showImplementClearContext,
+  gitWatcherIgnoredDirectories: saved.gitWatcherIgnoredDirectories,
+  excludedResourceKinds: saved.excludedResourceKinds,
+  keyboardShortcuts: saved.keyboardShortcuts,
   _systemIsDark: true,
   setDefaultTallConversation: (enabled) => {
     set({ defaultTallConversation: enabled })
@@ -90,10 +99,6 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   },
   setDefaultTallTerminal: (enabled) => {
     set({ defaultTallTerminal: enabled })
-    saveSettings(getAllSettings(get))
-  },
-  setDefaultTallEngine: (enabled) => {
-    set({ defaultTallEngine: enabled })
     saveSettings(getAllSettings(get))
   },
   setTabRecoveryEnabled: (enabled) => {
@@ -220,11 +225,8 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     set({ editorFontSize: clamped })
     saveSettings(getAllSettings(get))
   },
-  setConversationFontSize: (size) => {
-    const clamped = Math.max(8, Math.min(24, Math.round(size)))
-    set({ conversationFontSize: clamped })
-    saveSettings(getAllSettings(get))
-  },
+  setConversationFontSize: (size) => { const c = Math.max(8, Math.min(24, Math.round(size))); set({ conversationFontSize: c }); saveSettings(getAllSettings(get)) },
+  setPreviewFontSize: (size) => { const c = Math.max(8, Math.min(24, Math.round(size))); set({ previewFontSize: c }); saveSettings(getAllSettings(get)) },
   setGitOpsMode: (mode) => {
     set({ gitOpsMode: mode })
     saveSettings(getAllSettings(get))
@@ -420,6 +422,14 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     set({ lanServerPort: port })
     saveSettings(getAllSettings(get))
   },
+  setStreamThinkingToRemote: (enabled) => {
+    set({ streamThinkingToRemote: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setThinkingEnabled: (enabled) => {
+    set({ thinkingEnabled: enabled })
+    saveSettings(getAllSettings(get))
+  },
   addPairedDevice: (device) => {
     const current = get().pairedDevices.filter((d) => d.id !== device.id && d.name !== device.name)
     set({ pairedDevices: [...current, device] })
@@ -445,6 +455,14 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
   setPreferredModel: (model) => {
     set({ preferredModel: model })
     saveSettings(getAllSettings(get))
+  },
+  setDefaultEngineProfileId: (profileId) => {
+    set({ defaultEngineProfileId: profileId })
+    saveSettings(getAllSettings(get))
+  },
+  setEnterpriseNewConversationDefaults: (policy) => {
+    // Not persisted: enterprise policy is always fetched from the engine.
+    set({ enterpriseNewConversationDefaults: policy })
   },
   addEngineProfile: (profile) => {
     set({ engineProfiles: [...get().engineProfiles, profile] })
@@ -474,8 +492,45 @@ export const usePreferencesStore = create<PreferencesState>((set, get) => ({
     set({ planModeAllowedBashCommands: cmds })
     saveSettings(getAllSettings(get))
   },
+  setGitWatcherIgnoredDirectories: (dirs) => {
+    set({ gitWatcherIgnoredDirectories: dirs })
+    saveSettings(getAllSettings(get))
+  },
+  setExcludedResourceKinds: (kinds) => {
+    set({ excludedResourceKinds: kinds })
+    saveSettings(getAllSettings(get))
+  },
   setShowImplementClearContext: (enabled) => {
     set({ showImplementClearContext: enabled })
+    saveSettings(getAllSettings(get))
+  },
+  setKeyboardShortcut: (commandId, chord) => {
+    if (!parseChord(chord)) {
+      console.warn(`[Preferences] setKeyboardShortcut: invalid chord '${chord}' for '${commandId}' — ignored`)
+      return
+    }
+    const entry = SHORTCUT_CATALOG.find((e) => e.id === commandId)
+    if (!entry) {
+      console.warn(`[Preferences] setKeyboardShortcut: unknown command id '${commandId}' — ignored`)
+      return
+    }
+    const current = { ...get().keyboardShortcuts }
+    if (chord === entry.defaultBinding) {
+      delete current[commandId]
+    } else {
+      current[commandId] = chord
+    }
+    set({ keyboardShortcuts: current })
+    saveSettings(getAllSettings(get))
+  },
+  resetKeyboardShortcut: (commandId) => {
+    const current = { ...get().keyboardShortcuts }
+    delete current[commandId]
+    set({ keyboardShortcuts: current })
+    saveSettings(getAllSettings(get))
+  },
+  resetAllKeyboardShortcuts: () => {
+    set({ keyboardShortcuts: {} })
     saveSettings(getAllSettings(get))
   },
   setSystemTheme: (isDark) => {
@@ -507,6 +562,14 @@ loadPersistedSettings(
   () => usePreferencesStore.getState(),
   applyTheme,
 )
+
+// Load enterprise policy from engine at startup (async, not persisted).
+// Errors are non-fatal: the app runs without enterprise constraints.
+window.ion?.getEnterprisePolicy?.()?.then?.((policy) => {
+  usePreferencesStore.getState().setEnterpriseNewConversationDefaults(policy)
+})?.catch?.(() => {
+  // Engine not yet ready or no enterprise config — leave null.
+})
 
 // Listen for settings changes pushed from the main process (e.g. iOS
 // `set_desktop_setting` writes). Without this, iOS-originated changes

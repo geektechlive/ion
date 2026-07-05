@@ -13,6 +13,96 @@ permission engine).
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.43.0](https://github.com/dsswift/ion/compare/engine-v1.42.0...engine-v1.43.0) (2026-07-03)
+
+### Features
+
+* **engine:** read-triggered nested context loading ([3848a9e](https://github.com/dsswift/ion/commit/3848a9e99e9606d1779161c63afdbd0f59fea225))
+* **engine:** add launchd daemon with socket activation ([85314c1](https://github.com/dsswift/ion/commit/85314c1273b0ec12a242309d1319922a060df759))
+* **engine:** unify plain and extension-hosted conversations (#256) ([88de466](https://github.com/dsswift/ion/commit/88de46675eaacf55ed502f522b92d35db77f5644))
+* **engine:** emit plan_file_written marker on actual plan write ([8b4f4f9](https://github.com/dsswift/ion/commit/8b4f4f949b6faa56de9b4602a215dbebe0baa50c))
+* **engine:** add steer_dispatch wiring and tests ([17aeb6e](https://github.com/dsswift/ion/commit/17aeb6ea4b4c0e7da5126355b5cb2b3ece572e89))
+* **engine:** bound daemon memory with GOMEMLIMIT to survive OS pressure ([98ab4c8](https://github.com/dsswift/ion/commit/98ab4c85d042f253c361f06b6fad1fe9487505e6))
+* **engine:** add tiktoken-go BPE tokenizer + Tokenizer field to model catalog ([6220724](https://github.com/dsswift/ion/commit/62207245f63d7bb02d878e03e1e21a128086dc47))
+* **engine:** ion-meta message_end hook consumes context_breakdown ([3e3ebf3](https://github.com/dsswift/ion/commit/3e3ebf302b45965ba39abfbf1860b2a10ec6b05f))
+* **desktop:** ion-meta hook integration test ([9fd88e7](https://github.com/dsswift/ion/commit/9fd88e7bca7da05dc536376acef14ab1915653a7))
+
+### Bug Fixes
+
+* **engine:** order tool_results before images for anthropic ([03d643e](https://github.com/dsswift/ion/commit/03d643e10d601a47bef47f763b4a62467a1769a5))
+* **engine:** stop counting image base64 bytes as context tokens ([7b7ffe9](https://github.com/dsswift/ion/commit/7b7ffe95ee4dea17b9f914340fa7fe000619c57a))
+* **engine:** redirect stray plan-mode writes to canonical plan file ([d080e5d](https://github.com/dsswift/ion/commit/d080e5dc991e8efed10968857251a45b05622d49))
+* **engine:** append tool alias directive for CLI MCP bridge ([b1e2282](https://github.com/dsswift/ion/commit/b1e2282b92e9473faae8b6deb445edc6752b770a))
+* **engine:** key agent-state store by dispatch ID not name ([2178427](https://github.com/dsswift/ion/commit/2178427ae3236417e9a52f6704a213ab81bc224a))
+* **desktop:** update agent-state dispatch ID tests ([d972b03](https://github.com/dsswift/ion/commit/d972b03a0e89096c84b2eaab7f2580570213e592))
+* **engine:** add micro-only signal and harden micro-compaction ([9a1cd5d](https://github.com/dsswift/ion/commit/9a1cd5d36da8bcb7af287f666efa4573b927dfdf))
+* **engine:** scrub renderer-flavored language from engine code and logs ([f02c353](https://github.com/dsswift/ion/commit/f02c3538bb9c499f2525506eb2cafc0c871af356))
+* **engine:** split memstat sysctl to darwin-only build tag ([5f36661](https://github.com/dsswift/ion/commit/5f3666101f6cc2a7bf9b333cf7e65fb549dcaa3d))
+* **engine:** honor explicit SessionID unconditionally on session start ([1a3df69](https://github.com/dsswift/ion/commit/1a3df695230548b012bc061df3562000db96b305))
+* **engine:** make heartbeat shutdown test deterministic ([4ad080c](https://github.com/dsswift/ion/commit/4ad080ccb33d86b40cddf00a4559d6325afcc84a))
+
+## [1.42.0](https://github.com/dsswift/ion/compare/engine-v1.41.0...engine-v1.42.0) (2026-06-19)
+
+### Features
+
+* **engine:** add filesystem slash-command resolution and fork execution ([cb70d88](https://github.com/dsswift/ion/commit/cb70d882d9c5bd12988f400582a378f468fc612f))
+
+### Bug Fixes
+
+* **engine:** drop queued prompts on abort so post-stop prompt runs ([0ff14bc](https://github.com/dsswift/ion/commit/0ff14bc0192c2f8d4c7a17be388506681865da97))
+
+## [1.41.0](https://github.com/dsswift/ion/compare/engine-v1.40.0...engine-v1.41.0) (2026-06-18)
+
+### Features
+
+* **engine:** add get_plan_content command + event (#240) ([502d1a2](https://github.com/dsswift/ion/commit/502d1a20032ba25866705ffb8685096c46329f89))
+* **engine:** reap orphaned sessions; configurable limits ([b11fda5](https://github.com/dsswift/ion/commit/b11fda54459194d00a3b6d3cdb41898b9e5f884a))
+* **engine:** login-shell Bash + sendPrompt config carry (#242) ([40600d3](https://github.com/dsswift/ion/commit/40600d38eeaffa99dcc7d3b982d6a1c03cabf958))
+* **engine:** extended-thinking events + telemetry (#158) ([f057a60](https://github.com/dsswift/ion/commit/f057a600c1a2f0876485fa91f35b340d18885c9e))
+* **engine:** effort-based thinking across anthropic, openai, google ([653c738](https://github.com/dsswift/ion/commit/653c73875fb8bd53b404cfd28959d38958292ba6))
+
+### Bug Fixes
+
+* **engine:** plan-content symlink guard + thinking-strip pin ([8cf11ff](https://github.com/dsswift/ion/commit/8cf11ffef3a3db4749b2d6414780f5e39a0fec15))
+
+## [1.40.0](https://github.com/dsswift/ion/compare/engine-v1.39.1...engine-v1.40.0) (2026-06-16)
+
+### Features
+
+* **engine:** emit run.complete telemetry for all backends (#234) ([4de6dcc](https://github.com/dsswift/ion/commit/4de6dcc8633524ed0cedab0c1c264cadb2d6837b))
+* **engine:** add wildcard resource subscription (#179) ([744a5b0](https://github.com/dsswift/ion/commit/744a5b036997ec0a63dbc6503451a9b0e7541ee5))
+
+### Bug Fixes
+
+* **engine:** isolate HOME in config load tests ([5d2f9c9](https://github.com/dsswift/ion/commit/5d2f9c9f36eb64865bf082f1c7e87e14814a4abd))
+* **engine:** guarantee synthesized tool_use ID uniqueness ([0a30f43](https://github.com/dsswift/ion/commit/0a30f43a95fdd8c2cb175bc54289612250117466))
+* **engine:** make heartbeat tests load-robust under linux -race (#239) ([f746969](https://github.com/dsswift/ion/commit/f746969d67d6b1941c222b40e0ac2063d686de73))
+* **engine:** de-flake watchdog stall test under linux -race (#239) ([e517312](https://github.com/dsswift/ion/commit/e517312c21086f2eea91d4c6dffb04bcf58bbf6f))
+
+## [1.39.1](https://github.com/dsswift/ion/compare/engine-v1.39.0...engine-v1.39.1) (2026-06-15)
+
+## [1.39.0](https://github.com/dsswift/ion/compare/engine-v1.38.0...engine-v1.39.0) (2026-06-15)
+
+### Features
+
+* **engine:** add CompactNow capability and engine_export constant ([b52bf31](https://github.com/dsswift/ion/commit/b52bf31995e9321e3290331b103a085ebf130559))
+* **engine:** rename dead Engine* instance vocab to Conversation* ([94ad974](https://github.com/dsswift/ion/commit/94ad9743e32499c520982e5606c05d1e1d87590b))
+* **engine:** add ion-meta log and transcript introspection (#228) ([b05779d](https://github.com/dsswift/ion/commit/b05779d7081675eb9e427249a1d2b7f30c775962))
+* **engine:** explicit fresh-conversation path for restart (#231) ([624f4da](https://github.com/dsswift/ion/commit/624f4dac13fc04980776967976661a9ea640691e))
+* **engine:** session-rooted cancellation context tree (#232) ([d82d4bc](https://github.com/dsswift/ion/commit/d82d4bcbafc89cdca29828c75d2f7026848c3760))
+* **engine:** evolve llmCall opts + async concurrency (#225,#226) ([fde8acc](https://github.com/dsswift/ion/commit/fde8acc46edd43f994b523be5963c7877a939b7e))
+* **engine:** add IsRoot flag and agentName to before_agent_start (#227) ([157e388](https://github.com/dsswift/ion/commit/157e38895843ea3ba7fdee25e5590eda07208066))
+
+### Bug Fixes
+
+* **engine:** serialize file-mutating tools on same path ([ce59ae6](https://github.com/dsswift/ion/commit/ce59ae6e3d04848edb4a1a001702782415420068))
+* **engine:** prevent cache_control on empty text blocks ([e779dfa](https://github.com/dsswift/ion/commit/e779dfa122cc24aa2f29e1727abf114af91d1632))
+* **engine:** clear pending denials on /clear ([91b296f](https://github.com/dsswift/ion/commit/91b296ff97d588bd4f819a6eda8f3ffaf7ec8477))
+* **engine:** use fmt.Fprintf in tools_files_test (lint) ([e97d13a](https://github.com/dsswift/ion/commit/e97d13abd329796b7134616741b27ec808b860b6))
+* **engine:** add agentName to BeforeAgentStartResult SDK type ([7af4892](https://github.com/dsswift/ion/commit/7af489252b6667f6642c5323526ea60b8213fe35))
+* **engine:** repair openai-compatible stream tool args + errors (#229) ([76789c0](https://github.com/dsswift/ion/commit/76789c04346fb3d4d08b86e559218f8516b007bf))
+* **engine:** stop pinning stale command-type magic number ([998ed68](https://github.com/dsswift/ion/commit/998ed685adf810f440c4212d5ffb94fc98b1f6c9))
+
 ## [1.38.0](https://github.com/dsswift/ion/compare/engine-v1.37.0...engine-v1.38.0) (2026-06-12)
 
 ### Features

@@ -87,16 +87,30 @@ final class SessionViewModel {
     /// engineResourceSnapshot and engineResourceDelta events.
     let resourceStore = ResourceStore()
 
+    /// Paged plan content assembler (plan gentle-perching-lemon). Populated
+    /// by plan_content events in response to requestPlanContent commands.
+    let planContentStore = PlanContentStore()
+
     var tabs: [RemoteTabState] = []
     var tabIds: Set<String> = []
-    var liveText: [String: String] = [:]
-    var messages: [String: [Message]] = [:]
-    var messageCountByTab: [String: Int] = [:]
+    /// Mirror of each tab's conversation message count. Kept in sync by the
+    /// unified conversation accessors (SessionViewModel+Conversation.swift) and
+    /// mutateEngineInstance. Views observe this for scroll-to-bottom triggers.
+    /// The messages themselves live on the single per-tab ConversationInstanceInfo
+    /// (post-#256 unification) — read via `conversationMessages(_:)`.
     var loadingConversation: Set<String> = []
     var conversationLoaded: Set<String> = []
     var conversationHasMore: [String: Bool] = [:]
     var conversationCursor: [String: String] = [:]
     var conversationLoadFailed: Set<String> = []
+    /// Per-tab debounce clock for the snapshot staleness reconcile. When the
+    /// desktop snapshot's authoritative last-activity timestamp is newer than
+    /// the newest local message (dropped live deltas — e.g. a LAN↔relay
+    /// transport switch), the snapshot handler re-issues loadConversation to
+    /// heal the gap. This map throttles that heal per tab so a burst of
+    /// snapshots during a legitimately-streaming run does not thrash the
+    /// re-fetch. See SessionViewModel+Snapshot.swift.
+    var lastConversationReconcileAt: [String: Date] = [:]
     var suppressScrollToBottom = false
     var conversationLoadRetryCount: [String: Int] = [:]
     var conversationLoadTimers: [String: Task<Void, Never>] = [:]
@@ -110,16 +124,41 @@ final class SessionViewModel {
     /// Local display name overrides for terminal instances (keyed by "tabId:instanceId").
     var terminalInstanceLabels: [String: String] = [:]
     // Engine state (per engine tab)
-    var engineWorkingMessages: [String: String] = [:]           // compoundKey -> working message
     var engineDialogs: [String: EngineDialogInfo?] = [:]
     var enginePinnedPrompt: [String: String] = [:]
-    var engineConversationLoaded: Set<String> = []               // compoundKeys that have loaded history
     var engineTurnHasText: Set<String> = []                      // compoundKeys where current LLM sub-turn produced text
     var lastSpokenEngineMessageCount: [String: Int] = [:]        // compoundKey -> message count at last TTS call
     // Agent dispatch conversation history (per conversationId for dispatch pager)
-    var agentConversationMessages: [String: [Message]] = [:]     // conversationId -> messages
+    var agentConversationMessages: [String: [Message]] = [:]     // conversationId -> messages (merged: snapshot + live push)
     var agentConversationLoading: Set<String> = []               // conversationIds currently loading
-
+    // Live dispatched-agent transcript (architecture C — push + reconcile).
+    // agentSnapshotByConvId holds the last file-backed snapshot (the authority);
+    // agentDispatchActivity holds the in-flight push entries folded from
+    // engine_dispatch_activity. recomputeDispatchTranscript merges them into
+    // agentConversationMessages (what the popup reads). See
+    // SessionViewModel+EngineEvents.swift.
+    var agentSnapshotByConvId: [String: [Message]] = [:]         // conversationId -> last file snapshot
+    var agentDispatchActivity: [String: [Message]] = [:]         // dispatchAgentId -> folded push entries (ordered)
+    /// Parallel seq storage for sort tiebreaking. Indexed in lockstep with
+    /// agentDispatchActivity: agentDispatchSeqs[dispatchId][i] is the seq for
+    /// agentDispatchActivity[dispatchId][i]. Cleared with agentDispatchActivity.
+    var agentDispatchSeqs: [String: [Int]] = [:]                 // dispatchAgentId -> per-entry seq values
+    /// Maps conversationId -> most recent dispatchAgentId. Used by
+    /// recomputeDispatchTranscript when invoked from handleAgentConversationHistory
+    /// (which knows the convId but not the dispatchAgentId). Updated each time
+    /// handleDispatchActivity receives an event for a given dispatchAgentId.
+    var activeDispatchIdByConvId: [String: String] = [:]
+    /// Tracks dispatchAgentIds whose push cache has already been cleared on the
+    /// terminal edge. clearTerminalDispatchCaches is level-triggered (fires every
+    /// engineAgentState tick) so this set gates the clear to run exactly once
+    /// per dispatch, preventing repeated recomputeDispatchTranscript calls on
+    /// every tick after a dispatch finishes.
+    var terminalClearedDispatches: Set<String> = []
+    /// Last-seen StatusFields.sessionId per tabId. Used by
+    /// handleEngineSessionIdChange (SessionViewModel+DispatchCacheInvalidation.swift)
+    /// to detect when the engine process restarts — a changed sessionId means
+    /// all cached dispatch snapshots may be stale and must be re-fetched.
+    var lastKnownEngineSessionId: [String: String] = [:]
     // Engine instance state (per engine tab)
     var conversationInstances: [String: [ConversationInstanceInfo]] = [:]   // tabId -> instances
     var activeEngineInstance: [String: String] = [:]              // tabId -> active instanceId
@@ -145,6 +184,13 @@ final class SessionViewModel {
     /// clears the field via `switchToDevice`, and the new desktop's
     /// initial snapshot repopulates it.
     var desktopSettings: DesktopSettingsState? = nil
+
+    /// Enterprise new-conversation policy projected from the desktop via
+    /// `desktop_settings_snapshot.newConversationPolicy`. Non-nil + locked=true
+    /// means `resolveNewConversationAction` must return `.locked` and iOS
+    /// must skip all pickers. Nil means no enterprise config (or pre-#256
+    /// desktop build — treat as unlocked).
+    var enterpriseNewConversationPolicy: RemoteNewConversationPolicy? = nil
 
     /// Default model list used before the desktop sends a dynamic list.
     static let defaultModels: [RemoteModelEntry] = [
@@ -194,7 +240,7 @@ final class SessionViewModel {
     /// Snapshot semantics: every event REPLACES the prior entry for that key.
     var extensionCommands: [String: [EngineCommandListing]] = [:]
 
-    // Upload attachment results (consumed by InputBar / EngineView)
+    // Upload attachment results (consumed by InputBar / ConversationView)
     var pendingUploadResults: [UploadAttachmentResult] = []
 
     /// Pending /export payload waiting to be presented via the iOS share
@@ -233,6 +279,25 @@ final class SessionViewModel {
     /// `IonRemoteApp.swift`'s `.active` handler for the call sites.
     var pendingOnConnected: [() -> Void] = []
 
+    /// Keyed deferred queue for `.automaticEssential` sends that arrive
+    /// while the transport is not yet `.connected`.
+    ///
+    /// Keys are stable command-identity strings (e.g. `"loadConversation:<tabId>"`,
+    /// `"requestTerminalSnapshot:<tabId>"`, `"sync"`, `"gitChanges:<dir>"`).
+    /// Last-write-wins: enqueueing the same key again supersedes the prior
+    /// entry so a stale load intent from a tab the user navigated away from
+    /// does not replay against the next transport.
+    ///
+    /// Drained once per `.connected` transition by `drainPendingEssential()`
+    /// (called from `handleSnapshot`, next to `drainPendingOnConnected()`).
+    /// Cleared by `clearPendingEssential()` on hard disconnect so stale
+    /// intent from one desktop does not fire against a different pairing.
+    ///
+    /// Separate from `pendingOnConnected` (the closure-run-all queue) so
+    /// the dedup semantics are explicit and the two queues can evolve
+    /// independently. See `SessionViewModel+OnConnected.swift`.
+    var pendingEssentialQueue: [(key: String, command: RemoteCommand)] = []
+
     /// Which desktop is currently selected (persisted in UserDefaults).
     var activeDeviceId: String? {
         get { UserDefaults.standard.string(forKey: "activeDeviceId") }
@@ -261,8 +326,15 @@ final class SessionViewModel {
     /// Tab ID to auto-navigate to after remote creation.
     var pendingNavigationTabId: String? = nil
     /// Tab ID to auto-open the Git pane for (set by tapping the branch badge in tab list).
-    /// Observed by ConversationView and EngineView; cleared after the pane is presented.
+    /// Observed by ConversationView; cleared after the pane is presented.
     var pendingGitPaneTabId: String? = nil
+    /// Dispatch ID to auto-open in AgentDetailFullScreenView after the conversation view
+    /// appears. Mirrors the pendingNavigationTabId deep-link pattern. Set by
+    /// StatusDrawerView when the user taps a running dispatch row; cleared after the
+    /// fullScreenCover is presented. ConversationView observes via .onChange and opens
+    /// AgentDetailFullScreenView for the specific dispatchId, reconstructing the ancestor
+    /// breadcrumb chain before presenting (plan modest-leaping-waffle §9a).
+    var pendingDispatchId: String? = nil
     /// The currently focused tab ID — the tab the user is viewing right now.
     /// Updated by TabListView whenever the selected/navigated tab changes and
     /// cleared when the app backgrounds. The desktop reads this via `report_focus`
@@ -274,11 +346,10 @@ final class SessionViewModel {
     /// Text to prefill into the input bar (set by rewind/fork responses).
     var pendingInputByTab: [String: String] = [:]
     /// Per-tab unsent input text. Persisted to UserDefaults across launches.
-    /// Keyed by `tabId`. Updated on every keystroke via the InputBar binding.
+    /// Keyed by bare `tabId` for both plain and engine tabs (the single unified
+    /// draft store, post-#256). Updated on every keystroke via the InputBar
+    /// binding. See SessionViewModel+Drafts.swift.
     var draftInputByTab: [String: String] = [:]
-    /// Per-engine-instance unsent input text. Persisted to UserDefaults.
-    /// Key format: `"\(tabId):\(instanceId)"` (matches desktop's engineDraftInputs).
-    var engineDraftInputByKey: [String: String] = [:]
     /// Default directory for new tabs on iOS (independent of desktop setting).
     var defaultBaseDirectory: String? {
         get { UserDefaults.standard.string(forKey: "defaultBaseDirectory") }
@@ -367,11 +438,12 @@ final class SessionViewModel {
         }
     }
 
-    /// Compute the compound key for the active engine instance.
-    /// Returns `"tabId:instanceId"` when an instance is active, or just `tabId` as fallback.
-    func engineCompoundKey(tabId: String) -> String {
-        let instanceId = activeEngineInstance[tabId] ?? conversationInstances[tabId]?.first?.id ?? ""
-        return instanceId.isEmpty ? tabId : "\(tabId):\(instanceId)"
+    /// The desktop's `defaultEngineProfileId` preference, projected via
+    /// `desktopSettingsSnapshot`. Non-empty means the user has chosen a
+    /// default engine profile; empty means "unset" (show the picker).
+    /// Matches how `resolveNewConversationAction` reads `defaultId`.
+    var defaultEngineProfileId: String {
+        (desktopSettings?.currentValue(for: "defaultEngineProfileId")?.value as? String) ?? ""
     }
 
     /// Tabs grouped by working directory basename, preserving original order within each group.
@@ -474,94 +546,8 @@ final class SessionViewModel {
         toastMessages.removeAll { $0.id == id }
     }
 
-    // MARK: - Input Drafts
-
-    /// UserDefaults keys for draft persistence.
-    private static let draftInputByTabKey = "draftInputByTab"
-    private static let engineDraftInputByKeyKey = "engineDraftInputByKey"
-
-    /// Returns the persisted draft for a tab, or "" if none.
-    func tabDraft(_ tabId: String) -> String {
-        draftInputByTab[tabId] ?? ""
-    }
-
-    /// Writes (or clears) a per-tab draft and persists to UserDefaults.
-    /// Empty strings remove the key to avoid bloating storage.
-    func setTabDraft(_ tabId: String, _ text: String) {
-        if text.isEmpty {
-            if draftInputByTab.removeValue(forKey: tabId) != nil {
-                DiagnosticLog.log("DRAFT: tab \(tabId.prefix(8)) cleared")
-                persistDrafts()
-            }
-        } else {
-            let prev = draftInputByTab[tabId]
-            draftInputByTab[tabId] = text
-            if prev != text {
-                DiagnosticLog.log("DRAFT: tab \(tabId.prefix(8)) updated len=\(text.count)")
-                persistDrafts()
-            }
-        }
-    }
-
-    /// Removes a per-tab draft (used when tab is closed on the desktop).
-    func clearTabDraft(_ tabId: String) {
-        if draftInputByTab.removeValue(forKey: tabId) != nil {
-            DiagnosticLog.log("DRAFT: tab \(tabId.prefix(8)) removed (tab closed)")
-            persistDrafts()
-        }
-    }
-
-    /// Returns the persisted draft for a tab+instance, or "" if none.
-    func engineDraft(tabId: String, instanceId: String) -> String {
-        engineDraftInputByKey["\(tabId):\(instanceId)"] ?? ""
-    }
-
-    /// Writes (or clears) a per-engine-instance draft and persists.
-    func setEngineDraft(tabId: String, instanceId: String, _ text: String) {
-        let key = "\(tabId):\(instanceId)"
-        if text.isEmpty {
-            if engineDraftInputByKey.removeValue(forKey: key) != nil {
-                DiagnosticLog.log("DRAFT: engine \(tabId.prefix(8)):\(instanceId.prefix(8)) cleared")
-                persistDrafts()
-            }
-        } else {
-            let prev = engineDraftInputByKey[key]
-            engineDraftInputByKey[key] = text
-            if prev != text {
-                DiagnosticLog.log("DRAFT: engine \(tabId.prefix(8)):\(instanceId.prefix(8)) updated len=\(text.count)")
-                persistDrafts()
-            }
-        }
-    }
-
-    /// Removes all engine-instance drafts for a tab (used when tab is closed).
-    func clearEngineDrafts(forTab tabId: String) {
-        let prefix = "\(tabId):"
-        let removed = engineDraftInputByKey.keys.filter { $0.hasPrefix(prefix) }
-        guard !removed.isEmpty else { return }
-        for k in removed { engineDraftInputByKey.removeValue(forKey: k) }
-        DiagnosticLog.log("DRAFT: engine drafts removed for tab \(tabId.prefix(8)) count=\(removed.count)")
-        persistDrafts()
-    }
-
-    /// Writes both draft dictionaries to UserDefaults.
-    private func persistDrafts() {
-        UserDefaults.standard.set(draftInputByTab, forKey: Self.draftInputByTabKey)
-        UserDefaults.standard.set(engineDraftInputByKey, forKey: Self.engineDraftInputByKeyKey)
-    }
-
-    /// Hydrates draft dictionaries from UserDefaults. Called once in `init`.
-    private func hydrateDrafts() {
-        if let tabMap = UserDefaults.standard.dictionary(forKey: Self.draftInputByTabKey) as? [String: String] {
-            draftInputByTab = tabMap
-        }
-        if let engineMap = UserDefaults.standard.dictionary(forKey: Self.engineDraftInputByKeyKey) as? [String: String] {
-            engineDraftInputByKey = engineMap
-        }
-        DiagnosticLog.log("DRAFT: hydrated tabDrafts=\(draftInputByTab.count) engineDrafts=\(engineDraftInputByKey.count)")
-    }
-
     // MARK: - Init
+    // Draft persistence methods live in SessionViewModel+Drafts.swift.
 
     init() {
         loadPairedDevices()

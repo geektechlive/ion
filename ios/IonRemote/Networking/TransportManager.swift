@@ -67,6 +67,16 @@ final class TransportManager {
     private(set) var isStopped = false
     let _seqLock = OSAllocatedUnfairLock(initialState: UInt64(0))
     var lastReceivedSeq: UInt64 = 0
+    /// Outstanding gap-recovery range awaiting replayed frames from the desktop.
+    /// While set, an inbound frame whose seq falls in this (still-missing) set is
+    /// APPLIED even though it is below `lastReceivedSeq` (the normal dedup would
+    /// otherwise drop the very frames we asked the desktop to resend). Filled
+    /// seqs are removed; cleared when empty or on desktop_resend_unavailable.
+    /// See TransportManager+Receive.swift requestResendForGap / pendingResend.
+    var pendingResendSeqs: Set<UInt64> = []
+    /// Debounce: the last time a resend request was sent, so a burst of gaps
+    /// coalesces into one request.
+    var lastResendRequestAt: Date = .distantPast
     let eventContinuation: AsyncStream<RemoteEvent>.Continuation
     var relayListenTask: Task<Void, Never>?
     var lanListenTask: Task<Void, Never>?

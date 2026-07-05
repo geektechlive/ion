@@ -12,6 +12,9 @@ extension DiagnosticLog {
         case .heartbeat:
             return // skip — fires every few seconds
 
+        case .resendUnavailable(let fromSeq):
+            log("EVENT: resendUnavailable fromSeq=\(fromSeq)")
+
         case .snapshot(let tabs, let dirs, let groupMode, _, _, _, _, _, _, _, _):
             log("EVENT: snapshot tabs=\(tabs.count) dirs=\(dirs.count) groupMode=\(groupMode ?? "nil")")
 
@@ -116,6 +119,17 @@ extension DiagnosticLog {
         case .engineSteerInjected(let tabId, let instId, let messageLength):
             log("EVENT: engineSteerInjected tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") messageLength=\(messageLength)")
 
+        // Extended-thinking events (issue #158). A thinking block is OPTIONAL
+        // per turn; the delta may be suppressed by the desktop's low-bandwidth
+        // streamThinkingToRemote toggle, leaving start+end only. Log all three
+        // boundaries so the reasoning lifecycle is reconstructable from logs.
+        case .engineThinkingBlockStart(let tabId, let instId):
+            log("EVENT: engineThinkingBlockStart tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        case .engineThinkingDelta(let tabId, let instId, let thinkingText):
+            log("EVENT: engineThinkingDelta tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") len=\(thinkingText.count)")
+        case .engineThinkingBlockEnd(let tabId, let instId, let totalTokens, let elapsedSeconds, let redacted):
+            log("EVENT: engineThinkingBlockEnd tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") tokens=\(totalTokens.map(String.init) ?? "nil") elapsed=\(elapsedSeconds.map { String(format: "%.1f", $0) } ?? "nil") redacted=\(redacted ?? false)")
+
         case .engineToolUpdate(let tabId, let instId):
             log("EVENT: engineToolUpdate tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
         case .engineToolComplete(let tabId, let instId):
@@ -124,8 +138,12 @@ extension DiagnosticLog {
             log("EVENT: engineScheduleFired tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
         case .engineLlmCall(let tabId, let instId):
             log("EVENT: engineLlmCall tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
-        case .engineDispatchStart(let tabId, let instId):
-            log("EVENT: engineDispatchStart tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil")")
+        case .engineDispatchStart(let tabId, let instId, let agent, _, _, _, let depth, let parentId, let dispatchId):
+            log("EVENT: engineDispatchStart tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") agent=\(agent) depth=\(depth) parentId=\(parentId.prefix(16)) id=\(dispatchId.prefix(16))")
+        case .engineDispatchEnd(let tabId, let instId, let agent, let depth, let parentId, let exitCode, let elapsed, let dispatchId, _):
+            log("EVENT: engineDispatchEnd tab=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") agent=\(agent) depth=\(depth) parentId=\(parentId.prefix(16)) exit=\(exitCode) elapsed=\(String(format: "%.2f", elapsed))s id=\(dispatchId.prefix(16))")
+        case .engineDispatchActivity(let tabId, _, let agentId, let convId, let kind, let seq, _, let toolId, _, _, _):
+            log("EVENT: engineDispatchActivity tab=\(tabId.prefix(8)) agent=\(agentId.prefix(16)) conv=\(convId.prefix(8)) kind=\(kind) seq=\(seq) toolId=\(toolId ?? "")")
 
         case .engineError(let tabId, let instId, let msg):
             log("ERR: engine tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") msg=\(msg.prefix(80))")
@@ -160,8 +178,9 @@ extension DiagnosticLog {
         case .engineHarnessMessage(let tabId, let instId, let msg, _, _):
             log("EVENT: engineHarnessMessage tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") len=\(msg.count)")
 
-        case .engineConversationHistory(let tabId, let instId, let msgs):
-            log("EVENT: engineConvHistory tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") msgs=\(msgs.count)")
+        // engineConversationHistory log arm removed (WI-004 / #259).
+        // History arrives via .conversationHistory (desktop_conversation_history),
+        // logged by handleConversationHistory in SessionViewModel+PermissionMessageEvents.
 
         case .agentConversationHistory(let agentName, let convId, let msgs):
             log("EVENT: agentConvHistory agent=\(agentName) convId=\(convId ?? "nil") msgs=\(msgs.count)")
@@ -174,6 +193,8 @@ extension DiagnosticLog {
 
         case .enginePlanModeChanged(let tabId, let instId, let enabled, let path, let slug):
             log("EVENT: enginePlanModeChanged tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") enabled=\(enabled) path=\(path?.suffix(40) ?? "nil") slug=\(slug ?? "nil")")
+        case .enginePlanFileWritten(let tabId, let instId, let op, let path, let slug):
+            log("EVENT: enginePlanFileWritten tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") op=\(op) path=\(path?.suffix(40) ?? "nil") slug=\(slug ?? "nil")")
 
         case .enginePlanProposal(let tabId, let instId, let kind, let path, _):
             // Workflow event from the engine — iOS does not act on this
@@ -234,12 +255,13 @@ extension DiagnosticLog {
             // separately at the view layer.
             log("EVENT: engineExport tabId=\(tabId.prefix(8)) inst=\(instId?.prefix(8) ?? "nil") format=\(exportFormat ?? "nil") bytes=\(message.count)")
 
-        case .desktopSettingsSnapshot(let settings, let schema, let groups):
+        case .desktopSettingsSnapshot(let settings, let schema, let groups, let newConversationPolicy):
             // Snapshot of the desktop's projectable user preferences.
             // Logged with counts only — the actual values can be
             // sensitive and the wire payload is small enough that a
             // future diagnostic dump can capture the full record if
             // needed.
+            _ = newConversationPolicy // logged at assignment site in EventHandlers
             log("EVENT: desktopSettingsSnapshot values=\(settings.count) schema=\(schema.count) groups=\(groups.count)")
 
         case .gitChangesResponse(let dir, _):
@@ -307,6 +329,16 @@ extension DiagnosticLog {
 
         case .resourceContent(let resourceId, let kind, let content):
             log("EVENT: resourceContent resourceId=\(resourceId.prefix(12)) kind=\(kind) contentLen=\(content.count)")
+
+        case .planContent(let questionId, let planFilePath, let offset, let content, let totalBytes, let hasMore):
+            log("EVENT: planContent qId=\(questionId.prefix(12)) path=\(planFilePath.suffix(30)) offset=\(offset) contentLen=\(content.count) totalBytes=\(totalBytes) hasMore=\(hasMore)")
+
+        case .desktopContextBreakdown(let tabId, let instanceId, let payload):
+            // Context-breakdown diagnostics: log category count, total token sum, and
+            // whether this is a post-reconciliation update (apiReportedTotal present).
+            let reconciled = payload.apiReportedTotal != nil ? "reconciled" : "pre"
+            let unaccounted = payload.unaccounted.map { " unaccounted=\($0)" } ?? ""
+            log("EVENT: desktopContextBreakdown tab=\(tabId.prefix(8)) inst=\(instanceId?.prefix(8) ?? "nil") cats=\(payload.categories.count) total=\(payload.totalTokens)/\(payload.contextWindow) \(reconciled)\(unaccounted)")
         }
     }
 }

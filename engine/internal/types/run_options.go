@@ -33,6 +33,14 @@ type RunOptions struct {
 	// defect this field fixes — claude rejects non-UUID resume ids with exit
 	// code 1, killing every fresh manager-driven CLI run.
 	CliResumeSessionID string          `json:"cliResumeSessionId,omitempty"`
+	// ParentConversationID, when set, is written as the new conversation's
+	// `parentId` IF this run creates a fresh conversation file (SessionID names
+	// an id with no backing file yet). It records that the new session descends
+	// from a prior one — the on-disk linkage for a client-driven checkpoint cut
+	// (e.g. a desktop "clear context" that starts a new conversation for an
+	// existing tab). Ignored when resuming an existing conversation. Additive
+	// and non-breaking: an absent value leaves parentId empty as before.
+	ParentConversationID string         `json:"parentConversationId,omitempty"`
 	AllowedTools       []string        `json:"allowedTools,omitempty"`
 	SuppressTools      []string        `json:"suppressTools,omitempty"`
 	MaxTurns           int             `json:"maxTurns,omitempty"`
@@ -161,6 +169,19 @@ type RunOptions struct {
 	DisablePlanModeReminder bool         `json:"disablePlanModeReminder,omitempty"`
 	DisableTurnLimitWarning bool         `json:"disableTurnLimitWarning,omitempty"`
 	DisableMaxTokenContinue bool         `json:"disableMaxTokenContinue,omitempty"`
+	// ClaudeCompat mirrors EngineConfig.ClaudeCompat onto the run so the
+	// backend's read-triggered nested context loader applies the same Ion-vs-
+	// Claude gate as the eager context walk: Ion-native instruction files
+	// (AGENTS.md, ION.md) load regardless; Claude-compat files (CLAUDE.md)
+	// load only when this is true. Set from s.config.ClaudeCompat in
+	// buildRunOptions. Zero value (false) preserves today's behavior.
+	ClaudeCompat bool `json:"claudeCompat,omitempty"`
+	// DisableNestedContext turns off read-triggered nested context loading
+	// (progressive AGENTS.md/ION.md descent) for this run. Zero value (false)
+	// means the feature is ON by default; set true to suppress nested
+	// injections (the per-run analogue of SuppressSystemMessages but scoped to
+	// the nested-context mechanism specifically).
+	DisableNestedContext    bool         `json:"disableNestedContext,omitempty"`
 	CapabilityTools         []LlmToolDef `json:"-"` // capability tools injected by session manager
 	CapabilityPrompt        string       `json:"-"` // capability prompt content injected by session manager
 	WebSearchMode           string       `json:"-"` // "auto", "client", or "server", propagated from config
@@ -223,6 +244,41 @@ type RunOptions struct {
 	// text prompt. When non-empty the backend appends one image content block
 	// per attachment to the user message, in addition to the text block.
 	Attachments []ImageAttachment `json:"attachments,omitempty"`
+
+	// ResolveSlash signals that Prompt is a slash-command invocation
+	// (`/name args`) that the engine should resolve and expand, rather than a
+	// plain user message. When true the engine looks the command up across the
+	// conventional roots (extension command registry, .ion/commands,
+	// .claude/commands, skills, project), expands the template ($ARGUMENTS
+	// substitution + frontmatter handling), feeds the EXPANDED body to the model,
+	// and persists the RAW invocation as the displayed user turn.
+	//
+	// Default false: Prompt is treated as a plain message verbatim — byte-for-
+	// byte the engine's prior behavior. This keeps the field additive: an
+	// existing consumer that sends a `/`-leading message as ordinary content
+	// (a path, a diff, a regex) is unaffected because it does not set the flag.
+	// The engine never sniffs Prompt for a leading slash on its own; the
+	// consumer classifies the invocation (the same trivial check a client
+	// already does to drive its slash-command autocomplete) and sets this flag.
+	ResolveSlash bool `json:"resolveSlash,omitempty"`
+
+	// ResolvedSlashCommand / ResolvedSlashArgs / ResolvedSlashSource carry the
+	// raw slash invocation after the session layer has resolved+expanded it.
+	// When ResolvedSlashCommand is non-empty, the runloop persists the raw
+	// invocation as the displayed user turn (via
+	// conversation.AddUserMessageWithInvocation) while Prompt — already rewritten
+	// to the expanded body by the session layer — is what the model sees. These
+	// are in-process run fields (json:"-"): they never cross the wire (the
+	// consumer sent the raw Text + ResolveSlash; the engine produced these),
+	// mirroring the CapabilityTools / ParentCtx precedent.
+	ResolvedSlashCommand string `json:"-"`
+	ResolvedSlashArgs    string `json:"-"`
+	ResolvedSlashSource  string `json:"-"`
+	// ResolvedSlashContext is the resolved command's `context` frontmatter:
+	// "inline" (default — expand into the current conversation) or "fork" (run
+	// the expanded body as a forked sub-agent with its own context/token budget).
+	// In-process run field. Empty for non-slash prompts.
+	ResolvedSlashContext string `json:"-"`
 
 	// ParentCtx is the session's cancellation root. When non-nil, the
 	// backend derives the run's cancellation context from it

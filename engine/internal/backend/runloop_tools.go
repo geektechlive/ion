@@ -30,7 +30,7 @@ func (b *ApiBackend) executeTools(
 	var hooks RunHooks
 	var permEng *permissions.Engine
 	var sbCfg *sandbox.Config
-	var mcpRouter func(string, map[string]interface{}) (string, bool, error)
+	var mcpRouter func(context.Context, string, map[string]interface{}) (string, bool, error)
 	var telem TelemetryCollector
 	var spawnerFn tools.AgentSpawner
 	if run.cfg != nil {
@@ -48,9 +48,21 @@ func (b *ApiBackend) executeTools(
 	permDenyFn := hooks.OnPermissionDenied
 	permClassifyFn := hooks.OnPermissionClassify
 
-	// Inject session-scoped agent spawner into context for Agent tool
+	// Inject session-scoped agent spawner into context for Agent tool.
+	// A nil spawner means the Agent tool will return "Agent tool not
+	// available" if the LLM invokes it. This should not happen in
+	// production: both the main session path (wireAgentSpawner) and the
+	// dispatch child path (BuildChildAgentSpawner) wire a spawner. Log
+	// loudly so any future nil-spawner regression surfaces as a
+	// diagnosable log line instead of an opaque model narration.
 	if spawnerFn != nil {
 		gCtx = tools.WithAgentSpawner(gCtx, spawnerFn)
+	} else {
+		utils.Warn("ApiBackend", fmt.Sprintf(
+			"run=%s has nil AgentSpawner: Agent tool will be unavailable. "+
+				"This indicates a wiring gap in the RunConfig assembly path.",
+			run.requestID,
+		))
 	}
 
 	// Inject history searcher scoped to this run's conversation so the
@@ -162,7 +174,8 @@ func (b *ApiBackend) executeTools(
 
 			// Call onToolCall hook (extension hook). Race against gCtx so a
 			// hung extension subprocess can't wedge this goroutine; the run's
-			// per-tool 5min timeout is the outer backstop.
+			// per-tool timeout (TimeoutsConfig.ToolDefault, 60min default) is
+			// the outer backstop.
 			if hookFn != nil {
 				type hookRet struct {
 					result *ToolCallResult
@@ -229,11 +242,18 @@ func (b *ApiBackend) executeTools(
 			// planWriteOverwrite for the post-execution overwrite
 			// warning that the Write tool-result append below depends on.
 			var planWriteOverwrite bool
+			var planWriteRedirectNotice string
+			var planWriteToCanonical bool
+			var planFileHadContentBefore bool
 			{
-				var handled bool
-				if handled, planWriteOverwrite = applyPlanModeWriteGate(run, block, results, i, b.emit); handled {
+				gateRes := applyPlanModeWriteGate(run, block, results, i, cwd, b.emit)
+				if gateRes.handled {
 					return nil
 				}
+				planWriteOverwrite = gateRes.planWriteOverwrite
+				planWriteRedirectNotice = gateRes.redirectNotice
+				planWriteToCanonical = gateRes.planWriteToCanonical
+				planFileHadContentBefore = gateRes.planFileHadContentBefore
 				if applyPlanModeBashGate(run, block, results, i, b.emit) {
 					return nil
 				}
@@ -251,6 +271,65 @@ func (b *ApiBackend) executeTools(
 			// as the next prompt in the same session.
 			if block.Name == tools.AskUserQuestionName {
 				utils.Info("ApiBackend", fmt.Sprintf("run=%s ask_user question=%v", run.requestID, block.Input["question"]))
+
+				// If this run has a ChildElicitFn, it is a dispatched child.
+				// Route the question to the dispatcher via elicitation (blocks
+				// until answered). This is the "AskUserQuestion symmetrization":
+				// dispatched children block-and-resume like elicitations instead
+				// of terminating the run.
+				if run.cfg != nil && run.cfg.ChildElicitFn != nil {
+					question, _ := block.Input["question"].(string)
+					utils.Info("ApiBackend", fmt.Sprintf("run=%s ask_user routing to dispatcher via ChildElicitFn", run.requestID))
+					answer, cancelled, err := run.cfg.ChildElicitFn(question)
+					if err != nil || cancelled {
+						// Dispatcher couldn't answer (session torn down or
+						// cancelled). Terminate the child run via the standard
+						// PermissionDenial path so consumers see a uniform
+						// outcome.
+						utils.Info("ApiBackend", fmt.Sprintf("run=%s ask_user dispatcher unavailable cancelled=%v err=%v; terminating", run.requestID, cancelled, err))
+						run.mu.Lock()
+						run.exitPlanMode = true
+						run.permissionDenials = append(run.permissionDenials, types.PermissionDenial{
+							ToolName:  block.Name,
+							ToolUseID: block.ID,
+							ToolInput: block.Input,
+						})
+						run.mu.Unlock()
+						results[i] = conversation.ToolResultEntry{
+							ToolUseID: block.ID,
+							Content:   "Question could not be answered (dispatcher unavailable). Proceeding with best judgment.",
+							IsError:   false,
+						}
+						b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+							ToolID:  block.ID,
+							Content: "Question could not be answered (dispatcher unavailable). Proceeding with best judgment.",
+							IsError: false,
+						}})
+						return nil
+					}
+					// Dispatcher answered. Inject the answer as the tool result.
+					// The child run CONTINUES (no PermissionDenial, no terminate).
+					content := answer
+					if content == "" {
+						content = "(no answer provided — proceed with best judgment)"
+					}
+					utils.Info("ApiBackend", fmt.Sprintf("run=%s ask_user dispatcher answered; injecting result and continuing", run.requestID))
+					results[i] = conversation.ToolResultEntry{
+						ToolUseID: block.ID,
+						Content:   content,
+						IsError:   false,
+					}
+					b.emit(run, types.NormalizedEvent{Data: &types.ToolResultEvent{
+						ToolID:  block.ID,
+						Content: content,
+						IsError: false,
+					}})
+					return nil
+				}
+
+				// Standard path: record a PermissionDenial so consumers can
+				// surface the question, then terminate the run. The user's
+				// answer arrives as the next prompt in the same session.
 				run.mu.Lock()
 				run.exitPlanMode = true
 				run.permissionDenials = append(run.permissionDenials, types.PermissionDenial{
@@ -278,6 +357,15 @@ func (b *ApiBackend) executeTools(
 			// tool completes. Consumers that run liveness watchdogs use these
 			// events to distinguish "still working" from "dead" for tabs that
 			// are legitimately running long tools.
+			//
+			// The stall advisory is emitted via emitWithoutProgress, NOT emit:
+			// it is the engine signalling the *absence* of progress, so it must
+			// not bump run.lastProgressAt. If it did, a wedged but deadline-
+			// exempt Agent/dispatch tool (see the AgentToolName branch below)
+			// would reset the run-progress watchdog clock every tick and never
+			// trip the run-stall backstop — the exact incident in conversation
+			// 1782012033034-37d617d3d9ab. See emitWithoutProgress in
+			// api_backend.go for the full rationale.
 			// Capture the threshold locally so the goroutine doesn't race
 			// with tests that reassign the package-level var.
 			stallThreshold := toolStallThreshold
@@ -293,7 +381,7 @@ func (b *ApiBackend) executeTools(
 					select {
 					case <-ticker.C:
 						ticks++
-						b.emit(run, types.NormalizedEvent{Data: &types.ToolStalledEvent{
+						b.emitWithoutProgress(run, types.NormalizedEvent{Data: &types.ToolStalledEvent{
 							ToolID:   block.ID,
 							ToolName: block.Name,
 							Elapsed:  float64(ticks) * stallThreshold.Seconds(),
@@ -317,20 +405,51 @@ func (b *ApiBackend) executeTools(
 			// The Agent tool is a long-running child session with cooperative
 			// cancellation (parent abort → gCtx cancelled → child cancelled).
 			// Wrapping it in the standard tool timeout would kill child agents
-			// at 5 minutes. Use gCtx directly so Agent runs are bounded only
+			// at the deadline. Use gCtx directly so Agent runs are bounded only
 			// by parent lifecycle, not by the tool deadline.
+			//
+			// All other tools get a finite deadline, but via a DeadlineSuspender
+			// rather than a bare context.WithTimeout: an extension tool's
+			// execute() may synchronously call ctx.elicit(), which is an
+			// indefinite human-wait. The suspender lets that path pause the
+			// finite deadline for exactly the span it is blocked on the human,
+			// then resume it for the remaining machine work — preserving the
+			// indefinite-human-wait guarantee without removing the finite
+			// ceiling from machine work. (Permission prompts do not flow through
+			// the suspender; they block elsewhere — see DeadlineSuspender's doc.)
 			var toolCtx context.Context
 			var toolCancel context.CancelFunc
+			var toolSuspender *types.DeadlineSuspenderHandle
 			if block.Name == tools.AgentToolName {
 				toolCtx, toolCancel = context.WithCancel(gCtx)
 			} else {
-				toolCtx, toolCancel = context.WithTimeout(gCtx, toolTimeout)
+				toolCtx, toolCancel = context.WithCancel(gCtx)
+				ds := types.NewDeadlineSuspender(toolTimeout, toolCancel)
+				toolSuspender = ds
+				toolCtx = types.WithDeadlineSuspender(toolCtx, ds)
 			}
 			defer toolCancel()
+			defer toolSuspender.Stop()
 
 			// Inject timeouts config into context for individual tools to read.
 			if run.cfg != nil && run.cfg.Timeouts != nil {
 				toolCtx = types.WithTimeouts(toolCtx, run.cfg.Timeouts)
+			}
+
+			// Inject shell config so the Bash tool can run commands through the
+			// user's login shell when EngineRuntimeConfig.Shell.UseLoginShell
+			// is set. Nil-safe: omitted config leaves the default bash -c path.
+			if run.cfg != nil && run.cfg.Shell != nil {
+				toolCtx = types.WithShellConfig(toolCtx, run.cfg.Shell)
+			}
+
+			// Install the per-run touched-path sink so path-bearing tools can
+			// record the paths they resolve (drives read-triggered nested
+			// context loading). The sink is nil-safe and self-locking; tools
+			// call types.RecordTouchedPath(ctx, resolvedPath). Drained between
+			// turns by drainNestedContext.
+			if run.touchedSink != nil {
+				toolCtx = types.WithTouchedPathSink(toolCtx, run.touchedSink)
 			}
 
 			var toolResult *types.ToolResult
@@ -348,7 +467,7 @@ func (b *ApiBackend) executeTools(
 				}
 				resCh := make(chan mcpRet, 1)
 				go func() {
-					content, isErr, routeErr := mcpRouter(block.Name, block.Input)
+					content, isErr, routeErr := mcpRouter(toolCtx, block.Name, block.Input)
 					resCh <- mcpRet{content, isErr, routeErr}
 				}()
 				select {
@@ -370,8 +489,15 @@ func (b *ApiBackend) executeTools(
 
 			// Surface per-tool deadline as a tool-result error rather than
 			// failing the whole run, so the LLM sees a clear "this tool timed
-			// out" message and can adapt.
-			if err != nil && toolCtx.Err() == context.DeadlineExceeded {
+			// out" message and can adapt. Two cases produce the deadline
+			// result: a classic WithTimeout ctx (built-in tools) reporting
+			// DeadlineExceeded, and the DeadlineSuspender (extension/MCP tools)
+			// having fired its own deadline — the suspender cancels via
+			// WithCancel, so its ctx.Err() is Canceled, not DeadlineExceeded,
+			// and we must consult Fired() to distinguish a deadline from a
+			// genuine lifecycle abort.
+			deadlineHit := toolCtx.Err() == context.DeadlineExceeded || toolSuspender.Fired()
+			if err != nil && deadlineHit {
 				err = nil
 				toolResult = &types.ToolResult{
 					Content: fmt.Sprintf("Error: tool %q exceeded %s deadline. Narrow the request or split it into smaller calls.", block.Name, toolTimeout),
@@ -414,6 +540,49 @@ func (b *ApiBackend) executeTools(
 					"use the Edit tool next time. If you unintentionally removed existing deliverables, " +
 					"re-read the conversation history to recover them."
 				utils.Info("PlanMode", fmt.Sprintf("run=%s plan_file_overwritten plan_file=%s", run.requestID, run.planFilePath))
+			}
+
+			// Append the redirect notice when applyPlanModeWriteGate rewrote
+			// a stray plan-shaped target to the canonical plan file. The
+			// notice is block-scoped (returned from the gate, not run state)
+			// so it cannot leak onto another concurrent tool block's result.
+			if planWriteRedirectNotice != "" && !results[i].IsError {
+				results[i].Content += "\n\n" + planWriteRedirectNotice
+			}
+
+			// Emit the plan-file-written marker AFTER a successful Write/Edit
+			// to the canonical plan file. This is the accurate trigger for the
+			// "plan created / updated" conversation marker: the file now exists
+			// on disk with content, so the marker lands at the true point in
+			// the transcript and any link to the plan resolves. The
+			// created-vs-updated discriminator comes from the file's prior
+			// state captured pre-execution by the gate (planFileHadContentBefore).
+			// Plan-mode entry no longer drives this marker — entry happens
+			// before any file exists. Skipped on error (the write failed, so
+			// nothing changed on disk).
+			if planWriteToCanonical && !results[i].IsError {
+				op := "created"
+				if planFileHadContentBefore {
+					op = "updated"
+				}
+				utils.Info("PlanMode", fmt.Sprintf("run=%s plan_file_written op=%s plan_file=%s", run.requestID, op, run.planFilePath))
+				b.emit(run, types.NormalizedEvent{Data: &types.PlanFileWrittenEvent{
+					Operation:    op,
+					PlanFilePath: run.planFilePath,
+					PlanSlug:     types.PlanSlugFromPath(run.planFilePath),
+				}})
+				// Persist a plan marker so the "plan created / updated" marker
+				// survives reload (PlanFileWrittenEvent is not persisted).
+				if run.conv != nil && run.conv.Entries != nil {
+					conversation.AppendEntry(run.conv, conversation.EntryPlanMarker, conversation.PlanMarkerData{
+						Operation:    op,
+						PlanFilePath: run.planFilePath,
+						PlanSlug:     types.PlanSlugFromPath(run.planFilePath),
+					})
+					if err := conversation.Save(run.conv, ""); err != nil {
+						utils.Log("ApiBackend", fmt.Sprintf("plan_marker: failed to save: %s", err.Error()))
+					}
+				}
 			}
 
 			// Fire file_changed hook for write/edit tools

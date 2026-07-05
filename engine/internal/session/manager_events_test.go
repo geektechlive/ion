@@ -482,6 +482,68 @@ func TestHandleRunExit_NilCodeAndSignal_NoDeadEvent(t *testing.T) {
 	}
 }
 
+// TestHandleRunExit_CleanCancel_NoDeadEvent is the Defect-A regression test:
+// a cooperative cancel (code==0, signal="cancelled") is a CLEAN exit and must
+// NOT emit engine_dead. This is what a user/auto abort or a runloop hook
+// cancellation produces; emitting engine_dead for it made a deliberately
+// interrupted-but-recoverable run look crashed (the
+// 1782088921498-960b064fe896 incident).
+//
+// Revert the cleanCancel/abnormalExit narrowing in handleRunExit and this goes
+// red: the old `signal != nil` condition fires engine_dead for "cancelled".
+func TestHandleRunExit_CleanCancel_NoDeadEvent(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	ec := newEventCollector(mgr)
+
+	_, _ = mgr.StartSession("exit-clean", defaultConfig())
+	_ = mgr.SendPrompt("exit-clean", "go", nil)
+
+	keys := mb.startedKeys()
+	code := 0
+	signal := "cancelled"
+	mb.emitExit(keys[0], &code, &signal, "")
+
+	deadEvents := ec.byType("engine_dead")
+	if len(deadEvents) != 0 {
+		t.Errorf("clean cancel (code=0 signal=cancelled) must NOT emit engine_dead, got %d", len(deadEvents))
+	}
+	// It must still transition to idle so the tab is reusable.
+	idle := ec.byType("engine_status")
+	foundIdle := false
+	for _, e := range idle {
+		if e.event.Fields != nil && e.event.Fields.State == "idle" {
+			foundIdle = true
+		}
+	}
+	if !foundIdle {
+		t.Error("clean cancel must still emit an idle engine_status")
+	}
+}
+
+// TestHandleRunExit_ForcedCancel_EmitsDead asserts the watchdog's hard kill
+// (code=0, signal="cancelled-forced") is treated as abnormal death and STILL
+// emits engine_dead — a non-cooperative signal is a real termination the
+// consumer must surface, distinct from the cooperative "cancelled".
+func TestHandleRunExit_ForcedCancel_EmitsDead(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	ec := newEventCollector(mgr)
+
+	_, _ = mgr.StartSession("exit-forced", defaultConfig())
+	_ = mgr.SendPrompt("exit-forced", "go", nil)
+
+	keys := mb.startedKeys()
+	code := 0
+	signal := "cancelled-forced"
+	mb.emitExit(keys[0], &code, &signal, "")
+
+	deadEvents := ec.byType("engine_dead")
+	if len(deadEvents) == 0 {
+		t.Fatal("forced cancel (signal=cancelled-forced) must still emit engine_dead — it is a hard kill, not a cooperative cancel")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // handleRunError tests
 // ---------------------------------------------------------------------------
@@ -1046,5 +1108,75 @@ func TestToolCallAccumulation_SequentialTools(t *testing.T) {
 	nameB, ok := calls[1].Input["agent_name"]
 	if !ok || nameB != "beta" {
 		t.Errorf("second call: expected agent_name='beta', got %v", calls[1].Input)
+	}
+}
+
+// --- thinking events (issue #158) ---
+
+func TestHandleNormalizedEvent_ThinkingBlockStart(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	ec := newEventCollector(mgr)
+
+	_, _ = mgr.StartSession("think-start", defaultConfig())
+	_ = mgr.SendPrompt("think-start", "go", nil)
+
+	keys := mb.startedKeys()
+	mb.emitNormalized(keys[0], types.NormalizedEvent{
+		Data: &types.ThinkingBlockStartEvent{},
+	})
+
+	if len(ec.byType("engine_thinking_block_start")) == 0 {
+		t.Fatal("expected engine_thinking_block_start event")
+	}
+}
+
+func TestHandleNormalizedEvent_ThinkingDelta(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	ec := newEventCollector(mgr)
+
+	_, _ = mgr.StartSession("think-delta", defaultConfig())
+	_ = mgr.SendPrompt("think-delta", "go", nil)
+
+	keys := mb.startedKeys()
+	mb.emitNormalized(keys[0], types.NormalizedEvent{
+		Data: &types.ThinkingDeltaEvent{Text: "reasoning chunk"},
+	})
+
+	evs := ec.byType("engine_thinking_delta")
+	if len(evs) == 0 {
+		t.Fatal("expected engine_thinking_delta event")
+	}
+	if evs[0].event.ThinkingText != "reasoning chunk" {
+		t.Errorf("expected ThinkingText 'reasoning chunk', got %q", evs[0].event.ThinkingText)
+	}
+}
+
+func TestHandleNormalizedEvent_ThinkingBlockEnd(t *testing.T) {
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	ec := newEventCollector(mgr)
+
+	_, _ = mgr.StartSession("think-end", defaultConfig())
+	_ = mgr.SendPrompt("think-end", "go", nil)
+
+	keys := mb.startedKeys()
+	mb.emitNormalized(keys[0], types.NormalizedEvent{
+		Data: &types.ThinkingBlockEndEvent{TotalTokens: 42, ElapsedSeconds: 14.5, Redacted: true},
+	})
+
+	evs := ec.byType("engine_thinking_block_end")
+	if len(evs) == 0 {
+		t.Fatal("expected engine_thinking_block_end event")
+	}
+	if evs[0].event.ThinkingTotalTokens != 42 {
+		t.Errorf("expected ThinkingTotalTokens 42, got %d", evs[0].event.ThinkingTotalTokens)
+	}
+	if evs[0].event.ThinkingElapsedSeconds != 14.5 {
+		t.Errorf("expected ThinkingElapsedSeconds 14.5, got %f", evs[0].event.ThinkingElapsedSeconds)
+	}
+	if !evs[0].event.ThinkingRedacted {
+		t.Errorf("expected ThinkingRedacted true")
 	}
 }

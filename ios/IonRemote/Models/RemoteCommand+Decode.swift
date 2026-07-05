@@ -20,13 +20,14 @@ extension RemoteCommand {
 
         case .createTab:
             let workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
-            // Decode the optional `pinToGroupId` extension. Older desktops
-            // do not emit this field on iOS-bound replays, but the decoder
-            // path is reused for round-trip tests where iOS encodes a
-            // createTab and decodes it back — having the field flow through
-            // both directions keeps the wire model symmetrical.
+            // Decode the optional extensions added in #256 (engine-tab creation).
+            // Older desktops that don't emit these fields decode nil; behavior
+            // degrades to the legacy plain-tab path. The round-trip test
+            // exercises both fields flowing through encode → decode.
             let pinToGroupId = try container.decodeIfPresent(String.self, forKey: .pinToGroupId)
-            self = .createTab(workingDirectory: workingDirectory, pinToGroupId: pinToGroupId)
+            let profileId = try container.decodeIfPresent(String.self, forKey: .profileId)
+            let extensions = try container.decodeIfPresent([String].self, forKey: .extensions)
+            self = .createTab(workingDirectory: workingDirectory, pinToGroupId: pinToGroupId, profileId: profileId, extensions: extensions)
 
         case .closeTab:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -47,7 +48,12 @@ extension RemoteCommand {
             let origin = try container.decodeIfPresent(String.self, forKey: .origin)
             let clientMsgId = try container.decodeIfPresent(String.self, forKey: .clientMsgId)
             let attachments = try container.decodeIfPresent([CommandAttachment].self, forKey: .attachments)
-            self = .prompt(tabId: tabId, text: text, origin: origin, clientMsgId: clientMsgId, attachments: attachments)
+            let implementationPhase = try container.decodeIfPresent(Bool.self, forKey: .implementationPhase)
+            // `instanceId` is absent on plain CLI prompts; present when the
+            // command targets a specific engine instance (merged from the former
+            // desktop_engine_prompt shape, #256).
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            self = .prompt(tabId: tabId, text: text, origin: origin, clientMsgId: clientMsgId, attachments: attachments, implementationPhase: implementationPhase, instanceId: instanceId)
 
         case .cancel:
             let tabId = try container.decode(String.self, forKey: .tabId)
@@ -59,15 +65,35 @@ extension RemoteCommand {
             let optionId = try container.decode(String.self, forKey: .optionId)
             self = .respondPermission(tabId: tabId, questionId: questionId, optionId: optionId)
 
+        case .respondElicitation:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let requestId = try container.decode(String.self, forKey: .requestId)
+            let response = try container.decodeIfPresent([String: AnyCodable].self, forKey: .response)
+            let cancelled = try container.decode(Bool.self, forKey: .cancelled)
+            self = .respondElicitation(tabId: tabId, requestId: requestId, response: response, cancelled: cancelled)
+
         case .setPermissionMode:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let mode = try container.decode(PermissionMode.self, forKey: .mode)
             self = .setPermissionMode(tabId: tabId, mode: mode)
 
+        case .setThinkingEffort:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let effort = try container.decode(String.self, forKey: .effort)
+            self = .setThinkingEffort(tabId: tabId, effort: effort)
+
         case .loadConversation:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let before = try container.decodeIfPresent(String.self, forKey: .before)
             self = .loadConversation(tabId: tabId, before: before)
+
+        case .requestResend:
+            // iOS only ever ENCODES this (it asks the desktop to resend); the
+            // decode case exists to keep the TypeKey switch exhaustive and for
+            // round-trip test coverage.
+            let fromSeq = try container.decode(UInt64.self, forKey: .fromSeq)
+            let toSeq = try container.decode(UInt64.self, forKey: .toSeq)
+            self = .requestResend(fromSeq: fromSeq, toSeq: toSeq)
 
         case .createTerminalTab:
             let workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
@@ -104,6 +130,10 @@ extension RemoteCommand {
             let tabId = try container.decode(String.self, forKey: .tabId)
             self = .requestTerminalSnapshot(tabId: tabId)
 
+        case .requestContextBreakdown:
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            self = .requestContextBreakdown(tabId: tabId)
+
         case .renameTab:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let customTitle = try container.decodeIfPresent(String.self, forKey: .customTitle)
@@ -135,18 +165,6 @@ extension RemoteCommand {
         case .unpair:
             self = .unpair
 
-        case .createEngineTab:
-            let workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
-            let profileId = try container.decodeIfPresent(String.self, forKey: .profileId)
-            self = .createEngineTab(workingDirectory: workingDirectory, profileId: profileId)
-
-        case .enginePrompt:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let text = try container.decode(String.self, forKey: .text)
-            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
-            let attachments = try container.decodeIfPresent([CommandAttachment].self, forKey: .attachments)
-            self = .enginePrompt(tabId: tabId, text: text, instanceId: instanceId, attachments: attachments)
-
         case .engineAbort:
             let tabId = try container.decode(String.self, forKey: .tabId)
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
@@ -159,36 +177,7 @@ extension RemoteCommand {
             let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
             self = .engineDialogResponse(tabId: tabId, dialogId: dialogId, value: value, instanceId: instanceId)
 
-        case .engineAddInstance:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            self = .engineAddInstance(tabId: tabId)
-
-        case .engineRemoveInstance:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let instanceId = try container.decode(String.self, forKey: .instanceId)
-            self = .engineRemoveInstance(tabId: tabId, instanceId: instanceId)
-
-        case .engineRenameInstance:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let instanceId = try container.decode(String.self, forKey: .instanceId)
-            let label = try container.decode(String.self, forKey: .label)
-            self = .engineRenameInstance(tabId: tabId, instanceId: instanceId, label: label)
-
-        case .engineSelectInstance:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let instanceId = try container.decode(String.self, forKey: .instanceId)
-            self = .engineSelectInstance(tabId: tabId, instanceId: instanceId)
-
-        case .engineMoveInstance:
-            let sourceTabId = try container.decode(String.self, forKey: .sourceTabId)
-            let instanceId = try container.decode(String.self, forKey: .instanceId)
-            let targetTabId = try container.decode(String.self, forKey: .targetTabId)
-            self = .engineMoveInstance(sourceTabId: sourceTabId, instanceId: instanceId, targetTabId: targetTabId)
-
-        case .loadEngineConversation:
-            let tabId = try container.decode(String.self, forKey: .tabId)
-            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
-            self = .loadEngineConversation(tabId: tabId, instanceId: instanceId)
+        // .loadEngineConversation decode case removed in WI-004 / #259.
 
         case .loadAgentConversation:
             let conversationIds = try container.decode([String].self, forKey: .conversationIds)
@@ -397,6 +386,25 @@ extension RemoteCommand {
             let kind = try container.decode(String.self, forKey: .kind)
             let resourceId = try container.decode(String.self, forKey: .resourceId)
             self = .deleteResource(kind: kind, resourceId: resourceId)
+
+        case .implementPlan:
+            // iOS only sends this command (never decodes it from the wire),
+            // but the Codable conformance requires the path.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let questionId = try container.decode(String.self, forKey: .questionId)
+            let instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            let clearContext = try container.decodeIfPresent(Bool.self, forKey: .clearContext) ?? false
+            self = .implementPlan(tabId: tabId, questionId: questionId, instanceId: instanceId, clearContext: clearContext)
+
+        case .requestPlanContent:
+            // iOS only sends this command (never decodes it from the wire),
+            // but the Codable conformance requires the path.
+            let tabId = try container.decode(String.self, forKey: .tabId)
+            let questionId = try container.decode(String.self, forKey: .questionId)
+            let planFilePath = try container.decode(String.self, forKey: .planFilePath)
+            let offset = try container.decode(Int.self, forKey: .offset)
+            let length = try container.decode(Int.self, forKey: .length)
+            self = .requestPlanContent(tabId: tabId, questionId: questionId, planFilePath: planFilePath, offset: offset, length: length)
         }
     }
 

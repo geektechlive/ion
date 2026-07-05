@@ -40,7 +40,7 @@ desktop/src/
   preload/                 contextBridge IPC surface
   renderer/                React app
     App.tsx                root
-    stores/sessionStore.ts thin orchestrator (109 lines); logic lives in stores/slices/
+    stores/sessionStore.ts thin orchestrator; logic lives in stores/slices/
     stores/slices/         feature slices (engine, tabs, permissions, attachments, etc.)
     components/            UI (flat)
     hooks/                 React hooks
@@ -57,7 +57,7 @@ desktop/src/
 
 - All `ipcMain.handle/on` channels validated via `main/ipc-validation.ts` patterns. No exceptions.
 - Channels namespaced by feature: `session:start`, `git:status`, `terminal:write`, etc.
-- Renderer reaches IPC only through `preload/`. Renderer must not import from `main/`.
+- Renderer reaches IPC only through `preload/`. Renderer must not import IPC/Electron-bound code from `main/`. The one allowed exception is a small set of *pure* helpers that happen to live under `main/` and are imported by value for shared logic (`main/slash-parse` `parseSlash`, `main/tab-migration-split` `SPLIT_SCHEMA_VERSION`, `main/tab-migration-unify` `migrateTabToUnified`). These should migrate to `shared/` when next touched; do not add new renderer→`main/` imports beyond pure helpers.
 - Avoid `executeJavaScript` with string interpolation. Use preload-bridge functions.
 
 ## State
@@ -112,12 +112,20 @@ When investigating a renderer bug in a packaged build, **add the instrumentation
 ## Secrets
 
 - Paired-device shared secrets and relay API key go through `safeStorage.encryptString` (OS keychain).
-- Settings files use temp+fsync+rename. Reference: `engine/internal/conversation/filestore.go`.
+- Settings files use temp+fsync+rename. Reference: `engine/internal/conversation/persistence.go` (`writeFileSynced`).
 
 ## Cross-process types
 
 - Live in `desktop/src/shared/types.ts`.
-- Renderer must not import from `main/` (one type-only violation in `InputBar.tsx` for `DiscoveredCommand` — fix by lifting to `shared/types.ts`).
+- Renderer must not import IPC/Electron-bound code from `main/` (see the IPC section for the pure-helper exception and its migration intent).
+
+## Wire naming and contract rules (ADR 008)
+
+The desktop owns the desktop↔iOS wire. All `RemoteEvent` and `RemoteCommand` members carry the `desktop_` prefix. Any new member introduced to `src/main/remote/protocol.ts` must carry the `desktop_` prefix from its first commit. Cross-prefixed members (e.g. `engine_` on a `RemoteEvent`) are non-conforming.
+
+The desktop↔iOS wire operates under a **lockstep model**: every wire change ships to all clients in one PR. This is not a scrutinized breaking-change contract — it is a parity obligation. When reviewing or implementing desktop↔iOS wire renames, do not treat them as published-contract breaks. The only required gate is parity: `protocol.ts`, `RemoteCommand.swift`, `NormalizedEvent.swift` TypeKey raw values, and any handler that switches on the string must all be updated in the same commit (or PR).
+
+See root `AGENTS.md` § "Contract stability" and [docs/architecture/adr/008-wire-event-naming-and-ownership.md](../docs/architecture/adr/008-wire-event-naming-and-ownership.md).
 
 ## Contract sync (cross-language types)
 
@@ -139,8 +147,10 @@ Session-scoped resources appear in the per-conversation attachments panel (Conve
 
 ## Done criteria
 
+While developing, run only the **scoped** gates — see root [`AGENTS.md`](../AGENTS.md) § "Quality gates (run while developing)". The full `npm test` suite and `npm audit` are heavy gates that run at PR time (CI is authoritative; `/create-pr` runs the Linux parity subset, which includes the full desktop test run, before pushing); do not run them mid-development.
+
 1. `npm run typecheck` passes.
-2. `npm test` passes.
+2. `npm test -- <pattern>` passes for the area you touched. The full `npm test` run is a heavy gate — it runs at PR time (CI is authoritative; `/create-pr` runs it inside the Linux container before pushing); don't run it repeatedly while iterating.
 3. `make check-file-sizes` passes.
 4. UI changes: smoke-tested in `npm run dev`. Report what was tested.
 5. Don't `git push`.

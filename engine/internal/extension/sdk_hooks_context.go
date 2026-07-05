@@ -30,6 +30,19 @@ func (s *SDK) FireModelSelect(ctx *Context, info ModelSelectInfo) (string, error
 	return info.RequestedModel, nil
 }
 
+// FireSlashCommandResolved fires the slash_command_resolved hook. Handlers may
+// return a string to override the expanded body; the last non-nil string result
+// wins. Returns the override and true when a handler overrode, else ("", false).
+func (s *SDK) FireSlashCommandResolved(ctx *Context, info SlashResolvedInfo) (string, bool) {
+	results := s.fire(HookSlashCommandResolved, ctx, info)
+	for i := len(results) - 1; i >= 0; i-- {
+		if str, ok := results[i].(string); ok {
+			return str, true
+		}
+	}
+	return "", false
+}
+
 // FireUserBash fires the user_bash hook.
 func (s *SDK) FireUserBash(ctx *Context, command string) error {
 	s.fire(HookUserBash, ctx, command)

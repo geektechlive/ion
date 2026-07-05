@@ -21,49 +21,59 @@ type agentDiscoveryTestAccessor struct {
 	extGroup *extension.ExtensionGroup
 }
 
-func (a *agentDiscoveryTestAccessor) SessionKey() string       { return "test-session" }
-func (a *agentDiscoveryTestAccessor) ConversationID() string   { return "" }
-func (a *agentDiscoveryTestAccessor) WorkingDirectory() string { return "/tmp" }
-func (a *agentDiscoveryTestAccessor) Emit(ev types.EngineEvent) {}
-func (a *agentDiscoveryTestAccessor) SendAbort()               {}
-func (a *agentDiscoveryTestAccessor) RootContext() context.Context { return context.Background() }
-func (a *agentDiscoveryTestAccessor) SendPrompt(_, _ string) error { return nil }
+func (a *agentDiscoveryTestAccessor) SessionKey() string                       { return "test-session" }
+func (a *agentDiscoveryTestAccessor) ConversationID() string                   { return "" }
+func (a *agentDiscoveryTestAccessor) WorkingDirectory() string                 { return "/tmp" }
+func (a *agentDiscoveryTestAccessor) Emit(ev types.EngineEvent)                {}
+func (a *agentDiscoveryTestAccessor) SendAbort()                               {}
+func (a *agentDiscoveryTestAccessor) RootContext() context.Context             { return context.Background() }
+func (a *agentDiscoveryTestAccessor) SendPrompt(_, _ string, _ []string) error { return nil }
+func (a *agentDiscoveryTestAccessor) SteerSelfMainLoop(_ string) bool          { return false }
 func (a *agentDiscoveryTestAccessor) Elicit(_ extension.ElicitationRequestInfo) (map[string]interface{}, bool, error) {
 	return nil, false, nil
 }
-func (a *agentDiscoveryTestAccessor) SuppressTool(_ string)                            {}
-func (a *agentDiscoveryTestAccessor) CacheExtAgentStates(_ []types.AgentStateUpdate)   {}
-func (a *agentDiscoveryTestAccessor) RegisterAgent(_ string, _ types.AgentHandle)      {}
-func (a *agentDiscoveryTestAccessor) DeregisterAgent(_ string)                         {}
-func (a *agentDiscoveryTestAccessor) RegisterAgentSpec(_ types.AgentSpec)              {}
-func (a *agentDiscoveryTestAccessor) DeregisterAgentSpec(_ string)                     {}
-func (a *agentDiscoveryTestAccessor) LookupAgentSpec(_ string) (types.AgentSpec, bool) { return types.AgentSpec{}, false }
-func (a *agentDiscoveryTestAccessor) LookupExtDisplayName(_ string) string             { return "" }
-func (a *agentDiscoveryTestAccessor) ExtGroup() *extension.ExtensionGroup              { return a.extGroup }
-func (a *agentDiscoveryTestAccessor) ExtConfig() *extension.ExtensionConfig            { return nil }
-func (a *agentDiscoveryTestAccessor) ProcRegistry() *extension.ProcessRegistry         { return nil }
-func (a *agentDiscoveryTestAccessor) NewChildBackend() backend.RunBackend              { return nil }
-func (a *agentDiscoveryTestAccessor) EngineConfig() *types.EngineRuntimeConfig         { return nil }
-func (a *agentDiscoveryTestAccessor) ResolveTier(_ string) string                      { return "" }
+func (a *agentDiscoveryTestAccessor) SuppressTool(_ string)                          {}
+func (a *agentDiscoveryTestAccessor) CacheExtAgentStates(_ []types.AgentStateUpdate) {}
+func (a *agentDiscoveryTestAccessor) RegisterAgent(_ string, _ types.AgentHandle)    {}
+func (a *agentDiscoveryTestAccessor) DeregisterAgent(_ string)                       {}
+func (a *agentDiscoveryTestAccessor) RegisterAgentSpec(_ types.AgentSpec)            {}
+func (a *agentDiscoveryTestAccessor) DeregisterAgentSpec(_ string)                   {}
+func (a *agentDiscoveryTestAccessor) LookupAgentSpec(_ string) (types.AgentSpec, bool) {
+	return types.AgentSpec{}, false
+}
+func (a *agentDiscoveryTestAccessor) LookupExtDisplayName(_ string) string     { return "" }
+func (a *agentDiscoveryTestAccessor) ExtGroup() *extension.ExtensionGroup      { return a.extGroup }
+func (a *agentDiscoveryTestAccessor) ExtConfig() *extension.ExtensionConfig    { return nil }
+func (a *agentDiscoveryTestAccessor) ProcRegistry() *extension.ProcessRegistry { return nil }
+func (a *agentDiscoveryTestAccessor) NewChildBackend() backend.RunBackend      { return nil }
+func (a *agentDiscoveryTestAccessor) BumpParentProgress()                      {}
+func (a *agentDiscoveryTestAccessor) EmitDispatchCountStatus(_ string)         {}
+func (a *agentDiscoveryTestAccessor) EngineConfig() *types.EngineRuntimeConfig { return nil }
+func (a *agentDiscoveryTestAccessor) ResolveTier(_ string) string              { return "" }
 func (a *agentDiscoveryTestAccessor) PermissionCheck(_ string, _ map[string]interface{}) (string, string) {
 	return "", ""
 }
-func (a *agentDiscoveryTestAccessor) McpConnections() []*mcp.Connection             { return nil }
-func (a *agentDiscoveryTestAccessor) SearchHistory(_ string, _ int) []extension.HistoryMatch { return nil }
-func (a *agentDiscoveryTestAccessor) GetSessionMemory() string                              { return "" }
-func (a *agentDiscoveryTestAccessor) SetSessionMemory(_ string)                             {}
+func (a *agentDiscoveryTestAccessor) McpConnections() []*mcp.Connection { return nil }
+func (a *agentDiscoveryTestAccessor) SearchHistory(_ string, _ int) []extension.HistoryMatch {
+	return nil
+}
+func (a *agentDiscoveryTestAccessor) GetSessionMemory() string  { return "" }
+func (a *agentDiscoveryTestAccessor) SetSessionMemory(_ string) {}
 func (a *agentDiscoveryTestAccessor) TranslateEvent(_ types.NormalizedEvent, _ int) types.EngineEvent {
 	return types.EngineEvent{}
 }
 func (a *agentDiscoveryTestAccessor) SetPlanMode(_ bool, _ string)     {}
 func (a *agentDiscoveryTestAccessor) GetPlanModeState() (bool, string) { return false, "" }
-func (a *agentDiscoveryTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string { return "" }
-func (a *agentDiscoveryTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate))  {}
-func (a *agentDiscoveryTestAccessor) EmitAgentSnapshot(_ string) {}
-func (a *agentDiscoveryTestAccessor) ResourceBroker() *resource.Broker       { return nil }
-func (a *agentDiscoveryTestAccessor) GlobalResourceBroker() *resource.Broker { return nil }
-func (a *agentDiscoveryTestAccessor) BroadcastNotification(_ types.NotifyOpts)        {}
-func (a *agentDiscoveryTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)    {}
+func (a *agentDiscoveryTestAccessor) AppendOrUpdateAgentState(_ types.AgentStateUpdate) string {
+	return ""
+}
+func (a *agentDiscoveryTestAccessor) UpdateAgentStateByID(_ string, _ func(*types.AgentStateUpdate)) {
+}
+func (a *agentDiscoveryTestAccessor) EmitAgentSnapshot(_ string)                    {}
+func (a *agentDiscoveryTestAccessor) ResourceBroker() *resource.Broker              { return nil }
+func (a *agentDiscoveryTestAccessor) GlobalResourceBroker() *resource.Broker        { return nil }
+func (a *agentDiscoveryTestAccessor) BroadcastNotification(_ types.NotifyOpts)      {}
+func (a *agentDiscoveryTestAccessor) BroadcastIntercept(_ extension.InterceptOpts)  {}
 func (a *agentDiscoveryTestAccessor) ListAllSessions() []extension.SessionListEntry { return nil }
 func (a *agentDiscoveryTestAccessor) SendToSession(_, _, _ string, _ map[string]interface{}) error {
 	return nil

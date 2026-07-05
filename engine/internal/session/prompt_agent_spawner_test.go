@@ -46,6 +46,12 @@ type childStubBackend struct {
 	// tests to verify the parent's agent_state snapshot sequence isn't
 	// perturbed by intermediate workflow events from the child run.
 	emitModelFallback bool
+	// emitActivity, when true, causes the stub to emit a SessionInitEvent
+	// (carrying the child conv id) followed by a ToolCallEvent +
+	// ToolResultEvent pair and a TextChunkEvent BEFORE TaskCompleteEvent, so
+	// tests can assert the spawner emits engine_dispatch_activity deltas for
+	// the live transcript while the child is still running.
+	emitActivity bool
 	// childErr, when non-nil, is delivered via onError after StartRun
 	// returns control.
 	childErr error
@@ -74,6 +80,7 @@ func (c *childStubBackend) StartRun(requestID string, opts types.RunOptions) {
 	gate := c.releaseGate
 	result := c.resultText
 	emitFallback := c.emitModelFallback
+	emitActivity := c.emitActivity
 	errToEmit := c.childErr
 	c.mu.Unlock()
 
@@ -83,6 +90,14 @@ func (c *childStubBackend) StartRun(requestID string, opts types.RunOptions) {
 		// and child-error path).
 		if gate != nil {
 			<-gate
+		}
+		// Emit the live-transcript activity sequence (init → tool pair → text)
+		// before completion so the spawner produces engine_dispatch_activity.
+		if emitActivity && onNorm != nil {
+			onNorm(requestID, types.NormalizedEvent{Data: &types.SessionInitEvent{SessionID: "child-conv-id"}})
+			onNorm(requestID, types.NormalizedEvent{Data: &types.ToolCallEvent{ToolName: "Read", ToolID: "tool-1"}})
+			onNorm(requestID, types.NormalizedEvent{Data: &types.ToolResultEvent{ToolID: "tool-1", IsError: false}})
+			onNorm(requestID, types.NormalizedEvent{Data: &types.TextChunkEvent{Text: "looking at the file"}})
 		}
 		// Emit a synthetic ModelFallbackEvent before the task-complete so
 		// lifecycle tests can verify it doesn't perturb the parent's
@@ -119,10 +134,10 @@ func (c *childStubBackend) StartRun(requestID string, opts types.RunOptions) {
 	}()
 }
 
-// StartRunWithConfig implements the configurableBackend interface so the
-// session-package startChildRun helper routes through this method when the
-// spawner passes a non-nil RunConfig (the post-fix path). Captures cfg
-// alongside opts so tests can assert DefaultModel was threaded through.
+// StartRunWithConfig lets the shared dispatch path (extcontext.startChild,
+// reached via BuildDispatchAgentFunc) route through this method when the
+// spawner passes a non-nil RunConfig. Captures cfg alongside opts so tests can
+// assert DefaultModel and the AgentSpawner were threaded through.
 func (c *childStubBackend) StartRunWithConfig(requestID string, opts types.RunOptions, cfg *backend.RunConfig) {
 	c.mu.Lock()
 	c.startedCfg = cfg
@@ -149,18 +164,18 @@ func (c *childStubBackend) Cancel(_ string) bool {
 	return true
 }
 
-func (c *childStubBackend) IsRunning(_ string) bool                                    { return false }
-func (c *childStubBackend) WriteToStdin(_ string, _ interface{}) error                 { return nil }
-func (c *childStubBackend) FlushConversations()                                        {}
-func (c *childStubBackend) OnNormalized(fn func(string, types.NormalizedEvent))        { c.onNorm = fn }
-func (c *childStubBackend) OnExit(fn func(string, *int, *string, string))              { c.onExit = fn }
-func (c *childStubBackend) OnError(fn func(string, error))                             { c.onError = fn }
+func (c *childStubBackend) IsRunning(_ string) bool                             { return false }
+func (c *childStubBackend) WriteToStdin(_ string, _ interface{}) error          { return nil }
+func (c *childStubBackend) FlushConversations()                                 {}
+func (c *childStubBackend) OnNormalized(fn func(string, types.NormalizedEvent)) { c.onNorm = fn }
+func (c *childStubBackend) OnExit(fn func(string, *int, *string, string))       { c.onExit = fn }
+func (c *childStubBackend) OnError(fn func(string, error))                      { c.onError = fn }
 
 // installHookCapturingHost registers in-memory agent_start / agent_end
 // handlers on a fresh ExtensionGroup and returns the group together with
 // pointers the test can inspect after the spawner runs.
 type capturedAgentInfo struct {
-	mu        sync.Mutex
+	mu         sync.Mutex
 	startCalls []extension.AgentInfo
 	endCalls   []extension.AgentInfo
 }
@@ -243,6 +258,89 @@ func runSpawnerOnce(t *testing.T, stub *childStubBackend, parentCtx context.Cont
 
 	result, err := runCfg.AgentSpawner(parentCtx, "", prompt, "test-display", "/tmp", "")
 	return result, cap, err
+}
+
+// TestWireAgentSpawner_EmitsDispatchActivity pins the Agent-tool spawn path's
+// half of the live dispatched-agent transcript: a running sub-agent spawned via
+// the built-in Agent tool must emit engine_dispatch_activity deltas (tool_start,
+// tool_end, text) on the parent stream, mirroring the extension-dispatch path in
+// dispatch_agent.go. This is the regression for the shipped gap where ONLY the
+// extension-dispatch path was instrumented, so Agent-tool dispatches froze after
+// the first tool on clients.
+//
+// Reverting the activity wiring in prompt_agent_spawner.go turns this red: no
+// engine_dispatch_activity events are emitted.
+func TestWireAgentSpawner_EmitsDispatchActivity(t *testing.T) {
+	stub := &childStubBackend{resultText: "child output", emitActivity: true}
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	var mu sync.Mutex
+	var activity []types.EngineEvent
+	mgr.OnEvent(func(_ string, ev types.EngineEvent) {
+		if ev.Type == "engine_dispatch_activity" {
+			mu.Lock()
+			activity = append(activity, ev)
+			mu.Unlock()
+		}
+	})
+
+	if _, err := mgr.StartSession("activity-spawn", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["activity-spawn"]
+	mgr.mu.Unlock()
+
+	group, _ := installHookCapturingGroup(t)
+	mgr.mu.Lock()
+	s.extGroup = group
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "activity-spawn", "claude-sonnet", group, runCfg)
+	if _, err := runCfg.AgentSpawner(context.Background(), "", "do thing", "disp", "/tmp", ""); err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	// The text delta is coalesced (~500ms flush) and flushed on Close at child
+	// exit, so all three kinds are present by the time the spawner returns.
+	mu.Lock()
+	defer mu.Unlock()
+	var sawToolStart, sawToolEnd, sawText bool
+	lastSeq := 0
+	for _, ev := range activity {
+		if ev.DispatchConversationID != "child-conv-id" {
+			t.Errorf("activity kind=%s conversationId=%q, want child-conv-id", ev.DispatchActivityKind, ev.DispatchConversationID)
+		}
+		if ev.DispatchAgentID == "" {
+			t.Errorf("activity kind=%s missing DispatchAgentID", ev.DispatchActivityKind)
+		}
+		if ev.DispatchSeq <= lastSeq {
+			t.Errorf("activity seq not monotonic: %d after %d", ev.DispatchSeq, lastSeq)
+		}
+		lastSeq = ev.DispatchSeq
+		switch ev.DispatchActivityKind {
+		case "tool_start":
+			sawToolStart = true
+			if ev.ToolID != "tool-1" || ev.ToolName != "Read" {
+				t.Errorf("tool_start toolId=%q toolName=%q, want tool-1/Read", ev.ToolID, ev.ToolName)
+			}
+		case "tool_end":
+			sawToolEnd = true
+		case "text":
+			sawText = true
+			if ev.DispatchTextDelta != "looking at the file" {
+				t.Errorf("text delta=%q, want coalesced full text", ev.DispatchTextDelta)
+			}
+		}
+	}
+	if !sawToolStart || !sawToolEnd || !sawText {
+		t.Fatalf("missing activity kinds from Agent-tool spawn path: start=%v end=%v text=%v (got %d events)",
+			sawToolStart, sawToolEnd, sawText, len(activity))
+	}
 }
 
 func TestWireAgentSpawner_FiresAgentStartAndEnd_OnSuccess(t *testing.T) {
@@ -419,9 +517,9 @@ func TestWireAgentSpawner_ResolvesTierAlias(t *testing.T) {
 		context.Background(),
 		"test-specialist", // requestedName
 		"audit the extension",
-		"",    // description
+		"", // description
 		"/tmp",
-		"",    // model (empty — falls back to spec)
+		"", // model (empty — falls back to spec)
 	)
 	if spawnErr != nil {
 		t.Fatalf("spawner returned error: %v", spawnErr)
@@ -547,9 +645,9 @@ func TestWireAgentSpawner_ThreadsDefaultModelToChild(t *testing.T) {
 		context.Background(),
 		"test-specialist",
 		"audit the extension",
-		"",    // description
+		"", // description
 		"/tmp",
-		"",    // model (empty — falls back to spec → "standard")
+		"", // model (empty — falls back to spec → "standard")
 	)
 	if spawnErr != nil {
 		t.Fatalf("spawner returned error: %v", spawnErr)
@@ -563,7 +661,7 @@ func TestWireAgentSpawner_ThreadsDefaultModelToChild(t *testing.T) {
 	stub.mu.Unlock()
 
 	if gotCfg == nil {
-		t.Fatal("child started with no RunConfig — startChildRun must dispatch to StartRunWithConfig so DefaultModel reaches the runloop fallback")
+		t.Fatal("child started with no RunConfig — the dispatch path must route through StartRunWithConfig so DefaultModel reaches the runloop fallback")
 	}
 	if gotCfg.DefaultModel != "claude-sonnet-4-6" {
 		t.Errorf("child RunConfig.DefaultModel = %q, want %q (engine default must be threaded through)", gotCfg.DefaultModel, "claude-sonnet-4-6")
@@ -573,5 +671,353 @@ func TestWireAgentSpawner_ThreadsDefaultModelToChild(t *testing.T) {
 	// (see runloop_model_fallback_test.go).
 	if gotModel != "standard" {
 		t.Errorf("child opts.Model = %q, want %q (tier passthrough — runloop performs the swap)", gotModel, "standard")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Convergence regression tests: the orchestrator's Agent-tool spawner now
+// routes through the single shared dispatch mechanism
+// (extcontext.BuildDispatchAgentFunc). Before the convergence the bespoke
+// wireAgentSpawner run loop never wired an AgentSpawner onto the child
+// RunConfig (so a dispatched agent could not itself dispatch), never emitted
+// engine_dispatch_start/end telemetry (so the desktop dispatch-preview popup
+// found no nested children), and never stamped dispatchDepth/dispatchParentId
+// on the agent pill. These tests pin all three; reverting the convergence in
+// prompt_agent_spawner.go turns each red.
+// ---------------------------------------------------------------------------
+
+// TestWireAgentSpawner_WiresChildAgentSpawner is the BUG-2 root-cause pin: the
+// child RunConfig handed to the dispatched agent's run MUST carry a non-nil
+// AgentSpawner, so the dispatched agent (e.g. a Dev Lead) can itself invoke the
+// Agent tool to dispatch a sub-agent (e.g. an Engine Dev). The pre-fix path
+// built `&backend.RunConfig{DefaultModel: ...}` with no AgentSpawner, so the
+// runloop hit the nil-spawner branch and the sub-dispatch never spawned.
+func TestWireAgentSpawner_WiresChildAgentSpawner(t *testing.T) {
+	stub := &childStubBackend{resultText: "child output"}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	if _, err := mgr.StartSession("spawner-wiring", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["spawner-wiring"]
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "spawner-wiring", "claude-sonnet", nil, runCfg)
+	if runCfg.AgentSpawner == nil {
+		t.Fatal("wireAgentSpawner did not install AgentSpawner closure")
+	}
+
+	if _, err := runCfg.AgentSpawner(context.Background(), "", "do thing", "disp", "/tmp", ""); err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	stub.mu.Lock()
+	gotCfg := stub.startedCfg
+	stub.mu.Unlock()
+
+	if gotCfg == nil {
+		t.Fatal("child started with no RunConfig — AgentSpawner cannot be threaded")
+	}
+	if gotCfg.AgentSpawner == nil {
+		t.Fatal("child RunConfig.AgentSpawner is nil — a dispatched agent cannot dispatch a sub-agent (BUG 2 root cause)")
+	}
+}
+
+// TestWireAgentSpawner_SetsIsSubagent pins that the dispatched child run is
+// marked IsSubagent so the early-stop continuation gate skips it. The
+// orchestrator path always set this; the convergence preserves it by setting
+// IsSubagent inside BuildDispatchAgentFunc.
+func TestWireAgentSpawner_SetsIsSubagent(t *testing.T) {
+	stub := &childStubBackend{resultText: "child output"}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	if _, err := mgr.StartSession("spawner-subagent", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["spawner-subagent"]
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "spawner-subagent", "claude-sonnet", nil, runCfg)
+	if _, err := runCfg.AgentSpawner(context.Background(), "", "do thing", "disp", "/tmp", ""); err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	stub.mu.Lock()
+	gotSubagent := stub.startedOpts.IsSubagent
+	stub.mu.Unlock()
+
+	if !gotSubagent {
+		t.Error("child run opts.IsSubagent = false, want true (early-stop gate must skip dispatched subagents)")
+	}
+}
+
+// TestWireAgentSpawner_EmitsDispatchTelemetry is the BUG-2 desktop-join pin:
+// an orchestrator-dispatched agent must emit engine_dispatch_start AND
+// engine_dispatch_end on the parent stream, carrying a non-empty DispatchId,
+// DispatchDepth==1, and an empty DispatchParentId. The desktop dispatch-preview
+// popup builds its child rows from this telemetry; without it the popup is
+// always empty. The pre-fix path emitted only engine_agent_state.
+func TestWireAgentSpawner_EmitsDispatchTelemetry(t *testing.T) {
+	stub := &childStubBackend{resultText: "child output"}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	var mu sync.Mutex
+	var starts, ends []types.EngineEvent
+	mgr.OnEvent(func(_ string, ev types.EngineEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch ev.Type {
+		case "engine_dispatch_start":
+			starts = append(starts, ev)
+		case "engine_dispatch_end":
+			ends = append(ends, ev)
+		}
+	})
+
+	if _, err := mgr.StartSession("spawner-telemetry", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["spawner-telemetry"]
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "spawner-telemetry", "claude-sonnet", nil, runCfg)
+	if _, err := runCfg.AgentSpawner(context.Background(), "", "brief me", "disp", "/tmp", ""); err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) != 1 {
+		t.Fatalf("expected 1 engine_dispatch_start, got %d", len(starts))
+	}
+	if len(ends) != 1 {
+		t.Fatalf("expected 1 engine_dispatch_end, got %d", len(ends))
+	}
+	st := starts[0]
+	if st.DispatchId == "" {
+		t.Error("engine_dispatch_start.DispatchId is empty — desktop join key missing")
+	}
+	if st.DispatchDepth != 1 {
+		t.Errorf("engine_dispatch_start.DispatchDepth = %d, want 1 (orchestrator's direct dispatch)", st.DispatchDepth)
+	}
+	if st.DispatchParentId != "" {
+		t.Errorf("engine_dispatch_start.DispatchParentId = %q, want empty (orchestrator-direct)", st.DispatchParentId)
+	}
+	// end matches start by DispatchId so applyDispatchEnd can correlate.
+	if ends[0].DispatchId != st.DispatchId {
+		t.Errorf("engine_dispatch_end.DispatchId = %q, want %q (must match the start)", ends[0].DispatchId, st.DispatchId)
+	}
+}
+
+// TestWireAgentSpawner_StampsPillAttribution pins that the dispatched agent's
+// state pill carries dispatchDepth==1 and an empty dispatchParentId. The
+// desktop's isRootLevelAgent reads these to keep an orchestrator's direct
+// dispatch in the main panel; without them attribution defaults make the
+// filter behave incorrectly for nested instances.
+func TestWireAgentSpawner_StampsPillAttribution(t *testing.T) {
+	stub := &childStubBackend{resultText: "child output"}
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	mgr.childBackendOverride = func() backend.RunBackend { return stub }
+
+	if _, err := mgr.StartSession("spawner-attr", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["spawner-attr"]
+	mgr.mu.Unlock()
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "spawner-attr", "claude-sonnet", nil, runCfg)
+	if _, err := runCfg.AgentSpawner(context.Background(), "", "brief me", "disp", "/tmp", ""); err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	snap := s.agents.MergedSnapshot()
+	if len(snap) == 0 {
+		t.Fatal("no agent state pills after dispatch")
+	}
+	var found bool
+	for _, a := range snap {
+		if a.Metadata == nil {
+			continue
+		}
+		depth, hasDepth := a.Metadata["dispatchDepth"]
+		parent, hasParent := a.Metadata["dispatchParentId"]
+		if !hasDepth || !hasParent {
+			continue
+		}
+		found = true
+		if d, _ := depth.(int); d != 1 {
+			t.Errorf("pill dispatchDepth = %v, want 1", depth)
+		}
+		if p, _ := parent.(string); p != "" {
+			t.Errorf("pill dispatchParentId = %q, want empty (orchestrator-direct)", p)
+		}
+	}
+	if !found {
+		t.Error("no pill carried dispatchDepth/dispatchParentId attribution metadata")
+	}
+}
+
+// nestingStubBackend is a child stub whose StartRunWithConfig invokes the
+// AgentSpawner wired onto its RunConfig — simulating a dispatched agent (the
+// "Dev Lead") whose own LLM calls the Agent tool to dispatch a sub-agent (the
+// "Engine Dev"). It dispatches exactly once (guarded by a sync.Once) with the
+// configured sub-agent name, then completes.
+type nestingStubBackend struct {
+	mu           sync.Mutex
+	onNorm       func(string, types.NormalizedEvent)
+	onExit       func(string, *int, *string, string)
+	subAgentName string
+	dispatchOnce sync.Once
+}
+
+func (c *nestingStubBackend) StartRun(requestID string, _ types.RunOptions) {
+	c.mu.Lock()
+	onNorm := c.onNorm
+	onExit := c.onExit
+	c.mu.Unlock()
+	if onNorm != nil {
+		onNorm(requestID, types.NormalizedEvent{Data: &types.SessionInitEvent{SessionID: "lead-conv-id"}})
+		onNorm(requestID, types.NormalizedEvent{Data: &types.TaskCompleteEvent{Result: "lead done", SessionID: "lead-conv-id"}})
+	}
+	if onExit != nil {
+		onExit(requestID, nil, nil, "")
+	}
+}
+
+func (c *nestingStubBackend) StartRunWithConfig(requestID string, opts types.RunOptions, cfg *backend.RunConfig) {
+	// Before completing, dispatch a sub-agent through the spawner wired onto
+	// this child's RunConfig — exactly what a dispatched agent's LLM does when
+	// it calls the Agent tool. This is the path that was broken: the pre-fix
+	// orchestrator spawner never set cfg.AgentSpawner, so this would be nil.
+	c.dispatchOnce.Do(func() {
+		if cfg != nil && cfg.AgentSpawner != nil {
+			// Run in a goroutine so the spawner's foreground wait does not
+			// deadlock against this synchronous StartRun emission below.
+			go func() {
+				_, _ = cfg.AgentSpawner(context.Background(), c.subAgentName, "do the sub task", "sub", "/tmp", "")
+			}()
+		}
+	})
+	c.StartRun(requestID, opts)
+}
+
+func (c *nestingStubBackend) Cancel(_ string) bool                                { return true }
+func (c *nestingStubBackend) IsRunning(_ string) bool                             { return false }
+func (c *nestingStubBackend) WriteToStdin(_ string, _ interface{}) error          { return nil }
+func (c *nestingStubBackend) FlushConversations()                                 {}
+func (c *nestingStubBackend) OnNormalized(fn func(string, types.NormalizedEvent)) { c.onNorm = fn }
+func (c *nestingStubBackend) OnExit(fn func(string, *int, *string, string))       { c.onExit = fn }
+func (c *nestingStubBackend) OnError(_ func(string, error))                       {}
+
+// TestWireAgentSpawner_NestedDispatchChain is the end-to-end pin for the
+// production id chain the desktop dispatch-preview popup relies on: the
+// orchestrator dispatches A (the Dev Lead, depth 1, empty parent); A's child
+// run invokes the Agent tool to dispatch B (the Engine Dev); B's
+// engine_dispatch_start must carry DispatchDepth==2 and a DispatchParentId
+// equal to A's DispatchId. childrenOfDispatch on the desktop matches B to A by
+// exactly this (B.dispatchParentId == A.dispatchId), so this is the integration
+// proof that nested children render under their parent in the popup. The
+// pre-fix orchestrator path could not produce B at all (nil child AgentSpawner),
+// so this test exercises the bug's full surface.
+func TestWireAgentSpawner_NestedDispatchChain(t *testing.T) {
+	leadStub := &nestingStubBackend{subAgentName: "engine-dev"}
+	subStub := &childStubBackend{resultText: "engine dev brief"}
+
+	mb := newMockBackend()
+	mgr := NewManager(mb)
+	// First child backend = the lead (which dispatches a sub-agent); every
+	// subsequent child backend = the sub-agent's plain stub.
+	var n int
+	var nmu sync.Mutex
+	mgr.childBackendOverride = func() backend.RunBackend {
+		nmu.Lock()
+		defer nmu.Unlock()
+		n++
+		if n == 1 {
+			return leadStub
+		}
+		return subStub
+	}
+
+	var mu sync.Mutex
+	var starts []types.EngineEvent
+	mgr.OnEvent(func(_ string, ev types.EngineEvent) {
+		if ev.Type == "engine_dispatch_start" {
+			mu.Lock()
+			starts = append(starts, ev)
+			mu.Unlock()
+		}
+	})
+
+	if _, err := mgr.StartSession("nested-chain", defaultConfig()); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	mgr.mu.Lock()
+	s := mgr.sessions["nested-chain"]
+	mgr.mu.Unlock()
+	// Register the sub-agent spec so resolveAgentSpec matches it by name.
+	s.agents.RegisterSpec(types.AgentSpec{Name: "engine-dev"})
+
+	runCfg := &backend.RunConfig{}
+	mgr.wireAgentSpawner(s, "nested-chain", "claude-sonnet", nil, runCfg)
+	if _, err := runCfg.AgentSpawner(context.Background(), "dev-lead", "dispatch the engine dev", "lead", "/tmp", ""); err != nil {
+		t.Fatalf("spawner returned error: %v", err)
+	}
+
+	// The nested dispatch runs in a goroutine; give it a moment to emit its
+	// start telemetry. Poll for the second start.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		count := len(starts)
+		mu.Unlock()
+		if count >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) < 2 {
+		t.Fatalf("expected 2 engine_dispatch_start events (lead + nested engine-dev), got %d — nested dispatch never spawned (BUG 2)", len(starts))
+	}
+
+	// Identify the depth-1 (lead) and depth-2 (engine-dev) starts.
+	var lead, nested *types.EngineEvent
+	for i := range starts {
+		switch starts[i].DispatchDepth {
+		case 1:
+			lead = &starts[i]
+		case 2:
+			nested = &starts[i]
+		}
+	}
+	if lead == nil {
+		t.Fatal("no depth-1 (lead) dispatch start found")
+	}
+	if nested == nil {
+		t.Fatal("no depth-2 (nested engine-dev) dispatch start found")
+	}
+	if nested.DispatchParentId != lead.DispatchId {
+		t.Errorf("nested.DispatchParentId = %q, want %q (must equal the lead's DispatchId so the desktop join matches the child to its parent)", nested.DispatchParentId, lead.DispatchId)
+	}
+	if lead.DispatchParentId != "" {
+		t.Errorf("lead.DispatchParentId = %q, want empty (orchestrator-direct)", lead.DispatchParentId)
 	}
 }

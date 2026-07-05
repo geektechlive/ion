@@ -65,7 +65,7 @@ export function DiffSideBySide({ parsed }: { parsed: ParsedDiff }) {
   const colors = useColors()
   const rows = buildRows(parsed)
 
-  const cellBase: React.CSSProperties = { padding: '1px 6px', whiteSpace: 'pre', tabSize: 4, fontFamily: 'var(--font-mono, monospace)', fontSize: 11 }
+  const cellBase: React.CSSProperties = { padding: '1px 6px', whiteSpace: 'pre', tabSize: 4, fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ion-conv-font-size, 11px)' as unknown as number }
   const numCell: React.CSSProperties = { padding: '0 4px', color: colors.textMuted, textAlign: 'right', userSelect: 'none', width: 28, fontSize: 10 }
   const halfWidth: React.CSSProperties = { width: '50%', verticalAlign: 'top' }
 

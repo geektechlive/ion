@@ -47,6 +47,16 @@ func TestCompactIfNeeded_CircuitBreaker(t *testing.T) {
 	run := &activeRun{requestID: "circuit-test", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
+	// Skip the LLM-summary tier: this test asserts only the circuit-breaker
+	// control flow (compactionsWithoutProgress + compact_loop_aborted), not
+	// summarization. Leaving it enabled makes compaction fall through to a
+	// live provider.Stream against the default unconfigured Anthropic
+	// provider (https://api.anthropic.com, empty key → 401) on every loop
+	// iteration, which is non-hermetic, slow, and pollutes engine.log with
+	// spurious auth-failure lines. The regex/truncation tail still shrinks
+	// the working set, so the circuit-breaker behavior under test is
+	// unchanged. (Same skip pattern as runloop_compact_boundary_test.go.)
+	cp.summaryEnabled = false
 
 	// Each iteration simulates a runloop pass where the reported token count
 	// is stuck above the limit (e.g. the model keeps returning a huge prompt
@@ -140,6 +150,122 @@ func TestCompactIfNeeded_DisabledByConfig(t *testing.T) {
 	}
 }
 
+// lastCompactingDone returns the final CompactingEvent with Active==false from
+// a captured event slice, or nil if none was emitted.
+func lastCompactingDone(events []types.NormalizedEvent) *types.CompactingEvent {
+	var found *types.CompactingEvent
+	for i := range events {
+		if ce, ok := events[i].Data.(*types.CompactingEvent); ok && !ce.Active {
+			found = ce
+		}
+	}
+	return found
+}
+
+// TestPerformCompact_MicroOnlySignal verifies the MicroOnly flag on the
+// completion event. When step 1 (micro-compact) brings usage below the limit,
+// step 2 (hard truncate) is skipped: no messages are dropped and MicroOnly is
+// true. This is the explicit signal clients use to avoid rendering a
+// misleading "N → N messages" marker. Reverting the `MicroOnly: !shouldHardTruncate`
+// set in performCompact makes this test fail.
+func TestPerformCompact_MicroOnlySignal(t *testing.T) {
+	b := NewApiBackend()
+	events := captureEvents(b, "micro-only")
+
+	conv := conversation.CreateConversation("micro-only", "", "test-model")
+	// Recent turns carry large tool_result blocks that micro-compact clears.
+	// After clearing, the estimated token count drops far below the limit, so
+	// the hard-truncate step is skipped and the pass is micro-only.
+	big := make([]byte, 400)
+	for i := range big {
+		big[i] = 'x'
+	}
+	for i := 0; i < 6; i++ {
+		conv.Messages = append(conv.Messages,
+			types.LlmMessage{Role: "user", Content: []types.LlmContentBlock{
+				{Type: "tool_result", Content: string(big)},
+			}},
+			types.LlmMessage{Role: "assistant", Content: []types.LlmContentBlock{
+				{Type: "text", Text: "ok"},
+			}},
+		)
+	}
+
+	run := &activeRun{requestID: "micro-only", conv: conv}
+	cp := testCompactParams()
+	cp.summaryEnabled = false // hermetic: no live provider call
+
+	// A high tokenLimit relative to post-micro usage guarantees step 2 is
+	// skipped. contextWindow is large; the trigger check is the caller's
+	// responsibility (performCompact always compacts), so we invoke it directly.
+	b.performCompact(performCompactParams{
+		ctx:           context.Background(),
+		run:           run,
+		conv:          conv,
+		hooks:         RunHooks{},
+		contextWindow: 200_000,
+		tokenLimit:    100_000,
+		cp:            cp,
+		trigger:       "auto",
+	})
+
+	done := lastCompactingDone(*events)
+	if done == nil {
+		t.Fatal("expected a CompactingEvent with Active=false")
+	}
+	if !done.MicroOnly {
+		t.Errorf("expected MicroOnly=true on a micro-only pass, got false (msgsBefore=%d msgsAfter=%d)",
+			done.MessagesBefore, done.MessagesAfter)
+	}
+	if done.MessagesBefore != done.MessagesAfter {
+		t.Errorf("micro-only pass must not drop messages: before=%d after=%d",
+			done.MessagesBefore, done.MessagesAfter)
+	}
+}
+
+// TestPerformCompact_HardTruncateNotMicroOnly verifies the inverse: when the
+// hard-truncate step runs and drops messages, MicroOnly is false.
+func TestPerformCompact_HardTruncateNotMicroOnly(t *testing.T) {
+	b := NewApiBackend()
+	events := captureEvents(b, "hard-trunc")
+
+	conv := conversation.CreateConversation("hard-trunc", "", "test-model")
+	// Many short turns with no clearable tool_result blocks: micro-compact
+	// clears nothing, usage stays above the (low) limit, step 2 truncates.
+	for i := 0; i < 30; i++ {
+		conv.Messages = append(conv.Messages,
+			types.LlmMessage{Role: "user", Content: []types.LlmContentBlock{{Type: "text", Text: "question here"}}},
+			types.LlmMessage{Role: "assistant", Content: []types.LlmContentBlock{{Type: "text", Text: "answer here"}}},
+		)
+	}
+	// Force the post-micro usage above the limit so step 2 runs.
+	conv.LastInputTokens = 180_000
+	conv.LastInputTokensMsgCount = len(conv.Messages)
+
+	run := &activeRun{requestID: "hard-trunc", conv: conv}
+	cp := testCompactParams()
+	cp.summaryEnabled = false
+
+	b.performCompact(performCompactParams{
+		ctx:           context.Background(),
+		run:           run,
+		conv:          conv,
+		hooks:         RunHooks{},
+		contextWindow: 200_000,
+		tokenLimit:    100_000,
+		cp:            cp,
+		trigger:       "auto",
+	})
+
+	done := lastCompactingDone(*events)
+	if done == nil {
+		t.Fatal("expected a CompactingEvent with Active=false")
+	}
+	if done.MicroOnly {
+		t.Errorf("expected MicroOnly=false on a hard-truncate pass, got true")
+	}
+}
+
 // TestCompactReactive_HookReceivesFacts pins the contract added for issue #129:
 // after reactive compaction runs, the OnSessionCompact hook must receive the
 // facts the engine extracted from the pre-compaction message set, as a typed
@@ -171,6 +297,13 @@ func TestCompactReactive_HookReceivesFacts(t *testing.T) {
 	run := &activeRun{requestID: "reactive-facts", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
+	// Skip the LLM-summary tier: this test asserts on regex-extracted facts in
+	// the hook payload, not on LLM summarization. Leaving it enabled makes
+	// compactReactive fall through to a live provider.Stream against the
+	// default unconfigured Anthropic provider (https://api.anthropic.com,
+	// empty key → 401), which is non-hermetic and pollutes engine.log. The
+	// fact-extraction tier under test is unaffected.
+	cp.summaryEnabled = false
 
 	var capturedInfo interface{}
 	var hookFired bool
@@ -269,6 +402,13 @@ func TestCompactReactive_HookEmptyFactsWhenNoPatterns(t *testing.T) {
 	run := &activeRun{requestID: "reactive-no-facts", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
+	// Skip the LLM-summary tier: this test asserts the facts slice is empty on
+	// filler text, not on LLM summarization. Leaving it enabled makes
+	// compactReactive fall through to a live provider.Stream against the
+	// default unconfigured Anthropic provider (https://api.anthropic.com,
+	// empty key → 401), which is non-hermetic and pollutes engine.log. The
+	// fact-extraction tier under test is unaffected.
+	cp.summaryEnabled = false
 
 	var capturedInfo interface{}
 	var hookFired bool
@@ -385,8 +525,9 @@ func TestIsMemoryCurrent_BoundaryJustBeforeMidpoint(t *testing.T) {
 }
 
 func TestCompactIfNeeded_SessionMemoryCoverageCheck(t *testing.T) {
-	// When session memory has a stale boundary, compaction should fall
-	// through to LLM summary (or regex facts) instead of using stale memory.
+	// When session memory has a stale boundary, compaction should reject the
+	// stale memory and fall through to a fresher tier (regex facts /
+	// truncation) instead of using it.
 	b := NewApiBackend()
 	_ = captureEvents(b, "stale-mem")
 
@@ -406,8 +547,15 @@ func TestCompactIfNeeded_SessionMemoryCoverageCheck(t *testing.T) {
 	run := &activeRun{requestID: "stale-mem", conv: conv}
 	ctx := context.Background()
 	cp := testCompactParams()
-
-	// Set up session memory with a stale boundary (entry index 2 out of 40 entries).
+	// Skip the LLM-summary tier: this test asserts that stale session memory
+	// is rejected and compaction falls through to a fresher tier, not that the
+	// LLM tier specifically produced the result. Leaving it enabled makes
+	// compactIfNeeded fall through to a live provider.Stream against the
+	// default unconfigured Anthropic provider (https://api.anthropic.com,
+	// empty key → 401), which is non-hermetic and pollutes engine.log. The
+	// fall-through to the regex/truncation tier still proves stale memory was
+	// not used.
+	cp.summaryEnabled = false
 	staleBoundaryID := conv.Entries[2].ID
 	cp.getSessionMemory = func() string { return "stale iOS theme summary" }
 	cp.getLastSummarizedEntryID = func() string { return staleBoundaryID }

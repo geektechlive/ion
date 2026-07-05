@@ -10,6 +10,61 @@ through the relay to access remote engine instances.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.44.0](https://github.com/dsswift/ion/compare/ios-v1.43.0...ios-v1.44.0) (2026-07-03)
+
+### Features
+
+* **ios:** unify plain and extension-hosted conversations (#256) ([02bae5f](https://github.com/dsswift/ion/commit/02bae5f9d097a8bd76512370ec944e788fcd602a))
+* **ios:** project dispatch depth/parentId onto iOS surface ([6918d48](https://github.com/dsswift/ion/commit/6918d484444735de17cb3e63f2f16a793d435d61))
+* **ios:** dispatch telemetry, Transcript view, recursive agent popup ([0a3b346](https://github.com/dsswift/ion/commit/0a3b3462e5f7b63df55a8d50bd0b3b0c51197d72))
+* **ios:** thinking-hoist parity + label parity + dead-code cleanup ([678839e](https://github.com/dsswift/ion/commit/678839ef24af0b9b38a6a6d2c082277a82279f22))
+* **ios:** desktop_request_context_breakdown + session ID fix ([9eb4b06](https://github.com/dsswift/ion/commit/9eb4b06a2cb0ba5e5fdb3271ca39c3789cf8ca12))
+* **ios:** iOS desktop_context_breakdown wire + RemoteTabState cost/token fields ([1c1089a](https://github.com/dsswift/ion/commit/1c1089a083fee498d97d2278e648226aeef1ad11))
+
+### Bug Fixes
+
+* **ios:** restore plan divider Message decode across restart ([f785bca](https://github.com/dsswift/ion/commit/f785bcaa0dfb7d92ddf0b67468cf86c46cb1c3cb))
+* **ios:** drive plan marker from plan_file_written not entry ([795116c](https://github.com/dsswift/ion/commit/795116c6a9b555e5aa3ccd550ef07c79bd50ec50))
+* **ios:** sync dispatchId contract ([76e4d1c](https://github.com/dsswift/ion/commit/76e4d1cd616fba9ebc7cece9837503926a591ebf))
+* **ios:** add SendIntent enum and essential deferred queue ([652d2f0](https://github.com/dsswift/ion/commit/652d2f031e1ad5fbc8bfa81e647bd277d28d3ae7))
+
+## [1.43.0](https://github.com/dsswift/ion/compare/ios-v1.42.0...ios-v1.43.0) (2026-06-19)
+
+### Features
+
+* **ios:** add clear-all to global notifications panel ([4ff105b](https://github.com/dsswift/ion/commit/4ff105b97e4390ec6d17ecb52369c07e6edfc9b7))
+* **ios:** render slash pill from engine metadata ([708369d](https://github.com/dsswift/ion/commit/708369db1aa9aa8c22778cb04cbfef00b4f6c380))
+
+## [1.42.0](https://github.com/dsswift/ion/compare/ios-v1.41.0...ios-v1.42.0) (2026-06-18)
+
+### Features
+
+* **ios:** desktop_ wire prefix + paged plan-content fetch (#240) ([e351845](https://github.com/dsswift/ion/commit/e351845d8895bca575bdc44fbfe295135277e949))
+* **ios:** render extended-thinking row + toggle (#158) ([5f86aaa](https://github.com/dsswift/ion/commit/5f86aaa34dba282d331a5ee3d1c8676851bb3813))
+* **ios:** per-conversation thinking picker in conversation status bar ([51537d7](https://github.com/dsswift/ion/commit/51537d77d28eadac4b531c8b5b3b4d43204845c0))
+
+### Bug Fixes
+
+* **ios:** seed file editor from cached content on reopen ([618220b](https://github.com/dsswift/ion/commit/618220b6bbcaf77be81f57c1fb88992a55c7d7c7))
+
+## [1.41.0](https://github.com/dsswift/ion/compare/ios-v1.40.0...ios-v1.41.0) (2026-06-16)
+
+### Features
+
+* **ios:** kind-agnostic resource rendering (#179) ([0f5ac8d](https://github.com/dsswift/ion/commit/0f5ac8d5c02446817d768598361429c809a8f0e2))
+
+## [1.40.0](https://github.com/dsswift/ion/compare/ios-v1.39.0...ios-v1.40.0) (2026-06-15)
+
+### Features
+
+* **ios:** add engine-tab rewind to reach desktop parity ([305f3bf](https://github.com/dsswift/ion/commit/305f3bf90e0f4567672fb5918506820c2bf4aec8))
+* **ios:** rename Engine* instance vocab to Conversation* ([1dae06b](https://github.com/dsswift/ion/commit/1dae06b0337b64722901d6bf96445cc06f123fd3))
+
+### Bug Fixes
+
+* **ios:** mirror engine context window fix in status bar ([f0bdd9e](https://github.com/dsswift/ion/commit/f0bdd9ebbcabcecc707da978ed248e23fe06901c))
+* **ios:** suppress restored card after /clear divider ([f8109a1](https://github.com/dsswift/ion/commit/f8109a1e8329fb58ca5fd32a98671356ddf6dbe4))
+
 ## [1.39.0](https://github.com/dsswift/ion/compare/ios-v1.38.0...ios-v1.39.0) (2026-06-12)
 
 ### Features

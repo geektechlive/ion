@@ -129,7 +129,11 @@ func (p *anthropicProvider) doStream(ctx context.Context, opts types.LlmStreamOp
 	// Parse SSE stream. Anthropic events are already canonical format.
 	gotMessageStop := false
 	var streamErrEvent *anthropicStreamError
-	sseCh, sseErr := ParseSSEStream(resp.Body)
+	rawCh, rawErr := ParseSSEStream(resp.Body)
+	// Wrap with the per-event idle deadline + heartbeat so a stream that
+	// returns headers then goes silent is caught fast and retried, instead of
+	// blocking this loop indefinitely. See sse_idle.go.
+	sseCh, sseErr := streamWithIdle(rawCh, rawErr, "anthropic", opts.Model, "", nil)
 	for sse := range sseCh {
 		if sse.Data == "" {
 			continue
@@ -246,15 +250,31 @@ func (p *anthropicProvider) buildRequestBody(opts types.LlmStreamOptions) map[st
 		body["tools"] = allTools
 	}
 
-	// Extended thinking
-	if opts.Thinking != nil && opts.Thinking.Enabled {
-		budget := 10000
-		if opts.Thinking.BudgetTokens > 0 {
-			budget = opts.Thinking.BudgetTokens
+	// Extended thinking — resolve the per-model mechanism via the shared
+	// capability resolver. Current Anthropic models use adaptive thinking +
+	// effort; older models fall back to the legacy budget mechanism. An
+	// unsupported model or disabled config resolves to "none" and emits no
+	// directive (fail-loud; the resolver logs the reason).
+	switch res := resolveThinking(opts.Model, opts.Thinking); res.Mode {
+	case "adaptive":
+		// Adaptive thinking: the model self-regulates depth, steered by effort.
+		// display:"summarized" is set so newer models (which default to
+		// "omitted") still return summary text for the thinking renderer.
+		thinking := map[string]any{
+			"type":    "adaptive",
+			"display": "summarized",
 		}
+		body["thinking"] = thinking
+		if res.Effort != "" {
+			// Effort rides on the request's output config per Anthropic's
+			// effort parameter.
+			body["output_config"] = map[string]any{"effort": res.Effort}
+		}
+	case "budget":
+		// Legacy mechanism for older models that lack adaptive support.
 		body["thinking"] = map[string]any{
 			"type":          "enabled",
-			"budget_tokens": budget,
+			"budget_tokens": res.Budget,
 		}
 	}
 
@@ -397,6 +417,21 @@ func formatAnthropicBlock(b types.LlmContentBlock) map[string]any {
 			// Defensive: a boundary with no rendered summary still needs
 			// a non-empty text body so Anthropic accepts the message.
 			text = "[Previous conversation compacted]"
+		}
+		return map[string]any{"type": "text", "text": text}
+	case "context_injection":
+		// context_injection is an engine-internal structural marker for
+		// read-triggered nested context loading. Like compact_boundary, it
+		// must never reach a provider as its own block type. Flatten to a
+		// text block carrying the rendered "# Context from <path>" body so
+		// the model still sees the descended instruction files. The
+		// structured ContextPaths field is engine-internal (the dedup key)
+		// and is not forwarded.
+		text := b.Text
+		if text == "" {
+			// Defensive: an injection with no rendered body still needs a
+			// non-empty text block so Anthropic accepts the message.
+			text = "[Nested context loaded]"
 		}
 		return map[string]any{"type": "text", "text": text}
 	default:

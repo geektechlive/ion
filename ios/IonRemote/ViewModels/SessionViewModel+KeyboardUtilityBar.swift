@@ -31,7 +31,7 @@ extension SessionViewModel {
     }
 
     /// Whether the keyboard utility bar is shown above the engine view's
-    /// input bar (`EngineView.engineInputBar`). iOS-local, on by default.
+    /// input bar (`ConversationView.engineInputBar`). iOS-local, on by default.
     var showKeyboardUtilityBarInEngine: Bool {
         get { UserDefaults.standard.object(forKey: "showKeyboardUtilityBarInEngine") == nil
               ? true

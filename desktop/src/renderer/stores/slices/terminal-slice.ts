@@ -2,7 +2,7 @@ import type { TabState, TerminalInstance } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import { destroyTerminalInstance } from '../../components/TerminalPanel'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
-import { makeLocalTab, isBlankTerminalTab } from '../session-store-helpers'
+import { makeLocalTab, isReusableBlankTerminalTab } from '../session-store-helpers'
 
 export function createTerminalSlice(set: StoreSet, get: StoreGet): Partial<State> {
   return {
@@ -154,7 +154,7 @@ export function createTerminalSlice(set: StoreSet, get: StoreGet): Partial<State
       const defaultBase = usePreferencesStore.getState().defaultBaseDirectory
       const startDir = dir || defaultBase || homeDir
 
-      const existingBlank = get().tabs.find((t) => isBlankTerminalTab(t, startDir))
+      const existingBlank = get().tabs.find((t) => isReusableBlankTerminalTab(t, startDir))
       if (existingBlank) {
         const tallTerm = usePreferencesStore.getState().defaultTallTerminal
         set({

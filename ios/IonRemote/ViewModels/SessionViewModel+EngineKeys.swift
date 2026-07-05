@@ -1,132 +1,69 @@
 import Foundation
 
-// MARK: - Engine compound-key helpers
+// MARK: - Engine instance helpers
 //
-// Engine events are keyed by `tabId:instanceId` (the "compound key"). This
-// file holds the helpers SessionViewModel+EventHandlers uses to keep that
-// keying consistent with how the view layer looks state up:
+// Post-#256: every tab has exactly ONE conversation instance (the `main`
+// instance — see SessionViewModel+Conversation.swift / ensureMainInstance).
+// The pre-#256 compound "tabId:instanceId" key form is fully retired; engine
+// session state is keyed by bare tabId everywhere.
 //
-//   - resolveEngineKey: builds the compound key for an incoming event,
-//     falling back to the active instance when the engine omits instanceId.
+// This file holds the read/write helpers for that single instance:
 //
-//   - engineInstance(tabId:instanceId:): read-only lookup of an
-//     ConversationInstanceInfo by (tabId, instanceId).
+//   - engineInstance(tabId:instanceId:): read-only lookup of the tab's single
+//     ConversationInstanceInfo. The `instanceId` parameter is vestigial
+//     (always the single instance) and ignored; it is retained only so the
+//     existing call sites that thread `activeInstanceId` compile unchanged.
 //
-//   - mutateEngineInstance(tabId:instanceId:_:): write path — finds the
-//     instance by index and applies a mutating closure in place. The 4
-//     conversation fields (messages, agentStates, statusFields,
-//     modelOverride) live on the struct so this is the single write site.
+//   - mutateEngineInstance(tabId:instanceId:_:): write path — ensures the
+//     single instance exists, then applies a mutating closure in place.
 //
-//   - rekeyEngineMaps: when an engine instance moves between tabs, walks
-//     every remaining compound-keyed dictionary (working message, dialogs,
-//     pinned prompt, active tools) so they follow the instance to its new
-//     tab. The 4 conversation fields are NOT rekeyed here — they travel
-//     with the ConversationInstanceInfo struct when conversationInstances is updated.
+//   - parseEngineSessionKey: static helper that tolerates a legacy compound
+//     key — strips a ":instanceId" suffix if present, returns bare tabId. Used
+//     by the draft legacy-migration and AgentDetailFullScreenView's cached-key
+//     read path, which can still encounter a pre-#256 compound key.
 //
 // All helpers live on SessionViewModel via extension. They are intentionally
-// in a separate file because EventHandlers.swift is near the 600-line cap;
-// see .file-size-allowlist.yml and docs/architecture/file-organization.md.
+// in a separate file because EventHandlers.swift is near the 600-line cap.
 
 extension SessionViewModel {
 
-    /// Build the compound key used to store engine state for an event.
-    ///
-    /// When the engine omits `instanceId` we resolve to the active engine
-    /// instance for this tab (falling back to the first registered
-    /// instance). This matches how `engineCompoundKey(tabId:)` constructs
-    /// keys for view lookup, so an event with a nil instanceId still
-    /// lands under the same key the EngineView reads.
-    ///
-    /// Desktop today always sends an instanceId so this fallback is
-    /// defensive — it guards against a future emitter (test harness or
-    /// new event source) that sends nil and prevents the "agent state
-    /// stored under bare tabId, view reads tabId:instanceId" mismatch.
-    @MainActor
-    func resolveEngineKey(tabId: String, instanceId: String?) -> String {
-        if let id = instanceId {
-            return "\(tabId):\(id)"
-        }
-        let resolved = activeEngineInstance[tabId] ?? conversationInstances[tabId]?.first?.id
-        if let id = resolved {
-            DiagnosticLog.log("ENGINE: agent_state: nil instanceId tabId=\(tabId.prefix(8)) resolved=\(id.prefix(8))")
-            return "\(tabId):\(id)"
-        }
-        DiagnosticLog.log("ENGINE: agent_state: nil instanceId tabId=\(tabId.prefix(8)) no_instance_known (falling back to bare tabId)")
-        return tabId
-    }
-
-    /// Resolve `instanceId` the same way `resolveEngineKey` does, then
-    /// return the matching `ConversationInstanceInfo` (if any). Used by write
-    /// sites that need the actual instanceId string after nil-resolution
-    /// before calling `mutateEngineInstance`.
-    @MainActor
-    func resolveInstanceId(tabId: String, instanceId: String?) -> String? {
-        if let id = instanceId { return id }
-        return activeEngineInstance[tabId] ?? conversationInstances[tabId]?.first?.id
-    }
-
-    /// Return the `ConversationInstanceInfo` for a given (tabId, instanceId) pair,
-    /// or nil when no matching instance is registered. Pass nil for
-    /// `instanceId` to look up the active instance.
+    /// Return the tab's single `ConversationInstanceInfo`, or nil when the tab
+    /// has no instance yet. The `instanceId` parameter is vestigial post-#256
+    /// (a tab has exactly one instance) and is ignored — kept only for call-site
+    /// compatibility with sites that thread `activeInstanceId`.
     @MainActor
     func engineInstance(tabId: String, instanceId: String?) -> ConversationInstanceInfo? {
-        let id = instanceId ?? activeEngineInstance[tabId] ?? conversationInstances[tabId]?.first?.id
-        guard let id else { return nil }
-        return conversationInstances[tabId]?.first(where: { $0.id == id })
+        conversationInstances[tabId]?.first
     }
 
-    /// Mutate the `ConversationInstanceInfo` identified by (tabId, instanceId)
-    /// in place. Pass nil for `instanceId` to target the active instance.
-    /// No-ops silently when the instance is not found (defensive — mirrors
-    /// the dict-write pattern that simply overwrites an absent key).
+    /// Mutate the tab's single `ConversationInstanceInfo` in place. Ensures the
+    /// `main` instance exists first (creating it for a plain tab or a
+    /// not-yet-snapshotted engine tab) rather than silently no-opping, then
+    /// applies the caller's mutation. The `instanceId` parameter is vestigial
+    /// post-#256 and ignored (a tab has exactly one instance).
     @MainActor
     func mutateEngineInstance(tabId: String, instanceId: String?, _ body: (inout ConversationInstanceInfo) -> Void) {
-        let id = instanceId ?? activeEngineInstance[tabId] ?? conversationInstances[tabId]?.first?.id
-        guard let id,
-              let idx = conversationInstances[tabId]?.firstIndex(where: { $0.id == id })
-        else { return }
-        body(&conversationInstances[tabId]![idx])
+        ensureMainInstance(tabId: tabId)
+        guard !(conversationInstances[tabId]?.isEmpty ?? true) else { return }
+        body(&conversationInstances[tabId]![0])
     }
 
-    /// Rekey every remaining compound-keyed dictionary from `oldKey` to
-    /// `newKey`. Called when an engine instance moves between tabs.
+    /// Parse a possibly-compound engine session key into its bare tabId.
     ///
-    /// Note: the 4 conversation fields (messages, agentStates, statusFields,
-    /// modelOverride) are NOT in this list — they live on ConversationInstanceInfo
-    /// and travel with the struct when conversationInstances is updated in the
-    /// `.engineInstanceMoved` handler. Only the maps that still live as
-    /// standalone dictionaries on SessionViewModel are rekeyed here.
+    /// Pre-#256 keys had the form "tabId:instanceId". Post-#256 the key is
+    /// just bare tabId. This helper tolerates both forms so that any
+    /// cached compound key (e.g. from a UserDefaults-persisted engine draft
+    /// written before the upgrade) resolves correctly to the bare tabId.
     ///
-    /// The canonical set of maps is the one cleaned up in `handleTabClosed`
-    /// (SessionViewModel+TabEventHandlers.swift). Any new compound-keyed map
-    /// added to SessionViewModel must be added to BOTH that cleanup and this
-    /// helper, or instance moves and tab closes will silently leak state.
+    /// Terminal keys are NOT parsed here — this helper is for engine/
+    /// conversation session keys only.
     ///
-    /// Mirrors desktop's `engine-slice.ts:200-230` rekey<V> helper.
-    @MainActor
-    func rekeyEngineMaps(oldKey: String, newKey: String) {
-        var moved: [String] = []
-        func move<V>(_ name: String, _ dict: inout [String: V]) {
-            if let value = dict.removeValue(forKey: oldKey) {
-                dict[newKey] = value
-                moved.append(name)
-            }
-        }
-        move("engineWorkingMessages", &engineWorkingMessages)
-        move("engineDialogs", &engineDialogs)
-        move("enginePinnedPrompt", &enginePinnedPrompt)
-        move("activeTools", &activeTools)
-        // Sets need bespoke handling.
-        if engineConversationLoaded.contains(oldKey) {
-            engineConversationLoaded.remove(oldKey)
-            engineConversationLoaded.insert(newKey)
-            moved.append("engineConversationLoaded")
-        }
-        if engineTurnHasText.contains(oldKey) {
-            engineTurnHasText.remove(oldKey)
-            engineTurnHasText.insert(newKey)
-            moved.append("engineTurnHasText")
-        }
-        DiagnosticLog.log("ENGINE: rekey \(oldKey) -> \(newKey) moved=[\(moved.joined(separator: ","))]")
+    /// Examples:
+    ///   "tab-abc"         -> "tab-abc"
+    ///   "tab-abc:main"    -> "tab-abc"
+    ///   "tab-abc:inst-xy" -> "tab-abc"
+    static func parseEngineSessionKey(_ key: String) -> String {
+        guard let colonIdx = key.firstIndex(of: ":") else { return key }
+        return String(key[..<colonIdx])
     }
 }

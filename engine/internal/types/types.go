@@ -72,12 +72,49 @@ type EngineConfig struct {
 	// auto-resumed for this key. An explicit non-empty SessionID still takes
 	// precedence over both this flag and the binding store. (#231)
 	ForceNewConversation bool `json:"forceNewConversation,omitempty"`
+
+	// ParentConversationID records that a freshly-minted conversation for this
+	// session descends from a prior one. It is written as the new conversation
+	// file's `parentId` when the run creates a fresh file (used with
+	// ForceNewConversation, or an explicit unsaved SessionID, for a client-driven
+	// checkpoint cut such as a desktop "clear context" that starts a new
+	// conversation for an existing tab). Ignored when resuming an existing
+	// conversation. Additive and non-breaking — an absent value leaves parentId
+	// empty as before.
+	ParentConversationID string `json:"parentConversationId,omitempty"`
 }
 
 // ThinkingConfig controls extended thinking for API-backend runs.
 type ThinkingConfig struct {
 	Enabled      bool `json:"enabled"`
-	BudgetTokens int  `json:"budgetTokens,omitempty"`
+	// Effort is the cross-provider reasoning level: "low" | "medium" | "high".
+	// It is the forward-compatible control that the whole provider landscape
+	// has converged on (Anthropic adaptive `effort`, OpenAI `reasoning_effort`,
+	// Gemini `thinkingConfig` budget mapped from the level). Precedence with
+	// the legacy BudgetTokens field:
+	//   - Enabled && Effort != "" ⇒ effort-based resolution (preferred path).
+	//   - Enabled && Effort == "" ⇒ legacy budget path (back-compat only; used
+	//     for older models whose capability mode is "budget").
+	//   - !Enabled ⇒ no thinking directive emitted, regardless of other fields.
+	// The provider body-builders translate (mode, effort, budget) via the
+	// shared resolveThinking helper; see engine/internal/providers.
+	Effort       string `json:"effort,omitempty"`
+	BudgetTokens int    `json:"budgetTokens,omitempty"`
+	// StreamDeltas gates per-token engine_thinking_delta emission on the
+	// engine wire (issue #158). Pointer-bool: nil/absent ⇒ ON (default).
+	// Block-boundary events (engine_thinking_block_start / _end) always emit
+	// regardless of this flag, so disabling deltas keeps the liveness signal
+	// and the block summary. A headless harness that never wants reasoning
+	// text on its socket sets this to false.
+	StreamDeltas *bool `json:"streamDeltas,omitempty"`
+	// Persist gates retention of reasoning TEXT in conversation history
+	// (.tree.jsonl / .llm.jsonl). Pointer-bool: nil/absent ⇒ ON (default).
+	// When off, the persisted thinking block carries no text (bare
+	// {"type":"thinking"}), matching the pre-#158 behavior. This NEVER affects
+	// provider re-submission — SanitizeMessages strips thinking on the
+	// submission path regardless, because Anthropic rejects re-submitted
+	// thinking. Persisting is for display-only (historical "show thinking").
+	Persist *bool `json:"persist,omitempty"`
 }
 
 // AgentStateUpdate describes the current state of an agent.
@@ -125,6 +162,20 @@ type AgentSpec struct {
 type EngineCommandListing struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+}
+
+// SlashCommandListing is one entry in the engine's filesystem slash-command
+// discovery feed (the .md/skill templates across the conventional roots).
+// Distinct from EngineCommandListing (extension-registered commands published
+// via engine_command_registry): this surface covers the template/skill side so
+// a consumer's autocomplete menu unions the two without re-walking the
+// filesystem itself.
+type SlashCommandListing struct {
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	ArgumentHint string `json:"argumentHint,omitempty"`
+	// Source is one of "ion" | "claude" | "skill" — where the template lives.
+	Source string `json:"source,omitempty"`
 }
 
 // StatusFields are the fields emitted by engine_status events.
@@ -227,7 +278,6 @@ type SessionStatus struct {
 	ExtensionName string `json:"extensionName,omitempty"`
 }
 
-
 // MessageEndUsage reports token usage at the end of a message.
 type MessageEndUsage struct {
 	InputTokens    int     `json:"inputTokens"`
@@ -235,7 +285,6 @@ type MessageEndUsage struct {
 	ContextPercent int     `json:"contextPercent"`
 	Cost           float64 `json:"cost"`
 }
-
 
 // EarlyStopContinueConfig holds the engine-wide defaults for the early-stop
 // continuation feature. Lives under `earlyStopContinue` in ~/.ion/engine.json.
@@ -309,6 +358,37 @@ type SessionMessage struct {
 	ToolInput string `json:"toolInput,omitempty"`
 	Timestamp int64  `json:"timestamp"`
 	Internal  bool   `json:"internal,omitempty"`
+	// SlashCommand / SlashArgs / SlashSource carry the raw slash-command
+	// invocation when this user turn originated from a slash command the engine
+	// resolved and expanded. Content holds the raw invocation for display; the
+	// LLM-visible expanded body lives in the .llm.jsonl, not here. Consumers
+	// render a command pill from these fields. Empty for ordinary messages.
+	SlashCommand string `json:"slashCommand,omitempty"`
+	SlashArgs    string `json:"slashArgs,omitempty"`
+	SlashSource  string `json:"slashSource,omitempty"`
+
+	// Marker payload fields (additive, omitempty). Set only when Role=="system"
+	// and this row represents a persisted marker entry (compaction, plan, steer)
+	// replayed by flattenEntries on historical reload. Clients format from these
+	// structured fields using their existing formatters — the engine emits data,
+	// not display strings. MarkerKind discriminates the three marker families.
+	MarkerKind string `json:"markerKind,omitempty"` // "compaction" | "plan" | "steer"
+
+	// Compaction marker fields (MarkerKind=="compaction"): mirror CompactionData.
+	MarkerMessagesBefore int    `json:"markerMessagesBefore,omitempty"`
+	MarkerMessagesAfter  int    `json:"markerMessagesAfter,omitempty"`
+	MarkerClearedBlocks  int    `json:"markerClearedBlocks,omitempty"`
+	MarkerStrategy       string `json:"markerStrategy,omitempty"`
+	MarkerMicroOnly      bool   `json:"markerMicroOnly,omitempty"`
+	MarkerSummary        string `json:"markerSummary,omitempty"`
+
+	// Plan marker fields (MarkerKind=="plan"): mirror PlanMarkerData.
+	MarkerPlanOperation string `json:"markerPlanOperation,omitempty"` // "created" | "updated"
+	MarkerPlanFilePath  string `json:"markerPlanFilePath,omitempty"`
+	MarkerPlanSlug      string `json:"markerPlanSlug,omitempty"`
+
+	// Steer marker fields (MarkerKind=="steer"): mirror SteerMarkerData.
+	MarkerMessageLength int `json:"markerMessageLength,omitempty"`
 }
 
 // PermissionDenialEntry is the wire format for permission denials in ResultEvent.

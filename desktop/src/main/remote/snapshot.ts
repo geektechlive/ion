@@ -1,12 +1,14 @@
 import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+import { resolvePlanPreview } from './plan-content-cache'
 import { state, sessionPlane, lastMessagePreview } from '../state'
 import { TABS_FILE } from '../settings-store'
 import { isResourceRead } from '../event-wiring-resources'
 import { log } from '../logger'
 import type { RemoteTabState } from './protocol'
 import type { TabStatus } from '../../shared/types'
+import { projectRendererTab } from './snapshot-project'
 
 export type ResourceManifest = Record<string, Array<{ id: string; kind: string; title?: string; createdAt: string; read?: boolean; conversationId?: string }>>
 
@@ -21,6 +23,16 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
     rendererResult = await state.mainWindow?.webContents.executeJavaScript(`
       (function() {
         try {
+          // Inlined copy of tabHasExtensions (../../shared/tab-predicates).
+          // This IIFE is evaluated in the RENDERER global scope via
+          // executeJavaScript and CANNOT reference main-process imports —
+          // calling the imported helper threw a ReferenceError on every poll,
+          // silently degrading the snapshot to the cold-start path. The
+          // predicate is pure (engineProfileId non-null, non-empty), so it is
+          // safe to inline here. Keep this in sync with tab-predicates.ts.
+          function tabHasExtensions(t) {
+            return t.engineProfileId != null && t.engineProfileId !== '';
+          }
           var store = window.__Ion_SESSION_STORE__;
           if (!store) return { tabs: [], resourceManifest: {} };
           var s = store.getState();
@@ -53,8 +65,46 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
                 break;
               }
             }
+            // Conversation tail fingerprint — the staleness signal for the iOS
+            // main-conversation heal. iOS computes the SAME fingerprint over its
+            // local tail and reloads when it diverges (dropped live deltas).
+            // MUST stay byte-identical with conversationTailFingerprint in
+            // ../../shared/conversation-fingerprint.ts (the unit-tested mirror)
+            // and the Swift copy in SessionViewModel+Snapshot.swift. Pinning:
+            // tail = last 10 messages; tool rows = "<id>:t<statusChar>" (status
+            // only, truncation-immune); non-tool rows = "<id>:<utf8ByteLen>";
+            // join with ",". NO total-count term — iOS holds a paginated page,
+            // so any count would diverge on long conversations and reload-loop.
+            // UTF-8 byte length, never UTF-16 .length. This IIFE runs in the
+            // renderer, so TextEncoder is available; main-process imports are
+            // NOT (see header comment above).
+            var FP_TAIL = 10;
+            var convFingerprint = (function() {
+              function utf8Len(str) { return new TextEncoder().encode(str || '').length; }
+              function statusTok(st) {
+                if (st === 'running') return 'r';
+                if (st === 'completed') return 'c';
+                if (st === 'error') return 'e';
+                return '-';
+              }
+              var start = Math.max(0, msgs.length - FP_TAIL);
+              var toks = [];
+              for (var k = start; k < msgs.length; k++) {
+                var m = msgs[k];
+                if (m.role === 'tool') {
+                  toks.push(m.id + ':t' + statusTok(m.toolStatus));
+                } else {
+                  toks.push(m.id + ':' + utf8Len(m.content || ''));
+                }
+              }
+              return toks.join(',');
+            })();
             // Live interactive permission requests live on the active instance.
             var queue = (activeInst && activeInst.permissionQueue ? activeInst.permissionQueue : []).slice();
+            // Live extension elicitations (ctx.elicit) also live on the active
+            // instance; project them so iOS can render an approval card and the
+            // run is not silently parked on a mobile client.
+            var elicitQueue = (activeInst && activeInst.elicitationQueue ? activeInst.elicitationQueue : []).slice();
             // Promote the active instance's non-interactive denials into the
             // queue so the iOS card path (which keys off the tab-level queue)
             // works uniformly for every tab. An extension-hosted tab stamps the
@@ -64,17 +114,28 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
             // active-instance filter passes). The per-instance waitingState
             // (set below on conversationInstances[i]) drives the iOS sub-tab
             // pill; the parent pill glows because the denial is in the queue.
-            if (activeInst && t.status !== 'failed' && t.status !== 'dead') {
+            // Running/connecting tabs have no outstanding permission question:
+            // a genuine mid-run request arrives via the live permissionQueue /
+            // permission_request path, not the stale permissionDenied residue.
+            // permissionDenied is cleared lazily (only on next send when
+            // !isBusy — send-slice.ts), so a running tab holds a resolved
+            // denial and promoting it would re-inject a stale card on iOS on
+            // every snapshot tick. Exclude running and connecting to prevent that.
+            // TAB-TYPE-AGNOSTIC for idle/completed: a plain conversation can run
+            // background sub-agents whose denials must still reach iOS after the
+            // run finishes — do NOT weaken the idle/completed promotion path.
+            if (activeInst && t.status !== 'failed' && t.status !== 'dead' && t.status !== 'running' && t.status !== 'connecting') {
               var pdEntry = activeInst.permissionDenied;
               var pdTools = pdEntry && pdEntry.tools;
               if (pdTools && pdTools.length > 0) {
                 for (var pdi = 0; pdi < pdTools.length; pdi++) {
-                  // A completed PLAIN conversation only surfaces ExitPlanMode /
-                  // AskUserQuestion denials (historical filter); an
-                  // extension-hosted instance surfaces all of its denials.
-                  if (!t.hasEngineExtension && t.status === 'completed' &&
-                      pdTools[pdi].toolName !== 'ExitPlanMode' &&
-                      pdTools[pdi].toolName !== 'AskUserQuestion') continue;
+                  // TAB-TYPE-AGNOSTIC: every outstanding denial surfaces to the
+                  // iOS card queue, plain or extension-hosted. A plain
+                  // conversation can run background sub-agents that produce
+                  // non-plan tool denials, so a completed plain conversation's
+                  // denials must reach iOS too. (A prior filter dropped all but
+                  // ExitPlanMode / AskUserQuestion denials for completed plain
+                  // conversations — fixed.)
                   var pdEntryOut = {
                     questionId: 'denied-' + pdTools[pdi].toolUseId,
                     toolName: pdTools[pdi].toolName,
@@ -82,9 +143,18 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
                     toolInput: pdTools[pdi].toolInput,
                     options: []
                   };
-                  if (t.hasEngineExtension) pdEntryOut.instanceId = activeInstId;
+                  if (tabHasExtensions(t)) pdEntryOut.instanceId = activeInstId;
                   queue.push(pdEntryOut);
                 }
+              }
+            }
+            // Log when a running/connecting tab's denial promotion is suppressed
+            // so the skip is observable in desktop.log without ambiguity.
+            if (activeInst && (t.status === 'running' || t.status === 'connecting')) {
+              var pdSkipEntry = activeInst.permissionDenied;
+              var pdSkipTools = pdSkipEntry && pdSkipEntry.tools;
+              if (pdSkipTools && pdSkipTools.length > 0) {
+                console.log('[snapshot] suppressed stale denial promotion tabId=' + t.id.slice(0, 8) + ' status=' + t.status + ' tools=' + pdSkipTools.map(function(p) { return p.toolName + '(' + p.toolUseId.slice(-8) + ')'; }).join(','));
               }
             }
             var pane = panes && panes.get ? panes.get(t.id) : null;
@@ -128,9 +198,18 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
                   var st = sf.state;
                   instRunning = st === 'running' || st === 'connecting' || st === 'starting';
                 }
-                // Per-instance running-agent-count. Folds across the
-                // instance's agentStates field to expose "how many
-                // dispatched background agents are still running" to iOS.
+                // Per-instance running-agent-count. Folds across both the
+                // instance's agentStates field AND statusFields.backgroundAgents
+                // to expose "how many dispatched background agents are still
+                // running" to iOS. Takes the MAX (not sum) of both sources
+                // because they observe the same underlying agents from two
+                // vantage points — agentStates for extension-hosted orchestrators,
+                // backgroundAgents for plain-conversation dispatches where
+                // agentStates remains empty.
+                // Keep in sync with effectiveRunningChildrenCount in
+                // TabStripShared.ts — this IIFE cannot import that helper
+                // (runs in renderer global scope via executeJavaScript; see the
+                // tabHasExtensions inline-mirror precedent at lines 26-35).
                 // Drives the yellow "awaiting children" pulse on the iOS
                 // sub-tab pill and footer, mirroring the desktop's
                 // agentCountByInstance derivation in EngineTabStrip.
@@ -140,11 +219,14 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
                 // can be honored.
                 var instRunningAgents = 0;
                 var ags = inst.agentStates;
+                var fromAgentStates = 0;
                 if (ags && Array.isArray(ags)) {
                   for (var ai = 0; ai < ags.length; ai++) {
-                    if (ags[ai] && ags[ai].status === 'running') instRunningAgents++;
+                    if (ags[ai] && ags[ai].status === 'running') fromAgentStates++;
                   }
                 }
+                var fromBackgroundAgents = (inst.statusFields && inst.statusFields.backgroundAgents) || 0;
+                instRunningAgents = Math.max(fromAgentStates, fromBackgroundAgents);
                 // Per-instance model-fallback indicator. Projects the
                 // renderer's engineModelFallbacks map onto each instance
                 // so iOS can render a matching ⚠ glyph on its
@@ -164,15 +246,10 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
                     mfOut = { requestedModel: mf.requestedModel, fallbackModel: mf.fallbackModel };
                   }
                 }
-                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, runningAgentCount: instRunningAgents > 0 ? instRunningAgents : undefined, modelFallback: mfOut, conversationIds: inst.conversationIds && inst.conversationIds.length > 0 ? inst.conversationIds : undefined };
+                return { id: inst.id, label: inst.label, waitingState: ws, isRunning: instRunning || undefined, runningAgentCount: instRunningAgents > 0 ? instRunningAgents : undefined, modelFallback: mfOut, conversationIds: inst.conversationIds && inst.conversationIds.length > 0 ? inst.conversationIds : undefined, thinkingEffort: (inst.thinkingEffort && inst.thinkingEffort !== 'off') ? inst.thinkingEffort : undefined, dispatchTelemetry: inst.dispatchTelemetry && inst.dispatchTelemetry.length > 0 ? inst.dispatchTelemetry : undefined };
               });
               activeConversationInstanceId = ePaneForList.activeInstanceId || ePaneForList.instances[0].id;
             }
-            // Aggregate running state across all engine instances so the
-            // iOS tab-list dot pulses when ANY instance is running, even
-            // if the active instance is idle. Parallels the desktop's
-            // isAnyEngineInstanceRunning helper in TabStripShared.ts.
-            var anyInstanceRunning = false;
             // Parallel aggregate for "any instance has running background
             // children" — drives the iOS parent tab pill's yellow
             // "awaiting children" dot. Folds across the per-instance
@@ -181,92 +258,44 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
             var anyInstanceHasRunningChildren = false;
             if (conversationInstances) {
               for (var ei = 0; ei < conversationInstances.length; ei++) {
-                if (conversationInstances[ei].isRunning) anyInstanceRunning = true;
                 if ((conversationInstances[ei].runningAgentCount || 0) > 0) anyInstanceHasRunningChildren = true;
-                if (anyInstanceRunning && anyInstanceHasRunningChildren) break;
-              }
-            }
-            // Derive the parent engine tab's status authoritatively from
-            // per-instance state. The renderer's t.status can be stale
-            // for engine tabs: the engine_status / engine_text_delta
-            // handlers gate writes on the *active* sub-instance, so an
-            // inactive sub-instance that started running and then finished
-            // (or a user switching active sub-instances mid-run) can strand
-            // t.status === 'running' even when no sub-instance is
-            // actually running anymore. Without this derivation, iOS
-            // receives the stranded value via the snapshot and shows the
-            // parent tab pulsing orange + "Running…" indefinitely.
-            //
-            // Rules (engine tabs only):
-            //   - anyInstanceRunning → 'running'
-            //   - terminal status ('dead' / 'failed') → preserve
-            //   - 'completed' AND queue carries ExitPlanMode/AskUserQuestion
-            //     → preserve 'completed' so the green (plan-ready) /
-            //     blue (question) parent pill still shows after auto-allow
-            //   - otherwise → 'idle'
-            //
-            // Non-engine tabs pass through t.status unchanged.
-            //
-            // Desktop's own tab pill is unaffected: it reads
-            // isAnyEngineInstanceRunning(tab.id) directly in
-            // TabStripShared.ts line ~415, never trusting tab.status for
-            // engine running-state. This derivation is purely for the
-            // snapshot projection consumed by iOS.
-            //
-            // SYNC NOTE. The inline implementation below MUST match
-            // the pure deriveEngineParentStatus helper in
-            // snapshot-derive.ts. The helper is the canonical contract
-            // (pinned by __tests__/snapshot-derive.test.ts); the inline
-            // copy here exists because this IIFE runs in renderer
-            // process via executeJavaScript and cannot import from
-            // main-process modules. Reviewers verify by visual diff.
-            var derivedStatus = t.status;
-            if (t.hasEngineExtension === true) {
-              if (anyInstanceRunning) {
-                derivedStatus = 'running';
-              } else if (t.status === 'dead' || t.status === 'failed') {
-                derivedStatus = t.status;
-              } else if (t.status === 'completed') {
-                var hasWaitingDenial = false;
-                for (var qi = 0; qi < queue.length; qi++) {
-                  var qTool = queue[qi] && (queue[qi].toolTitle || queue[qi].toolName);
-                  if (qTool === 'ExitPlanMode' || qTool === 'AskUserQuestion') { hasWaitingDenial = true; break; }
-                }
-                derivedStatus = hasWaitingDenial ? 'completed' : 'idle';
-              } else {
-                derivedStatus = 'idle';
-              }
-              // Log every downgrade from running/connecting → idle so a
-              // future investigation can confirm the derivation fired and
-              // identify the tab. Logged in the renderer (console.log)
-              // because this IIFE runs in the renderer process. The
-              // main-process log() helper is not in scope here.
-              if ((t.status === 'running' || t.status === 'connecting') && derivedStatus !== 'running' && derivedStatus !== 'connecting') {
-                console.log('[snapshot] engine parent tab status downgrade tabId=' + (t.id || '').slice(0, 8) + ' raw=' + t.status + ' derived=' + derivedStatus + ' anyInstanceRunning=' + anyInstanceRunning + ' queueLen=' + queue.length);
+                if (anyInstanceHasRunningChildren) break;
               }
             }
             return {
               id: t.id,
               title: t.title,
               customTitle: t.customTitle,
-              status: derivedStatus,
+              // WI-001 landed at 8690aae3 makes t.status authoritative for every
+              // conversation. The normalized arm writes status to the single main
+              // instance with no active-instance gate, so t.status is never
+              // stranded by an inactive sub-instance switch. The per-instance
+              // status compensation block is retired; t.status projects uniformly
+              // for all tabs.
+              status: t.status,
               workingDirectory: t.workingDirectory,
-              permissionMode: (function() {
-                // Extension-hosted: each sub-conversation has its own mode, so
-                // the active instance is authoritative. Plain: permissionMode
-                // is a tab-level setting (t.permissionMode).
-                if (t.hasEngineExtension) {
-                  return (activeInst && activeInst.permissionMode) || 'auto';
-                }
-                return t.permissionMode;
-              })(),
+              // All tab types store permissionMode on the active conversation
+              // instance (WI-002). The activeInst resolution at the top of this
+              // map callback is the single read source — no tab-type fork.
+              permissionMode: (activeInst && activeInst.permissionMode) || 'auto',
               permissionQueue: queue,
+              elicitationQueue: elicitQueue,
+              // Per-conversation extended-thinking effort from the active instance.
+              // Omitted when 'off'/absent so the iOS control defaults to off.
+              thinkingEffort: (function() {
+                var eff = activeInst && activeInst.thinkingEffort;
+                return (eff && eff !== 'off') ? eff : undefined;
+              })(),
               contextTokens: t.contextTokens,
               contextWindow: t.contextWindow ?? null,
               messageCount: (msgs.length > 0 ? msgs.length : (activeInst && activeInst.messageCount) || 0),
               queuedPrompts: t.queuedPrompts || [],
               isTerminalOnly: t.isTerminalOnly || undefined,
-              hasEngineExtension: t.hasEngineExtension || undefined,
+              hasEngineExtension: tabHasExtensions(t) || undefined,
+              // iOS resolves the harness badge display name by matching
+              // engineProfileId against the desktop_engine_profiles list.
+              // Without this field, the badge falls back to literal "EXT".
+              engineProfileId: t.engineProfileId || null,
               conversationInstances: conversationInstances,
               activeConversationInstanceId: activeConversationInstanceId,
               terminalInstances: terminalInstances,
@@ -283,12 +312,41 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
               conversationId: t.conversationId || null,
               lastMessageContent: lastMsg,
               lastActivityTs: lastTs || 0,
+              convFingerprint: convFingerprint,
               pillColor: t.pillColor || null,
               pillIcon: t.pillIcon || null,
+              // ─── Cold-start parity: cost + token fields ───────────────────
+              // Projected from the active-instance statusFields and lastResult
+              // so iOS has accurate cost/token data on cold open without
+              // waiting for a live engine_status event. These match the fields
+              // RemoteTabState added in the snapshot-parity fix.
+              //
+              // totalCostUsd: prefer the live cumulative from statusFields;
+              //   fall back to the final task_complete cost from lastResult.
+              //   Omitted when neither is present (never-run tabs).
+              totalCostUsd: (function() {
+                var liveCost = activeInst && activeInst.statusFields && typeof activeInst.statusFields.totalCostUsd === 'number' ? activeInst.statusFields.totalCostUsd : undefined;
+                if (liveCost !== undefined) return liveCost;
+                return t.lastResult && typeof t.lastResult.totalCostUsd === 'number' ? t.lastResult.totalCostUsd : undefined;
+              })(),
+              inputTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.input_tokens === 'number') ? t.lastResult.usage.input_tokens : undefined,
+              outputTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.output_tokens === 'number') ? t.lastResult.usage.output_tokens : undefined,
+              cacheReadTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.cache_read_input_tokens === 'number') ? t.lastResult.usage.cache_read_input_tokens : undefined,
+              cacheCreationTokens: (t.lastResult && t.lastResult.usage && typeof t.lastResult.usage.cache_creation_input_tokens === 'number') ? t.lastResult.usage.cache_creation_input_tokens : undefined,
             };
           });
           return { tabs: tabs, resourceManifest: resourceManifest };
-        } catch(e) { return { tabs: [], resourceManifest: {} }; }
+        } catch(e) {
+          // Never fail silently. This IIFE runs in the renderer, so
+          // console.error is forwarded to ~/.ion/desktop.log via the
+          // renderer-console handler. A throw here degrades EVERY snapshot
+          // to the cold-start path (missing groupId / pillColor /
+          // conversationInstances), so it must be observable. The original
+          // ReferenceError (calling a main-process import inside this IIFE)
+          // went undetected for exactly this reason.
+          console.error('[snapshot] IIFE failed, falling back to cold-start: ' + (e && e.message ? e.message : String(e)));
+          return { tabs: [], resourceManifest: {} };
+        }
       })()
     `) || { tabs: [], resourceManifest: {} }
   } catch {
@@ -323,7 +381,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
               byKind[item.kind].push(item)
             }
             resourceManifest = byKind
-            log('snapshot', `resource manifest cold-loaded from disk: ${items.length} items`)
+            log('desktop_snapshot', `resource manifest cold-loaded from disk: ${items.length} items`)
           }
         }
       }
@@ -347,18 +405,14 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
     for (const t of rendererTabs) {
       if (t.permissionQueue?.length > 0) {
         const qIds = (t.permissionQueue || []).map((p: any) => `${p.toolTitle || p.toolName}(${p.questionId?.slice(-8)})`).join(', ')
-        log('snapshot', `tab=${t.id?.slice(0, 8)} status=${t.status} permQueue=[${qIds}]`)
+        log('desktop_snapshot', `tab=${t.id?.slice(0, 8)} status=${t.status} permQueue=[${qIds}]`)
       }
     }
     const mapped = rendererTabs
-      .map((t: any) => ({
-        id: t.id,
-        title: t.customTitle || t.title || 'Tab',
-        customTitle: t.customTitle || null,
-        status: t.status || 'idle',
-        workingDirectory: t.workingDirectory || '',
-        permissionMode: (t.permissionMode === 'plan' ? 'plan' : 'auto') as 'auto' | 'plan',
-        permissionQueue: (t.permissionQueue || []).map((p: any) => {
+      .map((t: any) => {
+        // Resolve impure inputs first, then delegate to the pure projection helper.
+        // The helper owns the field-mapping contract; callers here handle side effects.
+        const permissionQueue = (t.permissionQueue || []).map((p: any) => {
           const entry = {
             questionId: p.questionId,
             toolName: p.toolTitle || '',
@@ -373,34 +427,46 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
             // tabs and for renderer queue entries that predate the field.
             instanceId: p.instanceId || undefined,
           }
-          // Enrich ExitPlanMode entries with planContent by reading the plan file
-          if (entry.toolName === 'ExitPlanMode' && entry.toolInput?.planFilePath && !entry.toolInput?.planContent) {
-            try {
-              entry.toolInput = { ...entry.toolInput, planContent: readFileSync(entry.toolInput.planFilePath as string, 'utf-8') }
-            } catch {}
+          // Enrich ExitPlanMode entries with a bounded preview + metadata.
+          // The full plan body is not embedded in the snapshot — iOS fetches it
+          // on demand via request_plan_content. The preview comes from the plan
+          // file on disk when readable, else from the inline planContent the
+          // entry carries (backfilled / restored-synthesis cards have no readable
+          // file). Without the inline fallback the preview was silently omitted
+          // and the iOS card rendered blank. See plan gentle-perching-lemon.md
+          // and solid-running-river.md (Regression 1).
+          if (entry.toolName === 'ExitPlanMode') {
+            const PREVIEW_BYTES = 4 * 1024  // 4 KB inline preview for instant card render
+            const resolved = resolvePlanPreview(entry.toolInput, PREVIEW_BYTES)
+            if (resolved) {
+              entry.toolInput = {
+                ...entry.toolInput,
+                planContentPreview: resolved.preview,
+                planSizeBytes: resolved.totalBytes,
+                planTruncated: resolved.truncated,
+              }
+            } else if (entry.toolInput?.planFilePath || entry.toolInput?.planContent) {
+              // We had something to read but produced no preview — observable, not silent.
+              log('desktop_snapshot', `plan preview unavailable for ExitPlanMode entry: planFilePath=${entry.toolInput?.planFilePath ?? '<none>'} hasInline=${!!entry.toolInput?.planContent}`)
+            }
           }
           return entry
-        }),
-        lastMessage: t.lastMessageContent || lastMessagePreview.get(t.id) || null,
-        contextTokens: t.contextTokens || null,
-        contextWindow: t.contextWindow ?? null,
-        messageCount: t.messageCount || 0,
-        queuedPrompts: t.queuedPrompts || [],
-        isTerminalOnly: t.isTerminalOnly || undefined,
-        hasEngineExtension: t.hasEngineExtension || undefined,
-        conversationInstances: t.conversationInstances || undefined,
-        activeConversationInstanceId: t.activeConversationInstanceId || undefined,
-        terminalInstances: t.terminalInstances || undefined,
-        activeTerminalInstanceId: t.activeTerminalInstanceId || undefined,
-        groupId: t.groupId || null,
-        modelOverride: t.modelOverride || null,
-        groupPinned: t.groupPinned || false,
-        hasRunningChildren: t.hasRunningChildren || undefined,
-        conversationId: t.conversationId || undefined,
-        lastActivityAt: t.lastActivityTs || undefined,
-        pillColor: t.pillColor || null,
-        pillIcon: t.pillIcon || null,
-      }))
+        })
+        // Map the active instance's elicitation queue onto the wire shape. The
+        // renderer entry already matches ElicitationRequest, so this is a
+        // straight projection (defensive copy keeps the snapshot pure).
+        const elicitationQueue = (t.elicitationQueue || []).map((e: any) => ({
+          requestId: e.requestId,
+          mode: e.mode || '',
+          schema: e.schema,
+          url: e.url,
+        }))
+        const lastMessage = t.lastMessageContent || lastMessagePreview.get(t.id) || null
+        // Pure field projection — contract pinned by snapshot-project.ts and
+        // tested in __tests__/snapshot-project.test.ts. Visual diff here vs.
+        // that file to verify the two stay in sync.
+        return projectRendererTab(t, { lastMessage, permissionQueue, elicitationQueue })
+      })
 
     mapped.sort((a, b) => {
       const aRunning = a.status === 'running' || a.status === 'connecting' ? 1 : 0
@@ -445,7 +511,9 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
         customTitle: t.customTitle || null,
         status: (h?.status || 'idle') as TabStatus,
         workingDirectory: t.workingDirectory || '',
-        permissionMode: (t.permissionMode === 'plan' ? 'plan' : 'auto') as 'auto' | 'plan',
+        // Prefer the instance-persisted mode (WI-002). Fall back to the legacy
+        // tab-level field for tabs.json written before WI-002.
+        permissionMode: ((coldMain?.permissionMode || t.permissionMode) === 'plan' ? 'plan' : 'auto') as 'auto' | 'plan',
         permissionQueue: [],
         lastMessage: null,
         contextTokens: t.contextTokens || null,
@@ -454,6 +522,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
         queuedPrompts: t.queuedPrompts || [],
         modelOverride: coldMain?.modelOverride ?? null,
         lastActivityAt: h?.lastActivityAt || undefined,
+        convFingerprint: '',
       })
     }
   } else {
@@ -472,6 +541,7 @@ export async function getRemoteTabStates(): Promise<RemoteTabSnapshot> {
         messageCount: 0,
         queuedPrompts: [],
         lastActivityAt: t.lastActivityAt || undefined,
+        convFingerprint: '',
       })
     }
   }

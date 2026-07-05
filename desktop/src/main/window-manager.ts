@@ -119,7 +119,17 @@ export function createWindow(): void {
   state.mainWindow = mainWindow
 
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  mainWindow.setAlwaysOnTop(true, 'screen-saver')
+  // Use 'modal-panel' rather than 'screen-saver' here. 'modal-panel' sits
+  // above normal apps (browsers, VSCode — CGWindowLevel 0) so the overlay
+  // covers them in tall mode, but it stays BELOW macOS TCC/permission dialogs
+  // and the Dock (which live at kCGPopUpMenuWindowLevel and above). That lets
+  // system permission prompts surface over the Ion overlay when they fire.
+  //
+  // DO NOT raise this back to 'screen-saver' to fix a perceived z-order bug.
+  // 'screen-saver' is CGWindowLevel 2000, which sits above TCC dialogs
+  // (~1000) and causes them to be hidden behind the overlay in tall mode —
+  // the exact symptom this change was made to cure.
+  mainWindow.setAlwaysOnTop(true, 'modal-panel')
 
   mainWindow.webContents.on('console-message', (_e, level, message) => {
     if (level >= 3) log(`[renderer:error] ${message}`)

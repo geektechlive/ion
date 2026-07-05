@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type { TerminalPaneState, ConversationPane, Message } from '../../shared/types'
 import { serializeTerminalBuffer } from '../components/TerminalInstance'
 import type { State, StoreSet, StoreGet } from './session-store-types'
+import type { ResourceItem } from '../../shared/types-engine'
+import { markResourcesRead } from './slices/resource-slice'
 import { makeLocalTab, initialModelOverride } from './session-store-helpers'
 import { makeMainPane } from './conversation-instance'
 import { parseSessionKey } from '../../shared/session-key'
@@ -18,7 +20,6 @@ import { createPermissionsSlice } from './slices/permissions-slice'
 import { createSendSlice } from './slices/send-slice'
 import { createEventSlice } from './slices/event-slice'
 import { createEngineSlice } from './slices/engine-slice'
-import { createEngineEventSlice } from './slices/engine-event-slice'
 import { setupPersistence } from './session-store-persistence'
 import { usePreferencesStore } from '../preferences'
 
@@ -41,6 +42,8 @@ const initialState = {
   isExpanded: false,
   staticInfo: null,
   gitPanelOpen: false,
+  statusDrawerOpen: false,
+  statusDrawerDispatchId: null,
   terminalOpenTabIds: new Set<string>(),
   terminalPendingCommands: new Map<string, string>(),
   terminalPanes: new Map<string, TerminalPaneState>(),
@@ -53,9 +56,10 @@ const initialState = {
   fileEditorStates: new Map(),
   editorGeometry: { x: 60, y: 80, w: 680, h: 480 },
   planGeometry: { x: 60, y: 80, w: 720, h: 420 },
-  briefingGeometry: { x: 80, y: 100, w: 720, h: 420 },
+  resourceViewerGeometry: { x: 80, y: 100, w: 720, h: 420 },
   agentDetailGeometry: { x: 60, y: 80, w: 600, h: 500 },
   tabsReady: false,
+  rehydrating: false,
   initProgress: null,
   backend: 'api' as const,
   worktreeUncommittedMap: new Map(),
@@ -69,10 +73,12 @@ const initialState = {
   resources: {} as Record<string, import('../../shared/types-engine').ResourceItem[]>,
   resourceSubscriptions: {} as Record<string, string>,
   readResourceIds: new Set<string>(),
+  dispatchActivity: {} as Record<string, import('../../shared/types').Message[]>,
   tallViewTabId: null,
   scrollToBottomCounter: 0,
   settingsOpen: false,
   settingsInitialTab: null,
+  openFloatingPanelCount: 0,
 }
 
 export const useSessionStore = create<State>((set, get) => {
@@ -93,13 +99,23 @@ export const useSessionStore = create<State>((set, get) => {
     ...createSendSlice(_set, _get),
     ...createEventSlice(_set, _get),
     ...createEngineSlice(_set, _get),
-    ...createEngineEventSlice(_set, _get),
     markResourceRead: (resourceId: string) => {
       set((state) => {
         const updated = new Set(state.readResourceIds)
         updated.add(resourceId)
         return { readResourceIds: updated }
       })
+    },
+    markAllResourcesRead: (items: ResourceItem[]) => {
+      // Batch the local read-state update into a single transition.
+      set((state) => markResourcesRead(state, items.map((i) => i.id)))
+      // Fan the read state out per item through the engine's resource broker
+      // (mark_read delta) so other subscribers — notably iOS — converge. This
+      // reuses the exact per-item mechanism the panel already uses on open,
+      // which also persists the read state on the desktop main process.
+      for (const item of items) {
+        window.ion?.markResourceRead?.(item.kind, item.id)
+      }
     },
     deleteResource: (kind: string, resourceId: string) => {
       set((state) => {

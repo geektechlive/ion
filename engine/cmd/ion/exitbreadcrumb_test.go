@@ -226,3 +226,63 @@ func TestExitBreadcrumb_PanicStackTruncation(t *testing.T) {
 		t.Errorf("stack not truncated: len=%d want<=%d", len(rec.Stack), maxStack)
 	}
 }
+
+// ─── Memory footprint enrichment (OS-pressure-kill self-diagnosis) ────────────
+
+// TestExitBreadcrumb_BeatRecordsMemory pins that beat() captures the current
+// heap/sys footprint into the breadcrumb. Reverting the ReadMemStats population
+// in beat() turns this red.
+func TestExitBreadcrumb_BeatRecordsMemory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "engine.exit")
+
+	writeRunning(path)
+	beat(path)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("breadcrumb not found after beat: %v", err)
+	}
+	var rec exitRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// HeapAlloc and Sys are always > 0 in a live Go process.
+	if rec.LastHeapBytes == 0 {
+		t.Error("beat should record a non-zero lastHeapBytes")
+	}
+	if rec.LastSysBytes == 0 {
+		t.Error("beat should record a non-zero lastSysBytes")
+	}
+}
+
+// TestLogPriorExit_UncleanSurfacesMemory pins that an UNCLEAN classification with
+// recorded memory fields emits a line containing the lastHeapMB footprint. This is
+// the evidence that turns a future OS memory-pressure kill self-diagnosing.
+func TestLogPriorExit_UncleanSurfacesMemory(t *testing.T) {
+	get := captureLogs(t)
+
+	path := filepath.Join(t.TempDir(), "engine.exit")
+	rec := exitRecord{
+		Pid:           99997,
+		StartedAt:     time.Now().Add(-10 * time.Minute).UnixMilli(),
+		LastBeat:      time.Now().Add(-5 * time.Minute).UnixMilli(),
+		Status:        "running",
+		LastHeapBytes: 3 * 1024 * 1024 * 1024, // 3 GiB
+		LastSysBytes:  4 * 1024 * 1024 * 1024, // 4 GiB
+	}
+	data, _ := json.Marshal(rec)
+	_ = os.WriteFile(path, data, 0o644)
+
+	logPriorExit(path)
+
+	lines := get()
+	if !containsSubstr(lines, "UNCLEAN") {
+		t.Fatalf("expected UNCLEAN classification, got: %v", lines)
+	}
+	if !containsSubstr(lines, "lastHeapMB=3072") {
+		t.Fatalf("expected lastHeapMB footprint in UNCLEAN line, got: %v", lines)
+	}
+	if !containsSubstr(lines, "lastSysMB=4096") {
+		t.Fatalf("expected lastSysMB footprint in UNCLEAN line, got: %v", lines)
+	}
+}

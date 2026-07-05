@@ -11,6 +11,9 @@ struct TabRowView: View {
     var isSpeaking: Bool = false
     var gitChanges: GitChangesResponse? = nil
     var onOpenGit: (() -> Void)? = nil
+    /// Engine profiles list, passed from the parent (TabListView reads it from
+    /// the view model). Used to resolve the harness badge display name.
+    var engineProfiles: [EngineProfile] = []
 
     @State private var pulseOpacity: Double = 1.0
 
@@ -45,11 +48,7 @@ struct TabRowView: View {
                     }
                 }
 
-            if tab.hasEngineExtension == true {
-                Image(systemName: "bolt.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if tab.isTerminalOnly == true {
+            if tab.isTerminalOnly == true {
                 Image(systemName: "terminal")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -66,7 +65,7 @@ struct TabRowView: View {
                 Text(tab.displayTitle)
                     .font(.headline)
 
-                if showDirectory || (showGitInfo && gitChanges?.isGitRepo == true) {
+                if showDirectory || (showGitInfo && gitChanges?.isGitRepo == true) || tab.hasEngineExtension == true {
                     secondaryRow
                 }
 
@@ -108,6 +107,28 @@ struct TabRowView: View {
     @ViewBuilder
     private var secondaryRow: some View {
         HStack(spacing: 4) {
+            // Harness badge — leading element when a harness/extension NAME is
+            // present. #256 follow-up: gate on the DATA (a resolvable harness
+            // label) rather than the `tab.hasEngineExtension` tab-type flag, so
+            // the badge and its separators appear iff there is a name to show.
+            if harnessBadgeLabel != nil {
+                harnessBadge
+
+                // Separator between badge and directory segment
+                if showDirectory {
+                    Text("•")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+
+                // Separator between badge and git segment (when no directory is shown)
+                if !showDirectory, showGitInfo, let git = gitChanges, git.isGitRepo {
+                    Text("•")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+            }
+
             // Directory segment
             if showDirectory {
                 Image(systemName: "folder")
@@ -245,6 +266,52 @@ struct TabRowView: View {
     var pillColorValue: Color? {
         guard let hex = tab.pillColor, !hex.isEmpty else { return nil }
         return Color(hex: hex)
+    }
+
+    // MARK: - Harness badge
+
+    /// Abbreviated profile name for the harness badge, or nil when the tab has
+    /// no harness/extension NAME to show. Resolution order:
+    ///   1. No `engineProfileId` on the tab → nil (badge hidden). This is the
+    ///      DATA signal: a plain conversation carries no engine profile id, so
+    ///      it has no harness name and shows no badge. An extension-backed tab
+    ///      always carries one.
+    ///   2. `engineProfileId` present → resolve against `engineProfiles`:
+    ///      matched → abbreviated profile.name; unmatched (profile deleted or
+    ///      profiles not yet synced) → "EXT".
+    ///
+    /// #256 follow-up: the gate is the PRESENCE OF THE PROFILE-ID DATA, not the
+    /// `tab.hasEngineExtension` tab-type boolean. The two are equivalent today
+    /// (the desktop sets `hasEngineExtension` iff `engineProfileId != nil`), but
+    /// keying off the data keeps this branch-free of the tab-type flag in line
+    /// with the "difference is data, never a tab-type fork" standard.
+    private var harnessBadgeLabel: String? {
+        guard let pid = tab.engineProfileId else { return nil }
+        let profileName = engineProfiles.first(where: { $0.id == pid })?.name
+        return abbreviateProfileName(profileName)
+    }
+
+    /// Accent-tinted text chip matching the desktop badge style spec:
+    /// 9pt/semibold, accent bg at 15% opacity, accent border at 25% opacity,
+    /// 4pt corner radius, no-wrap. Coexists with the status dot and pillIcon.
+    @ViewBuilder
+    private var harnessBadge: some View {
+        if let label = harnessBadgeLabel {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(theme.accent)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(theme.accent.opacity(0.15))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(theme.accent.opacity(0.25), lineWidth: 0.5)
+                )
+                .fixedSize()
+        }
     }
 
     /// Render the status dot as an SF Symbol icon when `tab.pillIcon` is set,

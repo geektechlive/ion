@@ -2,13 +2,27 @@ package session
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/dsswift/ion/engine/internal/extension"
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
 // SetPlanMode enables or disables plan mode for a session.
-func (m *Manager) SetPlanMode(key string, enabled bool, allowedTools []string, source string) {
+//
+// planFilePath is an optional client-supplied path used to RESTORE plan-file
+// continuity across an engine-session replacement. When plan mode is being
+// enabled, the session currently has no plan file path, and the supplied
+// path is non-empty AND exists on disk, the session re-learns that path
+// instead of waiting for the next prompt to allocate a brand-new slug. This
+// closes the gap where a session that was replaced (rebound from the binding
+// store) is born with planFilePath="" and a plan-mode toggle could not
+// reconnect it to the conversation's existing plan. The on-disk existence
+// guard mirrors SendPrompt's restore path (prompt_dispatch.go); a path that
+// does not exist is ignored so a fresh slug is still allocated at prompt time.
+// An empty planFilePath (the common case for clients that do not track one)
+// is a no-op and preserves today's behavior.
+func (m *Manager) SetPlanMode(key string, enabled bool, allowedTools []string, source, planFilePath string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -20,6 +34,18 @@ func (m *Manager) SetPlanMode(key string, enabled bool, allowedTools []string, s
 	was := s.planMode
 	s.planMode = enabled
 	s.planModeTools = allowedTools
+	if enabled && s.planFilePath == "" && planFilePath != "" {
+		// Restore plan-file continuity on a plan-mode toggle. Only adopt the
+		// client-supplied path when it actually exists on disk — same guard as
+		// SendPrompt's restore branch. This prevents the next prompt from
+		// allocating a fresh slug and orphaning the conversation's real plan.
+		if _, err := os.Stat(planFilePath); err == nil {
+			s.planFilePath = planFilePath
+			utils.Info("PlanMode", fmt.Sprintf("SetPlanMode: key=%s restored planFile=%s from client (source=%s)", key, planFilePath, source))
+		} else {
+			utils.Info("PlanMode", fmt.Sprintf("SetPlanMode: key=%s client planFilePath=%s not on disk, leaving empty (source=%s)", key, planFilePath, source))
+		}
+	}
 	if !enabled {
 		// Preserve planFilePath across any harness-initiated disable. The
 		// plan ID is only retired when the engine session itself is

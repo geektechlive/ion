@@ -148,7 +148,7 @@ func TestLiveCliPlanModeEnterAndExit(t *testing.T) {
 
 	pc := newPlanEventCollector(mgr)
 
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err := mgr.SendPrompt(key,
 		"Create a brief plan for adding a hello() function to a Go file. "+
@@ -259,7 +259,7 @@ func TestLiveCliPlanModeGeneratesPlanFile(t *testing.T) {
 
 	pc := newPlanEventCollector(mgr)
 
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err := mgr.SendPrompt(key,
 		"Plan how to create a simple calculator module in Go with add, subtract, "+
@@ -343,7 +343,7 @@ func TestLiveCliPlanModeImplementFlow(t *testing.T) {
 
 	// ── Phase 1: Plan ──
 	t.Log("Phase 1: Plan mode — create a plan")
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err := mgr.SendPrompt(key,
 		"Plan how to create a file called hello.txt in the working directory "+
@@ -382,7 +382,7 @@ func TestLiveCliPlanModeImplementFlow(t *testing.T) {
 	t.Log("Phase 2: Auto mode — implement the plan")
 
 	// Switch to auto mode and start a fresh session (mirrors desktop behavior)
-	mgr.SetPlanMode(key, false, nil, "implement")
+	mgr.SetPlanMode(key, false, nil, "implement", "")
 	mgr.StopSession(key)
 
 	if _, err := mgr.StartSession(key, cfg); err != nil {
@@ -455,7 +455,7 @@ func TestLiveCliPlanModeToolRestriction(t *testing.T) {
 
 	pc := newPlanEventCollector(mgr)
 
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err := mgr.SendPrompt(key,
 		"Write the text 'MODIFIED' to the file target.txt in the working directory. "+
@@ -508,7 +508,7 @@ func TestLiveCliPlanModeViaManagerSendPrompt(t *testing.T) {
 
 	pc := newPlanEventCollector(mgr)
 
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err := mgr.SendPrompt(key,
 		"What is 2+2? Write a very brief plan that simply states the answer is 4. "+

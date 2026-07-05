@@ -60,14 +60,11 @@ func (m *Manager) snapshotHeartbeatInterval() time.Duration {
 //
 // Stop semantics: closing m.heartbeatStop terminates the goroutine on
 // the next tick or stop check. Closing is idempotent
-// (sync.Once-guarded in Shutdown).
-//
-// Per-tick cost: O(N) where N is the number of attached sessions. The
-// inner loop reads each session's currentSessionStatus under the
-// manager read-lock and emits a single event per session. Emission
-// happens outside the lock to avoid holding it across event-handler
-// callbacks that may block on socket writes.
+// (sync.Once-guarded in Shutdown). When the goroutine returns it closes
+// m.heartbeatDone so that Shutdown (which waits on that channel) can
+// unblock deterministically — no sleep-and-hope coordination required.
 func (m *Manager) runStatusHeartbeat() {
+	defer close(m.heartbeatDone)
 	// Initial wait of one full interval so a freshly-created Manager
 	// does not double-emit on startup (StartSession + immediate
 	// heartbeat would be redundant).
@@ -172,18 +169,26 @@ func (m *Manager) emitStatusSnapshot(key, reason string) {
 	lastWindow := s.lastContextWindow
 	lastModel := s.lastModel
 	lastCost := s.lastTotalCost
+	sessionID := s.conversationID
+	bgCount := 0
+	if s.dispatchRegistry != nil {
+		bgCount = len(s.dispatchRegistry.ActiveIDs())
+	}
 	m.mu.Unlock()
 
-	utils.Log("Session", fmt.Sprintf("status_snapshot_emitted key=%s state=%s reason=%s pendingDenials=%d model=%s contextPct=%d", key, sessionState, reason, len(pendingDenials), lastModel, lastPct))
+	utils.Log("Session", fmt.Sprintf("status_snapshot_emitted key=%s state=%s reason=%s pendingDenials=%d model=%s contextPct=%d backgroundAgents=%d", key, sessionState, reason, len(pendingDenials), lastModel, lastPct, bgCount))
 	m.emit(key, types.EngineEvent{
 		Type: "engine_status",
 		Fields: &types.StatusFields{
+			Label:             key,
 			State:             sessionState,
+			SessionID:         sessionID,
 			ContextPercent:    lastPct,
 			ContextWindow:     lastWindow,
 			Model:             lastModel,
 			TotalCostUsd:      lastCost,
 			PermissionDenials: pendingDenials,
+			BackgroundAgents:  bgCount,
 		},
 	})
 }

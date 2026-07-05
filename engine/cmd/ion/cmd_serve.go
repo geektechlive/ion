@@ -44,6 +44,14 @@ func cmdServe() {
 	utils.Log("main", fmt.Sprintf("config loaded: backend=%s model=%s providers=%d mcp=%d",
 		cfg.Backend, cfg.DefaultModel, len(cfg.Providers), len(cfg.McpServers)))
 
+	// Apply a soft heap ceiling (GOMEMLIMIT) so the GC holds resident memory below
+	// the level where the OS memory-pressure killer (macOS jetsam / Linux OOM) would
+	// SIGKILL this single daemon and take every hosted session down at once. The
+	// returned limit is reported by the memory monitor started below. This is a soft
+	// limit (GC pressure), never a hard cap, and it never overrides an operator's
+	// explicit GOMEMLIMIT env var. See cmd/ion/memlimit.go.
+	memLimitBytes := applyMemoryLimit(cfg)
+
 	network.InitNetwork(cfg.Network)
 
 	// Load models config (tiers, provider auto-detect) and register
@@ -163,14 +171,20 @@ func cmdServe() {
 	// Results cached and used by list_models; falls back to hardcoded catalog.
 	providers.StartModelDiscovery(resolver.ResolveKey, cfg.Providers)
 
-	if err := srv.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start: %s\n", err)
-		os.Exit(1)
-	}
-
+	// Acquire PID lock before binding the socket. If we get the lock, no
+	// other engine process is alive, so any existing socket file is stale
+	// and can be removed without probing. This prevents crash-loop
+	// scenarios where net.Dial succeeds on a stale socket whose listen
+	// backlog hasn't drained yet.
 	pidLock, lockErr := filelock.Acquire(pidPath())
 	if lockErr != nil {
 		fmt.Fprintf(os.Stderr, "Engine already running: %s\n", lockErr)
+		os.Exit(1)
+	}
+
+	utils.Log("main", "binding socket at "+sock)
+	if err := srv.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start: %s\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("Ion Engine v%s started (pid %d)\n", version, os.Getpid())
@@ -186,6 +200,15 @@ func cmdServe() {
 			beat(exitPath())
 		}
 	}()
+
+	// Memory-pressure monitor: periodically logs heap footprint against the soft
+	// ceiling and the live session count, escalating to ERROR near the high-water
+	// mark. Closes the observability blind spot — before this, nothing recorded
+	// memory pressure approaching the level where the OS kills the daemon. The
+	// session-count closure avoids a cmd→internal/server import concern.
+	startMemoryMonitor(memLimitBytes, func() int {
+		return len(srv.SessionManager().ListSessions())
+	})
 	if runtime.GOOS == "windows" {
 		fmt.Printf("Listening: tcp://%s\n", sock)
 	} else {
@@ -227,8 +250,11 @@ func cmdServe() {
 
 	// Wait for OS signal or shutdown IPC command (TS parity: server.ts calls
 	// process.exit(0) on shutdown; we unblock main instead).
+	// SIGHUP is included so that launchctl bootout (which sends SIGTERM) and
+	// parent-process death (which sends SIGHUP to non-detached children) both
+	// produce a graceful, breadcrumb-clean shutdown rather than an abrupt kill.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	select {
 	case sig := <-sigCh:
 		utils.Log("main", fmt.Sprintf("received signal: %s, shutting down", sig))

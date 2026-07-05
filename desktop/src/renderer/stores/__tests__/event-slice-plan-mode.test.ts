@@ -45,7 +45,6 @@ function makeTab() {
   return {
     id: 'tab1',
     title: 'Engine',
-    hasEngineExtension: false,
     engineProfileId: null,
     workingDirectory: '/tmp',
     hasChosenDirectory: true,
@@ -87,7 +86,7 @@ function buildHarness() {
       planFilePath: '/tmp/plan.md',
     }),
     backend: 'api',
-    sendMessage: vi.fn(),
+    submit: vi.fn(),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
@@ -117,7 +116,7 @@ describe('event-slice — engine_plan_mode_changed', () => {
     expect(mainInstance(state.conversationPanes, 'tab1')?.planFilePath).toBe('/tmp/plan.md')
   })
 
-  it('DOES set permissionMode to plan on planModeEnabled=true', () => {
+  it('DOES set instance permissionMode to plan on planModeEnabled=true (WI-001: instance, not parent)', () => {
     const { state, slice } = buildHarness()
     state.tabs[0].permissionMode = 'auto'
 
@@ -127,15 +126,17 @@ describe('event-slice — engine_plan_mode_changed', () => {
       planFilePath: '/tmp/plan.md',
     } as any)
 
-    expect(state.tabs[0].permissionMode).toBe('plan')
+    // WI-001: writes to the active INSTANCE, not the parent tab.
+    expect(mainInstance(state.conversationPanes, 'tab1')?.permissionMode).toBe('plan')
+    // Parent tab.permissionMode stays unchanged (sticky-parent invariant).
+    expect(state.tabs[0].permissionMode).toBe('auto')
   })
 
-  it('appends a "Plan created" divider system message on planModeEnabled=true', () => {
-    // Regression test: the event-slice handler also seeds a divider into
-    // the CLI tab's `main` instance messages so the user can see when the
-    // plan phase started. The earlier test only verified permissionMode;
-    // this one pins the divider-insertion path that engine-event-slice.ts
-    // mirrors for the engine-tab path.
+  it('does NOT append a divider on planModeEnabled=true (entry no longer draws the marker)', () => {
+    // Plan-mode ENTRY happens before the model has written the plan file, so a
+    // divider here would be mispositioned and its link would not resolve. The
+    // divider is now driven by engine_plan_file_written (the actual write), not
+    // by plan-mode entry. Entry still flips permissionMode + planFilePath.
     const { state, slice } = buildHarness()
     const messagesBefore = mainInstance(state.conversationPanes, 'tab1')!.messages.length
 
@@ -146,12 +147,11 @@ describe('event-slice — engine_plan_mode_changed', () => {
       planSlug: 'my-plan',
     } as any)
 
-    expect(mainInstance(state.conversationPanes, 'tab1')!.messages.length).toBe(messagesBefore + 1)
-    const last = mainInstance(state.conversationPanes, 'tab1')!.messages.at(-1)!
-    expect(last.role).toBe('system')
-    expect(last.content).toMatch(/^── Plan created at /)
-    expect(last.content).toContain('my-plan')
-    expect(last.planFilePath).toBe('/tmp/plan.md')
+    // No divider inserted on entry.
+    expect(mainInstance(state.conversationPanes, 'tab1')!.messages.length).toBe(messagesBefore)
+    // But state still updates: permissionMode → plan, planFilePath propagated.
+    expect(mainInstance(state.conversationPanes, 'tab1')?.permissionMode).toBe('plan')
+    expect(mainInstance(state.conversationPanes, 'tab1')?.planFilePath).toBe('/tmp/plan.md')
   })
 
   it('does NOT append a divider on planModeEnabled=false', () => {
@@ -171,8 +171,223 @@ describe('event-slice — engine_plan_mode_changed', () => {
   })
 })
 
+describe('event-slice — engine_plan_file_written (divider trigger)', () => {
+  it('appends a "Plan created" divider on operation=created, carrying planFilePath', () => {
+    // The accurate divider trigger: the engine confirms a Write/Edit landed on
+    // the plan file. operation="created" → "Plan created" marker. The divider
+    // carries planFilePath so its slug is a clickable link to the plan preview.
+    const { state, slice } = buildHarness()
+    const messagesBefore = mainInstance(state.conversationPanes, 'tab1')!.messages.length
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_file_written' as any,
+      planWriteOperation: 'created',
+      planFilePath: '/tmp/plan.md',
+      planSlug: 'my-plan',
+    } as any)
+
+    expect(mainInstance(state.conversationPanes, 'tab1')!.messages.length).toBe(messagesBefore + 1)
+    const last = mainInstance(state.conversationPanes, 'tab1')!.messages.at(-1)!
+    expect(last.role).toBe('system')
+    expect(last.content).toMatch(/^── Plan created at /)
+    expect(last.content).toContain('my-plan')
+    expect(last.planFilePath).toBe('/tmp/plan.md')
+  })
+
+  it('appends a "Plan updated" divider on operation=updated, carrying planFilePath', () => {
+    // operation="updated" → "Plan updated" marker. The engine carries the
+    // discriminator (it observed the file already had content), so the client
+    // trusts it rather than re-deriving from scrollback.
+    const { state, slice } = buildHarness()
+    const messagesBefore = mainInstance(state.conversationPanes, 'tab1')!.messages.length
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_file_written' as any,
+      planWriteOperation: 'updated',
+      planFilePath: '/tmp/plan.md',
+      planSlug: 'my-plan',
+    } as any)
+
+    expect(mainInstance(state.conversationPanes, 'tab1')!.messages.length).toBe(messagesBefore + 1)
+    const last = mainInstance(state.conversationPanes, 'tab1')!.messages.at(-1)!
+    expect(last.content).toMatch(/^── Plan updated at /)
+    expect(last.content).toContain('my-plan')
+    expect(last.planFilePath).toBe('/tmp/plan.md')
+  })
+
+  it('defaults to "Plan created" when operation is missing or unknown', () => {
+    const { state, slice } = buildHarness()
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_file_written' as any,
+      planFilePath: '/tmp/plan.md',
+      planSlug: 'my-plan',
+    } as any)
+    const last = mainInstance(state.conversationPanes, 'tab1')!.messages.at(-1)!
+    expect(last.content).toMatch(/^── Plan created at /)
+  })
+
+  it('propagates planFilePath onto the instance when not already set', () => {
+    const { state, slice } = buildHarness()
+    const inst = mainInstance(state.conversationPanes, 'tab1')!
+    inst.planFilePath = undefined as any
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_file_written' as any,
+      planWriteOperation: 'created',
+      planFilePath: '/tmp/new-plan.md',
+      planSlug: 'new-plan',
+    } as any)
+
+    expect(mainInstance(state.conversationPanes, 'tab1')?.planFilePath).toBe('/tmp/new-plan.md')
+  })
+})
+
+describe('event-slice — engine_plan_proposal as card trigger (Bug #2)', () => {
+  it('synthesizes an ExitPlanMode permissionDenied when none is present', () => {
+    // The proposal event is a first-class card trigger: even if task_complete
+    // loses the control-plane race, the card must render from the proposal.
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionDenied = null
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'exit',
+      planFilePath: '/tmp/plan.md',
+      planSlug: 'my-plan',
+    } as any)
+
+    const denied = mainInstance(state.conversationPanes, 'tab1')!.permissionDenied
+    expect(denied).not.toBeNull()
+    expect(denied!.tools).toHaveLength(1)
+    expect(denied!.tools[0].toolName).toBe('ExitPlanMode')
+    expect(denied!.tools[0].toolInput?.planFilePath).toBe('/tmp/plan.md')
+  })
+
+  it('does NOT overwrite an existing permissionDenied (idempotent with task_complete)', () => {
+    // If task_complete already set the denial, the proposal must not clobber it
+    // — same card, not a duplicate or a replacement with a synthesized id.
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionDenied = {
+      tools: [{ toolName: 'ExitPlanMode', toolUseId: 'real-engine-id', toolInput: { planFilePath: '/tmp/plan.md' } }],
+    }
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'exit',
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    const denied = mainInstance(state.conversationPanes, 'tab1')!.permissionDenied
+    expect(denied!.tools).toHaveLength(1)
+    // The original engine id is preserved — the synthesized branch did not run.
+    expect(denied!.tools[0].toolUseId).toBe('real-engine-id')
+  })
+
+  it('does NOT synthesize a denial for a non-exit proposal kind', () => {
+    const { state, slice } = buildHarness()
+    const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+    inst0.permissionDenied = null
+
+    slice.handleNormalizedEvent!('tab1', {
+      type: 'engine_plan_proposal' as any,
+      planProposalKind: 'something_else',
+      planFilePath: '/tmp/plan.md',
+    } as any)
+
+    expect(mainInstance(state.conversationPanes, 'tab1')!.permissionDenied).toBeNull()
+  })
+})
+
+describe('event-slice — engine_plan_proposal Layer 2 is an observability assertion (Bug #1)', () => {
+  // The engine dropped-entry-event defect is now fixed (run_key_binding routing
+  // fix). Layer 2 was downgraded from a silent recovery mutation to a pure
+  // regression DETECTOR: on a kind="exit" proposal that arrives when the
+  // instance is not already in plan mode, it warns and does NOT auto-correct.
+
+  it('warns and does NOT mutate permissionMode when the instance is at auto (regression detector, no silent correction)', () => {
+    // Critical regression test: on the OLD silent-mutation code this would flip
+    // permissionMode to 'plan'. On the new observability code the mode STAYS
+    // 'auto' and a warning is emitted instead. Auto-correcting here would mask
+    // the very engine defect the routing fix was meant to eliminate.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { state, slice } = buildHarness()
+      const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+      inst0.permissionMode = 'auto'
+      inst0.permissionDenied = null
+
+      slice.handleNormalizedEvent!('tab1', {
+        type: 'engine_plan_proposal' as any,
+        planProposalKind: 'exit',
+        planFilePath: '/tmp/plan.md',
+      } as any)
+
+      // No silent correction: the instance stays exactly where it was.
+      expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('auto')
+      // The regression is surfaced as a warning.
+      expect(warnSpy).toHaveBeenCalled()
+      const warned = warnSpy.mock.calls.some(
+        (c) => typeof c[0] === 'string' && c[0].includes('permissionMode=auto') && c[0].includes('NOT auto-correcting'),
+      )
+      expect(warned).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('does NOT warn and does NOT mutate when the instance is already at plan (entry event delivered normally)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { state, slice } = buildHarness()
+      const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+      inst0.permissionMode = 'plan'
+      inst0.permissionDenied = null
+
+      slice.handleNormalizedEvent!('tab1', {
+        type: 'engine_plan_proposal' as any,
+        planProposalKind: 'exit',
+        planFilePath: '/tmp/plan.md',
+      } as any)
+
+      // Stays plan (no mutation) and no regression warning is emitted.
+      expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('plan')
+      const warnedLayer2 = warnSpy.mock.calls.some(
+        (c) => typeof c[0] === 'string' && c[0].includes('NOT auto-correcting'),
+      )
+      expect(warnedLayer2).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('does NOT warn or mutate for a non-exit proposal kind', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { state, slice } = buildHarness()
+      const inst0 = mainInstance(state.conversationPanes, 'tab1')!
+      inst0.permissionMode = 'auto'
+
+      slice.handleNormalizedEvent!('tab1', {
+        type: 'engine_plan_proposal' as any,
+        planProposalKind: 'something_else',
+        planFilePath: '/tmp/plan.md',
+      } as any)
+
+      expect(mainInstance(state.conversationPanes, 'tab1')!.permissionMode).toBe('auto')
+      const warnedLayer2 = warnSpy.mock.calls.some(
+        (c) => typeof c[0] === 'string' && c[0].includes('NOT auto-correcting'),
+      )
+      expect(warnedLayer2).toBe(false)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+})
+
 describe('event-slice — task_complete with ExitPlanMode denial', () => {
-  it('populates permissionDenied and does NOT schedule sendMessage while in plan mode', () => {
+  it('populates permissionDenied and does NOT schedule submit while in plan mode', () => {
     const { state, slice } = buildHarness()
 
     slice.handleNormalizedEvent!('tab1', {
@@ -198,6 +413,6 @@ describe('event-slice — task_complete with ExitPlanMode denial', () => {
     expect(denied!.tools[0].toolName).toBe('ExitPlanMode')
 
     // Confirm no synthetic "Plan mode is not active..." message was scheduled.
-    expect(state.sendMessage).not.toHaveBeenCalled()
+    expect(state.submit).not.toHaveBeenCalled()
   })
 })

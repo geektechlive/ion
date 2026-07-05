@@ -63,6 +63,15 @@ const (
 	HookModelSelect   = "model_select"
 	HookUserBash      = "user_bash"
 
+	// HookSlashCommandResolved fires after the engine resolves and expands a
+	// slash-command invocation, before the expanded body is committed as the
+	// LLM-visible prompt. Handlers see the full frontmatter map + invocation
+	// metadata and may return a string to override the expanded body — the
+	// extensibility seam that lets an extension-hosted conversation handle a
+	// command differently than a plain one (e.g. branch on a frontmatter key the
+	// engine ignores). Influence hook; last non-nil string result wins.
+	HookSlashCommandResolved = "slash_command_resolved"
+
 	// Per-tool call hooks
 	HookBashToolCall  = "bash_tool_call"
 	HookReadToolCall  = "read_tool_call"

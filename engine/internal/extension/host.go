@@ -71,7 +71,7 @@ type Host struct {
 	// holds h.mu for the entire init handshake, and notifications can
 	// arrive mid-handshake before the init response.
 	notifMu        sync.RWMutex
-	onSendMessage  func(text string)
+	onSendMessage  func(SendPromptPayload)
 	persistentEmit func(types.EngineEvent)
 
 	// persistentPublishResource is the fallback for ext/publish_resource
@@ -166,8 +166,29 @@ type Host struct {
 	// inflightLLMMu. See host_llm_call_cancel.go.
 	inflightLLMCalls map[int64]context.CancelFunc
 	inflightLLMMu    sync.Mutex
+
+	// childQuestions maps a dispatch-question key (dispatchId + ":" +
+	// requestId) to a chan childQuestionReply. When a dispatched child calls
+	// AskUserQuestion, the OnChildQuestion callback wired in host_rpc.go
+	// stores a channel here, sends a dispatch_child_question notification to
+	// the TS SDK, and blocks on the channel. The TS SDK answers via an
+	// ext/answer_dispatch_question RPC, whose handler looks up the channel by
+	// key and delivers the reply. This mirrors the ext/elicit block-and-resume
+	// pattern but lives entirely on the Host because dispatch callbacks fire
+	// outside any hook/tool context (background dispatches resolve after the
+	// parent run has moved on). sync.Map is used so concurrent dispatches do
+	// not contend on a single mutex.
+	childQuestions sync.Map
 }
 
+// childQuestionReply carries the dispatcher's answer to a child's
+// AskUserQuestion, delivered over the per-question channel registered in
+// Host.childQuestions. Answer is the text injected as the child's
+// AskUserQuestion tool result; Cancelled=true terminates the child run.
+type childQuestionReply struct {
+	Answer    string
+	Cancelled bool
+}
 
 // SetPersistentEmit sets a persistent emit function that handles ext/emit
 // notifications when no tool or hook context is active (e.g., background tasks).
@@ -250,10 +271,36 @@ func (h *Host) SetExtensionDir(dir string) {
 	h.loadedConfig.ExtensionDir = dir
 }
 
+// SendPromptPayload is the full set of per-prompt options carried when an
+// extension queues a follow-up prompt via ext/send_message (or ext/send_prompt
+// without an active hook context). It mirrors the fields the active-hook path
+// threads through to PromptOverrides so the two dispatch paths converge on
+// identical run-configuration — there is no per-feature divergence between a
+// prompt sent from a live hook context and one sent from a timer/scheduler
+// background callback.
+//
+// Carried as a struct (rather than positional callback args) so future
+// per-prompt options become struct fields instead of forcing every
+// onSendMessage wiring site to re-widen a positional signature. This is the
+// same rationale PromptOverrides exists for on the session side.
+type SendPromptPayload struct {
+	// Text is the prompt text to dispatch. Required.
+	Text string
+	// Model is an optional per-prompt model override (tier alias or model id).
+	// Empty means "use the session's resolved model".
+	Model string
+	// BashAllowlistAdditions are per-prompt, run-scoped plan-mode Bash command
+	// prefixes, unioned with the session allowlist for the single run this
+	// prompt starts. Never persisted on the session. Empty/nil is a no-op.
+	BashAllowlistAdditions []string
+}
+
 // SetOnSendMessage sets the callback invoked when the extension sends an
 // ext/send_message notification. The session manager uses this to queue
-// follow-up prompts from extension-initiated messages.
-func (h *Host) SetOnSendMessage(fn func(text string)) {
+// follow-up prompts from extension-initiated messages. The callback receives
+// the full SendPromptPayload (text + model + bash-allowlist additions) so the
+// fallback path carries the same run configuration as the active-hook path.
+func (h *Host) SetOnSendMessage(fn func(SendPromptPayload)) {
 	h.notifMu.Lock()
 	defer h.notifMu.Unlock()
 	h.onSendMessage = fn

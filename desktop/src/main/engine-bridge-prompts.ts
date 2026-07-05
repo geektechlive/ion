@@ -20,10 +20,25 @@ export interface SendPromptArgs {
   appendSystemPrompt?: string
   imageAttachments?: ImageAttachmentPayload[]
   implementationPhase?: boolean
+  /**
+   * Per-prompt extended-thinking effort (live per-conversation control).
+   * 'off'/undefined → no thinking directive. Mapped onto the wire
+   * `thinkingEffort` field, which the engine turns into RunOptions.Thinking.
+   */
+  thinkingEffort?: string
   enterPlanModeDescription?: string
   planModeSparseReminder?: string
   planFilePath?: string
   bashAllowlistAdditionsForThisPrompt?: string[]
+  /**
+   * When true, instruct the engine to treat `text` as a slash invocation
+   * (`/name args`) and own the resolution + expansion: resolve the template
+   * across the engine's command roots, expand it, feed the expanded body to
+   * the model, and persist the RAW invocation as the displayed user turn.
+   * Sent on the wire only when truthy (mirrors the engine's omitempty
+   * `resolveSlash` field).
+   */
+  resolveSlash?: boolean
 }
 
 /**
@@ -50,6 +65,10 @@ export function buildSendPromptMessage(args: SendPromptArgs): Record<string, unk
   // is omitempty, so this round-trips cleanly. See ADR-003 framing in
   // the plan-mode docs for why structured flags beat prompt prose.
   if (args.implementationPhase) msg.implementationPhase = true
+  // Per-prompt thinking effort. Only attach a meaningful, non-"off" level so
+  // the engine's omitempty ThinkingEffort round-trips cleanly and "off"/absent
+  // both mean "no thinking this prompt".
+  if (args.thinkingEffort && args.thinkingEffort !== 'off') msg.thinkingEffort = args.thinkingEffort
   // Harness-supplied EnterPlanMode tool description (ADR-004). The
   // engine's RunOptions.EnterPlanModeDescription field is omitempty —
   // only send when non-empty so the wire format stays minimal. The
@@ -74,6 +93,11 @@ export function buildSendPromptMessage(args: SendPromptArgs): Record<string, unk
   if (args.bashAllowlistAdditionsForThisPrompt && args.bashAllowlistAdditionsForThisPrompt.length > 0) {
     msg.bashAllowlistAdditionsForThisPrompt = args.bashAllowlistAdditionsForThisPrompt
   }
+  // Tells the engine to resolve + expand `text` as a slash invocation
+  // rather than sending it as a plain message. Only attached when truthy so
+  // the engine's omitempty `resolveSlash` field round-trips cleanly and an
+  // absent value means "plain message" (unchanged behavior).
+  if (args.resolveSlash) msg.resolveSlash = true
   return msg
 }
 
@@ -91,5 +115,5 @@ export function buildSendPromptLogLine(args: SendPromptArgs): string {
   const descLen = args.enterPlanModeDescription?.length ?? 0
   const reminderLen = args.planModeSparseReminder?.length ?? 0
   const bashAddCount = args.bashAllowlistAdditionsForThisPrompt?.length ?? 0
-  return `sendPrompt: key=${args.key} len=${args.text.length} model=${args.model ?? 'default'} hasSysPrompt=${!!args.appendSystemPrompt} images=${attCount} implementationPhase=${args.implementationPhase ?? false} enterPlanModeDescLen=${descLen} planModeSparseReminderLen=${reminderLen} planFilePath=${args.planFilePath ?? 'none'} bashAdditions=${bashAddCount}`
+  return `sendPrompt: key=${args.key} len=${args.text.length} model=${args.model ?? 'default'} hasSysPrompt=${!!args.appendSystemPrompt} images=${attCount} implementationPhase=${args.implementationPhase ?? false} enterPlanModeDescLen=${descLen} planModeSparseReminderLen=${reminderLen} planFilePath=${args.planFilePath ?? 'none'} bashAdditions=${bashAddCount} resolveSlash=${args.resolveSlash ?? false}`
 }

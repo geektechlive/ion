@@ -28,11 +28,35 @@ export function isClearDivider(content: string): boolean {
 /**
  * Format the divider system message inserted into scrollback when the user
  * clicks "Implement" on a plan. Mirrors `formatClearDivider` but signals an
- * implementation-phase transition rather than a `/clear` checkpoint.
+ * implementation-phase transition rather than a `/clear` checkpoint. If `slug`
+ * is provided it is appended after a ` · ` separator (same shape as the
+ * plan-created / plan-updated dividers) so the user can identify which plan is
+ * being implemented and the renderer can make the slug a clickable link.
  */
-export function formatImplementDivider(at: Date): string {
+export function formatImplementDivider(at: Date, slug?: string): string {
   const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (slug) {
+    return `── Implementing plan at ${time} · ${slug} ──`
+  }
   return `── Implementing plan at ${time} ──`
+}
+
+/** Sentinel-prefix check for implement dividers. */
+export function isImplementDivider(content: string): boolean {
+  return content.startsWith('── Implementing plan')
+}
+
+/**
+ * Extract the human-readable slug portion of a plan file path: the basename
+ * minus the trailing `.md` extension. Mirrors the engine's PlanSlugFromPath
+ * (engine/internal/types/normalized_event.go) so the implement divider shows
+ * the same slug the engine puts on the plan-created / plan-updated dividers.
+ * Empty/undefined path → empty string.
+ */
+export function planSlugFromPath(path?: string | null): string {
+  if (!path) return ''
+  const base = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
+  return base.endsWith('.md') ? base.slice(0, -3) : base
 }
 
 /**
@@ -60,6 +84,27 @@ export function formatPlanCreatedDivider(at: Date, slug?: string): string {
 /** Sentinel-prefix check for plan-created dividers. */
 export function isPlanCreatedDivider(content: string): boolean {
   return content.startsWith('── Plan created')
+}
+
+/**
+ * Format the divider system message inserted into scrollback when an
+ * EXISTING plan is written again (a subsequent plan-mode entry for the same
+ * plan file). Mirrors `formatPlanCreatedDivider` but signals an update of the
+ * same plan rather than the first creation. The created-vs-updated decision is
+ * made by the consumer: the first divider for a given plan path is "created",
+ * any subsequent divider for the same path is "updated".
+ */
+export function formatPlanUpdatedDivider(at: Date, slug?: string): string {
+  const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (slug) {
+    return `── Plan updated at ${time} · ${slug} ──`
+  }
+  return `── Plan updated at ${time} ──`
+}
+
+/** Sentinel-prefix check for plan-updated dividers. */
+export function isPlanUpdatedDivider(content: string): boolean {
+  return content.startsWith('── Plan updated')
 }
 
 /**
@@ -96,8 +141,8 @@ export function buildClearDividerRemoteEvent(
   key: string,
   at: Date,
 ):
-  | { type: 'engine_harness_message'; tabId: string; instanceId: string; message: string; source: string }
-  | { type: 'message_added'; tabId: string; message: { id: string; role: 'system'; content: string; timestamp: number; source: 'desktop' } } {
+  | { type: 'desktop_harness_message'; tabId: string; instanceId: string; message: string; source: string }
+  | { type: 'desktop_message_added'; tabId: string; message: { id: string; role: 'system'; content: string; timestamp: number; source: 'desktop' } } {
   return buildDividerRemoteEvent(key, formatClearDivider(at), at)
 }
 
@@ -111,20 +156,20 @@ export function buildClearDividerRemoteEvent(
  *
  * The `key` parameter determines the event shape:
  *
- *   - `${tabId}:${instanceId}` → `engine_harness_message`
- *   - bare `${tabId}`          → `message_added`
+ *   - `${tabId}:${instanceId}` → `desktop_harness_message`
+ *   - bare `${tabId}`          → `desktop_message_added`
  */
 export function buildDividerRemoteEvent(
   key: string,
   content: string,
   at: Date,
 ):
-  | { type: 'engine_harness_message'; tabId: string; instanceId: string; message: string; source: string }
-  | { type: 'message_added'; tabId: string; message: { id: string; role: 'system'; content: string; timestamp: number; source: 'desktop' } } {
+  | { type: 'desktop_harness_message'; tabId: string; instanceId: string; message: string; source: string }
+  | { type: 'desktop_message_added'; tabId: string; message: { id: string; role: 'system'; content: string; timestamp: number; source: 'desktop' } } {
   const colonIdx = key.indexOf(':')
   if (colonIdx >= 0) {
     return {
-      type: 'engine_harness_message',
+      type: 'desktop_harness_message',
       tabId: key.slice(0, colonIdx),
       instanceId: key.slice(colonIdx + 1),
       message: content,
@@ -132,7 +177,7 @@ export function buildDividerRemoteEvent(
     }
   }
   return {
-    type: 'message_added',
+    type: 'desktop_message_added',
     tabId: key,
     message: {
       id: `clear-${at.getTime()}`,

@@ -13,11 +13,12 @@ export function InlineEditDiff({ oldString, newString }: InlineEditDiffProps) {
 
   return (
     <div
-      className="text-[11px] leading-[1.5] rounded"
+      className="leading-[1.5] rounded"
       style={{
         margin: '4px 0 0 0',
         fontFamily: 'monospace',
         border: `1px solid ${colors.toolBorder}`,
+        fontSize: 'var(--ion-conv-font-size, 11px)',
       }}
     >
       {oldLines.map((line, i) => (

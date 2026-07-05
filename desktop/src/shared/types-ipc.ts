@@ -4,6 +4,7 @@ export const IPC = {
   // Request-response (renderer → main)
   START: 'ion:start',
   CREATE_TAB: 'ion:create-tab',
+  ADOPT_TAB: 'ion:adopt-tab',
   PROMPT: 'ion:prompt',
   CANCEL: 'ion:cancel',
   STEER: 'ion:steer',
@@ -26,14 +27,17 @@ export const IPC = {
   PASTE_IMAGE: 'ion:paste-image',
   GET_DIAGNOSTICS: 'ion:get-diagnostics',
   RESPOND_PERMISSION: 'ion:respond-permission',
+  RESPOND_ELICITATION: 'ion:respond-elicitation',
   APPROVE_DENIED_TOOLS: 'ion:approve-denied-tools',
   INIT_SESSION: 'ion:init-session',
   ENSURE_ENGINE_SESSION: 'ion:ensure-engine-session',
   RESET_TAB_SESSION: 'ion:reset-tab-session',
+  RESTART_TAB_SESSION: 'ion:restart-tab-session',
   ANIMATE_HEIGHT: 'ion:animate-height',
   LIST_SESSIONS: 'ion:list-sessions',
   LIST_ALL_SESSIONS: 'ion:list-all-sessions',
   LOAD_SESSION: 'ion:load-session',
+  CONVERSATION_EXISTS: 'ion:conversation-exists',
   READ_PLAN: 'ion:read-plan',
   READ_IMAGE_DATA_URL: 'ion:read-image-data-url',
 
@@ -100,6 +104,9 @@ export const IPC = {
 
   // Batch conversation loading (all sessions in a chain in one roundtrip)
   LOAD_CHAIN_HISTORY: 'ion:load-chain-history',
+
+  // Enterprise policy
+  GET_ENTERPRISE_POLICY: 'ion:get-enterprise-policy',
 
   // Backend mode
   GET_BACKEND: 'ion:get-backend',
@@ -201,6 +208,7 @@ export const IPC = {
   REMOTE_USER_MESSAGE: 'ion:remote-user-message',
   REMOTE_BASH_COMMAND: 'ion:remote-bash-command',
   REMOTE_SET_PERMISSION_MODE: 'ion:remote-set-permission-mode',
+  REMOTE_SET_THINKING_EFFORT: 'ion:remote-set-thinking-effort',
   REMOTE_CLOSE_TAB: 'ion:remote-close-tab',
   REMOTE_RENAME_TAB: 'ion:remote-rename-tab',
   REMOTE_RENAME_TERMINAL_INSTANCE: 'ion:remote-rename-terminal-instance',
@@ -230,7 +238,6 @@ export const IPC = {
 
   // Engine (native extension runtime)
   ENGINE_START: 'ion:engine-start',
-  ENGINE_PROMPT: 'ion:engine-prompt',
   ENGINE_ABORT: 'ion:engine-abort',
   ENGINE_ABORT_AGENT: 'ion:engine-abort-agent',
   ENGINE_DIALOG_RESPONSE: 'ion:engine-dialog-response',
@@ -239,6 +246,7 @@ export const IPC = {
   ENGINE_EVENT: 'ion:engine-event',
   ENGINE_REMAP_SESSION: 'ion:engine-remap-session',
   ENGINE_BROADCAST_HISTORY: 'ion:engine-broadcast-history',
+  ENGINE_GET_CONTEXT_BREAKDOWN: 'ion:engine-get-context-breakdown',
 
   // Resource focus tracking
   NOTIFY_TAB_FOCUS: 'ion:notify-tab-focus',

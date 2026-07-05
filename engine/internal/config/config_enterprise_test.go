@@ -491,5 +491,95 @@ func TestIsMcpAllowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// NewConversationDefaults merge
+// ---------------------------------------------------------------------------
+
+// TestMergeEnterprisePartial_NewConversationDefaults verifies that the drop-in merge
+// carries a non-nil NewConversationDefaults pointer from the overlay onto the result
+// (whole-pointer replacement, matching the Sandbox/Network/Telemetry pattern).
+func TestMergeEnterprisePartial_NewConversationDefaults(t *testing.T) {
+	base := &types.EnterpriseConfig{
+		AllowedModels: []string{"claude-sonnet-4-6"},
+	}
+	overlay := &types.EnterpriseConfig{
+		NewConversationDefaults: &types.NewConversationDefaultsPolicy{
+			BaseDirectory:   "/corp/projects",
+			EngineProfileId: "profile-corp",
+			Locked:          true,
+		},
+	}
+
+	result := mergeEnterprisePartial(base, overlay)
+
+	if result.NewConversationDefaults == nil {
+		t.Fatal("expected NewConversationDefaults to be set from overlay")
+	}
+	if result.NewConversationDefaults.BaseDirectory != "/corp/projects" {
+		t.Errorf("expected BaseDirectory=/corp/projects, got %q", result.NewConversationDefaults.BaseDirectory)
+	}
+	if result.NewConversationDefaults.EngineProfileId != "profile-corp" {
+		t.Errorf("expected EngineProfileId=profile-corp, got %q", result.NewConversationDefaults.EngineProfileId)
+	}
+	if !result.NewConversationDefaults.Locked {
+		t.Error("expected Locked=true")
+	}
+	// Base AllowedModels must be preserved (unrelated field)
+	if len(result.AllowedModels) != 1 || result.AllowedModels[0] != "claude-sonnet-4-6" {
+		t.Errorf("AllowedModels not preserved: %v", result.AllowedModels)
+	}
+}
+
+// TestMergeEnterprisePartial_NewConversationDefaults_NilOverlayPreservesBase verifies
+// that a nil NewConversationDefaults in the overlay does not wipe a non-nil base value
+// (the "overlay wins only when set" semantics of every pointer field).
+func TestMergeEnterprisePartial_NewConversationDefaults_NilOverlayPreservesBase(t *testing.T) {
+	base := &types.EnterpriseConfig{
+		NewConversationDefaults: &types.NewConversationDefaultsPolicy{
+			BaseDirectory: "/base/dir",
+			Locked:        false,
+		},
+	}
+	// Overlay does not set NewConversationDefaults
+	overlay := &types.EnterpriseConfig{
+		AllowedModels: []string{"claude-opus-4"},
+	}
+
+	result := mergeEnterprisePartial(base, overlay)
+
+	if result.NewConversationDefaults == nil {
+		t.Fatal("expected NewConversationDefaults to be preserved from base when overlay is nil")
+	}
+	if result.NewConversationDefaults.BaseDirectory != "/base/dir" {
+		t.Errorf("expected preserved BaseDirectory=/base/dir, got %q", result.NewConversationDefaults.BaseDirectory)
+	}
+}
+
+// TestMergeEnterprisePartial_NewConversationDefaults_PlainConversation verifies that
+// an empty EngineProfileId (the "plain conversation" sentinel) is round-tripped
+// correctly through the merge (empty string is not omitted by omitempty when
+// the struct pointer is non-nil).
+func TestMergeEnterprisePartial_NewConversationDefaults_PlainConversation(t *testing.T) {
+	base := &types.EnterpriseConfig{}
+	overlay := &types.EnterpriseConfig{
+		NewConversationDefaults: &types.NewConversationDefaultsPolicy{
+			BaseDirectory:   "/work",
+			EngineProfileId: "", // explicit plain conversation
+		},
+	}
+
+	result := mergeEnterprisePartial(base, overlay)
+
+	if result.NewConversationDefaults == nil {
+		t.Fatal("expected NewConversationDefaults from overlay")
+	}
+	if result.NewConversationDefaults.EngineProfileId != "" {
+		t.Errorf("expected empty EngineProfileId (plain conversation), got %q", result.NewConversationDefaults.EngineProfileId)
+	}
+	if result.NewConversationDefaults.BaseDirectory != "/work" {
+		t.Errorf("expected BaseDirectory=/work, got %q", result.NewConversationDefaults.BaseDirectory)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Config Loading (file-based)
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@
 | Relay | `relay/` | Go |
 | iOS | `ios/IonRemote/` | Swift |
 
-Each component has its own `AGENTS.md` with subsystem-specific rules.
+Engine, desktop, and iOS each have their own `AGENTS.md` with subsystem-specific rules.
 
 ## Extension SDK source location
 
@@ -54,23 +54,39 @@ Run `make hooks` once per clone to point git at `.githooks/`. The pre-push hook 
 
 **Never run `make desktop`.** It builds, packages, installs to `/Applications`, and relaunches the desktop app. If you are running inside an Ion session, this kills the engine process hosting your conversation and often loses conversation state. The user runs `make desktop` manually when they are ready. If a desktop rebuild is needed, tell the user to run it.
 
-## Quality gates (must pass before merge)
+## Quality gates (run while developing)
+
+These are the gates to run **during normal development** — they are cheap, fast, and scoped to the work in front of you. Run them as you iterate. Do **not** run the heavy gates listed in the next subsection while developing.
 
 | Gate | Command |
 |------|---------|
 | File-size cap | `make check-file-sizes` |
-| Contract sync | `make check-contracts` |
-| Engine tests + race | `cd engine && go test -race ./...` |
-| Engine integration | `cd engine && go test -race -tags integration ./tests/integration/...` |
-| Engine vuln | `cd engine && govulncheck ./...` |
-| Engine lint | `cd engine && golangci-lint run` (full mode on both PR and main) |
-| Relay tests + race | `cd relay && go test -race ./...` |
+| Contract sync | `make check-contracts` (only when you change a shared type — see "Cross-language contract sync") |
+| Engine lint | `cd engine && golangci-lint run` (scope to touched packages while iterating: `golangci-lint run ./internal/<pkg>/...`) |
+| Engine tests (scoped) | `cd engine && go test ./internal/<touched-pkg>/...` — run the packages you changed, with `-race` when concurrency is involved. Do **not** routinely run the full `go test ./...` sweep while iterating. |
 | Desktop typecheck | `cd desktop && npm run typecheck` |
-| Desktop tests | `cd desktop && npm test` |
-| Desktop audit | `cd desktop && npm audit --audit-level=high --omit=dev` |
-| iOS build | `make ios-check` |
+| Desktop tests (scoped) | `cd desktop && npm test -- <pattern>` for the area you touched. The full `npm test` run belongs to the pre-PR sweep. |
 
 CI: `.github/workflows/build.yml` (release), `.github/workflows/quality.yml` (per-PR).
+
+### Heavy gates — never run during development
+
+The following gates are **slow** — Docker container spin-up, full-network vulnerability scan, full multi-package race runs, full iOS build. **Never run them during normal development.** Re-running them mid-session burns wall-clock and tokens for no added safety, because they run once, authoritatively, at PR time.
+
+| Heavy gate | Command |
+|------------|---------|
+| Linux parity | `make test-linux` (and `make test-linux-engine` / `make test-linux-desktop`) |
+| Full engine race suite | `cd engine && go test -race ./...` |
+| Engine integration | `cd engine && go test -race -tags integration ./tests/integration/...` |
+| Engine vuln | `cd engine && govulncheck ./...` |
+| Relay tests + race | `cd relay && go test -race ./...` |
+| Desktop audit | `cd desktop && npm audit --audit-level=high --omit=dev` |
+| Full desktop suite | `cd desktop && npm test` |
+| iOS build | `make ios-check` |
+
+**The heavy gates run at PR time, not during development.** CI (`quality.yml`) is the authoritative gate: it runs the full set above — race suites, integration, `govulncheck`, `npm audit`, iOS build — on **every PR**, on `ubuntu-latest`. Locally, `/create-pr` runs the **Linux parity** subset (`make test-linux`, which executes the full race suite + desktop tests inside Linux containers) **once**, right before pushing, to catch Linux-only failures before they burn Actions minutes on a red build. The only times the agent runs a heavy gate are (a) when `/create-pr` explicitly instructs it to, or (b) when the user explicitly asks for it (e.g. to reproduce a known Linux-only failure). Outside those two cases, the heavy gates are off-limits during development — CI is what proves them green on the PR.
+
+> **Why `/create-pr` runs `make test-linux`.** Local validation runs on macOS; the blocking CI gates run on `ubuntu-latest`. `go test -race ./...` (the `engine-test` job) and `npm test` (the `desktop-test` job) run on Linux in CI, so a macOS-only pass is **not** sufficient — OS-sensitive failures (path semantics, file-watcher timing, locale, goroutine starvation under the Linux race detector, eager `require('electron')` under `npm ci --ignore-scripts`) slip through. `make test-linux` runs the same commands CI runs, in Linux containers, so those failures surface before the PR instead of after burning Actions minutes on a red build. `/create-pr` runs this gate automatically before pushing and pauses if Docker isn't running — the common path needs no manual step.
 
 ## Branch workflow
 
@@ -80,7 +96,7 @@ CI: `.github/workflows/build.yml` (release), `.github/workflows/quality.yml` (pe
   1. Do work on the current feature branch, commit locally.
   2. When an external PR lands on `main` that your branch depends on or should incorporate: merge it on GitHub (`gh pr merge <number> --merge`), then `git checkout main && git pull` to sync local `main`, then `git checkout <feature-branch> && git rebase main` to rebase the feature branch onto the updated `main`.
   3. Open a PR from the feature branch into `main` (`gh pr create`). Never push directly to `main`.
-- CI must pass on the PR before merge. Run quality gates locally first (see table below).
+- CI must pass on the PR before merge. Run the development-time quality gates as you iterate (see "Quality gates (run while developing)"); the heavy gates are run once by `/create-pr` before pushing — do not run them yourself during development.
 
 ## Commits
 
@@ -120,6 +136,27 @@ CI: `.github/workflows/build.yml` (release), `.github/workflows/quality.yml` (pe
 Engine executes, harness decides. Engine never blocks for user input, never persists memory, never decides policy.
 
 When labeling work: engine, harness, or client. If a harness gap is caused by missing engine capability, note both.
+
+## Opinionless mechanics, extensible opinions
+
+The engine owns the **mechanism** — the dirty, load-bearing work that every consumer would otherwise have to reimplement — and ships the **most generic, least-opinionated standard behavior** for it. Consumers and extensions own and customize the **opinions**. This is the core engine-design principle: provide standards generically, and let opinions be modified and extended *off* the core mechanics. The engine is an opinionless core that anyone can build opinionated layers over.
+
+The principle stands on its own. It is **not** "match whatever a competitor does." When prior art informs a standard, adopt the generic shape of the mechanism; do not import another product's opinions as the engine's defaults, and never document engine behavior by reference to an external product's source (those references rot — see § "Aspirational comments" and § "Volatile counts").
+
+### The two obligations
+
+1. **Own the mechanism; carry the least-opinionated standard.** The engine does the work (discovery, parsing, scheduling, transport, persistence) and ships one generic, predictable default behavior. It does not bake in a consumer's workflow, UI shape, or policy.
+2. **Every opinion is configurable and extensible.** Any behavior that is an *opinion* — anything a reasonable consumer might want to do differently — must be exposed as a config field **and** reachable through a hook/SDK seam, so a consumer can observe, override, or augment it. **Forcing a consumer to do something exactly one way is the anti-pattern.** If you find the engine dictating a single fixed behavior where consumers would reasonably differ, that is a defect to fix, not a constraint to defend.
+
+### Canonical examples
+
+| Feature | Engine owns (mechanism) | Consumer owns (opinion) |
+|---------|-------------------------|--------------------------|
+| **Schedules** | The scheduler — timing, persistence, firing | What a schedule *does* when it fires |
+| **Webhooks** | The HTTP-server mechanics — listening, routing, lifecycle | The action taken on an inbound webhook; the consumer just registers it |
+| **Slash commands** | Discovery across the conventional roots, frontmatter parsing (full map preserved), precedence resolution, `$ARGUMENTS` expansion, the persisted-invocation-vs-expanded-content split | Whether non-standard activation modes are enabled (config), and specialized handling via a resolution hook that sees the full frontmatter + invocation metadata — so the same `/command` can behave differently in an extension-hosted conversation than in a plain one |
+
+When you add a feature to the engine, decide explicitly: what is the mechanism (engine-owned, generic) and what is the opinion (consumer-owned, configurable + hookable)? Ship the mechanism with a least-opinionated default and a seam for every opinion. A feature that hardcodes an opinion with no override is incomplete.
 
 ## Engine consumers
 
@@ -176,6 +213,17 @@ This applies equally to warnings (model fallback, deprecation notices), advisori
 - **Engine API surface should be generous.** Every configurable behavior should be exposed: as an `engine.json` config field, as a per-prompt `ClientCommand` override, and (where applicable) as an SDK context method. External consumers want every hook we can imagine.
 - **Desktop and iOS are not gatekeepers.** They consume the engine; they do not define its surface. When reviewing engine changes, do not ask "does desktop use this?" — ask "would an external consumer want this?"
 
+### Consuming harness updates ship with the engine change
+
+The framing above ("engine surface ships ahead of its consumers") governs *whether the engine may add surface with no in-repo caller* — it always may. It does **not** excuse leaving a *known, on-machine* consumer unwired when that consumer is the source of the bug or the destined user of the feature.
+
+When an engine/SDK change is driven by, or destined for, a specific harness that exists on the machine, the plan includes that harness's upgrade and ships it in the same change set (at the harness's own scope seam):
+
+- For the **in-repo `ion-meta` extension** (it ships with the engine to end users), the `ion-meta` update is part of the same plan and lands in this repo alongside the engine/SDK change.
+- For **out-of-repo harnesses** (the private `ion-dev` engine-development harness, `chief-of-staff`, or any other extension installed under `~/.ion/extensions/`), the upgrade is still in scope and is implemented and committed in that harness's own working tree. See the operator's global `~/.ion/AGENTS.md` § "Harnesses and extensions are in scope" for the full statement.
+
+The anti-pattern is shipping the engine mechanism and stopping — leaving the reporting/consuming harness unwired so the reported bug remains unfixed in practice. SDK source-of-truth note: edit the SDK in this repo at `engine/extensions/sdk/ion-sdk/`; never the installed copy at `~/.ion/extensions/sdk/`.
+
 ## Cross-platform parity (desktop ↔ iOS)
 
 > **Scope of this table.** The parity rules below apply when a feature *exists* on both desktop and iOS today and a change to one demands a change to the other. They do not require every new engine feature to ship simultaneously on desktop and iOS — engine surface ships ahead of reference implementations by design (see § "Engine consumers"). Use this section as a sync checklist for already-paired surfaces, not as a coverage mandate for new ones.
@@ -198,7 +246,7 @@ Desktop and iOS are co-equal clients. When a desktop change touches a feature th
 | Permission denials / waiting state | Permission queue / waiting state | `snapshot.ts` promotes denials into `permissionQueue`; per-instance `waitingState` on `conversationInstances` |
 | Tab group pills | Tab group sections | `snapshot.ts` → group fields on `RemoteTabState` |
 | Thinking indicator / interrupt button | Activity indicator / interrupt button | Real-time events (`engineTextDelta`, `tabStatus`) |
-| Tab context menu (TabStripTabContextMenu) | Tab context menu (TabRowContextMenu) | Actions operate on `RemoteTabState` fields; session identity via `snapshot.ts` → `RemoteTabState.conversationId` (plain conversation) and `StatusFields.sessionId` (extension-hosted conversation) |
+| Tab context menu (TabStripTabContextMenu) | Tab context menu (TabRowContextMenu) | Actions operate on `RemoteTabState` fields; session identity via `snapshot.ts` → `RemoteTabState.conversationId` for all conversations. For extension-loaded tabs, per-instance session IDs are available in `conversationInstances[i].conversationIds` (historical) and `StatusFields.sessionId` (live). |
 | Desktop Settings dialog (SettingsDialog categories) | Desktop Settings detail (DesktopSettingsView sections) | `projectable-settings.ts` allowlist → `desktop_settings_snapshot` event (settings + schema + groups) → `DesktopSettingsView` auto-renders sections. iOS group IDs **must** match the desktop's `CATEGORIES` array; renaming a desktop category requires updating `PROJECTABLE_GROUP_LABELS` and the test in `projectable-settings.test.ts`. Adding a new user-editable desktop preference requires a parallel entry in `PROJECTABLE_SETTINGS_DATA` unless the setting is local-machine-only (font, path, secret). |
 | Model fallback indicator (EngineStatusBar per-instance ⚠) | Model fallback indicator (EngineInstanceBar per-instance ⚠) | `snapshot.ts` → `RemoteTabState.conversationInstances[i].modelFallback`. Desktop populates `engineModelFallbacks` from the `engine_model_fallback` event; the snapshot poller projects each entry onto the corresponding `conversationInstances[i]` and iOS reads it from the snapshot. Cleared on the next idle transition (per-instance). |
 
@@ -234,13 +282,21 @@ The engine stores nothing. Extensions that declare resource kinds are responsibl
 
 `ctx.notify()` sends a push notification through the engine's relay pipeline. Notifications are signals, not payloads (per D-009). The push body is a doorbell string ("New briefing ready"), not content. The `resourceId` field enables deep-linking: iOS reads it from the push payload's `userInfo` to navigate to the specific resource.
 
-## Contract stability (never break the client)
+## Contract stability
 
-The client is the consumer of the Ion engine — desktop, iOS, and harness extensions all depend on published contracts. **Never ship a breaking change to a published contract.**
+Not all wire contracts carry the same stability obligation. The rules differ by owner.
 
-Event-shape contracts are not just about field names. Event **semantics** (snapshot vs. incremental, replace vs. merge, idempotency) are also part of the contract. See [docs/architecture/agent-state.md](docs/architecture/agent-state.md) for the canonical example: `engine_agent_state` is always a complete snapshot, and consumers replace local state with the payload.
+### Engine wire - scrutinized contract
 
-### What counts as a contract
+The engine wire is a **scrutinized contract**. External integrators build custom clients, shell scripts, and automation pipelines directly against the engine NDJSON socket. Ion cannot reach those consumers to coordinate a migration. A breaking change to the engine wire must be a conscious, surfaced decision — never committed silently.
+
+**Never ship a breaking change to the engine wire contract without explicit operator approval.**
+
+Event-shape contracts are not just about field names. Event **semantics** (snapshot vs. incremental, replace vs. merge, idempotency) are also part of the engine contract. See [docs/architecture/agent-state.md](docs/architecture/agent-state.md) for the canonical example: `engine_agent_state` is always a complete snapshot, and consumers replace local state with the payload.
+
+Correcting an improper legacy name on the engine wire **may** be committed as a breaking change in a future version using `fix` (not `feat!`) unless the rename is genuinely application-sweeping. The operator decides; the agent surfaces the decision, never makes it alone.
+
+#### What counts as an engine contract
 
 | Surface | Key files |
 |---------|-----------|
@@ -250,13 +306,13 @@ Event-shape contracts are not just about field names. Event **semantics** (snaps
 | Hook names & payload shapes | All hooks registered in `engine/internal/extension/sdk_hooks_*.go` |
 | Engine events consumed by clients | Any event type or field a client reads to render UI |
 
-### Allowed (non-breaking)
+#### Allowed (non-breaking engine changes)
 
 - **Add** new fields with zero-value defaults, new event variants, new hooks, new optional parameters.
 - **Fix** bugs in existing methods (behavior change that corrects a documented or obvious defect).
 - **Version** a new alternative when a design must evolve (e.g. `ToolCallV2`) — leave the original intact.
 
-### Forbidden (breaking)
+#### Forbidden (breaking engine changes)
 
 - Remove or rename a field, type, constant, hook name, or event variant.
 - Change a field's type (e.g. `string` → `int`, `[]T` → `map`).
@@ -265,6 +321,29 @@ Event-shape contracts are not just about field names. Event **semantics** (snaps
 - Change wire-protocol message framing or envelope structure.
 
 If you believe a break is truly necessary, stop and discuss with the user — never commit it silently.
+
+### Desktop↔iOS wire and future client wires - lockstep, not scrutinized
+
+The desktop↔iOS wire (and any future client wire such as desktop↔Android or desktop↔web) operates under a **lockstep model**. All clients that share a wire are co-located in this repo. A wire rename ships to every side in one PR — there is no deployment window where one side has the new string and the other has the old one. These wire changes are not breaking changes in the external-integrator sense.
+
+**Do not push back on desktop↔iOS wire changes as though they were published-contract breaks.** They are not. The only obligation is **parity**: every side of the wire is updated in the same PR. If you are reviewing or implementing a desktop↔iOS wire rename and all clients are updated together, the change conforms to this policy.
+
+Parity check: confirm `desktop/src/main/remote/protocol.ts`, the iOS `RemoteCommand.swift` and `NormalizedEvent.swift` TypeKey raw values, and any ViewModel or handler that switches on the string are all updated in the same commit (or PR).
+
+### Wire event naming - prefix by owner (ADR 008)
+
+Wire events are prefixed by the **owner of the contract**. See [docs/architecture/adr/008-wire-event-naming-and-ownership.md](docs/architecture/adr/008-wire-event-naming-and-ownership.md) for the full rationale.
+
+| Owner | Prefix | Wire |
+|-------|--------|------|
+| Engine | `engine_` | Engine NDJSON socket |
+| Desktop | `desktop_` | Desktop↔iOS WebSocket |
+| Android (future) | `android_` | Desktop↔Android WebSocket |
+| Web (future) | `web_` | Desktop↔Web WebSocket |
+
+The engine's outbound event set is uniformly `engine_`-prefixed (see `engine/internal/types/engine_event.go`). All `RemoteEvent` and `RemoteCommand` members on the desktop↔iOS wire carry the `desktop_` prefix. Any new member introduced to either wire must carry the correct prefix from its first commit. PRs that introduce unprefixed or cross-prefixed members are non-conforming.
+
+**Internal vs. wire names.** `NormalizedEvent` uses bare names internally. These never reach a consumer: `translateToEngineEvent()` converts them to `engine_*` before anything is written to the socket. The bare internal names and the wire names are distinct layers.
 
 ### Cross-language contract sync
 
@@ -455,6 +534,37 @@ Every solution must solve the problem at its root cause. **Never trade correctne
 
 5. **Never avoid expanding a surface to dodge work.** If a feature requires a new event type on iOS, a new protocol field, a new enum case, or a new handler — add it. Workarounds that relay, proxy, or approximate the proper mechanism to "keep the surface small" are the same anti-pattern as substituting a heuristic for a precise mechanism. API surfaces, event surfaces, and wire protocols are meant to grow as the product grows. A comment like "iOS does not yet act on this" is a gap waiting for its first consumer, not a reason to route around the gap.
 
+6. **When the proper fix is known, ship the proper fix — never a stopgap, stepping stone, or intermittent workaround.** If analysis has identified the correct root-cause solution, implement *that*, not a cheaper interim version of it that will have to be replaced or collapsed later. Stopgaps become legacy: they add code that the next change must first unwind, they create a second mechanism that drifts from the proper one, and they leave the real fix undone while signaling that it's "handled." This holds **regardless of how much larger the proper fix is, how many files it touches, how many commits it takes, or how many PRs it spans.** PR size, commit count, and diff size are never reasons to choose a stepping stone over the known-correct fix. The only acceptable reasons to *stage* work are the same three in rule 2 (published-contract break, architecture physically can't support it yet, domain genuinely doesn't need the precision) — and "the proper fix is bigger" is **not** one of them. If you catch yourself proposing an interim fix because the real one is more work, stop and propose the real one. Do not ask the operator to choose between a stopgap and the proper fix; if the proper fix is known, that is the plan. (This is the forward-looking complement to the "## Aspirational comments → The rule applies to plans" rule: that rule forbids *documenting* a defect instead of fixing it; this rule forbids *half-fixing* it when the full fix is known.)
+
+## Dead code is not load-bearing until proven otherwise — verify the layer, then delete
+
+Leaving a **no-op / pass-through / vestigial layer** in place because removing it *looks* risky — and justifying the keep with an **unverified claim** about what some caller, wire event, or consumer "still needs" — is a recurring defect. "It compiles, the tests pass, and I added a comment explaining why it stays" is **not** verification; it is the exact rationalization the "## Solution quality" rule forbids, wearing a comment as a disguise. The keep is only legitimate after you have located the *actual* load-bearing layer and proven the dead code is not it.
+
+### The failure mode (what this rule prevents)
+
+You encounter a handler that logs and does nothing, a helper that returns its input unchanged, an enum case routed to `break`, a field nothing reads, or a parameter every caller ignores. Removing it would touch several call sites and *feels* unsafe, so you keep it and write a comment — "kept so older clients still decode", "retained for API compat", "the desktop may still send this". Then it turns out the premise in your own comment was **false** (the current in-repo emitter *does* send it, or *no longer* sends it), and you kept the **wrong layer** for a reason that actually applied to a **different layer** — or to no layer at all. The dead code now lies to the next reader about being meaningful, and the comment lies about the wire.
+
+### The discipline (do this every time)
+
+When you find a no-op / vestigial / pass-through construct in the path of your work:
+
+1. **Identify every layer involved.** A "dead" event handler is usually three separable layers: the wire **TypeKey / decoder** (what makes the bytes parse), the **typed case / struct field** (the in-memory representation), and the **handler body** (what acts on it). A "dead" helper is its **signature** vs its **callers** vs its **body**. Name them explicitly; do not treat the cluster as one indivisible thing.
+2. **Find the real load-bearing layer by checking the producer/consumer in source — not from memory.** Grep the actual emitter (`desktop/src/`, the engine, the SDK), the actual callers, the actual decoder's failure mode. *"Does the live, in-repo producer still emit this? Does any caller still invoke it? What happens on the unhandled path — silent drop, or thrown error?"* Answer with a citation, not an assumption. (This is the "## Operator premises" rule applied to your *own* premise.)
+3. **Delete every layer above the one that is genuinely required.** Keep only the minimum the producer/consumer actually forces you to keep, and say *why that exact layer* is required (with the source citation). If the wire decoder must stay because a live event would otherwise throw, keep the decoder and **delete the no-op handler** — do not keep both and call the handler "load-bearing."
+4. **If nothing is load-bearing, delete all of it.** A construct with no producer and no consumer is not "compat surface"; it is dead code. Remove it. The "## Good citizen" rule already puts this in scope when you encounter it.
+5. **Make every surviving comment true.** A comment asserting wire/caller behavior ("desktop no longer sends this", "kept for older clients") is a factual claim subject to "## Aspirational comments" and "## Volatile counts": if you did not grep it, do not write it, and if it is stale, fix it as part of the same change.
+
+### Forbidden justifications (each is the anti-pattern, not a reason)
+
+- "Removing it touches N call sites, so I kept it." — Effort is never a reason to keep dead code (mirrors "## Solution quality" rule 2).
+- "It's safer to leave it and add a comment." — Unverified safety. A no-op that misrepresents itself as meaningful is *less* safe for the next change, not more.
+- "Some older/hypothetical client might still need it." — If you cannot name and cite the live consumer, this is a guess. Verify or delete.
+- "I'll leave the handler as a no-op so the event still decodes." — The handler is not what makes it decode; the TypeKey/decoder is. Keep the right layer.
+
+### When a keep IS legitimate
+
+Keeping a layer is correct only when step 2 produced a **cited** reason the producer or consumer forces it — e.g. the wire decoder for an event a **current in-repo emitter still sends** (removing the TypeKey would throw on a live message), or a parser still reachable by a **real cached-key / migration path**. In that case: keep the **minimum** layer, delete the rest, and write the true reason with its source citation. "Verified the desktop still emits `X` at `path:line`, so the decoder stays; the no-op handler does not" is a resolution. "Kept to be safe" is not.
+
 ## Testing is mandatory — every feature, every fix
 
 **No feature and no bug fix is complete without a test that pins its behavior.** A change that compiles, type-checks, and "looks correct on read" is *not* verified. "I read the code and it's right" is the exact reasoning that lets defects reach production — it is never an acceptable substitute for a test.
@@ -500,7 +610,7 @@ Conversations are persisted as NDJSON file pairs under `~/.ion/conversations/`.
 
 ### ID format
 
-Each conversation ID is `{unix-millis}-{12-hex-chars}` (e.g. `1780093348767-c1c03e998388`). Generated in `engine/internal/backend/runloop_setup.go` via `time.Now().UnixMilli()` + `newConvSuffix()` (see `runloop_helpers.go`).
+Each conversation ID is `{unix-millis}-{12-hex-chars}` (e.g. `1780093348767-c1c03e998388`). Generated by `NewConversationID()` in `engine/internal/conversation/id.go` (`time.Now().UnixMilli()` + `NewConvSuffix()`).
 
 ### File layout
 
@@ -548,7 +658,7 @@ When given a conversation ID, glob for its files:
 
 | What | Where |
 |------|-------|
-| ID generation | `engine/internal/backend/runloop_helpers.go` (`newConvSuffix`) |
+| ID generation | `engine/internal/conversation/id.go` (`NewConversationID` / `NewConvSuffix`) |
 | Save/load logic | `engine/internal/conversation/persistence.go` (`Save`, `Load`, `saveSplit`) |
 | Data structures | `engine/internal/conversation/conversation.go` (`Conversation`, `SessionEntry`) |
 | LLM message type | `engine/internal/types/llm.go` (`LlmMessage`) |

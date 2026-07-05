@@ -12,6 +12,12 @@ import (
 
 // TestToolStalledEventEmitted verifies that ToolStalledEvent is emitted
 // periodically when a tool call takes longer than toolStallThreshold.
+//
+// This also guards delivery through emitWithoutProgress: the stall ticker now
+// routes the advisory through that progress-neutral path (so it does not defeat
+// the run-stall watchdog — see TestRunStallFiresDespiteToolStallEmits). If a
+// future change accidentally dropped the emit instead of merely making it
+// progress-neutral, stallCount would fall to 0 and this test would fail.
 func TestToolStalledEventEmitted(t *testing.T) {
 	// Shorten thresholds for the test so we don't wait 30 real seconds.
 	origStall := toolStallThreshold
@@ -53,9 +59,9 @@ func TestToolStalledEventEmitted(t *testing.T) {
 	b := NewApiBackend()
 	c := collectEvents(b, "req-stall")
 	b.StartRun("req-stall", types.RunOptions{
-		Prompt:      "stall test",
-		ProjectPath: "/tmp",
-		Model:       testModel,
+		Prompt:           "stall test",
+		ProjectPath:      "/tmp",
+		Model:            testModel,
 		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 
@@ -130,9 +136,9 @@ func TestToolStalledEventNotEmittedOnFastTool(t *testing.T) {
 	b := NewApiBackend()
 	c := collectEvents(b, "req-fast")
 	b.StartRun("req-fast", types.RunOptions{
-		Prompt:      "fast test",
-		ProjectPath: "/tmp",
-		Model:       testModel,
+		Prompt:           "fast test",
+		ProjectPath:      "/tmp",
+		Model:            testModel,
 		EarlyStopEnabled: testEarlyStopDisabled(),
 	})
 

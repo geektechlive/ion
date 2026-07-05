@@ -102,6 +102,22 @@ type LlmContentBlock struct {
 	// consumers (and the model) can re-attach them without re-parsing
 	// the Summary prose.
 	RecentFiles []string `json:"recentFiles,omitempty"`
+
+	// --- context_injection field ---
+	// Only meaningful when Type == "context_injection".
+
+	// ContextPaths is the set of absolute instruction-file paths carried by
+	// a context_injection block (read-triggered nested AGENTS.md/ION.md
+	// descent). It is the STRUCTURAL dedup key: the nested-context seeder
+	// recovers "which files are already injected" by reading this field off
+	// the typed block, never by substring-matching the rendered "# Context
+	// from <path>" prose in arbitrary message text. Storing the paths as
+	// structured data is what makes the dedup precise — a user message that
+	// merely contains the marker prose carries no ContextPaths and therefore
+	// cannot poison the seed. Provider serialisers translate the block to a
+	// plain text block on the wire (mirroring compact_boundary), so the model
+	// still sees the rendered context and providers never see this field.
+	ContextPaths []string `json:"contextPaths,omitempty"`
 }
 
 // ImageSource carries base64-encoded image data for vision.
@@ -195,21 +211,43 @@ type ModelInfo struct {
 	SupportsCaching  bool    `json:"supportsCaching,omitempty"`
 	SupportsThinking bool    `json:"supportsThinking,omitempty"`
 	SupportsImages   bool    `json:"supportsImages,omitempty"`
-	IsCustom         bool    `json:"-"` // not serialized; set by config loader, propagated to ModelEntry
+	// ThinkingMode is the reasoning mechanism this model uses on the wire:
+	//   "adaptive"         — Anthropic adaptive thinking + effort (current models)
+	//   "budget"           — Anthropic legacy type:"enabled" + budget_tokens (older)
+	//   "reasoning_effort" — OpenAI / OpenAI-compatible reasoning_effort
+	//   "gemini"           — Google Gemini thinkingConfig
+	//   "none" / ""        — no reasoning support
+	// The shared resolveThinking helper reads this to pick the body shape.
+	ThinkingMode string `json:"thinkingMode,omitempty"`
+	// ThinkingEfforts is the set of effort levels this model accepts, e.g.
+	// ["low","medium","high"]. Clients use it to show/gray the per-conversation
+	// thinking control honestly. Empty ⇒ thinking control hidden for this model.
+	ThinkingEfforts []string `json:"thinkingEfforts,omitempty"`
+	// Tokenizer is the tiktoken encoding name for this model's local BPE encoder.
+	// One of "o200k_base" (GPT-4o/o-series/Claude), "cl100k_base" (legacy GPT-4/3.5
+	// and approximate fallback for other families), or "" (no local encoder).
+	// Additive field — omitempty, never breaks existing consumers.
+	Tokenizer string `json:"tokenizer,omitempty"`
+	IsCustom  bool   `json:"-"` // not serialized; set by config loader, propagated to ModelEntry
 }
 
 // ModelEntry is the wire-format model information returned by list_models.
 // Tracked by contract sync.
 type ModelEntry struct {
-	ID               string  `json:"id"`
-	ProviderID       string  `json:"providerId"`
-	ContextWindow    int     `json:"contextWindow"`
-	CostPer1kInput   float64 `json:"costPer1kInput"`
-	CostPer1kOutput  float64 `json:"costPer1kOutput"`
-	SupportsCaching  bool    `json:"supportsCaching,omitempty"`
-	SupportsThinking bool    `json:"supportsThinking,omitempty"`
-	SupportsImages   bool    `json:"supportsImages,omitempty"`
-	IsCustom         bool    `json:"isCustom,omitempty"`
+	ID               string   `json:"id"`
+	ProviderID       string   `json:"providerId"`
+	ContextWindow    int      `json:"contextWindow"`
+	CostPer1kInput   float64  `json:"costPer1kInput"`
+	CostPer1kOutput  float64  `json:"costPer1kOutput"`
+	SupportsCaching  bool     `json:"supportsCaching,omitempty"`
+	SupportsThinking bool     `json:"supportsThinking,omitempty"`
+	SupportsImages   bool     `json:"supportsImages,omitempty"`
+	ThinkingMode     string   `json:"thinkingMode,omitempty"`
+	ThinkingEfforts  []string `json:"thinkingEfforts,omitempty"`
+	// Tokenizer is the tiktoken encoding name for this model's local BPE encoder.
+	// See ModelInfo.Tokenizer for the value contract. Additive, omitempty.
+	Tokenizer string `json:"tokenizer,omitempty"`
+	IsCustom  bool   `json:"isCustom,omitempty"`
 }
 
 // ProviderEntry is the wire-format provider information returned by list_models.

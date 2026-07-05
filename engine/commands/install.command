@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ION_HOME="$HOME/.ion"
 BIN_DIR="$ION_HOME/bin"
+PLIST_LABEL="com.ion.engine"
+PLIST_FILENAME="com.ion.engine.plist"
+LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
 cd "$SCRIPT_DIR"
 
@@ -13,34 +16,18 @@ go build -o bin/ion ./cmd/ion
 echo "==> Installing to $BIN_DIR..."
 mkdir -p "$BIN_DIR"
 
-# Stop running engine daemon so the new binary takes effect on next start
-ENGINE_PID=""
-if [[ -S "$ION_HOME/engine.sock" ]]; then
-  ENGINE_PID=$(lsof -t "$ION_HOME/engine.sock" 2>/dev/null | head -1 || true)
-fi
-if [[ -z "$ENGINE_PID" ]]; then
-  ENGINE_PID=$(pgrep -f "ion serve" 2>/dev/null | head -1 || true)
-fi
-if [[ -n "$ENGINE_PID" ]]; then
-  echo "==> Stopping engine daemon (PID $ENGINE_PID)..."
-  # 1. Try graceful shutdown via socket command
-  ./bin/ion shutdown 2>/dev/null &
-  SHUTDOWN_PID=$!
-  sleep 1
-  kill $SHUTDOWN_PID 2>/dev/null || true
-  # 2. SIGTERM
-  if kill -0 "$ENGINE_PID" 2>/dev/null; then
-    kill -TERM "$ENGINE_PID" 2>/dev/null || true
-    sleep 1
-  fi
-  # 3. SIGKILL if still alive
-  if kill -0 "$ENGINE_PID" 2>/dev/null; then
-    echo "  Engine did not stop gracefully, forcing kill..."
-    kill -9 "$ENGINE_PID" 2>/dev/null || true
-    sleep 1
-  fi
-fi
-# Clean up stale socket
+# Stop the running LaunchAgent so the new binary takes effect on next start.
+# bootout removes the service from the bootstrap namespace (prevents KeepAlive
+# restart). On a fresh install (no agent ever loaded) bootout exits non-zero.
+echo "==> Stopping engine LaunchAgent (if running)..."
+launchctl bootout "gui/$(id -u)/$PLIST_LABEL" 2>/dev/null || true
+# Wait for the service to be fully removed from the namespace. Without this,
+# bootstrap can see the departing service as "already loaded" (exit 5) and
+# RunAtLoad won't fire — leaving the old binary running.
+for _i in $(seq 1 50); do
+    launchctl print "gui/$(id -u)/$PLIST_LABEL" >/dev/null 2>&1 || break
+    sleep 0.1
+done
 rm -f "$ION_HOME/engine.sock"
 
 rm -f "$BIN_DIR/ion"
@@ -69,6 +56,32 @@ if [[ "${1:-}" == "--standalone" ]]; then
             fi
         fi
     fi
+fi
+
+# Install LaunchAgent plist from the repo template, substituting $HOME.
+# Written/refreshed on every install so updates propagate.
+PLIST_TEMPLATE="$SCRIPT_DIR/../packaging/launchd/$PLIST_FILENAME"
+PLIST_DEST="$LAUNCH_AGENTS_DIR/$PLIST_FILENAME"
+if [[ -f "$PLIST_TEMPLATE" ]]; then
+    echo "==> Installing LaunchAgent plist to $PLIST_DEST..."
+    mkdir -p "$LAUNCH_AGENTS_DIR"
+    # Replace every $HOME literal in the template with the real home directory.
+    sed "s|\$HOME|$HOME|g" "$PLIST_TEMPLATE" > "$PLIST_DEST"
+    # Load into the launchd bootstrap namespace. RunAtLoad starts the engine
+    # immediately. The bootout-wait above guarantees a clean load (no exit 5).
+    launchctl bootstrap "gui/$(id -u)" "$PLIST_DEST" 2>/dev/null || true
+    # Wait for the engine to bind its socket (confirms the process is ready).
+    for _i in $(seq 1 30); do
+        [ -S "$ION_HOME/engine.sock" ] && break
+        sleep 0.2
+    done
+    if [ -S "$ION_HOME/engine.sock" ]; then
+        echo "==> LaunchAgent $PLIST_LABEL started"
+    else
+        echo "  WARNING: engine socket not ready after 6s (engine may still be starting)"
+    fi
+else
+    echo "  WARNING: plist template not found at $PLIST_TEMPLATE, skipping LaunchAgent install"
 fi
 
 # Install SDK for TypeScript extensions

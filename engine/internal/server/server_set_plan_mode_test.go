@@ -1,6 +1,8 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -121,4 +123,72 @@ func TestSetPlanMode_TriValued_NonEmptyReplaces(t *testing.T) {
 	_ = readLines(t, conn, 3, 1*time.Second)
 
 	assertAllowlist(t, srv, key, []string{"gh", "git log"})
+}
+
+// ---------------------------------------------------------------------------
+// planFilePath restore-on-toggle (plan-file continuity)
+// ---------------------------------------------------------------------------
+//
+// A set_plan_mode command carrying planFilePath for a file that exists on
+// disk must restore the session's planFilePath, so a plan-mode toggle after
+// an engine-session replacement reconnects the conversation to its existing
+// plan instead of allocating a fresh slug. Without the field the path stays
+// empty (the pre-existing behavior, now reached only when the client omits
+// it). Goes through the full JSON-decode → dispatch → manager-state path.
+
+func TestSetPlanMode_PlanFilePath_RestoresWhenSupplied(t *testing.T) {
+	planFile := filepath.Join(t.TempDir(), "simple-sailing-pine.md")
+	if err := os.WriteFile(planFile, []byte("# real plan"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mb := newMockBackend()
+	srv := newShortPathTestServer(t, mb)
+
+	conn := dialServer(t, srv)
+	defer conn.Close()
+
+	const key = "restore-supplied"
+	startSession(t, conn, key, "req-start")
+
+	sendJSON(t, conn, map[string]interface{}{
+		"cmd":          "set_plan_mode",
+		"key":          key,
+		"enabled":      true,
+		"planFilePath": planFile,
+		"requestId":    "req-restore",
+	})
+	_ = readLines(t, conn, 3, 1*time.Second)
+
+	enabled, path := srv.SessionManager().GetPlanModeState(key)
+	if !enabled {
+		t.Error("expected planMode=true after enable")
+	}
+	if path != planFile {
+		t.Errorf("expected restored planFilePath=%q, got %q", planFile, path)
+	}
+}
+
+func TestSetPlanMode_PlanFilePath_OmittedLeavesEmpty(t *testing.T) {
+	mb := newMockBackend()
+	srv := newShortPathTestServer(t, mb)
+
+	conn := dialServer(t, srv)
+	defer conn.Close()
+
+	const key = "restore-omitted"
+	startSession(t, conn, key, "req-start")
+
+	// No planFilePath field — path must stay empty (unchanged behavior).
+	sendJSON(t, conn, map[string]interface{}{
+		"cmd":       "set_plan_mode",
+		"key":       key,
+		"enabled":   true,
+		"requestId": "req-omit",
+	})
+	_ = readLines(t, conn, 3, 1*time.Second)
+
+	_, path := srv.SessionManager().GetPlanModeState(key)
+	if path != "" {
+		t.Errorf("expected planFilePath empty when field omitted, got %q", path)
+	}
 }

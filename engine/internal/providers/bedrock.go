@@ -195,7 +195,10 @@ func (p *bedrockProvider) parseBedrockStream(ctx context.Context, reader io.Read
 	contentIndex := 0
 	var totalInputToks, totalOutputToks int
 
-	sseCh, sseErr := ParseSSEStream(reader)
+	rawCh, rawErr := ParseSSEStream(reader)
+	// Per-event idle deadline + heartbeat (see sse_idle.go): a stream that
+	// returns headers then goes silent is caught fast and retried.
+	sseCh, sseErr := streamWithIdle(rawCh, rawErr, "bedrock", "", "", nil)
 	for sse := range sseCh {
 		if sse.Data == "" {
 			continue
@@ -369,6 +372,24 @@ func formatBedrockMessages(messages []types.LlmMessage) []map[string]any {
 						},
 					})
 				}
+			case "compact_boundary":
+				// Engine-internal compaction marker; Bedrock must never see
+				// the raw block type. Flatten to text so the model still sees
+				// the rendered summary. See anthropic.go for rationale.
+				text := b.Summary
+				if text == "" {
+					text = "[Previous conversation compacted]"
+				}
+				content = append(content, map[string]any{"text": text})
+			case "context_injection":
+				// Engine-internal nested-context marker; flatten to text so
+				// the model still sees the descended instruction files. See
+				// anthropic.go for rationale.
+				text := b.Text
+				if text == "" {
+					text = "[Nested context loaded]"
+				}
+				content = append(content, map[string]any{"text": text})
 			}
 		}
 		if len(content) > 0 {

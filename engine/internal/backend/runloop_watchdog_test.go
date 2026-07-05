@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dsswift/ion/engine/internal/providers"
+	"github.com/dsswift/ion/engine/internal/tools"
 	"github.com/dsswift/ion/engine/internal/types"
 )
 
@@ -62,6 +63,10 @@ type wedgeProvider struct {
 
 func (w *wedgeProvider) ID() string { return w.id }
 
+func (w *wedgeProvider) CountTokens(_ context.Context, _ providers.CountTokensRequest) (int, error) {
+	return 0, providers.ErrCountUnsupported
+}
+
 func (w *wedgeProvider) Stream(ctx context.Context, _ types.LlmStreamOptions) (<-chan types.LlmStreamEvent, <-chan error) {
 	w.streamCalls.Add(1)
 	events := make(chan types.LlmStreamEvent)
@@ -100,13 +105,40 @@ func TestRunloopWatchdogCancelsStalledRun(t *testing.T) {
 
 	cfg := &RunConfig{
 		Timeouts: &types.TimeoutsConfig{
-			RunStallMs: 100, // 100ms threshold so we can see it fire in well under 1s
+			// 500ms threshold. This must be comfortably larger than the
+			// time it takes the run goroutine to start and reach
+			// provider.Stream() — on a CPU-pressured CI runner under the
+			// race detector, goroutine startup can be starved for far
+			// longer than the 100ms this test originally used, so the
+			// watchdog could declare a stall before Stream() was ever
+			// called (streamCalls==0) and Assertion 1 flaked. The sibling
+			// TestRunloopWatchdogResetsOnProgress uses 600ms for the same
+			// reason. The fast 20ms tick keeps the test quick once the
+			// threshold is crossed.
+			RunStallMs: 500,
 		},
 	}
 	b.StartRunWithConfig(requestID, types.RunOptions{
 		Prompt: "hello",
 		Model:  watchdogTestModel,
 	}, cfg)
+
+	// Deterministically confirm the run actually started — wait until the
+	// wedge provider's Stream() has been entered before relying on the
+	// watchdog. This removes the race between run-goroutine startup and the
+	// watchdog timer that previously made Assertion 1 flaky: we only proceed
+	// to assert stall-detection once we KNOW the run reached the provider.
+	streamStarted := false
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if provider.streamCalls.Load() > 0 {
+			streamStarted = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !streamStarted {
+		t.Fatal("run goroutine never reached provider.Stream() within 2s — runloop startup regressed")
+	}
 
 	if !waitForExit(c, 2*time.Second) {
 		t.Fatal("watchdog did not trigger exit within 2s — stall detection regressed")
@@ -117,7 +149,8 @@ func TestRunloopWatchdogCancelsStalledRun(t *testing.T) {
 
 	// Assertion 1: at least one provider Stream call occurred (the
 	// runloop actually started before stalling — not a "the watchdog
-	// fired on a not-yet-started run" false positive).
+	// fired on a not-yet-started run" false positive). Guaranteed by the
+	// streamStarted wait above; re-checked here for clarity.
 	if got := provider.streamCalls.Load(); got == 0 {
 		t.Errorf("expected provider.Stream() to be called at least once, got %d", got)
 	}
@@ -152,6 +185,112 @@ func TestRunloopWatchdogCancelsStalledRun(t *testing.T) {
 	b.mu.Unlock()
 	if stillActive {
 		t.Error("expected run to be removed from activeRuns after watchdog cancellation")
+	}
+}
+
+// TestRunStallFiresDespiteToolStallEmits is the regression test for the
+// conversation 1782012033034-37d617d3d9ab incident: a wedged, deadline-exempt
+// Agent/dispatch tool emitted a ToolStalledEvent every stall interval, each
+// emit reset the run-progress clock, and the run-stall watchdog never fired —
+// so the run hung for ~10 minutes until the engine restarted.
+//
+// The fix routes ToolStalledEvent through emitWithoutProgress, so the stall
+// advisory no longer counts as forward progress. This test pins that: a tool
+// that wedges forever, runs longer than both the tool-stall interval AND the
+// run-stall threshold, must still trip the run-stall watchdog. The tool is
+// named tools.AgentToolName so the runloop's per-tool-deadline exemption is in
+// force (otherwise the per-tool deadline, not the watchdog, would end the run
+// and the test would not pin the right mechanism).
+//
+// On the UNFIXED code this test fails: the periodic ToolStalledEvent emits keep
+// lastProgressAt fresh, the watchdog never observes RunStall idleness, and
+// waitForExit times out.
+func TestRunStallFiresDespiteToolStallEmits(t *testing.T) {
+	withFastWatchdogTick(t, 20*time.Millisecond)
+
+	// A tool that wedges until ctx cancellation. Named "Agent" so the runloop
+	// takes the deadline-exempt branch (no per-tool DeadlineSuspender). It
+	// honors ctx so the watchdog's run.cancel() unblocks it cleanly.
+	tools.RegisterTool(&types.ToolDef{
+		Name:        tools.AgentToolName,
+		Description: "wedges forever (test)",
+		InputSchema: map[string]any{"type": "object"},
+		Execute: func(ctx context.Context, _ map[string]any, _ string) (*types.ToolResult, error) {
+			<-ctx.Done()
+			return &types.ToolResult{Content: "cancelled", IsError: true}, ctx.Err()
+		},
+	})
+
+	// Provider calls the wedging Agent tool, then (never reached) end_turn.
+	mock := &mockLlmProvider{
+		id: watchdogTestProviderID,
+		responses: [][]types.LlmStreamEvent{
+			toolUseResponse(tools.AgentToolName, "agent-wedge-1", map[string]any{}, 10, 5),
+			textResponse("unreachable", 10, 5),
+		},
+	}
+	registerWatchdogTestProvider(t, mock)
+
+	b := NewApiBackend()
+	const requestID = "req-agent-wedge"
+	c := collectEvents(b, requestID)
+
+	// Tool-stall interval (50ms) well below the run-stall threshold (400ms):
+	// several ToolStalledEvents fire before the run-stall window elapses, so
+	// the test genuinely exercises "stall emits do not hold the watchdog off".
+	cfg := &RunConfig{
+		Timeouts: &types.TimeoutsConfig{
+			ToolStallMs: 50,
+			RunStallMs:  400,
+		},
+	}
+	b.StartRunWithConfig(requestID, types.RunOptions{
+		Prompt:           "wedge the agent tool",
+		Model:            watchdogTestModel,
+		EarlyStopEnabled: testEarlyStopDisabled(),
+	}, cfg)
+
+	if !waitForExit(c, 5*time.Second) {
+		t.Fatal("run-stall watchdog never fired despite a wedged deadline-exempt Agent tool — tool-stall emits are defeating the watchdog (the incident defect)")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// The stall advisory must still have fired (we did not silence it; we
+	// only made it progress-neutral). At least one ToolStalledEvent proves
+	// the tool ran long enough to emit, which is precisely the case the
+	// watchdog must survive.
+	var sawToolStalled, sawRunStalled, sawRunStalledErrorCode bool
+	for _, ev := range c.normalized {
+		switch d := ev.Data.(type) {
+		case *types.ToolStalledEvent:
+			if d.ToolID == "agent-wedge-1" {
+				sawToolStalled = true
+			}
+		case *types.RunStalledEvent:
+			sawRunStalled = true
+		case *types.ErrorEvent:
+			if d.ErrorCode == "run_stalled" {
+				sawRunStalledErrorCode = true
+			}
+		}
+	}
+	if !sawToolStalled {
+		t.Error("expected at least one ToolStalledEvent for the wedged Agent tool (advisory must still fire)")
+	}
+	if !sawRunStalled {
+		t.Error("expected RunStalledEvent — the run-stall watchdog must fire despite the periodic tool-stall emits")
+	}
+	if !sawRunStalledErrorCode {
+		t.Error("expected ErrorEvent{run_stalled} for headless consumers")
+	}
+
+	b.mu.Lock()
+	_, stillActive := b.activeRuns[requestID]
+	b.mu.Unlock()
+	if stillActive {
+		t.Error("expected run removed from activeRuns after watchdog cancellation")
 	}
 }
 
@@ -229,6 +368,10 @@ func newProgressDripProvider(id string) *progressDripProvider {
 }
 
 func (p *progressDripProvider) ID() string { return p.id }
+
+func (p *progressDripProvider) CountTokens(_ context.Context, _ providers.CountTokensRequest) (int, error) {
+	return 0, providers.ErrCountUnsupported
+}
 
 func (p *progressDripProvider) Stream(ctx context.Context, opts types.LlmStreamOptions) (<-chan types.LlmStreamEvent, <-chan error) {
 	p.mu.Lock()

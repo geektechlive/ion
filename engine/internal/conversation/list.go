@@ -421,7 +421,70 @@ func flattenEntries(conv *Conversation) []types.SessionMessage {
 	toolCallIndex := map[string]int{} // toolID → index in result
 
 	for _, entry := range path {
-		if entry.Type != EntryMessage {
+		switch entry.Type {
+		case EntryCompaction:
+			// Replay a persisted compaction event as a system-role marker row so
+			// the marker survives historical reload (it renders live via
+			// CompactingEvent, but that event is not persisted). Content carries
+			// the "[Compaction]" sentinel the iOS detection code already looks
+			// for; the structured Marker* fields carry the payload consumers
+			// format from. Engine emits data, not display strings.
+			cd := asCompactionData(entry.Data)
+			if cd == nil {
+				continue
+			}
+			result = append(result, types.SessionMessage{
+				Role:                 "system",
+				Content:              "[Compaction]",
+				Timestamp:            entry.Timestamp,
+				MarkerKind:           "compaction",
+				MarkerSummary:        cd.Summary,
+				MarkerMessagesBefore: cd.MessagesBefore,
+				MarkerMessagesAfter:  cd.MessagesAfter,
+				MarkerClearedBlocks:  cd.ClearedBlocks,
+				MarkerStrategy:       cd.Strategy,
+				MarkerMicroOnly:      cd.MicroOnly,
+			})
+			continue
+		case EntryPlanMarker:
+			// Replay a persisted plan-file-written event as a system-role marker
+			// row. Content carries the "──" sentinel the iOS detection code
+			// already looks for; the structured MarkerPlan* fields carry the
+			// payload consumers format from.
+			pd := asPlanMarkerData(entry.Data)
+			if pd == nil {
+				continue
+			}
+			result = append(result, types.SessionMessage{
+				Role:                "system",
+				Content:             "──",
+				Timestamp:           entry.Timestamp,
+				MarkerKind:          "plan",
+				MarkerPlanOperation: pd.Operation,
+				MarkerPlanFilePath:  pd.PlanFilePath,
+				MarkerPlanSlug:      pd.PlanSlug,
+			})
+			continue
+		case EntrySteerMarker:
+			// Replay a persisted steer-injection event as a system-role marker
+			// row. This is an additional row alongside the injected user message
+			// (which flattens separately from its EntryMessage), not a
+			// replacement. Content carries the "──" sentinel.
+			sd := asSteerMarkerData(entry.Data)
+			if sd == nil {
+				continue
+			}
+			result = append(result, types.SessionMessage{
+				Role:                "system",
+				Content:             "──",
+				Timestamp:           entry.Timestamp,
+				MarkerKind:          "steer",
+				MarkerMessageLength: sd.MessageLength,
+			})
+			continue
+		case EntryMessage:
+			// falls through to the message-flattening logic below
+		default:
 			continue
 		}
 		md := asMessageData(entry.Data)
@@ -454,6 +517,14 @@ func flattenEntries(conv *Conversation) []types.SessionMessage {
 					Content:   content,
 					Timestamp: entry.Timestamp,
 					Internal:  isInternalMessage(content),
+					// Slash-command provenance: when this user turn was a
+					// resolved slash invocation, Content already holds the raw
+					// invocation (the engine stored it as the entry display
+					// content; the expanded body lives only in the .llm.jsonl).
+					// Forward the provenance so consumers render a command pill.
+					SlashCommand: md.SlashCommand,
+					SlashArgs:    md.SlashArgs,
+					SlashSource:  md.SlashSource,
 				})
 			}
 

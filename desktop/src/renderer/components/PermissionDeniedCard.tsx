@@ -17,16 +17,13 @@ interface Props {
   tabPlanFilePath?: string | null
   /** When true, shows the "Implement and unpin" button on the Plan Ready card. */
   tabGroupPinned?: boolean
-  /** When false, hides the "Implement, clear context" button. Engine tabs pass
-   *  false because they lack a per-instance reset IPC. Default true. */
-  supportsContextClear?: boolean
   onDismiss: () => void
   /**
    * Called when the user clicks Implement (or "Implement, clear context").
    * `clearContext` defaults to false — the regular Implement button
    * preserves the engine conversation across the plan→implement boundary.
-   * When `clearContext = true`, the handler runs the historical
-   * reset-and-archive path. See usePermissionDeniedHandlers.ts.
+   * When `clearContext = true`, the handler runs the reset-and-archive
+   * path. See runHandleImplement in ConversationView-implement.ts.
    */
   onImplement?: (clearContext?: boolean) => void
   /**
@@ -38,7 +35,7 @@ interface Props {
   onApprove?: (toolNames: string[]) => void
 }
 
-export function PermissionDeniedCard({ tools, tabId, sessionId, projectPath, messages, tabPlanFilePath, tabGroupPinned, supportsContextClear, onDismiss, onImplement, onImplementAndUnpin, onAnswer, onApprove }: Props) {
+export function PermissionDeniedCard({ tools, tabId, sessionId, projectPath, messages, tabPlanFilePath, tabGroupPinned, onDismiss, onImplement, onImplementAndUnpin, onAnswer, onApprove }: Props) {
   const colors = useColors()
   const allowSettingsEdits = usePreferencesStore((s) => s.allowSettingsEdits)
   // Reveals the secondary "Implement, clear context" action on the
@@ -210,7 +207,7 @@ export function PermissionDeniedCard({ tools, tabId, sessionId, projectPath, mes
               >
                 Implement
               </button>
-              {showImplementClearContext && supportsContextClear !== false && (
+              {showImplementClearContext && (
                 <button
                   onClick={() => onImplement(true)}
                   title="Start a fresh conversation for the implementation phase — the model will not see the planning conversation."

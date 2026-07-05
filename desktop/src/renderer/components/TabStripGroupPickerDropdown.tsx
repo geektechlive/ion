@@ -3,12 +3,14 @@ import { createPortal } from 'react-dom'
 import { motion, AnimatePresence, Reorder } from 'framer-motion'
 import { useSessionStore } from '../stores/sessionStore'
 import { useColors } from '../theme'
+import { usePreferencesStore } from '../preferences'
 import { usePopoverLayer } from './PopoverLayer'
 import type { TabGroupView } from '../hooks/useTabGroups'
 import { checkWorktreeUncommitted, shouldUseWorktree, zoomViewport } from './TabStripShared'
 import { PillColorPicker } from './TabStripPillColorPicker'
 import { TabContextMenu } from './TabStripTabContextMenu'
 import { DropdownTabRow } from './TabStripDropdownTabRow'
+import { newTabInDirectory } from './new-conversation-routing'
 
 interface GroupPickerDropdownProps {
   group: TabGroupView
@@ -122,6 +124,7 @@ export function GroupPickerDropdown({
         maxWidth: 340,
         maxHeight: 300,
         overflowY: 'auto',
+        overscrollBehavior: 'contain',
       }}
     >
       <Reorder.Group
@@ -200,7 +203,16 @@ export function GroupPickerDropdown({
               } : undefined}
               onNewTabInDir={() => {
                 window.dispatchEvent(new CustomEvent('ion:close-group-pickers'))
-                useSessionStore.getState().createTabInDirectory(menuTab.workingDirectory, shouldUseWorktree(false))
+                // Lock-safe single path: cannot bypass the enterprise lock.
+                const { engineProfiles, defaultEngineProfileId, enterpriseNewConversationDefaults: policy } = usePreferencesStore.getState()
+                newTabInDirectory(menuTab.workingDirectory, {
+                  profiles: engineProfiles,
+                  defaultProfileId: defaultEngineProfileId,
+                  enterprisePolicy: policy,
+                  createTabInDir: (d, wt) => useSessionStore.getState().createTabInDirectory(d, wt),
+                  createConvTab: (d, opts) => useSessionStore.getState().createConversationTab(d, opts),
+                  shouldUseWorktree: shouldUseWorktree(false),
+                })
               }}
               onFinishWork={() => {
                 useSessionStore.getState().finishWorktreeTab(menuTab.id)

@@ -123,6 +123,21 @@ func (g *ExtensionGroup) FireModelSelect(ctx *Context, info ModelSelectInfo) (st
 	return model, nil
 }
 
+// FireSlashCommandResolved fires slash_command_resolved on every host. The last
+// host that returns an override string wins (matching FireModelSelect's
+// last-writer policy). Returns the override and true when any host overrode.
+func (g *ExtensionGroup) FireSlashCommandResolved(ctx *Context, info SlashResolvedInfo) (string, bool) {
+	var override string
+	var overridden bool
+	for _, h := range g.hosts {
+		if o, ok := h.FireSlashCommandResolved(ctx, info); ok {
+			override = o
+			overridden = true
+		}
+	}
+	return override, overridden
+}
+
 func (g *ExtensionGroup) FireToolStart(ctx *Context, info ToolStartInfo) error {
 	return g.fireVoid(func(h *Host) error { return h.FireToolStart(ctx, info) })
 }

@@ -20,6 +20,29 @@ export interface DiscoveredCommand {
   origin: 'ion' | 'claude'
 }
 
+/**
+ * Raw shape of one entry in the engine's `discover_slash_commands` reply.
+ *
+ * The engine OWNS slash-command resolution and is therefore the authority on
+ * which filesystem `.md`/skill templates exist. Its taxonomy is richer than
+ * the desktop's `DiscoveredCommand` (origin/scope) split, so the engine
+ * bridge maps this onto `DiscoveredCommand` for the autocomplete menu.
+ *
+ * `source` is one of:
+ *   - "extension" → an engine extension command (rare in this listing; the
+ *                   desktop unions the extension registry separately)
+ *   - "ion"       → `.ion/commands/`
+ *   - "claude"    → `.claude/commands/`
+ *   - "skill"     → a skill template (SKILL.md)
+ *   - "project"   → a project-root-scoped template
+ */
+export interface EngineDiscoveredCommand {
+  name: string
+  description?: string
+  argumentHint?: string
+  source?: 'extension' | 'ion' | 'claude' | 'skill' | 'project'
+}
+
 // ─── CLI Backend Stream Event Types ───
 
 export interface InitEvent {
@@ -140,7 +163,6 @@ export interface UnknownEvent {
 }
 
 // ─── Canonical Events (normalized from raw stream) ───
-
 export type NormalizedEvent =
   | { type: 'session_init'; sessionId: string; tools: string[]; model: string; mcpServers: Array<{ name: string; status: string }>; skills: string[]; version: string; isWarmup?: boolean }
   | { type: 'text_chunk'; text: string }
@@ -158,8 +180,79 @@ export type NormalizedEvent =
   | { type: 'plan_mode_changed'; enabled: boolean; planFilePath?: string; planSlug?: string }
   | { type: 'plan_mode_auto_exit'; stopReason: string; planFilePath?: string; planSlug?: string; reason?: string; sessionId?: string; runId?: string }
   | { type: 'stream_reset' }
-  | { type: 'compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string }
+  | { type: 'compacting'; active: boolean; summary?: string; messagesBefore?: number; messagesAfter?: number; clearedBlocks?: number; strategy?: string; microOnly?: boolean }
   | { type: 'tool_stalled'; toolId: string; toolName: string; elapsed: number }
   | { type: 'steer_injected'; messageLength: number }
   | { type: 'model_fallback'; requestedModel: string; fallbackModel: string; reason: string }
   | { type: 'run_stalled'; stalledDuration: number; lastActivity?: string }
+  // Extended-thinking events (issue #158), normalized-stream layer. These are
+  // the bare-name desktop-internal events the renderer consumes for PLAIN
+  // conversations. The control plane (engine-control-plane-events.ts)
+  // translates the engine-wire `engine_thinking_*` events into these so
+  // `event-slice.ts` can materialize `role: 'thinking'` rows — mirroring the
+  // extension-hosted path, where engine-event-slice.ts consumes the
+  // `engine_thinking_*` events directly. A thinking block is OPTIONAL per turn;
+  // boundaries (start/end) always arrive when reasoning happened, the delta may
+  // be suppressed engine-side (summary-only path). See ThinkingBlock.tsx.
+  | { type: 'thinking_block_start' }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'thinking_block_end'; totalTokens?: number; elapsedSeconds?: number; redacted?: boolean }
+  // Extension-surface events (WI-001: single-path collapse).
+  // Previously handled only by the raw engine_* stream; now first-class
+  // NormalizedEvent variants so every conversation flows through the
+  // single normalized reducer (handleNormalizedEvent in event-slice.ts).
+  | { type: 'message_end'; inputTokens?: number; outputTokens?: number; contextPercent?: number; cost?: number }
+  | { type: 'agent_state'; agents: import('./types-engine').AgentStateUpdate[] }
+  // status — desktop-internal per-session status snapshot. Emitted by the
+  // control plane (engine-control-plane-events.ts handleStatusEvent) from every
+  // inbound engine_status, carrying the engine's full StatusFields. The renderer
+  // REPLACES inst.statusFields wholesale (snapshot semantics, like agent_state).
+  // This is the forwarding hop that populates inst.statusFields — without it the
+  // field is null forever and every StatusBar slot that reads it (engine
+  // identity, cost, backend badge, model-picker actual-model parenthetical)
+  // renders nothing. Desktop-internal: no Go struct backing (StatusFields itself
+  // is the synced shared type), so no contract-sync manifest entry.
+  | { type: 'status'; fields: import('./types-engine').StatusFields }
+  | { type: 'harness_message'; message: string; dedupKey?: string; source?: string }
+  | { type: 'working_message'; message: string }
+  | { type: 'notify'; message: string; level: string }
+  | { type: 'dialog'; dialogId: string; method: string; title: string; options?: string[]; defaultValue?: string }
+  // Extension elicitation (ctx.elicit). Translated from the engine-wire
+  // `engine_elicitation_request` event by engine-control-plane-events.ts so
+  // the single normalized reducer (event-slice.ts) can push it onto the
+  // active instance's elicitationQueue.
+  | { type: 'elicitation_request'; requestId: string; mode: string; schema?: Record<string, unknown>; url?: string }
+  | { type: 'extension_died'; extensionName: string }
+  | { type: 'extension_respawned'; extensionName: string; attemptNumber: number }
+  | { type: 'extension_dead_permanent'; extensionName: string; attemptNumber: number }
+  | { type: 'events_dropped'; count: number }
+  // Dispatch telemetry (n-tier nested dispatch). Emitted by the control plane
+  // from engine_dispatch_start/end so the renderer can record dispatch depth
+  // and parent linkage for tree rendering in the AgentPanel.
+  | { type: 'dispatch_start'; dispatchAgent: string; dispatchTask: string; dispatchModel: string; dispatchSessionId: string; dispatchDepth: number; dispatchParentId: string; dispatchId: string }
+  | { type: 'dispatch_end'; dispatchAgent: string; dispatchExitCode: number; dispatchElapsed: number; dispatchCost: number; dispatchDepth: number; dispatchParentId: string; dispatchId: string; dispatchConversationId?: string }
+  // Cross-cutting events (WI-001): previously handled via raw IPC.ENGINE_EVENT,
+  // now routed through the normalized stream so the renderer has a single
+  // subscription. These are desktop-internal variants with no Go struct backing;
+  // they are emitted by wireEngineBridgeEvents (main process) and consumed by
+  // handleCrossNormalizedEvent (renderer) without touching conversation state.
+  // The `tabId` carried on the normalized-event envelope is the session key
+  // (bare tabId for session events, empty string for workspace-scoped events).
+  | { type: 'command_registry'; commands: Array<{ name: string; description?: string }> }
+  | { type: 'command_result'; command: string; commandError?: string }
+  | { type: 'resource_snapshot'; resourceKind: string; resourceSubId?: string; resourceItems: import('./types-engine').ResourceItem[] }
+  | { type: 'resource_delta'; resourceKind: string; resourceDelta: import('./types-engine').ResourceDelta }
+  | { type: 'engine_notification'; notificationTitle: string; notificationBody: string; notificationLevel: string }
+  // dispatch_activity — a running dispatched (sub-)agent's intra-turn transcript
+  // delta (tool start/end, streamed text), bridged from the engine's
+  // engine_dispatch_activity (event-wiring.ts). Cross-cutting: the agent popup
+  // folds it into the per-dispatch transcript cache keyed by
+  // dispatchAgentId/conversationId; it must never append to the main conversation
+  // message stream. INCREMENTAL/append-by-key — see agent-dispatch-activity.ts.
+  | { type: 'dispatch_activity'; dispatchAgentId: string; dispatchConversationId: string; dispatchActivityKind: 'text' | 'tool_start' | 'tool_end'; dispatchSeq: number; toolName?: string; toolId?: string; dispatchTextDelta?: string; dispatchToolIsError?: boolean; dispatchActivityTs?: number }
+  // context_breakdown — per-category token breakdown from engine_context_breakdown.
+  // Emitted after prompt assembly; reconciled (apiReportedTotal/unaccounted) after
+  // the first usage event. Desktop-internal: translated from the engine wire in
+  // event-wiring.ts and stored on the active instance (event-slice.ts case
+  // 'context_breakdown') so the Status Drawer can render it synchronously.
+  | { type: 'context_breakdown'; categories: import('./types-engine').ContextBreakdownCategory[]; contextWindow: number; totalTokens: number; apiReportedTotal?: number; unaccounted?: number; cacheReadTokens?: number; cacheCreationTokens?: number; model: string; aggregateCostUsd?: number }

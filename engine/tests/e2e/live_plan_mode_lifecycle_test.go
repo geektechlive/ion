@@ -55,7 +55,7 @@ func TestLivePlanModeReplanAfterImplementGetsNewSlug(t *testing.T) {
 
 	// ── Phase 1: Plan ──
 	t.Log("Phase 1: Plan mode — create a plan")
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err := mgr.SendPrompt(key,
 		"Create a brief plan for adding a greet() function to a Go file. "+
@@ -84,7 +84,7 @@ func TestLivePlanModeReplanAfterImplementGetsNewSlug(t *testing.T) {
 	// Simulate the desktop's onImplement flow: stop session, start fresh,
 	// do NOT pass the old planFilePath (matches Fix 1: desktop clears it).
 	t.Log("Phase 2: Auto mode — implement the plan")
-	mgr.SetPlanMode(key, false, nil, "implement")
+	mgr.SetPlanMode(key, false, nil, "implement", "")
 	mgr.StopSession(key)
 
 	if _, err := mgr.StartSession(key, cfg); err != nil {
@@ -116,7 +116,7 @@ func TestLivePlanModeReplanAfterImplementGetsNewSlug(t *testing.T) {
 	t.Log("Phase 3: Plan mode again — should get a fresh plan slug")
 
 	pc.reset()
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err = mgr.SendPrompt(key,
 		"Create a brief plan for adding a farewell() function to a Go file. "+
@@ -190,7 +190,7 @@ func TestLivePlanModeReplanWithStalePlanFilePathReusesIt(t *testing.T) {
 	pc := newPlanEventCollector(mgr)
 
 	// ── Phase 1: Plan ──
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err := mgr.SendPrompt(key,
 		"Create a brief plan for adding a sum() function. "+
@@ -212,8 +212,8 @@ func TestLivePlanModeReplanWithStalePlanFilePathReusesIt(t *testing.T) {
 	// ── Phase 2: Toggle plan mode off and back on (without implementing) ──
 	// This simulates the desktop's toggle behavior where planFilePath is
 	// preserved in tab state and passed back as an override.
-	mgr.SetPlanMode(key, false, nil, "toggle")
-	mgr.SetPlanMode(key, true, nil, "toggle")
+	mgr.SetPlanMode(key, false, nil, "toggle", "")
+	mgr.SetPlanMode(key, true, nil, "toggle", "")
 
 	pc.reset()
 
@@ -296,7 +296,7 @@ func TestLivePlanModeConversationContinuity(t *testing.T) {
 	// ── Phase 2: Plan mode — reference the codeword ──
 	t.Log("Phase 2: Plan mode — reference the codeword in the plan")
 	pc.reset()
-	mgr.SetPlanMode(key, true, nil, "test")
+	mgr.SetPlanMode(key, true, nil, "test", "")
 
 	err = mgr.SendPrompt(key,
 		"Create a plan that references the codeword I gave you earlier. "+

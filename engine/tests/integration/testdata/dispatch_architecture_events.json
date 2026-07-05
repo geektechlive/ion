@@ -1,0 +1,170 @@
+[
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "alpha",
+    "task": "Task-AAA",
+    "model": "mock-model",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "beta",
+    "task": "Task-BBB",
+    "model": "mock-model",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "alpha",
+    "cost": 0.000105,
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "beta",
+    "cost": 0.000105,
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "alpha",
+    "task": "Task-CCC",
+    "model": "mock-model",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "beta",
+    "task": "Task-DDD",
+    "model": "mock-model",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "alpha",
+    "cost": 0.000105,
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "beta",
+    "cost": 0.000105,
+    "session": "sess-a"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "alpha",
+    "task": "Task-EEE",
+    "model": "mock-model",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "beta",
+    "task": "Task-FFF",
+    "model": "mock-model",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "alpha",
+    "cost": 0.000105,
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "beta",
+    "cost": 0.000105,
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "alpha",
+    "task": "Task-GGG",
+    "model": "mock-model",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_start",
+    "agent": "beta",
+    "task": "Task-HHH",
+    "model": "mock-model",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "alpha",
+    "cost": 0.000105,
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_agent_state",
+    "session": "sess-b"
+  },
+  {
+    "type": "engine_dispatch_end",
+    "agent": "beta",
+    "cost": 0.000105,
+    "session": "sess-b"
+  }
+]

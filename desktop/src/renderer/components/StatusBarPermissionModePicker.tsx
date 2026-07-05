@@ -5,44 +5,35 @@ import { CaretDown, Check, ShieldCheck, ListChecks } from '@phosphor-icons/react
 import { useSessionStore } from '../stores/sessionStore'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
-import { useActiveEngineKey } from './StatusBarEngineHelpers'
+import { effectivePermissionMode } from '../stores/conversation-instance'
+import { tabHasExtensions } from '../../shared/tab-predicates'
 
 /* ─── Permission Mode Picker ─── */
 
 /**
  * Permission mode picker rendered in the unified `StatusBar` left
- * cluster. Sources state from a per-tab-type read path; the **write**
- * path is already routed correctly inside `setPermissionMode`
- * (tab-slice.ts:30-39) — it inspects the active tab and writes to
- * either `tabs[i].permissionMode` or `enginePermissionModes[key]`.
+ * cluster. Sources state from the active conversation instance — the single
+ * home for permissionMode for every tab type (WI-002). The **write** path
+ * inside `setPermissionMode` (tab-slice.ts) also writes to the instance.
  *
- * Read paths:
- * - **Engine tabs**: `instance.permissionMode` on the active instance in
- *   `conversationPanes` (default 'auto' when no instance). Per-instance, since each
- *   engine sub-conversation can have its own permission mode.
- * - **Conversation tabs**: `tab.permissionMode` (default 'plan').
- *
- * Engine-only confirmation modal: on engine tabs, clicking the pill
- * pops up the "Change Mode" confirmation modal because extensions
- * typically control the permission mode on engine tabs and the user's
- * manual override may interfere with the extension's workflow. This
- * gating is engine-only per the plan's "each view keeps the same
- * components" rule — conversation tabs swap modes immediately on
- * click as today.
+ * `permissionModeGoverned` is a DISPLAY predicate: "does an extension/harness
+ * govern this conversation's permission mode?" (i.e. `tabHasExtensions`). A
+ * governed conversation shows a confirm modal on click; an ungoverned one
+ * shows the direct Plan/Auto popover. This is the only remaining use of
+ * `tabHasExtensions` in this file — it gates the UX affordance (F-13a), not
+ * the storage-home read.
  */
 export function PermissionModePicker() {
-  // Read path: route by tab type. `permissionMode` resolves to 'auto'
-  // (engine default) or 'plan' (conversation default) when the store
-  // has no entry yet.
-  const engineKey = useActiveEngineKey()
-  const isEngine = engineKey != null
+  // Read the AUTHORITATIVE permission mode through the single unified seam.
+  // effectivePermissionMode reads the active conversation instance for every
+  // tab type — no tab-type fork. `permissionModeGoverned` is a DISPLAY flag
+  // for the confirm-modal UX (F-13a), not a storage-home branch.
+  const activeTab = useSessionStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
+  const permissionModeGoverned = activeTab ? tabHasExtensions(activeTab) : false
   const permissionMode = useSessionStore((s) => {
-    if (engineKey) {
-      const pane = s.conversationPanes.get(engineKey.tabId)
-      const inst = pane?.instances.find((i) => i.id === engineKey.instanceId)
-      return inst?.permissionMode ?? 'auto'
-    }
-    return s.tabs.find((t) => t.id === s.activeTabId)?.permissionMode ?? 'plan'
+    const tab = s.tabs.find((t) => t.id === s.activeTabId)
+    if (!tab) return 'plan'
+    return effectivePermissionMode(tab, s.conversationPanes)
   })
   const setPermissionMode = useSessionStore((s) => s.setPermissionMode)
   const activeTabId = useSessionStore((s) => s.activeTabId)
@@ -84,7 +75,7 @@ export function PermissionModePicker() {
     // mode on engine tabs and we don't want to silently fight them.
     // Mirrors the prior behavior of the former engine status bar's
     // permission-mode pill click handler.
-    if (isEngine) {
+    if (permissionModeGoverned) {
       setShowModeConfirm(true)
       return
     }
@@ -110,18 +101,18 @@ export function PermissionModePicker() {
           color: modeColor,
           cursor: 'pointer',
         }}
-        title={isEngine ? 'Permission mode — extensions control this; click to override' : 'Permission mode (this tab)'}
+        title={permissionModeGoverned ? 'Permission mode — extensions control this; click to override' : 'Permission mode (this tab)'}
       >
         {modeIcon}
         {modeLabel}
         {/* Conversation tabs show a caret because the click opens a
             popover with explicit Plan/Auto choices. Engine tabs go
             straight to the confirm modal so no caret is needed. */}
-        {!isEngine && <CaretDown size={10} style={{ opacity: 0.6 }} />}
+        {!permissionModeGoverned && <CaretDown size={10} style={{ opacity: 0.6 }} />}
       </button>
 
       {/* Conversation popover — Plan/Auto choices, applied immediately. */}
-      {!isEngine && popoverLayer && open && createPortal(
+      {!permissionModeGoverned && popoverLayer && open && createPortal(
         <motion.div
           ref={popoverRef}
           data-ion-ui
@@ -183,7 +174,7 @@ export function PermissionModePicker() {
       {/* Engine confirmation modal — extracted verbatim from the prior
           former engine status bar. Confirms an override of the
           extension-controlled mode before flipping. */}
-      {isEngine && popoverLayer && showModeConfirm && createPortal(
+      {permissionModeGoverned && popoverLayer && showModeConfirm && createPortal(
         <div
           data-ion-ui
           style={{

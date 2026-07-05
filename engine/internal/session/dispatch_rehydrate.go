@@ -54,6 +54,13 @@ func (m *Manager) rehydrateDispatchState(s *engineSession, key string) {
 			}
 			metadata["conversationIds"] = ids
 		}
+		// Rehydrate the depth/parent attribution persisted in Commit 1 onto the
+		// reloaded agent-state metadata, mirroring how conversationId/dispatches
+		// are restored above. These carry the persisted value verbatim (0 / ""
+		// for a top-level dispatch) so a reloaded row reports the same nesting
+		// it had before the engine restart.
+		metadata["dispatchDepth"] = d.DispatchDepth
+		metadata["dispatchParentId"] = d.DispatchParentID
 
 		// Build a dispatch info entry for the structured dispatches array.
 		dispatchEntry := map[string]interface{}{
@@ -70,23 +77,23 @@ func (m *Manager) rehydrateDispatchState(s *engineSession, key string) {
 		}
 
 		// Restore persisted dispatches array, or initialize with this entry.
+		// The persisted array is de-duplicated by each entry's stable "id"
+		// before it lands in the slot, so a legacy file whose array already
+		// carries duplicate instances (the amplification bug) collapses to the
+		// distinct set on load instead of re-seeding the duplication.
 		if len(d.Dispatches) > 0 {
-			dispatchList := make([]interface{}, len(d.Dispatches))
-			for i, dp := range d.Dispatches {
-				dispatchList[i] = dp
-			}
-			metadata["dispatches"] = dispatchList
+			metadata["dispatches"] = dedupDispatchesByID(nil, d.Dispatches)
 		} else {
 			metadata["dispatches"] = []interface{}{dispatchEntry}
 		}
 
-		s.agents.AppendOrUpdate(types.AgentStateUpdate{
+		s.agents.AppendOrUpdateByID(types.AgentStateUpdate{
 			Name:     d.AgentName,
 			ID:       d.AgentID,
 			Status:   d.Status,
 			Metadata: metadata,
 		}, func(existing *types.AgentStateUpdate) {
-			existing.ID = d.AgentID
+			existing.Name = d.AgentName
 			existing.Status = d.Status
 			if existing.Metadata == nil {
 				existing.Metadata = map[string]interface{}{}
@@ -125,24 +132,74 @@ func (m *Manager) rehydrateDispatchState(s *engineSession, key string) {
 				existing.Metadata["conversationIds"] = existingIDs
 			}
 
-			// Merge the structured dispatches array. When the persisted entry
-			// carries a full dispatches array, use it as the authoritative
-			// source (it has startTime, elapsed, etc.). Otherwise fall back
-			// to appending the bare dispatchEntry.
+			// Merge the structured dispatches array, unioning by each entry's
+			// stable "id" so an instance is held once per slot regardless of how
+			// many persisted entries reference it. When the persisted entry
+			// carries a full dispatches array, union it with whatever the slot
+			// already holds (it has startTime, elapsed, etc.). Otherwise fall
+			// back to unioning the bare dispatchEntry.
+			existingDispatches, _ := existing.Metadata["dispatches"].([]interface{})
 			if len(d.Dispatches) > 0 {
-				dispatchList := make([]interface{}, len(d.Dispatches))
-				for i, dp := range d.Dispatches {
-					dispatchList[i] = dp
-				}
-				existing.Metadata["dispatches"] = dispatchList
+				existing.Metadata["dispatches"] = dedupDispatchesByID(existingDispatches, d.Dispatches)
 			} else {
-				existingDispatches, _ := existing.Metadata["dispatches"].([]interface{})
-				existing.Metadata["dispatches"] = append(existingDispatches, dispatchEntry)
+				existing.Metadata["dispatches"] = dedupDispatchesByID(existingDispatches, []map[string]interface{}{dispatchEntry})
 			}
 		})
 	}
 
 	utils.Log("Session", fmt.Sprintf("rehydrateDispatchState: loaded %d dispatch entries key=%s id=%s", len(dispatches), key, s.conversationID))
+}
+
+// dedupDispatchesByID unions an existing []interface{} dispatches slice with a
+// freshly-loaded []map[string]interface{} slice, keying on each entry's stable
+// "id" so an instance appears exactly once. First-seen order is preserved:
+// existing entries keep their position, new ids are appended in load order.
+// Entries with no usable "id" are always kept (they cannot be de-duplicated)
+// so malformed members survive rather than being silently dropped. The result
+// is a fresh []interface{} suitable for assignment into agent metadata.
+func dedupDispatchesByID(existing []interface{}, loaded []map[string]interface{}) []interface{} {
+	out := make([]interface{}, 0, len(existing)+len(loaded))
+	seen := make(map[string]bool, len(existing)+len(loaded))
+
+	for _, e := range existing {
+		if m, ok := e.(map[string]interface{}); ok {
+			if id, ok := m["id"].(string); ok && id != "" {
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+			}
+		}
+		out = append(out, e)
+	}
+
+	for _, m := range loaded {
+		if id, ok := m["id"].(string); ok && id != "" {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+		}
+		out = append(out, m)
+	}
+
+	return out
+}
+
+// metaInt reads an integer-valued metadata key, tolerating both the int form
+// (set in-process by the engine spawner) and the float64 form (produced by a
+// JSON decode round-trip through the conversation file). Returns 0 when the
+// key is absent or carries an unusable type.
+func metaInt(meta map[string]interface{}, key string) int {
+	switch v := meta[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
 }
 
 // persistTerminalDispatches scans the session's agent registry for
@@ -185,12 +242,47 @@ func (m *Manager) persistTerminalDispatches(key, convID string) {
 		elapsed, _ := meta["elapsed"].(float64)
 		childConvID, _ := meta["conversationId"].(string)
 
+		// Dispatch depth and parent id follow the same read-from-meta pattern
+		// as conversationId above. dispatchDepth arrives as int when set by
+		// the engine spawner in-process, or as float64 after a JSON decode
+		// round-trip (e.g. a prior persist -> rehydrate cycle), so normalize
+		// both. dispatchParentId is always a string. Persisting these lets the
+		// depth/parent attribution survive an engine restart.
+		dispatchDepth := metaInt(meta, "dispatchDepth")
+		dispatchParentID, _ := meta["dispatchParentId"].(string)
+
+		// Build the structured dispatches array, de-duplicating by each
+		// entry's stable "id". A grouped MergedSnapshot row can carry the same
+		// instance more than once if an earlier persist -> rehydrate cycle
+		// restored it into multiple slots; persisting that array verbatim would
+		// bake the duplication into the conversation file and compound it on the
+		// next load. Keying on "id" writes each instance exactly once. Entries
+		// with no usable "id" are kept (append) so malformed members survive.
 		var dispatchList []map[string]interface{}
+		seenDispatchIDs := make(map[string]bool)
 		if dl, ok := meta["dispatches"].([]interface{}); ok {
 			for _, item := range dl {
-				if m, ok := item.(map[string]interface{}); ok {
-					dispatchList = append(dispatchList, m)
+				m, ok := item.(map[string]interface{})
+				if !ok {
+					continue
 				}
+				if id, ok := m["id"].(string); ok && id != "" {
+					if seenDispatchIDs[id] {
+						continue
+					}
+					seenDispatchIDs[id] = true
+				}
+				// Stamp depth/parent onto each surviving dispatch member so the
+				// per-dispatch identity carries the attribution too, not just
+				// the top-level record. Only set when non-zero/non-empty so we
+				// never overwrite a member's own values with defaults.
+				if dispatchDepth != 0 {
+					m["dispatchDepth"] = dispatchDepth
+				}
+				if dispatchParentID != "" {
+					m["dispatchParentId"] = dispatchParentID
+				}
+				dispatchList = append(dispatchList, m)
 			}
 		}
 
@@ -210,16 +302,18 @@ func (m *Manager) persistTerminalDispatches(key, convID string) {
 			Type:      conversation.EntryAgentDispatch,
 			Timestamp: time.Now().UnixMilli(),
 			Data: conversation.AgentDispatchData{
-				AgentName:       state.Name,
-				AgentID:         state.ID,
-				DisplayName:     displayName,
-				Task:            task,
-				Model:           model,
-				Status:          state.Status,
-				Elapsed:         elapsed,
-				ConversationID:  childConvID,
-				ConversationIDs: convIDs,
-				Dispatches:      dispatchList,
+				AgentName:        state.Name,
+				AgentID:          state.ID,
+				DisplayName:      displayName,
+				Task:             task,
+				Model:            model,
+				Status:           state.Status,
+				Elapsed:          elapsed,
+				ConversationID:   childConvID,
+				ConversationIDs:  convIDs,
+				Dispatches:       dispatchList,
+				DispatchDepth:    dispatchDepth,
+				DispatchParentID: dispatchParentID,
 			},
 		})
 	}

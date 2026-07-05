@@ -379,3 +379,158 @@ func newTestManager(t *testing.T) *Manager {
 		sessions: make(map[string]*engineSession),
 	}
 }
+
+// makeDispatchMember builds a single dispatch[] array member.
+func makeDispatchMember(id, convID, status string) map[string]interface{} {
+	m := map[string]interface{}{"id": id, "status": status}
+	if convID != "" {
+		m["conversationId"] = convID
+	}
+	return m
+}
+
+// TestRehydrateDispatchState_CollapsesDuplicateArray drives the real
+// rehydrateDispatchState against an on-disk conversation whose persisted
+// agent_dispatch entries carry a duplicate-laden dispatches[] array (the
+// amplification-bug fingerprint: many members, few distinct ids). The
+// rehydrated MergedSnapshot must collapse to the DISTINCT-id count.
+func TestRehydrateDispatchState_CollapsesDuplicateArray(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	convDir := home + "/.ion/conversations"
+
+	const convID = "rehydrate-dup-1"
+	conv := conversation.CreateConversation(convID, "sys", "model")
+	conversation.AddUserMessage(conv, "hello")
+
+	// One agent_dispatch entry for "dev-lead" whose array holds 5 members but
+	// only 2 distinct ids (d1 thrice, d2 twice) — exactly what the amplified
+	// file on disk looks like.
+	dupArray := []map[string]interface{}{
+		makeDispatchMember("d1", "conv-1", "done"),
+		makeDispatchMember("d2", "conv-2", "done"),
+		makeDispatchMember("d1", "conv-1", "done"),
+		makeDispatchMember("d2", "conv-2", "done"),
+		makeDispatchMember("d1", "conv-1", "done"),
+	}
+	conv.Entries = append(conv.Entries, conversation.SessionEntry{
+		ID: "d2", ParentID: nil, // representative id = d2
+		Type: conversation.EntryAgentDispatch, Timestamp: 1000,
+		Data: conversation.AgentDispatchData{
+			AgentName:  "dev-lead",
+			AgentID:    "d2",
+			Task:       "lead the work",
+			Status:     "done",
+			Dispatches: dupArray,
+		},
+	})
+	if err := conversation.Save(conv, convDir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	m := newTestManager(t)
+	s := &engineSession{
+		key:              "k",
+		conversationID:   convID,
+		agents:           agents.NewRegistry(),
+		dispatchRegistry: extcontext.NewDispatchRegistry(),
+		pending:          pending.New(),
+	}
+	m.sessions["k"] = s
+
+	m.rehydrateDispatchState(s, "k")
+
+	snap := s.agents.MergedSnapshot()
+	var devLead *types.AgentStateUpdate
+	for i := range snap {
+		if snap[i].Name == "dev-lead" {
+			devLead = &snap[i]
+			break
+		}
+	}
+	if devLead == nil {
+		t.Fatalf("dev-lead not found in snapshot: %+v", snap)
+	}
+	dispatches, _ := devLead.Metadata["dispatches"].([]interface{})
+	if len(dispatches) != 2 {
+		t.Fatalf("expected 2 distinct dispatches after collapse, got %d: %v", len(dispatches), dispatches)
+	}
+}
+
+// TestPersistRehydrateLoop_LengthStable is the amplification regression test.
+// It runs persist -> rehydrate -> persist -> rehydrate and asserts the grouped
+// dev-lead dispatches[] length is FIXED across cycles. Without the id-dedup at
+// groupByName, persistTerminalDispatches, and rehydrateDispatchState, the
+// length grows every round-trip (the 1,2,4,6,...,99 progression seen on disk).
+func TestPersistRehydrateLoop_LengthStable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	convDir := home + "/.ion/conversations"
+
+	const convID = "loop-1"
+	conv := conversation.CreateConversation(convID, "sys", "model")
+	conversation.AddUserMessage(conv, "hello")
+	if err := conversation.Save(conv, convDir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	m := newTestManager(t)
+	s := &engineSession{
+		key:              "k",
+		conversationID:   convID,
+		agents:           agents.NewRegistry(),
+		dispatchRegistry: extcontext.NewDispatchRegistry(),
+		pending:          pending.New(),
+	}
+	m.sessions["k"] = s
+
+	// Seed the registry with three genuinely-distinct dev-lead dispatches.
+	// Each slot's array carries the FULL set (overlapping) — the shape a
+	// partially-amplified file produces, so this loop exercises the cross-slot
+	// concatenation in groupByName as well as the persist/rehydrate de-dup.
+	fullArray := []interface{}{
+		makeDispatchMember("d1", "conv-d1", "done"),
+		makeDispatchMember("d2", "conv-d2", "done"),
+		makeDispatchMember("d3", "conv-d3", "done"),
+	}
+	for _, id := range []string{"d1", "d2", "d3"} {
+		s.agents.AppendOrUpdateByID(types.AgentStateUpdate{
+			Name:   "dev-lead",
+			ID:     id,
+			Status: "done",
+			Metadata: map[string]interface{}{
+				"task":           "lead",
+				"conversationId": "conv-" + id,
+				"dispatches":     fullArray,
+			},
+		}, func(existing *types.AgentStateUpdate) {})
+	}
+
+	distinctLen := func() int {
+		snap := s.agents.MergedSnapshot()
+		for i := range snap {
+			if snap[i].Name == "dev-lead" {
+				d, _ := snap[i].Metadata["dispatches"].([]interface{})
+				return len(d)
+			}
+		}
+		return -1
+	}
+
+	if got := distinctLen(); got != 3 {
+		t.Fatalf("seed: expected 3 dispatches, got %d", got)
+	}
+
+	// Run several persist -> rehydrate cycles. The length must stay at 3.
+	for cycle := 0; cycle < 4; cycle++ {
+		m.persistTerminalDispatches("k", convID)
+
+		// Fresh registry simulates an engine restart / session reload.
+		s.agents = agents.NewRegistry()
+		m.rehydrateDispatchState(s, "k")
+
+		if got := distinctLen(); got != 3 {
+			t.Fatalf("cycle %d: expected dispatches length fixed at 3, got %d (amplification)", cycle, got)
+		}
+	}
+}

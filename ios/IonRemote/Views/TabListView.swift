@@ -1,9 +1,13 @@
-// @file-size-exception: single-screen view; split deferred per file-organization.md decomposition phase
 import SwiftUI
 
 struct TabListView: View {
     @Environment(\.appTheme) private var theme
-    @Environment(SessionViewModel.self) private var viewModel
+    // Internal (not private) so the same-module TabListView+Helpers extension
+    // can read it — the helper extraction (ca74c229) moved viewModel-reading
+    // helpers out but left this `private`, which doesn't cross file boundaries
+    // and broke the build. Matches the extraction's documented intent that the
+    // state the helpers read is internal.
+    @Environment(SessionViewModel.self) var viewModel
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var showSettings = false
@@ -19,13 +23,19 @@ struct TabListView: View {
     // never accidentally treated as a per-group request.
     @State private var pendingPinToGroupId: String? = nil
     @State private var showPairingSheet = false
-    @State private var enginePickerDirectory: String? = nil
+    // When non-nil, the new-conversation profile picker is shown.
+    // Holds the target directory for tab creation and optional group pin id.
+    // These four are read by the TabListView+Helpers.swift extension, so they
+    // are internal (not private — private is file-scoped and the extension
+    // lives in another file).
+    @State var conversationPickerDirectory: String? = nil
+    @State var conversationPickerPinToGroupId: String? = nil
     @State private var renamingTabId: String?
     @State private var renameText: String = ""
-    @State private var collapsedGroupIds: Set<String> = {
+    @State var collapsedGroupIds: Set<String> = {
         Set(UserDefaults.standard.stringArray(forKey: "collapsedGroupIds") ?? [])
     }()
-    @State private var searchText: String = ""
+    @State var searchText: String = ""
 
     // iPad: selection-based navigation
     @State private var selectedTabId: String?
@@ -73,34 +83,48 @@ struct TabListView: View {
                 directories: allDirectories,
                 pendingPinToGroupId: pendingPinToGroupId,
                 isPresented: $showNewTab,
-                onCreateConversationTab: { dir, pinToGroupId in
-                    viewModel.createTab(workingDirectory: dir, pinToGroupId: pinToGroupId)
+                onNewConversation: { dir, pin in
+                    requestNewConversation(directory: dir, pinToGroupId: pin)
                 },
                 onCreateTerminalTab: { dir in
                     viewModel.createTerminalTab(workingDirectory: dir)
-                },
-                onCreateEngineTab: { dir in
-                    requestEngineTab(directory: dir)
                 }
             )
         }
+        // New-conversation profile picker. Shown when `resolveNewConversationAction`
+        // returns `.showPicker` — i.e. multiple profiles exist and no default is set.
+        // Includes "Plain conversation" at top (matches desktop picker behaviour).
         .confirmationDialog(
-            "Select Engine Profile",
+            "New Conversation",
             isPresented: Binding(
-                get: { enginePickerDirectory != nil },
-                set: { if !$0 { enginePickerDirectory = nil } }
+                get: { conversationPickerDirectory != nil },
+                set: { if !$0 { conversationPickerDirectory = nil; conversationPickerPinToGroupId = nil } }
             ),
             titleVisibility: .visible
         ) {
+            // Plain conversation option — always first (mirrors desktop picker).
+            Button("Plain conversation") {
+                let dir = conversationPickerDirectory
+                let pin = conversationPickerPinToGroupId
+                conversationPickerDirectory = nil
+                conversationPickerPinToGroupId = nil
+                DiagnosticLog.log("NEW-CONV: picker selected plain dir=\(dir?.prefix(40) ?? "nil")")
+                viewModel.createTab(workingDirectory: dir, pinToGroupId: pin)
+            }
+            // Engine profiles.
             ForEach(viewModel.engineProfiles) { profile in
                 Button(profile.name) {
-                    let dir = enginePickerDirectory
-                    enginePickerDirectory = nil
-                    viewModel.createEngineTab(workingDirectory: dir, profileId: profile.id)
+                    let dir = conversationPickerDirectory
+                    let pin = conversationPickerPinToGroupId
+                    conversationPickerDirectory = nil
+                    conversationPickerPinToGroupId = nil
+                    DiagnosticLog.log("NEW-CONV: picker selected profile=\(profile.id.prefix(8)) dir=\(dir?.prefix(40) ?? "nil")")
+                    viewModel.createTab(workingDirectory: dir, pinToGroupId: pin, profileId: profile.id)
                 }
             }
             Button("Cancel", role: .cancel) {
-                enginePickerDirectory = nil
+                conversationPickerDirectory = nil
+                conversationPickerPinToGroupId = nil
             }
         }
         .alert("Rename Tab", isPresented: .init(
@@ -237,7 +261,7 @@ struct TabListView: View {
                 }
                 .refreshable {
                     Haptic.light()
-                    viewModel.sync()
+                    viewModel.sync(intent: .userInitiated)
                 }
                 .onChange(of: viewModel.pendingNavigationTabId) { _, tabId in
                     if let tabId {
@@ -309,7 +333,7 @@ struct TabListView: View {
             .scrollContentBackground(.hidden)
             .refreshable {
                 Haptic.light()
-                viewModel.sync()
+                viewModel.sync(intent: .userInitiated)
             }
             .overlay {
                 emptyStateOverlay
@@ -354,7 +378,8 @@ struct TabListView: View {
                                         onOpenGit: {
                                             viewModel.pendingGitPaneTabId = tab.id
                                             viewModel.pendingNavigationTabId = tab.id
-                                        }
+                                        },
+                                        engineProfiles: viewModel.engineProfiles
                                     )
                                 }
                             case .selection:
@@ -368,7 +393,8 @@ struct TabListView: View {
                                     onOpenGit: {
                                         viewModel.pendingGitPaneTabId = tab.id
                                         viewModel.pendingNavigationTabId = tab.id
-                                    }
+                                    },
+                                    engineProfiles: viewModel.engineProfiles
                                 )
                                 .tag(tab.id)
                             }
@@ -436,14 +462,11 @@ struct TabListView: View {
             tabGroupMode: viewModel.tabGroupMode,
             pendingPinToGroupId: $pendingPinToGroupId,
             showNewTab: $showNewTab,
-            onCreateConversationTab: { dir, pin in
-                viewModel.createTab(workingDirectory: dir, pinToGroupId: pin)
+            onNewConversation: { dir, pin in
+                requestNewConversation(directory: dir, pinToGroupId: pin)
             },
             onCreateTerminalTab: { dir in
                 viewModel.createTerminalTab(workingDirectory: dir)
-            },
-            onCreateEngineTab: { dir in
-                requestEngineTab(directory: dir)
             },
             onToggleCollapsed: {
                 toggleGroupCollapsed(group.id)
@@ -455,11 +478,12 @@ struct TabListView: View {
 
     @ViewBuilder
     private func destinationView(for tabId: String) -> some View {
-        if viewModel.tab(for: tabId)?.hasEngineExtension == true {
-            EngineView(tabId: tabId)
-        } else if viewModel.tab(for: tabId)?.isTerminalOnly == true {
+        if viewModel.tab(for: tabId)?.isTerminalOnly == true {
             RemoteTerminalView(tabId: tabId)
         } else {
+            // One unified conversation view for every non-terminal tab — plain
+            // or extension (#256). Engine-only chrome self-gates on
+            // `tabHasExtensions` inside the view.
             ConversationView(tabId: tabId)
         }
     }
@@ -489,7 +513,8 @@ struct TabListView: View {
     private var newTabButton: some View {
         Button {
             if allDirectories.isEmpty {
-                viewModel.createTab()
+                // No directories known yet: route immediately (will create plain).
+                requestNewConversation(directory: nil, pinToGroupId: nil)
             } else {
                 showNewTab = true
             }
@@ -498,14 +523,11 @@ struct TabListView: View {
         }
         .contextMenu {
             if let defaultDir = allDirectories.first {
-                Button { viewModel.createTab(workingDirectory: defaultDir.fullPath) } label: {
+                Button { requestNewConversation(directory: defaultDir.fullPath, pinToGroupId: nil) } label: {
                     Label("New Tab", systemImage: "plus")
                 }
                 Button { viewModel.createTerminalTab(workingDirectory: defaultDir.fullPath) } label: {
                     Label("New Terminal", systemImage: "terminal")
-                }
-                Button { requestEngineTab(directory: defaultDir.fullPath) } label: {
-                    Label("New Engine", systemImage: "bolt.fill")
                 }
             }
         }
@@ -554,87 +576,14 @@ struct TabListView: View {
     /// Returns `viewModel.displayGroups` filtered by `searchText`.
     /// When search is empty, returns the full list unchanged (zero cost).
     /// Groups with zero matching tabs are dropped entirely.
-    private var filteredDisplayGroups: [(label: String, id: String, icon: String, directory: String?, tabs: [RemoteTabState])] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return viewModel.displayGroups }
-
-        return viewModel.displayGroups.compactMap { group in
-            let matchingTabs = group.tabs.filter { tab in
-                return TabSearchHelper.matches(
-                    tab: tab,
-                    query: query,
-                    messages: viewModel.messages[tab.id],
-                    engineMessages: viewModel.engineInstance(tabId: tab.id, instanceId: viewModel.activeEngineInstance[tab.id])?.messages,
-                    attachments: viewModel.tabAttachmentCache[tab.id]
-                )
-            }
-            guard !matchingTabs.isEmpty else { return nil }
-            return (label: group.label, id: group.id, icon: group.icon, directory: group.directory, tabs: matchingTabs)
-        }
-    }
-
     // newTabSheet was extracted to TabListNewTabSheet.swift to keep this
     // file under the Swift 600-line cap. See CLAUDE.md → "When a file
     // exceeds the cap". The sheet is now presented inline in `body`'s
     // `.sheet(isPresented:onDismiss:)` modifier above.
-
-    // MARK: - Helpers
-
-    /// Toggle a group's collapsed state and persist to UserDefaults.
-    private func toggleGroupCollapsed(_ groupId: String) {
-        if collapsedGroupIds.contains(groupId) {
-            collapsedGroupIds.remove(groupId)
-        } else {
-            collapsedGroupIds.insert(groupId)
-        }
-        persistCollapsedGroups()
-    }
-
-    private func persistCollapsedGroups() {
-        UserDefaults.standard.set(Array(collapsedGroupIds), forKey: "collapsedGroupIds")
-    }
-
-    /// Handle engine tab creation with profile selection.
-    /// - 0 profiles: auto-create without a profileId (engine uses default)
-    /// - 1 profile: auto-select the only profile
-    /// - 2+ profiles: show a confirmation dialog picker
-    private func requestEngineTab(directory: String) {
-        let profiles = viewModel.engineProfiles
-        switch profiles.count {
-        case 0:
-            viewModel.createEngineTab(workingDirectory: directory)
-        case 1:
-            viewModel.createEngineTab(workingDirectory: directory, profileId: profiles[0].id)
-        default:
-            enginePickerDirectory = directory
-        }
-    }
-
-    /// Ordered list of directories: default base directory first, then recent directories (deduplicated).
-    private var allDirectories: [(label: String, fullPath: String)] {
-        var seen = Set<String>()
-        var result: [(label: String, fullPath: String)] = []
-
-        if let base = viewModel.defaultBaseDirectory, !base.isEmpty {
-            seen.insert(base)
-            result.append((label: directoryLabel(base), fullPath: base))
-        }
-
-        for dir in viewModel.recentDirectories where !seen.contains(dir) {
-            seen.insert(dir)
-            result.append((label: directoryLabel(dir), fullPath: dir))
-        }
-
-        return result
-    }
-
-    private func directoryLabel(_ path: String) -> String {
-        let base = (path as NSString).lastPathComponent
-        if base.isEmpty || path == "/" || path == "~" {
-            return "Home"
-        }
-        return base
-    }
+    //
+    // The search-filter (filteredDisplayGroups), collapsed-group persistence,
+    // new-conversation routing (requestNewConversation), and directory-list
+    // helpers were extracted to TabListView+Helpers.swift for the same reason.
 }
 
 // MARK: - Tab Selection Style

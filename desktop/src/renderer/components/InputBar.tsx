@@ -4,7 +4,7 @@ import { create } from 'zustand'
 import { useSessionStore } from '../stores/sessionStore'
 import { activeInstance } from '../stores/conversation-instance'
 import { AttachmentChips } from './AttachmentChips'
-import { SlashCommandMenu, getFilteredCommandsWithExtras, ExtensionCommandIcon, type SlashCommand } from './SlashCommandMenu'
+import { SlashCommandMenu, getFilteredCommandsWithExtras, slashMenuEnterAction, ExtensionCommandIcon, type SlashCommand } from './SlashCommandMenu'
 import { useColors } from '../theme'
 import { usePreferencesStore } from '../preferences'
 import type { DiscoveredCommand } from '../../shared/types'
@@ -40,8 +40,7 @@ export function InputBar() {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const measureRef = useRef<HTMLTextAreaElement | null>(null)
 
-  const sendMessage = useSessionStore((s) => s.sendMessage)
-  const submitEnginePrompt = useSessionStore((s) => s.submitEnginePrompt)
+  const submit = useSessionStore((s) => s.submit)
   // (clearTab/addSystemMessage/addEngineSystemMessage were used by the
   // pre-pipeline renderer slash dispatch; they remain available on the
   // store and are now driven by engine_command_result subscribers in
@@ -51,16 +50,10 @@ export function InputBar() {
   const addAttachments = useSessionStore((s) => s.addAttachments)
   const removeAttachment = useSessionStore((s) => s.removeAttachment)
   const setDraftInput = useSessionStore((s) => s.setDraftInput)
-  const setEngineDraftInput = useSessionStore((s) => s.setEngineDraftInput)
   const clearPendingInput = useSessionStore((s) => s.clearPendingInput)
 
   const activeTabId = useSessionStore((s) => s.activeTabId)
   const tab = useSessionStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
-  const activeInstanceId = useSessionStore((s) => {
-    const t = s.tabs.find((t) => t.id === s.activeTabId)
-    if (!t?.hasEngineExtension) return null
-    return s.conversationPanes.get(t.id)?.activeInstanceId ?? null
-  })
   const bashExecuting = tab?.bashExecuting ?? false
   const tabsReady = useSessionStore((s) => s.tabsReady)
   const initProgress = useSessionStore((s) => s.initProgress)
@@ -82,14 +75,23 @@ export function InputBar() {
   const { voiceState, voiceError, stopRecording, cancelRecording, toggleRecording } =
     useVoiceRecording(appendTranscript)
 
-  // Discover commands from filesystem on mount and when working directory changes
+  // Discover slash commands from the engine. Fires on mount, when the working
+  // directory changes, AND whenever the slash menu opens (slashFilter goes
+  // non-null). The menu-open trigger matters on a FRESH tab: the engine's first
+  // discover call after startup is cold (extension/skill loading adds latency),
+  // so the initial mount fetch may still be in flight when the user first types
+  // `/`. Re-fetching on open guarantees the list refreshes as soon as the
+  // (now-warm) engine responds, instead of showing only the built-ins until
+  // some unrelated re-render. The result updates state, so an open menu
+  // re-renders with the commands the moment they arrive.
+  const slashMenuOpen = slashFilter !== null
   useEffect(() => {
     let cancelled = false
     window.ion.discoverCommands(workingDir).then((cmds) => {
       if (!cancelled) setDiscoveredCommands(cmds)
     }).catch(() => {})
     return () => { cancelled = true }
-  }, [workingDir])
+  }, [workingDir, slashMenuOpen])
 
   const discoveredExtra: SlashCommand[] = discoveredCommands.map((dc) => ({
     command: `/${dc.name}`,
@@ -99,8 +101,11 @@ export function InputBar() {
   }))
 
   // Merge extension-registered commands from the engine's command registry.
-  // The key matches the engine session key used by engine-event-slice.ts.
-  const extensionKey = tab?.hasEngineExtension && activeInstanceId ? `${activeTabId}:${activeInstanceId}` : activeTabId
+  // The registry is keyed by the bare tabId (the engine session key for every
+  // conversation post-#256), so there is no tab-type fork: a plain tab simply
+  // has no registered extension commands and getRendererExtensionCommands
+  // returns an empty list.
+  const extensionKey = activeTabId
   const extensionExtra: SlashCommand[] = extensionKey
     ? getRendererExtensionCommands(extensionKey).map((ec) => ({
       command: `/${ec.name}`,
@@ -129,22 +134,6 @@ export function InputBar() {
     textareaRef.current?.focus()
     setBashMode(false)
   }, [activeTabId])
-
-  // ─── Per-engine-instance draft input sync ───
-  // Save current input to departing instance, restore arriving instance's draft
-  const prevInstanceRef = useRef<string | null>(activeInstanceId)
-  useEffect(() => {
-    const prevInst = prevInstanceRef.current
-    if (tab?.hasEngineExtension && activeTabId && prevInst && prevInst !== activeInstanceId) {
-      setEngineDraftInput(`${activeTabId}:${prevInst}`, input)
-      const arrivingDraft = activeInstanceId
-        ? (useSessionStore.getState().conversationPanes.get(activeTabId)?.instances.find(i => i.id === activeInstanceId)?.draftInput ?? '')
-        : ''
-      setInput(arrivingDraft)
-      setSlashFilter(null)
-    }
-    prevInstanceRef.current = activeInstanceId
-  }, [activeInstanceId])
 
   // ─── Rewind: restore user message to input bar ───
   const pendingInput = tab?.pendingInput
@@ -258,7 +247,7 @@ export function InputBar() {
   // ─── Slash commands ───
   // The slash menu only sets the input text; the real dispatch happens
   // inside handleSend below, which hands the raw text (including any leading
-  // "/") to the main process via window.ion.prompt / window.ion.enginePrompt.
+  // "/") to the main process via window.ion.prompt (the single unified prompt IPC).
   // The unified prompt pipeline (desktop/src/main/prompt-pipeline.ts) owns
   // all slash routing: extension-command dispatch, .md template expansion,
   // and the /clear short-circuit for sessions that haven't started yet.
@@ -316,7 +305,7 @@ export function InputBar() {
     // Slash-command routing is NOT done here any more. After the unified
     // prompt pipeline (desktop/src/main/prompt-pipeline.ts) the renderer is
     // a dumb pipe: it hands raw text — including any leading "/" — to the
-    // main process via window.ion.prompt / window.ion.enginePrompt, and the
+    // main process via window.ion.prompt (the single unified prompt IPC), and the
     // main-process pipeline decides between extension command dispatch,
     // .md template expansion, and normal LLM prompt submission. This makes
     // desktop and remote (iOS) paths behaviourally identical and removes
@@ -326,20 +315,18 @@ export function InputBar() {
     // emitted by the engine via engine_command_result events and inserted
     // by the engine-event-slice subscriber, so the same trigger works for
     // both desktop-initiated and iOS-initiated /clear.
+    // Unified submit for EVERY tab — plain or extension-backed. No tab-type
+    // fork: `submit` reads tab.attachments internally and resolves the tab's
+    // extensions from its profile (data), which routes the prompt through the
+    // engine pipeline for extension-backed tabs and the CLI pipeline otherwise.
     const currentTab = useSessionStore.getState().tabs.find(t => t.id === useSessionStore.getState().activeTabId)
-    if (currentTab?.hasEngineExtension) {
-      const enginePane = useSessionStore.getState().conversationPanes.get(currentTab.id)
-      if (enginePane?.activeInstanceId) {
-        setEngineDraftInput(`${currentTab.id}:${enginePane.activeInstanceId}`, '')
-      }
-      submitEnginePrompt(currentTab.id, prompt || (attachments.length > 0 ? 'See attached files' : ''), undefined, undefined, attachments.length > 0 ? attachments : undefined)
-      requestAnimationFrame(() => textareaRef.current?.focus())
-      return
-    }
-    sendMessage(prompt || 'See attached files')
+    if (!currentTab) return
+    // Clear the per-tab draft (bare tabId key — single instance per tab).
+    setDraftInput(currentTab.id, '')
+    submit(currentTab.id, prompt || (attachments.length > 0 ? 'See attached files' : ''))
     // Refocus after React re-renders from the state update
     requestAnimationFrame(() => textareaRef.current?.focus())
-  }, [input, isBusy, sendMessage, submitEnginePrompt, attachments.length, showSlashMenu, slashFilter, slashIndex, handleSlashSelect, bashMode, bashExecuting, tab?.workingDirectory, startBashCommand, completeBashCommand, extraCommands, isConnecting, activeTabId, setDraftInput, setEngineDraftInput, setBashMode])
+  }, [input, isBusy, submit, attachments.length, showSlashMenu, slashFilter, slashIndex, handleSlashSelect, bashMode, bashExecuting, tab?.workingDirectory, startBashCommand, completeBashCommand, extraCommands, isConnecting, activeTabId, setDraftInput, setBashMode])
 
   // ─── Keyboard ───
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -353,7 +340,24 @@ export function InputBar() {
       const filtered = getFilteredCommandsWithExtras(slashFilter!, extraCommands)
       if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex((i) => (i + 1) % filtered.length); return }
       if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((i) => (i - 1 + filtered.length) % filtered.length); return }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); if (filtered.length > 0) handleSlashSelect(filtered[slashIndex]); return }
+      // Tab always completes from the menu (no-op when there are no matches).
+      if (e.key === 'Tab') { e.preventDefault(); if (filtered.length > 0) handleSlashSelect(filtered[slashIndex]); return }
+      // Enter: if the menu has a match, complete it. If the typed text matches
+      // NO known command (filtered empty), do NOT swallow Enter — close the
+      // menu and submit the raw text. The prompt pipeline forwards it to the
+      // engine with resolveSlash=true; the engine resolves the template or
+      // surfaces "Unknown command". Swallowing Enter here would make an
+      // unknown/typed slash command unsendable.
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        if (slashMenuEnterAction(filtered.length) === 'complete') {
+          handleSlashSelect(filtered[slashIndex])
+        } else {
+          setSlashFilter(null)
+          handleSend()
+        }
+        return
+      }
       if (e.key === 'Escape') { e.preventDefault(); setSlashFilter(null); return }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }

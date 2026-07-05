@@ -49,6 +49,13 @@ export function createDirectorySlice(set: StoreSet, get: StoreGet): Partial<Stat
         ).catch(() => {})
       }
 
+      // setBaseDirectory intentionally starts a FRESH conversation in the new
+      // directory: the renderer state below nulls conversationId and clears
+      // historicalSessionIds. So the destructive resetTabSession (which also
+      // nulls the engine-side conversationId and forces a fresh mint) is the
+      // CORRECT primitive here — engine and renderer stay consistent. This is
+      // distinct from stuck-tab recovery, which must PRESERVE the conversation
+      // and therefore uses restartTabSession.
       window.ion.resetTabSession(activeTabId)
       set((s) => ({
         tabs: s.tabs.map((t) =>

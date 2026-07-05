@@ -57,7 +57,7 @@ vi.mock('../../preferences', () => ({
   usePreferencesStore: { getState: () => ({ uiZoom: 1, gitOpsMode: 'standard' }) },
 }))
 
-import { anyEngineInstanceHasRunningChildren, isAnyEngineInstanceRunning } from '../TabStripShared'
+import { anyEngineInstanceHasRunningChildren, effectiveRunningChildrenCount, isAnyEngineInstanceRunning } from '../TabStripShared'
 
 function resetState() {
   state.conversationPanes = new Map()
@@ -78,6 +78,19 @@ function setAgents(tabId: string, instanceId: string, statuses: string[]) {
   pane.instances[idx] = {
     ...pane.instances[idx],
     agentStates: statuses.map((status, i) => ({ name: `agent-${i}`, status, metadata: {} })),
+  }
+}
+
+/** Stamp inst.statusFields.backgroundAgents on the first instance of tabId. */
+function setBackgroundAgents(tabId: string, instanceId: string, count: number) {
+  const pane = state.conversationPanes.get(tabId)
+  if (!pane) return
+  const idx = pane.instances.findIndex((i: any) => i.id === instanceId)
+  if (idx === -1) return
+  const existing = pane.instances[idx].statusFields || {}
+  pane.instances[idx] = {
+    ...pane.instances[idx],
+    statusFields: { ...existing, backgroundAgents: count },
   }
 }
 
@@ -133,5 +146,100 @@ describe('anyEngineInstanceHasRunningChildren', () => {
     pane.instances[0] = { ...pane.instances[0], statusFields: { state: 'running' } }
     expect(anyEngineInstanceHasRunningChildren('tab1')).toBe(true)
     expect(isAnyEngineInstanceRunning('tab1')).toBe(true)
+  })
+})
+
+// ─── effectiveRunningChildrenCount unit tests ─────────────────────────────────
+//
+// These test the canonical helper directly. Each case must go RED if the helper
+// is reverted to an agentStates-only fold.
+
+describe('effectiveRunningChildrenCount', () => {
+  it('returns 0 when agentStates is empty and backgroundAgents is absent', () => {
+    expect(effectiveRunningChildrenCount({ agentStates: [], statusFields: null })).toBe(0)
+  })
+
+  it('counts running entries from agentStates only', () => {
+    const inst = {
+      agentStates: [{ status: 'running' }, { status: 'done' }, { status: 'running' }],
+      statusFields: null,
+    }
+    expect(effectiveRunningChildrenCount(inst)).toBe(2)
+  })
+
+  it('returns backgroundAgents when agentStates is empty (plain-conversation dispatch)', () => {
+    // This is the bug scenario: a plain orchestrator conversation idle with
+    // background agents running. agentStates is empty; backgroundAgents carries
+    // the count. Reverting the helper to agentStates-only makes this go RED.
+    const inst = {
+      agentStates: [],
+      statusFields: { backgroundAgents: 3 },
+    }
+    expect(effectiveRunningChildrenCount(inst)).toBe(3)
+  })
+
+  it('returns max (not sum) when both sources are non-zero', () => {
+    // 1 running agentState + backgroundAgents=2 → max(1,2) = 2, not 3.
+    // Both vantage points observe the same agents; summing would double-count.
+    const inst = {
+      agentStates: [{ status: 'running' }],
+      statusFields: { backgroundAgents: 2 },
+    }
+    expect(effectiveRunningChildrenCount(inst)).toBe(2)
+  })
+
+  it('returns 0 when backgroundAgents is 0 and no running agentStates', () => {
+    const inst = {
+      agentStates: [{ status: 'done' }],
+      statusFields: { backgroundAgents: 0 },
+    }
+    expect(effectiveRunningChildrenCount(inst)).toBe(0)
+  })
+
+  it('ignores backgroundAgents when undefined (treats as 0)', () => {
+    // statusFields present but backgroundAgents absent → only agentStates counted
+    const inst = {
+      agentStates: [{ status: 'running' }],
+      statusFields: { backgroundAgents: undefined },
+    }
+    expect(effectiveRunningChildrenCount(inst)).toBe(1)
+  })
+})
+
+// ─── anyEngineInstanceHasRunningChildren — backgroundAgents branch ─────────────
+//
+// These verify the fix end-to-end through the store-fold entry point.
+// Each must go RED if anyEngineInstanceHasRunningChildren is reverted to
+// iterate only inst.agentStates.
+
+describe('anyEngineInstanceHasRunningChildren — backgroundAgents branch', () => {
+  beforeEach(resetState)
+
+  it('returns true when agentStates is empty but statusFields.backgroundAgents > 0', () => {
+    // Core regression case: plain orchestrator conversation idle with background
+    // agents still running. agentStates is empty (engine does not populate it
+    // for plain dispatches); backgroundAgents carries the live count.
+    setPane('tab1', ['inst1'])
+    setBackgroundAgents('tab1', 'inst1', 2)
+    expect(anyEngineInstanceHasRunningChildren('tab1')).toBe(true)
+  })
+
+  it('resolves via max when both agentStates and backgroundAgents are non-zero', () => {
+    // Proves we take max(1, 2) = 2, and the result is > 0 (true), not a sum.
+    // If this returned false the max logic is broken.
+    setPane('tab1', ['inst1'])
+    setAgents('tab1', 'inst1', ['running'])   // fromAgentStates = 1
+    setBackgroundAgents('tab1', 'inst1', 2)   // fromBackgroundAgents = 2
+    expect(anyEngineInstanceHasRunningChildren('tab1')).toBe(true)
+    // Verify the count via effectiveRunningChildrenCount directly:
+    const pane = state.conversationPanes.get('tab1')
+    const inst = pane.instances[0]
+    expect(effectiveRunningChildrenCount(inst)).toBe(2)  // max, not sum (3)
+  })
+
+  it('returns false when backgroundAgents is 0 and agentStates is empty', () => {
+    setPane('tab1', ['inst1'])
+    setBackgroundAgents('tab1', 'inst1', 0)
+    expect(anyEngineInstanceHasRunningChildren('tab1')).toBe(false)
   })
 })

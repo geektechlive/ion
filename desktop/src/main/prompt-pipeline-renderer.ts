@@ -38,28 +38,34 @@ function escape(s: string): string {
  */
 export function emitRemoteMessageAdded(p: IncomingPrompt, content: string, role: 'user' | 'system'): void {
   if (!state.remoteTransport) return
-  // For engine tabs the remote transport has a different envelope shape —
-  // engine_harness_message — for system content. User content for engine
-  // tabs is replayed via `engine_conversation_history` on load, so we don't
-  // echo individual user message_added events for engine tabs.
-  if (p.isEngineTab) {
+  // For extension-hosted conversations the remote transport has a different envelope shape —
+  // engine_harness_message — for system content. User content for extension-hosted
+  // conversations is replayed via `engine_conversation_history` on load, so we don't
+  // echo individual user message_added events for extension tabs.
+  if (p.hasExtensions) {
     if (role === 'system') {
       state.remoteTransport.send({
-        type: 'engine_harness_message',
+        type: 'desktop_harness_message',
         tabId: p.tabId,
         instanceId: p.instanceId ?? null,
         message: content,
         source: 'pipeline',
       })
     }
-    // No user-role engine echo here — the renderer's submitEnginePrompt
-    // path handles its own optimistic insert; iOS sees the agent activity
-    // via engine_message_added events that come back from the engine
-    // bridge once the prompt actually runs.
+    // No user-role engine echo on this branch: the renderer's unified submit
+    // path handles its own optimistic insert for a locally-typed turn, and the
+    // remote (iOS) prompt path echoes desktop_message_added itself (see
+    // remote/handlers/tabs-prompt.ts). iOS sees an extension-hosted user turn
+    // through the full history reload (engine_conversation_history) on
+    // conversation load, which is the snapshot authority for persisted turns.
+    // The engine does NOT echo user turns back to clients (engine_user_turn was
+    // removed); cross-device live echo is owned by the desktop↔iOS wire. There
+    // is NO engine_message_added event either — a prior comment here described a
+    // mechanism that never existed.
     return
   }
   state.remoteTransport.send({
-    type: 'message_added',
+    type: 'desktop_message_added',
     tabId: p.tabId,
     message: {
       // Reuse the request id ONLY for the user echo so iOS replaces its
@@ -82,65 +88,72 @@ export function emitRemoteMessageAdded(p: IncomingPrompt, content: string, role:
  * Insert a system-message bubble into the desktop renderer's per-tab
  * messages. Lets the unified pipeline surface unknown-command feedback,
  * extension-command failures, and timeouts without going through an LLM
- * round-trip. Engine and CLI tabs use different store mutators so we
- * branch on isEngineTab.
+ * round-trip.
+ *
+ * Routes through `addEngineSystemMessage(tabId, content)` for every tab
+ * type — the store action resolves the active instance internally. The
+ * old two-branch split (compound key for extension tabs, inline store
+ * mutation for plain tabs) is gone: Phase 4b collapsed every conversation
+ * to a single 'main' instance, so the store action is the single correct
+ * path for both.
  */
 export async function insertRendererSystemMessage(p: IncomingPrompt, content: string): Promise<void> {
   if (!state.mainWindow) return
   const escapedContent = escape(content)
+  const escapedTab = escape(p.tabId)
   try {
-    if (p.isEngineTab) {
-      if (!p.instanceId) return
-      const key = `${p.tabId}:${p.instanceId}`
-      const escapedKey = escape(key)
-      await state.mainWindow.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return;
-          var fn = store.getState().addEngineSystemMessage;
-          if (typeof fn !== 'function') return;
-          fn('${escapedKey}', '${escapedContent}');
-        })()
-      `)
-    } else {
-      const escapedTab = escape(p.tabId)
-      await state.mainWindow.webContents.executeJavaScript(`
-        (function() {
-          var store = window.__Ion_SESSION_STORE__;
-          if (!store) return;
-          var s = store.getState();
-          // Per-conversation messages now live on the active ConversationInstance
-          // in conversationPanes, not on the in-memory TabState. Append the system
-          // message onto the active instance, and update the tab status separately.
-          var pane = s.conversationPanes ? s.conversationPanes.get('${escapedTab}') : null;
-          var inst = pane ? (pane.instances.find(function(i){ return i.id === pane.activeInstanceId; }) || pane.instances[0]) : null;
-          var patch = {};
-          if (inst) {
-            var newMsg = {
-              id: 'msg-' + Date.now() + '-' + Math.random(),
-              role: 'system',
-              content: '${escapedContent}',
-              timestamp: Date.now()
-            };
-            var nextMsgs = (inst.messages || []).concat([newMsg]);
-            var nextInst = Object.assign({}, inst, { messages: nextMsgs, messageCount: nextMsgs.length });
-            var nextInstances = pane.instances.map(function(i) { return i === inst ? nextInst : i; });
-            var nextPanes = new Map(s.conversationPanes);
-            nextPanes.set('${escapedTab}', Object.assign({}, pane, { instances: nextInstances }));
-            patch.conversationPanes = nextPanes;
-          }
-          patch.tabs = s.tabs.map(function(t) {
-            if (t.id !== '${escapedTab}') return t;
-            return Object.assign({}, t, {
-              status: t.status === 'connecting' ? 'idle' : t.status
-            });
-          });
-          store.setState(patch);
-        })()
-      `)
-    }
+    await state.mainWindow.webContents.executeJavaScript(`
+      (function() {
+        var store = window.__Ion_SESSION_STORE__;
+        if (!store) return;
+        var fn = store.getState().addEngineSystemMessage;
+        if (typeof fn !== 'function') return;
+        fn('${escapedTab}', '${escapedContent}');
+      })()
+    `)
   } catch (err) {
     log(`insertRendererSystemMessage error: ${(err as Error).message}`)
+  }
+}
+
+/**
+ * Insert a user-message bubble into the desktop renderer's per-tab messages
+ * for a remote-originated prompt that bypassed the renderer's submit() path.
+ *
+ * This is the fix for the iOS slash first-message disappearance: when an
+ * extension command succeeds synchronously (commandError === ''), the
+ * extension's ctx.sendPrompt starts a run, but the desktop pipeline's
+ * success path returns without ever calling submit() on the renderer. The
+ * renderer store therefore has no user bubble for the prompt, and iOS
+ * history reads (which pull from the renderer store) also miss it.
+ *
+ * Routes through insertRemoteUserMessage(tabId, content, slashCommand?,
+ * slashArgs?) on the store, which appends a user message to the active
+ * instance without triggering a new prompt to the engine.
+ */
+export async function insertRendererRemoteUserMessage(
+  p: IncomingPrompt,
+  content: string,
+  slashCommand?: string,
+  slashArgs?: string,
+): Promise<void> {
+  if (!state.mainWindow) return
+  const escapedTab = escape(p.tabId)
+  const escapedContent = escape(content)
+  const escapedSlash = slashCommand ? escape(slashCommand) : ''
+  const escapedArgs = slashArgs ? escape(slashArgs) : ''
+  try {
+    await state.mainWindow.webContents.executeJavaScript(`
+      (function() {
+        var store = window.__Ion_SESSION_STORE__;
+        if (!store) return;
+        var fn = store.getState().insertRemoteUserMessage;
+        if (typeof fn !== 'function') return;
+        fn('${escapedTab}', '${escapedContent}'${escapedSlash ? `, '${escapedSlash}', '${escapedArgs}'` : ''});
+      })()
+    `)
+  } catch (err) {
+    log('insertRendererRemoteUserMessage error: ' + (err as Error).message)
   }
 }
 
@@ -156,9 +169,14 @@ export async function clearConnectingStatus(p: IncomingPrompt): Promise<void> {
   if (!state.mainWindow) return
   const escapedTab = escape(p.tabId)
   try {
-    if (p.isEngineTab) {
-      // Engine tabs use the same tab.status field as CLI tabs (set by
-      // submitEnginePrompt to 'running'). Reset it the same way.
+    if (p.hasExtensions) {
+      // Extension-hosted tabs use the same tab.status field as plain tabs (set by
+      // submitEnginePrompt to 'running'). Reset ONLY 'connecting' to idle —
+      // never knock a 'running' tab to idle. A pure slash-command dispatch
+      // leaves the tab 'connecting' (no LLM turn coming); but if a real run is
+      // already in flight (status 'running'), clearing it would hide the
+      // interrupt button and make the tab look idle mid-turn. Mirrors the plain
+      // branch below, which already guards on 'connecting' only.
       await state.mainWindow.webContents.executeJavaScript(`
         (function() {
           var store = window.__Ion_SESSION_STORE__;
@@ -167,7 +185,7 @@ export async function clearConnectingStatus(p: IncomingPrompt): Promise<void> {
           store.setState({
             tabs: s.tabs.map(function(t) {
               if (t.id !== '${escapedTab}') return t;
-              if (t.status !== 'connecting' && t.status !== 'running') return t;
+              if (t.status !== 'connecting') return t;
               return Object.assign({}, t, { status: 'idle' });
             })
           });
@@ -193,5 +211,5 @@ export async function clearConnectingStatus(p: IncomingPrompt): Promise<void> {
     log(`clearConnectingStatus error: ${(err as Error).message}`)
   }
   // Mirror to iOS so its tab status indicator flips too.
-  state.remoteTransport?.send({ type: 'tab_status', tabId: p.tabId, status: 'idle' })
+  state.remoteTransport?.send({ type: 'desktop_tab_status', tabId: p.tabId, status: 'idle' })
 }

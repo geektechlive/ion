@@ -85,6 +85,18 @@ type ClientCommand struct {
 	// in engine/internal/types/types.go for the full rationale.
 	ImplementationPhase bool `json:"implementationPhase,omitempty"`
 
+	// send_prompt: per-prompt extended-thinking effort for this run. One of
+	// "low" | "medium" | "high"; "" or "off" means NO thinking directive for
+	// this prompt (overriding any session default to off). This is the LIVE
+	// per-conversation control — a client changes the level and it takes
+	// effect on the very next prompt with no session restart, mirroring the
+	// ImplementationPhase per-prompt override pattern above. The engine maps a
+	// non-empty value onto RunOptions.Thinking{Enabled:true, Effort:<level>};
+	// the provider body-builders then resolve the per-model mechanism via the
+	// shared resolveThinking helper. Additive optional field on the scrutinized
+	// engine wire — non-breaking.
+	ThinkingEffort string `json:"thinkingEffort,omitempty"`
+
 	// send_prompt: harness-supplied description prose for the
 	// EnterPlanMode sentinel tool that the engine injects during
 	// auto-mode runs. When non-empty, the engine forwards this string
@@ -150,6 +162,23 @@ type ClientCommand struct {
 	// invariant is the entire point of the field's existence.
 	BashAllowlistAdditionsForThisPrompt []string `json:"bashAllowlistAdditionsForThisPrompt,omitempty"`
 
+	// send_prompt: signals that Text is a slash-command invocation
+	// (`/name args`) the engine should resolve and expand, rather than a plain
+	// user message. When true the engine resolves the command across the
+	// conventional roots (extension registry, .ion/commands, .claude/commands,
+	// skills, project), expands the template ($ARGUMENTS substitution +
+	// frontmatter handling), feeds the EXPANDED body to the model, and persists
+	// the RAW invocation as the displayed user turn (so the user sees the
+	// command, the model sees the expansion).
+	//
+	// Default false: Text is treated as a plain message verbatim — byte-for-byte
+	// the engine's prior behavior. Additive: a client that sends `/`-leading
+	// content as an ordinary message (a path, a diff, a regex) is unaffected
+	// because it does not set the flag. The engine never sniffs Text for a
+	// leading slash on its own; the client classifies the invocation (the same
+	// trivial check it already does to drive slash-command autocomplete).
+	ResolveSlash bool `json:"resolveSlash,omitempty"`
+
 	// Compaction overrides — per-prompt tuning of context compaction behavior.
 	CompactTargetPercent  float64 `json:"compactTargetPercent,omitempty"`
 	CompactMicroKeepTurns int     `json:"compactMicroKeepTurns,omitempty"`
@@ -158,6 +187,14 @@ type ClientCommand struct {
 	CompactMemoryEnabled  *bool   `json:"compactMemoryEnabled,omitempty"`
 
 	// resource_subscribe / resource_unsubscribe
+	//
+	// ResourceKind names the resource kind to subscribe to. The sentinel
+	// value "*" subscribes to every kind on the target broker — every kind
+	// with a producer now plus every kind registered or published later.
+	// Wildcard delivery carries the real item kind in each snapshot/delta
+	// (never "*"), so consumers bucket by the true kind. This is pure data
+	// routing; the engine encodes no render policy. An exact kind string
+	// subscribes to that one kind only (unchanged behavior).
 	ResourceKind   string                `json:"resourceKind,omitempty"`
 	ResourceFilter *types.ResourceFilter `json:"resourceFilter,omitempty"`
 	ResourceSubID  string                `json:"resourceSubId,omitempty"`
@@ -231,6 +268,36 @@ var validCommands = map[string]bool{
 	"resource_subscribe":   true,
 	"resource_unsubscribe": true,
 	"resource_publish":     true,
+	// get_plan_content: fetch a bounded byte-range window of a plan file.
+	// Key (session key) scopes the plan directory for the security check.
+	// Path is the absolute plan file path the engine emitted in a prior
+	// plan_mode_changed / plan_proposal / plan_mode_auto_exit event.
+	// Offset + Limit select the window (Limit 0 = server default 64 KB).
+	// The engine replies with a plan_content event on the same connection.
+	"get_plan_content": true,
+	// discover_slash_commands: lists the filesystem slash-command templates and
+	// skills available across the conventional roots for a working directory.
+	// Path carries the working directory (optional; user-level roots are always
+	// included). The optional Config carries claudeCompat; when false (or the
+	// Config is absent), the engine skips the .claude / ~/.claude roots, matching
+	// the slash-resolution and skill-loading gates. Replaces per-consumer
+	// filesystem walks so every consumer's autocomplete menu is fed by one owner.
+	// Stateless; no session required. The engine replies with the listing in the
+	// result data.
+	"discover_slash_commands": true,
+	// get_enterprise_policy: read the enterprise NewConversationDefaults policy
+	// so clients can decide whether the new-conversation flow is locked.
+	// Stateless (no session key); the engine replies with
+	// { newConversationDefaults } in the result data (null when no enterprise
+	// config / no section is present).
+	"get_enterprise_policy": true,
+	// get_context_breakdown: on-demand context breakdown outside of an active
+	// run. Reconstructs the full assembly pipeline (system prompt + tools +
+	// conversation messages) for the given session key and emits
+	// engine_context_breakdown. For a fresh session the breakdown reflects
+	// system prompt + tools with zero conversation tokens; for a historical
+	// session it reflects all on-disk messages. Requires only key.
+	"get_context_breakdown": true,
 }
 
 // ParseClientCommand parses a single NDJSON line into a ClientCommand.
@@ -410,6 +477,9 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 	case "list_directory":
 		// path is optional ("" or "~" → engine home); no required fields
 		return true
+	case "discover_slash_commands":
+		// path (working directory) is optional; user-level roots always apply
+		return true
 	case "clear_conversation_file":
 		// key carries the sessionId (conversationId) to wipe. Required and non-empty.
 		return hasNonEmptyString(raw, "key")
@@ -427,6 +497,17 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "resourceSubId")
 	case "resource_publish":
 		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "resourceOp")
+	case "get_plan_content":
+		// key scopes the plan directory; path is the target plan file.
+		// offset and limit are optional (both default to 0 = start/server-default).
+		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "path")
+	case "get_enterprise_policy":
+		// Stateless read; no required fields. requestId is optional but needed
+		// to receive the ServerResult (per the wire contract).
+		return true
+	case "get_context_breakdown":
+		// On-demand breakdown for the given session key. Only key is required.
+		return hasNonEmptyString(raw, "key")
 	}
 	return false
 }

@@ -15,12 +15,12 @@ function log(msg: string): void {
  *
  * Reads the full content of a single resource item from the renderer's
  * resource store via executeJavaScript and sends it back as a
- * resource_content event. iOS sends this when the user taps a briefing
+ * resource_content event. iOS sends this when the user taps a resource
  * card to expand it — the snapshot carries only metadata, so the full
  * content is fetched on demand.
  */
 export async function handleRequestResourceContent(
-  cmd: Extract<RemoteCommand, { type: 'request_resource_content' }>,
+  cmd: Extract<RemoteCommand, { type: 'desktop_request_resource_content' }>,
   deviceId: string,
 ): Promise<void> {
   const { kind, resourceId } = cmd
@@ -71,7 +71,7 @@ export async function handleRequestResourceContent(
     }
   }
   state.remoteTransport?.sendToDevice(deviceId, {
-    type: 'resource_content',
+    type: 'desktop_resource_content',
     resourceId,
     kind,
     content,
@@ -81,13 +81,13 @@ export async function handleRequestResourceContent(
 /**
  * Handles mark_resource_read from iOS.
  *
- * When a user reads a briefing on iOS, the read state must propagate to
+ * When a user reads a resource on iOS, the read state must propagate to
  * the desktop (source of truth) and then fan out to all subscribers via
  * the engine's resource broker. This mirrors the desktop's own mark-read
  * flow: persist locally + publish a mark_read delta through the engine.
  */
 export async function handleMarkResourceRead(
-  cmd: Extract<RemoteCommand, { type: 'mark_resource_read' }>,
+  cmd: Extract<RemoteCommand, { type: 'desktop_mark_resource_read' }>,
 ): Promise<void> {
   const { kind, resourceId } = cmd
   log(`mark_resource_read: kind=${kind} resourceId=${resourceId.slice(0, 12)}`)
@@ -129,7 +129,7 @@ export async function handleMarkResourceRead(
  * for the engine round-trip.
  */
 export async function handleDeleteResource(
-  cmd: Extract<RemoteCommand, { type: 'delete_resource' }>,
+  cmd: Extract<RemoteCommand, { type: 'desktop_delete_resource' }>,
 ): Promise<void> {
   const { kind, resourceId } = cmd
   log(`delete_resource: kind=${kind} resourceId=${resourceId.slice(0, 12)}`)

@@ -1,7 +1,11 @@
 /**
- * engine-event-slice — `engine_harness_message` dedup convention
- * (See full comment in original file; test behavior unchanged, assertions
- * now read from instance.messages in conversationPanes instead of engineMessages Map.)
+ * harness_message — WI-001 dedup convention (normalized stream)
+ *
+ * After the single-path collapse (WI-001), engine_harness_message is promoted
+ * to a NormalizedEvent variant (harness_message) and handled by handleNormalizedEvent
+ * in event-slice.ts. The dedupKey logic is preserved: if a message with the same
+ * dedupKey already exists in the active instance's scrollback, the duplicate is
+ * suppressed.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -13,106 +17,102 @@ vi.mock('../session-store-helpers', () => ({
     return vi.fn(() => `mock-msg-${++n}`)
   })(),
   playNotificationIfHidden: vi.fn(async () => {}),
+  totalInputTokens: vi.fn(() => 0),
+  scheduleDoneGroupMove: vi.fn(),
+}))
+vi.mock('../slices/event-slice-titling', () => ({ maybeGenerateTabTitle: vi.fn() }))
+vi.mock('../../preferences', () => ({
+  usePreferencesStore: { getState: vi.fn(() => ({ expandToolResults: false, aiGeneratedTitles: false })) },
+}))
+vi.mock('../slices/engine-event-slice-messages', () => ({
+  handleCrossNormalizedEvent: vi.fn(() => false),
 }))
 
-import { createEngineEventSlice } from '../slices/engine-event-slice'
+import { createEventSlice } from '../slices/event-slice'
+import { activeInstance } from '../conversation-instance'
 import type { State } from '../session-store-types'
 
 function makeInstance(id: string) {
-  return { id, label: id, messages: [], modelOverride: null, permissionMode: 'auto', permissionDenied: null, conversationIds: [], draftInput: '', agentStates: [], statusFields: null, planFilePath: null }
+  return {
+    id, label: id, messages: [], messageCount: 0, modelOverride: null, sessionModel: null,
+    permissionMode: 'auto', permissionDenied: null, permissionQueue: [], elicitationQueue: [],
+    conversationIds: [], draftInput: '', agentStates: [],
+    statusFields: null, planFilePath: null, thinkingEffort: 'off', sealed: false,
+  }
 }
 
 function buildHarness() {
   const state: any = {
-    tabs: [{ id: 'tab1', hasEngineExtension: true, lastEventAt: 0 }],
+    tabs: [{ id: 'tab1', engineProfileId: 'test-profile', lastEventAt: 0, hasUnread: false, queuedPrompts: [], historicalSessionIds: [] }],
+    activeTabId: 'tab1',
+    isExpanded: false,
     engineWorkingMessages: new Map(),
     engineNotifications: new Map(),
     engineDialogs: new Map(),
     enginePinnedPrompt: new Map(),
     engineUsage: new Map(),
     engineModelFallbacks: new Map(),
-    conversationPanes: new Map([['tab1', { instances: [makeInstance('inst1')], activeInstanceId: 'inst1' }]]),
+    conversationPanes: new Map([['tab1', { instances: [makeInstance('main')], activeInstanceId: 'main' }]]),
   }
   const set = (partial: any) => {
     const patch = typeof partial === 'function' ? partial(state) : partial
     Object.assign(state, patch)
   }
   const get = () => state as State
-  const slice = createEngineEventSlice(set, get) as State
+  const slice = createEventSlice(set, get) as State
   return { state, slice }
 }
 
-function getMessages(state: any, tabId: string, instanceId: string) {
-  const pane = state.conversationPanes.get(tabId)
-  return pane?.instances.find((i: any) => i.id === instanceId)?.messages ?? []
+function getMessages(state: any) {
+  return activeInstance(state.conversationPanes, 'tab1')?.messages ?? []
 }
 
-describe('engine_harness_message dedupKey convention', () => {
+describe('harness_message dedupKey convention (WI-001 normalized path)', () => {
   it('drops the second emission when dedupKey matches a prior harness message', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_harness_message',
+    slice.handleNormalizedEvent('tab1', {
+      type: 'harness_message',
       message: 'Welcome to Ion Meta',
+      dedupKey: 'ion-meta:welcome',
       source: 'ion-meta',
-      metadata: { dedupKey: 'ion-meta:welcome' },
     } as any)
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_harness_message',
+    slice.handleNormalizedEvent('tab1', {
+      type: 'harness_message',
       message: 'Welcome to Ion Meta',
+      dedupKey: 'ion-meta:welcome',
       source: 'ion-meta',
-      metadata: { dedupKey: 'ion-meta:welcome' },
     } as any)
 
-    const msgs = getMessages(state, 'tab1', 'inst1')
+    const msgs = getMessages(state)
     expect(msgs).toHaveLength(1)
     expect(msgs[0].role).toBe('harness')
     expect(msgs[0].content).toBe('Welcome to Ion Meta')
-    expect(msgs[0].dedupKey).toBe('ion-meta:welcome')
+    expect((msgs[0] as any).harnessDedup).toBe('ion-meta:welcome')
   })
 
   it('pushes both emissions when dedupKey values differ', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_harness_message',
-      message: 'first',
-      metadata: { dedupKey: 'ext:msg-a' },
-    } as any)
+    slice.handleNormalizedEvent('tab1', { type: 'harness_message', message: 'first', dedupKey: 'ext:msg-a' } as any)
+    slice.handleNormalizedEvent('tab1', { type: 'harness_message', message: 'second', dedupKey: 'ext:msg-b' } as any)
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_harness_message',
-      message: 'second',
-      metadata: { dedupKey: 'ext:msg-b' },
-    } as any)
-
-    const msgs = getMessages(state, 'tab1', 'inst1')
+    const msgs = getMessages(state)
     expect(msgs).toHaveLength(2)
-    expect(msgs[0].dedupKey).toBe('ext:msg-a')
-    expect(msgs[1].dedupKey).toBe('ext:msg-b')
+    expect((msgs[0] as any).harnessDedup).toBe('ext:msg-a')
+    expect((msgs[1] as any).harnessDedup).toBe('ext:msg-b')
   })
 
-  it('pushes both emissions when metadata/dedupKey is absent (opt-out)', () => {
+  it('pushes both emissions when dedupKey is absent (opt-out)', () => {
     const { state, slice } = buildHarness()
-    const key = 'tab1:inst1'
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_harness_message',
-      message: 'bare 1',
-    } as any)
+    slice.handleNormalizedEvent('tab1', { type: 'harness_message', message: 'bare 1' } as any)
+    slice.handleNormalizedEvent('tab1', { type: 'harness_message', message: 'bare 2' } as any)
 
-    slice.handleEngineEvent(key, {
-      type: 'engine_harness_message',
-      message: 'bare 2',
-      metadata: { someOtherHint: 'foo' },
-    } as any)
-
-    const msgs = getMessages(state, 'tab1', 'inst1')
+    const msgs = getMessages(state)
     expect(msgs).toHaveLength(2)
-    expect(msgs[0].dedupKey).toBeUndefined()
-    expect(msgs[1].dedupKey).toBeUndefined()
+    expect((msgs[0] as any).harnessDedup).toBeUndefined()
+    expect((msgs[1] as any).harnessDedup).toBeUndefined()
   })
 })

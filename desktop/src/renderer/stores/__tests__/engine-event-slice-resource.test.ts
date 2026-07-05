@@ -1,31 +1,28 @@
 /**
- * engine-event-slice — resource subsystem event routing
+ * Resource subsystem event routing — normalized path (WI-001)
  *
- * Pins the contract that engine_resource_snapshot and engine_resource_delta
- * are handled for BOTH global (key="") and session-scoped (key="tab:inst")
- * events. The earlier bug: both types were in handleMessageEvents, which is
- * only reached after the `if (!key.includes(':')) return` guard. Global
- * resources arrived with key="" and were silently dropped.
+ * After WI-001, resource and notification events flow through the normalized
+ * stream (ion:normalized-event → handleNormalizedEvent → handleCrossNormalizedEvent)
+ * instead of the raw IPC.ENGINE_EVENT path. handleCrossEngineEvent is dead
+ * code with no production caller and has been deleted (QA finding on WI-001).
  *
- * Also pins the notification-panel visibility contract (regression for the
- * d306b769 / global-notifications-empty bug):
- *   - The store holds all items flat, keyed by kind.
- *   - NotificationsPanel renders only items without conversationId.
- *   - A snapshot containing mixed global + conversation items must preserve
- *     the global items so the panel is not empty after delivery.
+ * This test re-points the original coverage at handleCrossNormalizedEvent —
+ * the live path — using NormalizedEvent shapes. The underlying store mutations
+ * (applyResourceSnapshot, applyResourceDelta) are identical; only the wrapper
+ * function and event-type discriminators change.
  *
- * Tests:
- *   - engine_resource_snapshot with key="" updates the store (global path)
- *   - engine_resource_snapshot with key="tab:inst" updates the store (session path)
- *   - engine_resource_delta create with key="" updates the store (global path)
- *   - engine_resource_delta create with key="tab:inst" updates the store (session path)
- *   - engine_resource_delta update mutates the correct item
- *   - engine_resource_delta delete removes the correct item
- *   - engine_resource_delta mark_read adds item id to readResourceIds
- *   - applyResourceSnapshot merges read=true items into readResourceIds
- *   - engine_notification with key="" is handled (does not throw, returns)
- *   - engine_notification with key="tab:inst" is handled (does not throw, returns)
- *   - mixed snapshot: global items (no conversationId) survive the panel filter
+ * Original contracts pinned:
+ *   - resource_snapshot global (tabId="") and session (tabId="tab1") scope
+ *   - resource_delta create/update/delete/mark_read for both scopes
+ *   - notification handled and does not throw
+ *   - mixed snapshot: global items survive the NotificationsPanel filter
+ *   - empty snapshot does NOT wipe disk-seeded items
+ *   - partial snapshot merges with existing items when incoming count is smaller
+ *   - snapshot with read=true items merges into readResourceIds
+ *
+ * NOTE: handleCrossNormalizedEvent uses bare tabId (not compound key).
+ * For session-scope resources the caller passes the bare tabId; for global
+ * resources it passes '' (empty string), same convention as the old path.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -36,8 +33,9 @@ vi.mock('../session-store-helpers', () => ({
   playNotificationIfHidden: vi.fn(async () => {}),
 }))
 
-import { handleCrossEngineEvent } from '../slices/engine-event-slice-messages'
+import { handleCrossNormalizedEvent } from '../slices/engine-event-slice-messages'
 import type { ResourceItem } from '../../../shared/types-engine'
+import type { NormalizedEvent } from '../../../shared/types-events'
 
 // ── Minimal state shape required by the resource handlers ──────────────────
 
@@ -66,17 +64,17 @@ function makeItem(overrides: Partial<ResourceItem> = {}): ResourceItem {
 
 // ── Snapshot tests ─────────────────────────────────────────────────────────
 
-describe('engine_resource_snapshot', () => {
-  it('populates the store when key is "" (global scope)', () => {
+describe('resource_snapshot', () => {
+  it('populates the store when tabId is "" (global scope)', () => {
     const { state, set } = makeResourceState()
     const item = makeItem({ id: 'g-1', kind: 'briefing' })
 
-    const handled = handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_snapshot',
+    const handled = handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-global',
       resourceItems: [item],
-    })
+    } as NormalizedEvent)
 
     expect(handled).toBe(true)
     expect(state.resources['briefing']).toHaveLength(1)
@@ -84,16 +82,16 @@ describe('engine_resource_snapshot', () => {
     expect(state.resourceSubscriptions['briefing']).toBe('sub-global')
   })
 
-  it('populates the store when key is "tab1:inst1" (session scope)', () => {
+  it('populates the store when tabId is "tab1" (session scope)', () => {
     const { state, set } = makeResourceState()
     const item = makeItem({ id: 's-1', kind: 'briefing', conversationId: 'conv-abc' })
 
-    const handled = handleCrossEngineEvent(set, () => state, 'tab1:inst1', {
-      type: 'engine_resource_snapshot',
+    const handled = handleCrossNormalizedEvent(set, () => state, 'tab1', {
+      type: 'resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-session',
       resourceItems: [item],
-    })
+    } as NormalizedEvent)
 
     expect(handled).toBe(true)
     expect(state.resources['briefing']).toHaveLength(1)
@@ -103,16 +101,14 @@ describe('engine_resource_snapshot', () => {
 
   it('replaces the entire collection when incoming count equals or exceeds existing', () => {
     const { state, set } = makeResourceState()
-    // Prime with two items.
     state.resources['briefing'] = [makeItem({ id: 'old-1' }), makeItem({ id: 'old-2' })]
 
-    // Snapshot with same count: replaces (full snapshot semantics).
-    handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_snapshot',
+    handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-replace',
       resourceItems: [makeItem({ id: 'new-1' }), makeItem({ id: 'new-2' })],
-    })
+    } as NormalizedEvent)
 
     expect(state.resources['briefing']).toHaveLength(2)
     expect(state.resources['briefing'].map((i: ResourceItem) => i.id)).toEqual(['new-1', 'new-2'])
@@ -120,22 +116,19 @@ describe('engine_resource_snapshot', () => {
 
   it('merges when partial snapshot has fewer items than existing (protects disk-seeded items)', () => {
     const { state, set } = makeResourceState()
-    // Prime with three items (simulating disk cold-load).
     state.resources['briefing'] = [
       makeItem({ id: 'old-1' }),
       makeItem({ id: 'old-2' }),
       makeItem({ id: 'old-3' }),
     ]
 
-    // Partial snapshot (e.g. extension respawn with fresh in-memory state, only 1 item known).
-    handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_snapshot',
+    handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-partial',
       resourceItems: [makeItem({ id: 'old-2', content: 'updated content' })],
-    })
+    } as NormalizedEvent)
 
-    // All 3 items survive. old-2 is updated (incoming wins on conflict).
     expect(state.resources['briefing']).toHaveLength(3)
     const ids = state.resources['briefing'].map((i: ResourceItem) => i.id)
     expect(ids).toContain('old-1')
@@ -150,12 +143,12 @@ describe('engine_resource_snapshot', () => {
     const readItem = makeItem({ id: 'already-read', read: true })
     const unreadItem = makeItem({ id: 'unread' })
 
-    handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_snapshot',
+    handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-read-merge',
       resourceItems: [readItem, unreadItem],
-    })
+    } as NormalizedEvent)
 
     expect(state.readResourceIds.has('already-read')).toBe(true)
     expect(state.readResourceIds.has('unread')).toBe(false)
@@ -164,12 +157,12 @@ describe('engine_resource_snapshot', () => {
   it('handles empty resourceItems without throwing', () => {
     const { state, set } = makeResourceState()
     expect(() => {
-      handleCrossEngineEvent(set, () => state, '', {
-        type: 'engine_resource_snapshot',
+      handleCrossNormalizedEvent(set, () => state, '', {
+        type: 'resource_snapshot',
         resourceKind: 'briefing',
         resourceSubId: 'sub-empty',
         resourceItems: [],
-      })
+      } as NormalizedEvent)
     }).not.toThrow()
     expect(state.resources['briefing']).toHaveLength(0)
   })
@@ -177,37 +170,35 @@ describe('engine_resource_snapshot', () => {
 
 // ── Delta tests ────────────────────────────────────────────────────────────
 
-describe('engine_resource_delta', () => {
-  it('create delta with key="" adds item to the store (global path)', () => {
+describe('resource_delta', () => {
+  it('create delta with tabId="" adds item to the store (global path)', () => {
     const { state, set } = makeResourceState()
 
-    const handled = handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_delta',
+    const handled = handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_delta',
       resourceKind: 'briefing',
-      resourceSubId: 'sub-delta-global',
       resourceDelta: {
         op: 'create',
         item: makeItem({ id: 'created-global' }),
       },
-    })
+    } as NormalizedEvent)
 
     expect(handled).toBe(true)
     expect(state.resources['briefing']).toHaveLength(1)
     expect(state.resources['briefing'][0].id).toBe('created-global')
   })
 
-  it('create delta with key="tab1:inst1" adds item to the store (session path)', () => {
+  it('create delta with tabId="tab1" adds item to the store (session path)', () => {
     const { state, set } = makeResourceState()
 
-    const handled = handleCrossEngineEvent(set, () => state, 'tab1:inst1', {
-      type: 'engine_resource_delta',
+    const handled = handleCrossNormalizedEvent(set, () => state, 'tab1', {
+      type: 'resource_delta',
       resourceKind: 'briefing',
-      resourceSubId: 'sub-delta-session',
       resourceDelta: {
         op: 'create',
         item: makeItem({ id: 'created-session', conversationId: 'conv-xyz' }),
       },
-    })
+    } as NormalizedEvent)
 
     expect(handled).toBe(true)
     expect(state.resources['briefing']).toHaveLength(1)
@@ -221,15 +212,14 @@ describe('engine_resource_delta', () => {
       makeItem({ id: 'untouched' }),
     ]
 
-    handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_delta',
+    handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_delta',
       resourceKind: 'briefing',
-      resourceSubId: 'sub-update',
       resourceDelta: {
         op: 'update',
         item: makeItem({ id: 'item-to-update', title: 'New Title' }),
       },
-    })
+    } as NormalizedEvent)
 
     const updated = state.resources['briefing'].find((i: ResourceItem) => i.id === 'item-to-update')
     expect(updated?.title).toBe('New Title')
@@ -244,15 +234,14 @@ describe('engine_resource_delta', () => {
       makeItem({ id: 'to-keep' }),
     ]
 
-    handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_delta',
+    handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_delta',
       resourceKind: 'briefing',
-      resourceSubId: 'sub-delete',
       resourceDelta: {
         op: 'delete',
         item: makeItem({ id: 'to-delete' }),
       },
-    })
+    } as NormalizedEvent)
 
     expect(state.resources['briefing']).toHaveLength(1)
     expect(state.resources['briefing'][0].id).toBe('to-keep')
@@ -262,15 +251,14 @@ describe('engine_resource_delta', () => {
     const { state, set } = makeResourceState()
     state.resources['briefing'] = [makeItem({ id: 'mark-me' })]
 
-    handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_delta',
+    handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_delta',
       resourceKind: 'briefing',
-      resourceSubId: 'sub-mark-read',
       resourceDelta: {
         op: 'mark_read',
         item: makeItem({ id: 'mark-me' }),
       },
-    })
+    } as NormalizedEvent)
 
     const item = state.resources['briefing'][0]
     expect(item.read).toBe(true)
@@ -280,14 +268,14 @@ describe('engine_resource_delta', () => {
   it('does nothing when resourceDelta is absent', () => {
     const { state, set } = makeResourceState()
 
-    const handled = handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_delta',
+    // resource_delta always has resourceDelta in the NormalizedEvent type,
+    // but guard against a malformed event at runtime.
+    const handled = handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_delta',
       resourceKind: 'briefing',
-      resourceSubId: 'sub-no-delta',
-      // no resourceDelta field
-    })
+      resourceDelta: undefined as any,
+    } as NormalizedEvent)
 
-    // Still handled (returns true) but store is unchanged.
     expect(handled).toBe(true)
     expect(state.resources['briefing']).toBeUndefined()
   })
@@ -309,17 +297,15 @@ describe('notification panel visibility — global items survive mixed snapshot'
     const globalItem = makeItem({ id: 'global-1', kind: 'briefing' }) // no conversationId
     const convItem = makeItem({ id: 'conv-1', kind: 'briefing', conversationId: 'conv-abc' })
 
-    handleCrossEngineEvent(set, () => state, 'tab1:inst1', {
-      type: 'engine_resource_snapshot',
+    handleCrossNormalizedEvent(set, () => state, 'tab1', {
+      type: 'resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-mixed',
       resourceItems: [globalItem, convItem],
-    })
+    } as NormalizedEvent)
 
-    // Store has both items.
     expect(state.resources['briefing']).toHaveLength(2)
 
-    // Simulate the NotificationsPanel filter: only show items without conversationId.
     const panelItems = (state.resources['briefing'] as ResourceItem[]).filter(
       (item) => !item.conversationId,
     )
@@ -328,59 +314,48 @@ describe('notification panel visibility — global items survive mixed snapshot'
   })
 
   it('an empty snapshot does NOT wipe existing items (disk-seed guard)', () => {
-    // Multiple sessions fire engine_resource_snapshot on connect. If the
-    // extension's HandleQuery fails (subprocess died) or the subscription
-    // races with extension init, the snapshot arrives with 0 items. The
-    // disk-seed injects persisted items into the store, but subsequent
-    // empty snapshots from other sessions would wipe them without the
-    // guard in applyResourceSnapshot.
     const { state, set } = makeResourceState()
 
-    // Prime with real data from disk-seed injection.
     state.resources['briefing'] = [
       makeItem({ id: 'real-1' }),
       makeItem({ id: 'real-2' }),
     ]
 
-    // SubscribeDirect delivers empty snapshot (Items: nil → []).
-    handleCrossEngineEvent(set, () => state, '', {
-      type: 'engine_resource_snapshot',
+    handleCrossNormalizedEvent(set, () => state, '', {
+      type: 'resource_snapshot',
       resourceKind: 'briefing',
       resourceSubId: 'sub-direct-empty',
       resourceItems: [],
-    })
+    } as NormalizedEvent)
 
-    // Empty snapshot must NOT wipe the existing items.
     expect(state.resources['briefing']).toHaveLength(2)
     expect(state.resources['briefing'][0].id).toBe('real-1')
   })
 })
 
 describe('engine_notification', () => {
-  it('is handled and returns true when key is "" (global)', () => {
+  it('is handled and returns true (global)', () => {
     const { state, set } = makeResourceState()
     expect(() => {
-      const handled = handleCrossEngineEvent(set, () => state, '', {
+      const handled = handleCrossNormalizedEvent(set, () => state, '', {
         type: 'engine_notification',
-        push: true,
-        notifyKind: 'briefing',
-        notifyTitle: 'New briefing ready',
-        notifyBody: 'Your daily summary is available.',
-      })
+        notificationTitle: 'New briefing ready',
+        notificationBody: 'Your daily summary is available.',
+        notificationLevel: 'info',
+      } as NormalizedEvent)
       expect(handled).toBe(true)
     }).not.toThrow()
   })
 
-  it('is handled and returns true when key is "tab1:inst1" (session)', () => {
+  it('is handled and returns true (session)', () => {
     const { state, set } = makeResourceState()
     expect(() => {
-      const handled = handleCrossEngineEvent(set, () => state, 'tab1:inst1', {
+      const handled = handleCrossNormalizedEvent(set, () => state, 'tab1', {
         type: 'engine_notification',
-        push: false,
-        notifyKind: 'briefing',
-        notifyTitle: 'Session alert',
-        notifyBody: 'Something happened in this session.',
-      })
+        notificationTitle: 'Session alert',
+        notificationBody: 'Something happened.',
+        notificationLevel: 'warning',
+      } as NormalizedEvent)
       expect(handled).toBe(true)
     }).not.toThrow()
   })

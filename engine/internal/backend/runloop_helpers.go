@@ -47,8 +47,14 @@ func runHookCtx[T any](ctx context.Context, fn func() T) (T, error) {
 // cooperating tools cancel via gCtx far sooner. Bash has its own much-longer
 // inner timeout (long shell commands are legitimate); this cap applies to the
 // surrounding goroutine, so a misbehaving Bash subprocess that ignores SIGTERM
-// will still let executeTools return.
-const defaultToolTimeout = 5 * time.Minute
+// will still let executeTools return. 60 minutes is generous enough that
+// legitimate long tools (large builds, multi-step agent dispatches via the
+// extension dispatch_* tools) complete without hitting it, while still
+// bounding a truly wedged tool. Kept equal to TimeoutsConfig.ToolDefault()'s
+// compiled default so behavior is identical whether or not a Timeouts block is
+// configured (runloop_tools.go reads this const, then overrides with the
+// configured value when present).
+const defaultToolTimeout = 60 * time.Minute
 
 // toolStallThreshold is how long a tool call runs before a ToolStalledEvent
 // is emitted. This is a heuristic to surface tools that may be blocked by
@@ -126,6 +132,18 @@ func appendOrGrow(blocks []types.LlmContentBlock, idx int, block types.LlmConten
 }
 
 func intPtr(v int) *int       { return &v }
+
+// cumulativeUsage snapshots the run's cumulative token counters into a
+// UsageData suitable for TaskCompleteEvent. Each field is a fresh pointer
+// so the event payload is independent of the run struct's lifetime.
+func cumulativeUsage(run *activeRun) types.UsageData {
+	return types.UsageData{
+		InputTokens:              intPtr(run.cumulativeInputTokens),
+		OutputTokens:             intPtr(run.cumulativeOutputTokens),
+		CacheReadInputTokens:     intPtr(run.cumulativeCacheReadTokens),
+		CacheCreationInputTokens: intPtr(run.cumulativeCacheCreateTokens),
+	}
+}
 func strPtr(v string) *string { return &v }
 
 // buildUserContentBlocks turns a text prompt plus pre-encoded image
@@ -159,4 +177,45 @@ func buildUserContentBlocks(prompt string, attachments []types.ImageAttachment) 
 		blocks = append(blocks, types.LlmContentBlock{Type: "text", Text: "(empty prompt)"})
 	}
 	return blocks
+}
+
+// appendInboundUserMessage appends the inbound user turn to the conversation,
+// handling the three shapes the prompt can take:
+//
+//   - Resolved slash command (opts.ResolvedSlashCommand set): opts.Prompt is the
+//     EXPANDED template body — the LLM sees that — but the persisted/displayed
+//     user turn must be the RAW invocation the user typed, so consumers render
+//     the command pill and the invocation survives reload.
+//     AddUserMessageWithInvocation writes the expansion to conv.Messages and the
+//     raw invocation to the tree entry.
+//   - Image attachments (opts.Attachments non-empty): build a structured content
+//     block list so the provider sends them as native multimodal content
+//     (Anthropic image blocks, OpenAI image_url, Gemini inlineData, Bedrock image
+//     content). The engine has no opinion on any client-side marker syntax inside
+//     opts.Prompt — bytes ride in opts.Attachments.
+//   - Plain text: opts.Prompt verbatim.
+//
+// Slash expansion and image attachments are mutually exclusive: a resolved slash
+// command carries no client image attachments.
+//
+// Returns the *SessionEntry that the underlying AppendEntry produced (the
+// display/tree entry for this user turn). Returns nil when no tree entry was
+// written (conv.Entries == nil). The caller currently appends-and-persists
+// without consuming the entry; the return is retained for callers that need
+// the tree entry id.
+//
+// Extracted from RunAgentLoop to keep runloop.go under the file-size cap.
+func appendInboundUserMessage(conv *conversation.Conversation, opts *types.RunOptions) *conversation.SessionEntry {
+	switch {
+	case opts.ResolvedSlashCommand != "":
+		return conversation.AddUserMessageWithInvocation(conv, opts.Prompt, conversation.SlashInvocation{
+			Command: opts.ResolvedSlashCommand,
+			Args:    opts.ResolvedSlashArgs,
+			Source:  opts.ResolvedSlashSource,
+		})
+	case len(opts.Attachments) > 0:
+		return conversation.AddUserMessage(conv, buildUserContentBlocks(opts.Prompt, opts.Attachments))
+	default:
+		return conversation.AddUserMessage(conv, opts.Prompt)
+	}
 }

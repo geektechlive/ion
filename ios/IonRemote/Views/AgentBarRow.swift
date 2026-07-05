@@ -39,13 +39,21 @@ struct AgentBarRow: View {
     }
 
     // Live elapsed seconds from startTime (running) or final elapsed (done).
+    // Delegates to AgentDuration so AgentExpandedContent can share the logic.
+    // When dispatches exist, the latest dispatch (default selection) provides
+    // per-dispatch duration fields, mirroring desktop's per-dispatch-first
+    // resolution (AgentExpandedView.tsx:59-61).
     private var elapsedSeconds: Int? {
-        if agent.status == "running", let st = agent.startTime {
-            let secs = Int(now.timeIntervalSince1970 - st)
-            return max(0, secs)
-        }
-        if let e = agent.elapsed { return max(0, Int(e)) }
-        return nil
+        let latestDispatch = agent.dispatches.last
+        let dispatchStatus = latestDispatch?.status ?? agent.status
+        let dispatchStartTime = latestDispatch?.startTime ?? agent.startTime
+        let dispatchElapsed = latestDispatch?.elapsed ?? agent.elapsed
+        return AgentDuration.elapsedSeconds(
+            status: dispatchStatus,
+            startTime: dispatchStartTime,
+            elapsed: dispatchElapsed,
+            now: now
+        )
     }
 
     var body: some View {
@@ -101,7 +109,7 @@ struct AgentBarRow: View {
 
             // Live duration
             if let secs = elapsedSeconds {
-                Text(formatDuration(secs))
+                Text(AgentDuration.format(secs))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(theme.textSecondary.opacity(0.5))
                     .fixedSize()
@@ -174,14 +182,6 @@ struct AgentBarRow: View {
         case "error": return theme.statusError
         default: return theme.textSecondary.opacity(0.5)
         }
-    }
-
-    private func formatDuration(_ secs: Int) -> String {
-        if secs < 60 { return "\(secs)s" }
-        if secs < 3600 { return "\(secs / 60)m \(secs % 60)s" }
-        let h = secs / 3600
-        let m = (secs % 3600) / 60
-        return "\(h)h \(m)m"
     }
 }
 

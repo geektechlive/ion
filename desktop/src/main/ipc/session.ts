@@ -2,59 +2,39 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/types'
 import type { RunOptions } from '../../shared/types'
 import { log as _log } from '../logger'
-import { state, sessionPlane, engineBridge, activeAssistantMessages, activeToolInputs, lastMessagePreview, lastForwardedEngineTabStatus, extensionCommandRegistry, DEBUG_MODE } from '../state'
+import { state, sessionPlane, engineBridge, activeAssistantMessages, lastMessagePreview, lastForwardedTabStatus, extensionCommandRegistry, DEBUG_MODE } from '../state'
 import { terminalManager } from '../terminal-manager-instance'
 import { getRemoteTabStates } from '../remote/snapshot'
-import { expandSlashCommand } from '../cli-compat/slash-expand'
-import { readSettings, SETTINGS_DEFAULTS } from '../settings-store'
-import { broadcast } from '../broadcast'
 import { processIncomingPrompt } from '../prompt-pipeline'
-import { isFirstPromptForTab } from '../slash-classify'
+import { parseSlash } from '../slash-parse'
 
 function log(msg: string): void {
   _log('main', msg)
 }
 
-/** Expand slash commands in-place on RunOptions when claudeCompat is enabled.
- *  Used ONLY by the RETRY path now — fresh prompts route through
- *  processIncomingPrompt which has its own (richer) slash-routing logic.
- *  Retried prompts skip the full pipeline because the user has already made
- *  the routing decision once (the slash-or-not classification doesn't change
- *  on retry); we only need the .md expansion behaviour preserved here.
- *  When a command file is found, auto-switches the tab from plan → auto so
- *  the expanded command executes immediately instead of being planned about. */
-async function applySlashExpansion(tabId: string, options: RunOptions): Promise<void> {
-  let claudeCompat = SETTINGS_DEFAULTS.enableClaudeCompat
-  try {
-    const s = readSettings()
-    claudeCompat = s.enableClaudeCompat ?? claudeCompat
-  } catch { /* use default */ }
-  if (!claudeCompat) {
-    log(`slashExpand: claudeCompat disabled, skipping`)
-    return
-  }
-
-  const expansion = await expandSlashCommand(options.prompt, options.projectPath)
-  if (expansion.expanded) {
-    log(`slashExpand: expanded "${options.prompt.substring(0, 50)}" → systemPrompt=${expansion.systemPrompt.length}chars userPrompt="${expansion.userPrompt.substring(0, 50)}"`)
-    options.prompt = expansion.userPrompt
-    options.appendSystemPrompt = options.appendSystemPrompt
-      ? options.appendSystemPrompt + '\n\n' + expansion.systemPrompt
-      : expansion.systemPrompt
-    // Auto-switch plan → auto only for the first prompt. Retries inherently
-    // have promptCount > 0 (the original prompt was already submitted), so
-    // this guard always prevents the switch on the retry path — which is
-    // correct: a retry should preserve whatever permission mode the tab is
-    // currently in rather than forcing it back to auto.
-    // Also blocked when options.sessionId is set (resumed conversation).
-    if (isFirstPromptForTab(tabId, options.sessionId)) {
-      sessionPlane.setPermissionMode(tabId, 'auto', 'slash_command')
-      broadcast(IPC.REMOTE_SET_PERMISSION_MODE, { tabId, mode: 'auto' })
-    } else {
-      log(`slashExpand: skipping plan→auto switch for tabId=${tabId} — conversation already active (promptCount=${sessionPlane.getTabStatus(tabId)?.promptCount ?? '?'})`)
-    }
+/**
+ * Mark a RETRY's RunOptions for engine-side slash resolution when the
+ * retried prompt is a slash invocation.
+ *
+ * Fresh prompts route through processIncomingPrompt, which dispatches the
+ * slash as an extension command and (on unknown_command) re-submits with
+ * resolveSlash=true. Retried prompts skip the full pipeline because the user
+ * has already made the routing decision once — but if the original prompt
+ * was a slash, the engine still needs to be told to resolve + expand it
+ * (otherwise the literal `/command args` string would be sent to the model).
+ *
+ * Local `.md` expansion is retired: the engine now OWNS slash resolution +
+ * expansion (template lookup, $ARGUMENTS substitution, frontmatter), so the
+ * desktop simply sets the resolveSlash flag and forwards the raw text. Both
+ * branches are logged per desktop/AGENTS.md § Logging.
+ */
+function markSlashForRetry(tabId: string, options: RunOptions): void {
+  const slash = parseSlash(options.prompt)
+  if (slash) {
+    log(`retrySlash: tab=${tabId} prompt is slash /${slash.command} → setting resolveSlash=true (engine resolves + expands)`)
+    options.resolveSlash = true
   } else {
-    log(`slashExpand: no expansion for "${options.prompt.substring(0, 50)}"`)
+    log(`retrySlash: tab=${tabId} prompt is not a slash → no resolveSlash`)
   }
 }
 
@@ -67,12 +47,32 @@ export function registerSessionIpc(): void {
       getRemoteTabStates().then(({ tabs: tabStates }) => {
         const newTab = tabStates.find(t => t.id === tabId)
         if (newTab) {
-          state.remoteTransport?.send({ type: 'tab_created', tab: newTab })
+          state.remoteTransport?.send({ type: 'desktop_tab_created', tab: newTab })
         }
       })
     }
 
     return { tabId }
+  })
+
+  // ADOPT_TAB registers a tab under a caller-supplied (persisted) id instead of
+  // minting one. The restore path uses this to reuse the durable tabId so the
+  // session key is invariant across restarts and the engine binding store hits.
+  // Idempotent in the control plane (adoptTab preserves an existing entry).
+  ipcMain.handle(IPC.ADOPT_TAB, (_event, tabId: string) => {
+    const adopted = sessionPlane.adoptTab(tabId)
+    log(`IPC ADOPT_TAB → ${adopted}`)
+
+    if (state.remoteTransport) {
+      getRemoteTabStates().then(({ tabs: tabStates }) => {
+        const newTab = tabStates.find(t => t.id === adopted)
+        if (newTab) {
+          state.remoteTransport?.send({ type: 'desktop_tab_created', tab: newTab })
+        }
+      })
+    }
+
+    return { tabId: adopted }
   })
 
   ipcMain.on(IPC.INIT_SESSION, (_event, tabId: string) => {
@@ -97,6 +97,17 @@ export function registerSessionIpc(): void {
     sessionPlane.resetTabSession(tabId)
   })
 
+  // RESTART_TAB_SESSION power-cycles the engine session WITHOUT cutting a new
+  // conversation (preserves conversationId). Used by stuck-tab recovery and
+  // directory-change reconnect — a recoverable tab is turned off and on again,
+  // not amputated. RESET_TAB_SESSION (above) is the destructive cut, reserved
+  // for the Implement-plan clear-context flow.
+  ipcMain.on(IPC.RESTART_TAB_SESSION, (_event, tabId: string) => {
+    log(`IPC RESTART_TAB_SESSION: ${tabId} — queuing stop_session to engine socket (FIFO; will arrive before resubmit's start_session)`)
+    sessionPlane.restartTabSession(tabId)
+    log(`IPC RESTART_TAB_SESSION: ${tabId} — stop_session enqueued; handler complete`)
+  })
+
   ipcMain.handle(IPC.PROMPT, async (_event, { tabId, requestId, options }: { tabId: string; requestId: string; options: RunOptions }) => {
     if (DEBUG_MODE) {
       log(`IPC PROMPT: tab=${tabId} req=${requestId} prompt="${options.prompt.substring(0, 100)}"`)
@@ -117,7 +128,7 @@ export function registerSessionIpc(): void {
     // the optimistic entry locally and the pipeline will echo back to it.
     if (state.remoteTransport && options.source !== 'remote') {
       state.remoteTransport.send({
-        type: 'message_added',
+        type: 'desktop_message_added',
         tabId,
         message: {
           id: requestId,
@@ -150,9 +161,20 @@ export function registerSessionIpc(): void {
         text: options.prompt,
         reqId: requestId,
         source: 'desktop',
-        isEngineTab: false,
+        // DATA-derived: an extension-backed conversation carries its resolved
+        // extension list in RunOptions (the unified renderer `submit` populates
+        // it from the tab's profile); a plain CLI tab does not. There is no
+        // separate engine prompt IPC any more — every tab funnels through PROMPT.
+        hasExtensions: (options.extensions?.length ?? 0) > 0,
         projectPath: options.projectPath,
         runOptions: options,
+        // Forward the engine-resolve-slash flag from RunOptions onto the
+        // pipeline. When set (the iOS slash re-submit bounced back through the
+        // renderer, or a retry of a slash prompt), the pipeline skips the
+        // extension-command dispatch and submits the raw `/command args`
+        // straight to the engine with resolveSlash=true — re-dispatching would
+        // loop (the text is still a slash). See processIncomingPrompt.
+        resolveSlash: options.resolveSlash,
       })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -167,8 +189,24 @@ export function registerSessionIpc(): void {
   })
 
   ipcMain.on(IPC.STEER, (_event, { tabId, message }: { tabId: string; message: string }) => {
-    log(`IPC STEER: tab=${tabId}`)
-    sessionPlane.steerSession(tabId, message)
+    // Unified steer for EVERY conversation tab — plain or extension-backed
+    // (the engine-vs-plain split was collapsed; there is no separate
+    // ENGINE_STEER any more). Dispatch straight to engineBridge.sendSteer,
+    // which emits the single `steer_agent` wire command with the bare tabId
+    // as the session key.
+    //
+    // C1 GUARD: route through the tab-registry check. registerAdoptedTab (via
+    // IPC.ADOPT_TAB) always completes before any tab is visible/interactive —
+    // the renderer awaits adoptTab() before the tab object enters the store, so
+    // no steer can arrive for an unregistered tab in normal flow. An unregistered
+    // steer is a bug in the caller; log and drop instead of silently dispatching
+    // a steer_agent command against an engine key with no backing session.
+    if (!sessionPlane.hasTab(tabId)) {
+      log(`IPC STEER: tab=${tabId} NOT registered in control plane — dropping steer (len=${message.length})`)
+      return
+    }
+    log(`IPC STEER: tab=${tabId} len=${message.length}`)
+    engineBridge.sendSteer(tabId, message)
   })
 
   ipcMain.handle(IPC.STOP_TAB, (_event, tabId: string) => {
@@ -178,7 +216,7 @@ export function registerSessionIpc(): void {
 
   ipcMain.handle(IPC.RETRY, async (_event, { tabId, requestId, options }: { tabId: string; requestId: string; options: RunOptions }) => {
     log(`IPC RETRY: tab=${tabId} req=${requestId}`)
-    await applySlashExpansion(tabId, options)
+    markSlashForRetry(tabId, options)
     return sessionPlane.retry(tabId, requestId, options)
   })
 
@@ -189,17 +227,21 @@ export function registerSessionIpc(): void {
     log(`IPC CLOSE_TAB: ${tabId}`)
     sessionPlane.closeTab(tabId)
     terminalManager.destroyByPrefix(`${tabId}:`)
+    // Conversations key their engine session by the bare tabId (ADR-010),
+    // so stop that session directly. stopByPrefix(`${tabId}:`) only matches
+    // compound keys (terminals, legacy `${tabId}:main`) and would otherwise
+    // leave the bare-key conversation session orphaned.
+    void engineBridge.stopSession(tabId)
     engineBridge.stopByPrefix(`${tabId}:`)
 
     if (state.remoteTransport) {
-      state.remoteTransport.send({ type: 'tab_closed', tabId })
+      state.remoteTransport.send({ type: 'desktop_tab_closed', tabId })
     }
 
     // Clean up all per-tab main-process state to prevent memory leaks.
     activeAssistantMessages.delete(tabId)
-    activeToolInputs.delete(tabId)
     lastMessagePreview.delete(tabId)
-    lastForwardedEngineTabStatus.delete(tabId)
+    lastForwardedTabStatus.delete(tabId)
     for (const key of extensionCommandRegistry.keys()) {
       if (key === tabId || key.startsWith(`${tabId}:`)) extensionCommandRegistry.delete(key)
     }

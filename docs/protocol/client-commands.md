@@ -64,6 +64,7 @@ Send a user message to an active session.
 | `planModePrompt`            | string   | no       | Custom system prompt for plan mode. When non-empty, the engine uses this string verbatim instead of building the default from `buildPlanModePrompt`. See [Plan mode prose overrides](../sessions/lifecycle.md#plan-mode-prose-overrides). |
 | `planModeReentry`           | boolean  | no       | When `true`, prepends re-entry guidance (read the existing plan before making changes). Set by the session manager when plan mode is re-enabled on a session that has a prior plan file. |
 | `implementationPhase`       | boolean  | no       | Suppresses the `EnterPlanMode` sentinel-tool injection. Set on the "implement" half of a plan-then-implement flow so the model cannot re-propose plan-mode entry. See ADR-004. |
+| `thinkingEffort`            | string   | no       | Per-prompt extended-thinking effort for this run: `"low"`, `"medium"`, or `"high"`. `""` or `"off"` means no thinking directive for this prompt, overriding any session default to off. A live per-conversation control — a client changes the level and it takes effect on the very next prompt with no session restart (mirrors `implementationPhase`). The engine maps a non-empty value onto `RunOptions.Thinking`; the provider then resolves the per-model mechanism (Anthropic adaptive `effort`, OpenAI `reasoning_effort`, Gemini `thinkingConfig`). A model that declares no thinking mechanism receives no directive. See the [model capability fields](../configuration/models.md#providersidmodelsname) (`thinkingMode` / `thinkingEfforts`) a client uses to decide whether to offer this control. |
 | `enterPlanModeDescription`  | string   | no       | Harness-supplied description prose for the `EnterPlanMode` sentinel tool. When non-empty, the engine forwards it verbatim as the tool description. Empty falls back to the engine's one-line neutral default. Per [ADR-004](../architecture/adr/004-enter-plan-mode-prose-in-harness.md). |
 | `planModeSparseReminder`    | string   | no       | Harness-supplied text for the per-turn plan-mode sparse reminder. When non-empty, the engine injects this verbatim instead of building the reminder from the plan file. Empty inherits the engine default (`buildPlanModeSparseReminder`). See [Plan mode prose overrides](../sessions/lifecycle.md#plan-mode-prose-overrides). |
 | `bashAllowlistAdditionsForThisPrompt` | string[] | no | Per-prompt additions to the plan-mode Bash command allowlist. The engine unions these with the session-scoped allowlist (`set_plan_mode.planModeAllowedBashCommands`) when building the run-time tool list, then drops them at run end — the session allowlist is never mutated. Intended carrier: slash commands whose YAML frontmatter declares additional bash permissions for one turn (e.g. `/ion--review-changes` needing `gh pr diff`). See § [`set_plan_mode` → Configuration layers](#set_plan_mode) for the three-layer composition model. |
@@ -72,6 +73,7 @@ Send a user message to an active session.
 | `compactEnabled`            | boolean  | no       | Gate for proactive compaction on this prompt. `false` disables proactive compaction; reactive compaction still fires on provider errors. |
 | `compactSummaryEnabled`     | boolean  | no       | Whether LLM-based summarization is used during compaction for this prompt. |
 | `compactMemoryEnabled`      | boolean  | no       | Whether the background session memory summarizer is active for this prompt. |
+| `resolveSlash`              | boolean  | no       | When `true`, signals that `text` is a slash-command invocation (`/name args`) the engine should resolve and expand rather than treat as plain content. The engine looks the command up across the conventional roots (extension registry, `.ion/commands`, `.claude/commands`, skills, project), substitutes `$ARGUMENTS`, feeds the **expanded** body to the model, and persists the **raw** invocation as the displayed user turn. Default `false`; existing clients sending `/`-prefixed content as ordinary text are unaffected because they do not set this flag. |
 
 ```json
 {"cmd":"send_prompt","key":"abc-123","text":"List all files in the current directory","requestId":"r2"}
@@ -231,6 +233,7 @@ Toggle plan mode for a session. In plan mode, the agent plans without executing 
 | `enabled`                      | boolean            | yes      | Enable or disable plan mode          |
 | `allowedTools`                 | string[]           | no       | Tools allowed during plan mode       |
 | `planModeAllowedBashCommands`  | string[]           | no       | Bash command prefixes allowed in plan mode. Tri-valued — see semantics below. |
+| `planFilePath`                 | string             | no       | Existing plan file path to **restore** when enabling plan mode. When `enabled` is true, the session currently has no plan file path, and this path exists on disk, the engine re-adopts it instead of allocating a fresh slug on the next prompt — preserving plan-file continuity after a session is replaced (e.g. rebound from the binding store). Ignored when the session already has a path, when the file is not on disk, or when `enabled` is false. Omit it when the client does not track a plan path (preserves prior behavior). |
 | `requestId`                    | string             | no       | Correlates with ServerResult         |
 
 ```json
@@ -368,6 +371,83 @@ Respond to a permission request from the engine. Fire-and-forget.
 
 ---
 
+### elicitation_response
+
+Reply to an `engine_elicitation_request` event. Fire-and-forget; no result is sent. The engine pairs the reply to the waiting `ctx.elicit()` call using `elicitRequestId` and resolves the extension's Promise with either the response payload or the cancelled flag.
+
+| Field             | Type    | Required | Description                                                                 |
+|-------------------|---------|----------|-----------------------------------------------------------------------------|
+| `cmd`             | `"elicitation_response"` | yes | Command discriminator                                          |
+| `key`             | string  | yes      | Session key                                                                 |
+| `elicitRequestId` | string  | yes      | Correlator echoed from the `engine_elicitation_request` `requestId` field   |
+| `elicitResponse`  | object  | no       | The user's response payload, conforming to the `schema` from the request. Omit when cancelling. |
+| `elicitCancelled` | boolean | no       | Set `true` when the user dismissed the prompt without submitting a response. |
+
+```json
+{"cmd":"elicitation_response","key":"abc-123","elicitRequestId":"elicit-001","elicitResponse":{"confirm":true}}
+```
+
+```json
+{"cmd":"elicitation_response","key":"abc-123","elicitRequestId":"elicit-001","elicitCancelled":true}
+```
+
+---
+
+### discover_slash_commands
+
+Discover filesystem slash-command templates and skills available across the conventional roots for a working directory. Stateless -- no session key is required.
+
+| Field       | Type                          | Required | Description                                                                                                                       |
+|-------------|-------------------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `cmd`       | `"discover_slash_commands"`   | yes      | Command discriminator                                                                                                             |
+| `path`      | string                        | no       | Working directory. User-level roots are always included; this field adds project-level roots scoped to the given directory.        |
+| `config`    | object                        | no       | Optional config object. When `claudeCompat` is `false` or absent, the engine skips `.claude` / `~/.claude` roots, matching the slash-resolution and skill-loading gates. |
+| `requestId` | string                        | no       | Correlates with ServerResult                                                                                                      |
+
+```json
+{"cmd":"discover_slash_commands","path":"/home/user/project","config":{"claudeCompat":false},"requestId":"r40"}
+```
+
+**Response:** `ServerResult` with `data` containing an array of `SlashCommandListing` objects.
+
+**SlashCommandListing fields:**
+
+| Field           | Type   | Description                                                                          |
+|-----------------|--------|--------------------------------------------------------------------------------------|
+| `name`          | string | Command name (without the leading slash)                                             |
+| `description`   | string | One-line description from the template frontmatter, if present                       |
+| `argumentHint`  | string | Argument hint string, if present                                                     |
+| `source`        | string | Where the template lives: `"ion"`, `"claude"`, or `"skill"`                         |
+
+Higher-precedence roots shadow same-name entries in lower-precedence roots (project-level beats user-level). The engine owns the discovery walk so every consumer's autocomplete menu is fed by one owner with no per-consumer filesystem walk.
+
+---
+
+### get_enterprise_policy
+
+Read the enterprise `NewConversationDefaults` policy so clients can decide whether the new-conversation flow is locked. Stateless -- no session key is required.
+
+| Field       | Type                       | Required | Description                  |
+|-------------|----------------------------|----------|------------------------------|
+| `cmd`       | `"get_enterprise_policy"`  | yes      | Command discriminator        |
+| `requestId` | string                     | no       | Correlates with ServerResult |
+
+```json
+{"cmd":"get_enterprise_policy","requestId":"r41"}
+```
+
+**Response:** `ServerResult` with `data`:
+
+| Field                     | Type         | Description                                                                                                   |
+|---------------------------|--------------|---------------------------------------------------------------------------------------------------------------|
+| `newConversationDefaults` | object\|null | The enterprise `NewConversationDefaults` policy object, or `null` when no enterprise config is loaded or no `NewConversationDefaults` section is present. |
+
+```json
+{"cmd":"result","requestId":"r41","ok":true,"data":{"newConversationDefaults":null}}
+```
+
+---
+
 ### shutdown
 
 Shut down the engine daemon. Stops all sessions and closes all connections.
@@ -477,13 +557,26 @@ Subscribe to resource updates for a specific kind. The engine streams a snapshot
 |------------------|-------------------------|----------|------------------------------------------------------------------------------|
 | `cmd`            | `"resource_subscribe"`  | yes      | Command discriminator                                                        |
 | `key`            | string                  | yes      | Session key                                                                  |
-| `resourceKind`   | string                  | yes      | Resource kind to subscribe to (e.g. `"tasks"`, `"notifications"`)            |
+| `resourceKind`   | string                  | yes      | Resource kind to subscribe to (e.g. `"tasks"`, `"notifications"`). The sentinel `"*"` subscribes to every kind on the target broker — see [Wildcard subscription](#wildcard-subscription) below. |
 | `resourceFilter` | ResourceFilter object   | no       | Optional filter applied to the subscription                                  |
 | `resourceGlobal` | boolean                 | no       | When `true`, subscribes to the Manager-level global broker instead of the per-session broker. Default `false`. |
 | `requestId`      | string                  | no       | Correlates with ServerResult                                                 |
 
 ```json
 {"cmd":"resource_subscribe","key":"abc-123","resourceKind":"tasks","requestId":"r20"}
+```
+
+#### Wildcard subscription
+
+The sentinel `resourceKind: "*"` subscribes to **every** resource kind on the target broker — every kind that has a producer registered now, plus every kind registered or published later. A consumer can therefore drop hardcoded kind lists entirely and receive whatever any extension declares.
+
+- **Real kind in every envelope.** Each snapshot and delta still carries the real item `kind` (never `"*"`), so the consumer buckets items by their true kind.
+- **Per-session wildcard** (`resourceGlobal` omitted/`false`): the engine aggregates an initial snapshot by querying every registered producer, delivering one snapshot per producing kind, then streams all future kinds' deltas. It never errors on "no producer" — a broker with zero producers yields zero snapshots and still receives future kinds.
+- **Global wildcard** (`resourceGlobal: true`): a producer-less subscription across all kinds on the Manager-level broker. No initial producer query is performed (workspace-scoped resources published by clients may have no producer), so the subscriber receives the live delta stream only.
+- **Pure data routing.** The wildcard is a routing addition; the engine encodes no render or UI policy. Exact-kind subscriptions are unchanged.
+
+```json
+{"cmd":"resource_subscribe","key":"abc-123","resourceKind":"*","requestId":"r20"}
 ```
 
 **Response:** `ServerResult` with `data: { subscriptionId: string }`. Use `subscriptionId` to unsubscribe later.
@@ -545,6 +638,50 @@ Request an immediate `engine_session_status` emission for a session. The status 
 ```
 
 **Response:** `ServerResult` with `ok: true`. The session status arrives as an `engine_session_status` event on the stream.
+
+---
+
+### get_context_breakdown
+
+Request an on-demand context breakdown for a session. The engine reconstructs the full assembly pipeline (system prompt + tools + conversation messages) outside any active run and emits `engine_context_breakdown` on the event stream.
+
+**Recompute model.** This command fires the same assembly pipeline that `send_prompt` runs before every prompt: it loads the conversation from disk, injects context files, extension context, git context, and session memory into `RunOptions`, then calls `BuildContextBreakdown`. The result always reflects the current on-disk state — it is never cached or persisted.
+
+**Fresh conversations.** When the session has not sent its first prompt yet, the conversation file may not exist. The engine falls back to an empty conversation, so the breakdown shows system prompt + tools with zero conversation tokens. This is the accurate pre-first-prompt view.
+
+**CliBackend.** When the session is wired to a CliBackend (no API provider), the token counter falls back to local BPE / char4 estimation. The breakdown is still emitted.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `cmd` | `"get_context_breakdown"` | yes | Command discriminator |
+| `key` | string | yes | Session key |
+| `requestId` | string | no | Correlates with ServerResult |
+
+```json
+{"cmd":"get_context_breakdown","key":"abc-123","requestId":"r31"}
+```
+
+**Response:** `ServerResult` with `ok: true` (empty). The breakdown arrives as an `engine_context_breakdown` event on the stream. If no session exists for the key, the command is a no-op (Warn log fires engine-side).
+
+**Payload fields (`ContextBreakdownPayload`).**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `categories` | array | Per-category token rows. Each row has `name`, `kind`, `tokens`, `tier` ("exact"/"local"/"approximate"), and optional `path`. |
+| `contextWindow` | number | Maximum token budget for the model. |
+| `totalTokens` | number | Sum of all category token counts. |
+| `apiReportedTotal` | number? | Provider-reported input token count. Zero until after-first-turn reconciliation. |
+| `unaccounted` | number? | `apiReportedTotal - totalTokens`. Non-zero after reconciliation. |
+| `cacheReadTokens` | number? | Provider-reported cache-read tokens. Annotation only — NOT included in `totalTokens`. |
+| `cacheCreationTokens` | number? | Provider-reported cache-creation tokens. Annotation only — NOT included in `totalTokens`. |
+| `model` | string | Model identifier used for tokenization. |
+| `aggregateCostUsd` | number? | Sum of this session's LLM cost **plus every descendant dispatch session's cost**, walked on demand from the conversation tree. Absent for sessions with no dispatches or no cost yet. See "Aggregate cost model" below. |
+
+**Aggregate cost model.** `aggregateCostUsd` is recomputed on every `get_context_breakdown` request — no accumulator, no persistence. The engine reads each session's persisted `totalCost` from its `.llm.jsonl` header, then recursively follows `AgentDispatchData.ConversationIDs` entries in the parent's `.tree.jsonl` to collect every descendant dispatch session. In-flight background dispatches (not yet written to `.tree.jsonl`) are also included via the live dispatch registry, as of their last cost flush. Each conversation ID is counted at most once (cycle/dup guard). A mid-turn child may undercount by its unflushed turn — this self-heals on the next drawer-open after the child's next flush.
+
+Two cost numbers in the Status Drawer are intentionally distinct: the Context section shows the **top-level session cost only** (`StatusFields.totalCostUsd`), while the Session section shows the **end-to-end aggregate** (`aggregateCostUsd`). When there are no descendant dispatches, the two are equal.
+
+**iOS companion.** iOS sends `desktop_request_context_breakdown { tabId }` to the desktop on drawer open. The desktop's `command-handler.ts` forwards a `get_context_breakdown` to the engine for that tab. The resulting `engine_context_breakdown` is forwarded to iOS as `desktop_context_breakdown` by `event-wiring.ts`, which populates `inst.contextBreakdown` and re-renders the Status Drawer. This is the on-demand recompute model: no persistence, no stale cache — every drawer open triggers a fresh computation.
 
 ---
 

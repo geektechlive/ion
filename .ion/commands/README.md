@@ -10,7 +10,7 @@ Type `/{filename}` (without `.md` extension) in any Ion session with this repo a
 
 ### `/align`
 
-Context-aware alignment gate. In plan mode (after `/spec`): audits the current plan against Ion's architectural principles before any code is written. Outside plan mode: reviews all branch changes against Ion quality standards as a pre-PR gate. Supports PR mode (`in PR #N`), branch mode (`in branch <name>`), and optional focus narrowing. Analyze-only — never edits source files.
+Context-aware alignment gate. In plan mode (after `/spec`): audits the current plan against Ion's architectural principles, then updates the plan with the alignment amendments. Outside plan mode: reviews all branch changes against Ion quality standards as a pre-PR gate, then enters planning mode and authors a fix plan for the findings. Supports PR mode (`in PR #N`), branch mode (`in branch <name>`), and optional focus narrowing. Never edits source files — the only file it writes is a plan.
 
 ### `/create-pr`
 
@@ -23,3 +23,7 @@ Open a GitHub issue on the `dsswift/ion` repository based on the current convers
 ### `/squash`
 
 Collapse the current branch's commits into clean conventional commits. Creates a backup branch first, analyzes commit messages to identify logical groupings, presents a squash plan for review, then executes the rebase. Does not push.
+
+### `/resolve-dependabot-prs`
+
+Triage the repo's open Dependabot PRs. Runs a read-only analysis pass and returns a terse risk/action summary table, with notes only on special cases (a required follow-up PR, or a close-as-too-risky recommendation). Then enters planning mode and authors an ordered rebase → merge → follow-up → resume resolution plan for the user to review and approve before any merge happens. The command itself never merges, rebases, closes, comments, or pushes — those steps execute only after the plan is approved.

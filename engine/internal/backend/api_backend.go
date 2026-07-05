@@ -100,6 +100,35 @@ type activeRun struct {
 	cumulativeOutputTokens int
 	lastContinuationDelta  int
 
+	// contextBreakdown holds the per-category token breakdown built once at
+	// the first turn's prompt assembly. Reconciled (and re-emitted) after the
+	// first UsageEvent so consumers see the provider-reported total and the
+	// unaccounted delta. Nil until the first turn builds it; breakdownReconciled
+	// guards the one-shot reconcile so later turns don't append duplicate
+	// "unaccounted" rows.
+	contextBreakdown    *providers.ContextBreakdown
+	breakdownReconciled bool
+
+	// Cumulative token counters across all turns. Populated on the same
+	// path that accumulates run.totalCost (turnUsage in the runloop).
+	// Surfaced on every TaskCompleteEvent.Usage so dispatch consumers
+	// and any event reader gets real token counts.
+	cumulativeInputTokens        int
+	cumulativeCacheReadTokens    int
+	cumulativeCacheCreateTokens  int
+
+	// thinkingTokens accumulates the estimated reasoning-token count across
+	// every thinking block in this run (issue #158). Providers fold thinking
+	// into the final output-token usage, so this is an estimate derived from
+	// accumulated reasoning text length (see ThinkingBlockEndEvent.TotalTokens).
+	// Surfaced on DispatchAgentResult.ThinkingTokens / engine_dispatch_end so
+	// cost/audit consumers can separate reasoning spend from user-facing
+	// output. Atomic because processStream runs on the run goroutine while the
+	// dispatch result is assembled after the run completes — the value is read
+	// once the run goroutine has finished, but atomic keeps it race-free under
+	// the detector regardless of read/write ordering.
+	thinkingTokens atomic.Int64
+
 	// lastProgressAt is the unix-nanos timestamp of the last observed
 	// forward-progress event on this run. Bumped on every emit (so
 	// every provider stream chunk, tool result, status update, error
@@ -114,6 +143,33 @@ type activeRun struct {
 	// Storing nanos as int64 keeps the value lock-free with the
 	// std/sync/atomic primitives.
 	lastProgressAt atomic.Int64
+
+	// humanWaitDepth counts how many human-wait spans this run is currently
+	// blocked inside. A human-wait is an *intentional* indefinite pause for a
+	// user decision. The only producer is Manager.elicit (ctx.elicit()); a
+	// permission decision on this (the watchdog-bearing ApiBackend) is
+	// synchronous (permEng.Check returns a policy decision and does not block
+	// on a human), and the blocking permission dialog (PermissionHookServer)
+	// runs only on the CLI backend, which has no watchdog — so neither needs
+	// this exemption. The exemption exists for elicitation, as opposed to a
+	// wedged tool or stalled provider stream. While depth > 0 the run-progress
+	// watchdog (runloop_watchdog.go) must NOT cancel the run for idleness,
+	// because zero forward-progress emits during a human-wait is the expected,
+	// contract-mandated state, not a stall.
+	//
+	// The default human-wait is indefinite (see TimeoutsConfig.HumanWait): if a
+	// user takes a month to approve a plan, the run waits a month. The watchdog
+	// is the only mechanism that previously violated that guarantee — it had no
+	// human-wait exemption and cancelled the parked run at RunStall() (10m). This
+	// counter is that exemption.
+	//
+	// A counter (not a bool) so genuinely overlapping or nested waits — e.g. an
+	// extension elicitation_request hook that itself elicits while the
+	// triggering tool's ctx.elicit() is still open — are reference-counted
+	// correctly: the watchdog resumes only when the LAST wait ends. Bumped via
+	// ApiBackend.BeginHumanWait / EndHumanWait. Atomic so the watchdog goroutine
+	// reads it without taking run.mu, matching lastProgressAt.
+	humanWaitDepth atomic.Int64
 
 	// progressWatchdogStop is closed by runLoop's deferred removeRun
 	// to signal the run-progress watchdog goroutine that it should
@@ -130,6 +186,23 @@ type activeRun struct {
 	// double-close (from race-prone teardown paths) does not panic.
 	progressWatchdogStop chan struct{}
 	stopWatchdogOnce     sync.Once
+
+	// touchedSink accumulates filesystem paths that tools touched during the
+	// run, driving read-triggered nested context loading (progressive
+	// AGENTS.md/ION.md descent). Tools record into it via the ctx-threaded
+	// TouchedPathSink (installed in executeTools); the run loop drains it
+	// between turns in drainNestedContext. The sink has its own mutex, so the
+	// write path (concurrent errgroup tool goroutines) does not take run.mu.
+	// Created once at run start.
+	touchedSink *types.TouchedPathSink
+
+	// injectedNestedPaths is the conversation-lifetime set of context-file
+	// paths already injected into this conversation (eager root/home walk +
+	// any nested injections, this session or a prior one). Guarded by run.mu.
+	// Seeded at run start from the loaded conversation (system prompt + message
+	// history) via seedInjectedNestedPaths so a reload never re-injects a file
+	// that is already present. drainNestedContext consults and extends it.
+	injectedNestedPaths map[string]bool
 
 	cfg *RunConfig // captured per-run config; nil means "no hooks, no per-run state"
 }
@@ -402,20 +475,45 @@ func (b *ApiBackend) SearchHistory(requestID string, query string, maxResults in
 	return conversation.SearchMessages(run.conv, query, maxResults)
 }
 
-// Steer sends a steering message to an active run's conversation.
+// Steer sends a steering message to an active run's conversation. It returns
+// true when the message was buffered for delivery, false otherwise. It is a
+// thin boolean wrapper over SteerWithReason, retained for callers that do not
+// need to distinguish the failure mode.
 func (b *ApiBackend) Steer(requestID, message string) bool {
+	return b.SteerWithReason(requestID, message) == SteerResultDelivered
+}
+
+// SteerWithReason sends a steering message to an active run's conversation and
+// reports a typed verdict. The message is buffered on the run's steer channel
+// and injected at the next drainSteer checkpoint in the run loop — including
+// the post-tool-results checkpoint, which is the one that fires after a parent
+// run's dispatched sub-agents (executed as tool calls) complete. That is why a
+// steer aimed at a parent parked on its children is delivered rather than
+// dropped: it sits in the buffer until executeTools returns.
+//
+// Every branch logs (engine-grounding §7): the no-run rejection, the
+// channel-full rejection, and the successful buffer.
+func (b *ApiBackend) SteerWithReason(requestID, message string) SteerResult {
 	b.mu.Lock()
 	run, ok := b.activeRuns[requestID]
 	b.mu.Unlock()
 	if !ok {
-		return false
+		utils.Warn("ApiBackend", fmt.Sprintf(
+			"Steer rejected, no active run: runID=%s msgLen=%d", requestID, len(message),
+		))
+		return SteerResultNoRun
 	}
 	select {
 	case run.steerCh <- message:
-		return true
+		utils.Log("ApiBackend", fmt.Sprintf(
+			"Steer buffered on steer channel: runID=%s msgLen=%d", requestID, len(message),
+		))
+		return SteerResultDelivered
 	default:
-		utils.Warn("ApiBackend", fmt.Sprintf("Steer: channel full, message dropped: runID=%s msgLen=%d", requestID, len(message)))
-		return false // channel full
+		utils.Warn("ApiBackend", fmt.Sprintf(
+			"Steer rejected, channel full: runID=%s msgLen=%d", requestID, len(message),
+		))
+		return SteerResultChannelFull
 	}
 }
 
@@ -464,10 +562,48 @@ func (b *ApiBackend) removeRun(requestID string) {
 // this function. Bumping run.lastProgressAt here means we don't have
 // to instrument every emit call site individually. The watchdog itself
 // lives in runloop_watchdog.go.
+//
+// The one event that must NOT bump the progress clock is ToolStalledEvent —
+// see emitWithoutProgress below for why.
 func (b *ApiBackend) emit(run *activeRun, event types.NormalizedEvent) {
 	if run != nil {
 		run.lastProgressAt.Store(time.Now().UnixNano())
 	}
+	b.dispatchEvent(run, event)
+}
+
+// emitWithoutProgress forwards a normalized event exactly like emit, but does
+// NOT bump run.lastProgressAt. It exists for events that are the engine
+// signalling the *absence* of progress — specifically ToolStalledEvent, which
+// the per-tool stall ticker (runloop_tools.go) emits every ToolStall() while a
+// tool runs longer than the stall threshold.
+//
+// Why this matters: the run-progress watchdog (runloop_watchdog.go) cancels a
+// run when no emit lands within RunStall(). If the stall advisory bumped the
+// progress clock, a wedged but deadline-exempt Agent/dispatch tool — which the
+// runloop intentionally exempts from the per-tool deadline (runloop_tools.go,
+// AgentToolName branch) — would emit a ToolStalledEvent every 30s, reset the
+// clock every 30s, and never trip the 10-minute run-stall backstop. The event
+// meant to *signal* the stall would be the very thing preventing the backstop
+// from firing. That is exactly the incident in conversation
+// 1782012033034-37d617d3d9ab: a foreground dispatch whose child never reached
+// OnExit hung for ~10 minutes emitting ToolStalledEvent every 30s and only
+// cleared on engine restart.
+//
+// Routing the stall advisory through this progress-neutral path lets the
+// run-stall watchdog see the genuine idleness and cancel the wedged run.
+// Real forward progress (provider chunks, tool results, child activity bumped
+// via BumpRunProgress) still flows through emit and still resets the clock.
+func (b *ApiBackend) emitWithoutProgress(run *activeRun, event types.NormalizedEvent) {
+	b.dispatchEvent(run, event)
+}
+
+// dispatchEvent is the shared body of emit and emitWithoutProgress: it applies
+// the run's secret-redaction policy and forwards the event to the registered
+// onNormalized callback. The only difference between the two public entry
+// points is whether they stamp run.lastProgressAt first; keeping the redact +
+// forward logic here guarantees the two paths cannot drift.
+func (b *ApiBackend) dispatchEvent(run *activeRun, event types.NormalizedEvent) {
 	if run != nil && run.cfg != nil && run.cfg.SecurityCfg != nil && run.cfg.SecurityCfg.RedactSecrets {
 		if tr, ok := event.Data.(*types.ToolResultEvent); ok {
 			tr.Content = insights.RedactSecrets(tr.Content)
@@ -483,6 +619,99 @@ func (b *ApiBackend) emit(run *activeRun, event types.NormalizedEvent) {
 			runID = run.requestID
 		}
 		fn(runID, event)
+	}
+}
+
+// BumpRunProgress stamps the run-progress watchdog clock for the named active
+// run, if it exists. It is the seam through which a dispatch/spawn layer reports
+// that a *child* agent is demonstrably alive (producing events) so the parent
+// run — which is parked in the deadline-exempt Agent tool call and therefore
+// emits no progress of its own — is not falsely flagged as stalled.
+//
+// This is the second half of the matched pair documented on emitWithoutProgress:
+// the parent's self-emitted stall advisory stops counting as progress, and the
+// child's genuine activity starts counting. A dispatch is then "alive" iff its
+// child is actually producing events. Nil/absent-run safe.
+func (b *ApiBackend) BumpRunProgress(requestID string) {
+	b.mu.Lock()
+	run, ok := b.activeRuns[requestID]
+	b.mu.Unlock()
+	if !ok || run == nil {
+		return
+	}
+	run.lastProgressAt.Store(time.Now().UnixNano())
+}
+
+// BeginHumanWait marks the named active run as entering an intentional,
+// indefinite human-wait (an elicitation — Manager.elicit / ctx.elicit() —
+// blocking on a user decision). While a run has one or more open human-waits, the
+// run-progress watchdog (runloop_watchdog.go) skips its idle-cancellation check
+// for that run: zero forward-progress emits during a human-wait is the expected
+// state, not a stall, and the human-wait is indefinite by default (see
+// TimeoutsConfig.HumanWait).
+//
+// Reference-counted via run.humanWaitDepth so overlapping/nested waits resume
+// the watchdog only when the last one ends (see EndHumanWait). Nil/absent-run
+// safe — a wait on a run that is no longer active is a harmless no-op.
+//
+// This is the watchdog-side analogue of the per-tool DeadlineSuspender
+// (runloop_tools.go), which already exempts the same human-wait span from the
+// finite per-tool deadline. The two mechanisms are independent; both must honor
+// the indefinite-human-wait guarantee.
+func (b *ApiBackend) BeginHumanWait(requestID string) {
+	b.mu.Lock()
+	run, ok := b.activeRuns[requestID]
+	b.mu.Unlock()
+	if !ok || run == nil {
+		utils.Debug("ApiBackend", fmt.Sprintf(
+			"BeginHumanWait: no active run for requestID=%s (no-op)", requestID))
+		return
+	}
+	depth := run.humanWaitDepth.Add(1)
+	utils.Log("ApiBackend", fmt.Sprintf(
+		"BeginHumanWait: runID=%s humanWaitDepth=%d (watchdog idle-check paused)",
+		requestID, depth))
+}
+
+// EndHumanWait marks the named active run as leaving a human-wait span opened by
+// BeginHumanWait. On the decrement that returns the depth to zero, it stamps
+// lastProgressAt = now so the machine work that resumes after the human-wait
+// gets a full fresh RunStall() window rather than being retroactively charged
+// for the time the human took to respond.
+//
+// Reference-counted: only the final EndHumanWait (depth 1 → 0) resumes the
+// watchdog. Defensive against an unmatched call — depth is floored at 0 and the
+// stamp/log still fire so a stray End cannot drive the counter negative and
+// permanently disarm the watchdog. Nil/absent-run safe.
+func (b *ApiBackend) EndHumanWait(requestID string) {
+	b.mu.Lock()
+	run, ok := b.activeRuns[requestID]
+	b.mu.Unlock()
+	if !ok || run == nil {
+		utils.Debug("ApiBackend", fmt.Sprintf(
+			"EndHumanWait: no active run for requestID=%s (no-op)", requestID))
+		return
+	}
+	depth := run.humanWaitDepth.Add(-1)
+	if depth < 0 {
+		// Unmatched End (should not happen). Floor at 0 so the watchdog is not
+		// left permanently disarmed by a negative depth, and log loudly.
+		run.humanWaitDepth.Store(0)
+		utils.Error("ApiBackend", fmt.Sprintf(
+			"EndHumanWait: unmatched call for runID=%s, depth floored to 0", requestID))
+		depth = 0
+	}
+	if depth == 0 {
+		// Resume the watchdog with a fresh window: do not charge the human's
+		// think-time against the post-wait machine work.
+		run.lastProgressAt.Store(time.Now().UnixNano())
+		utils.Log("ApiBackend", fmt.Sprintf(
+			"EndHumanWait: runID=%s humanWaitDepth=0 (watchdog idle-check resumed, clock reset)",
+			requestID))
+	} else {
+		utils.Log("ApiBackend", fmt.Sprintf(
+			"EndHumanWait: runID=%s humanWaitDepth=%d (still in a human-wait)",
+			requestID, depth))
 	}
 }
 

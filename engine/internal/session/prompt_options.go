@@ -12,13 +12,73 @@ import (
 	"github.com/dsswift/ion/engine/internal/utils"
 )
 
+// buildPromptOverrides constructs the *PromptOverrides for a per-prompt
+// dispatch from the two run-scoped options every sendPrompt entry point
+// carries: an optional model override and optional plan-mode Bash allowlist
+// additions. Returns nil when both are empty so callers pass nil (the
+// "no overrides" sentinel) rather than an empty struct.
+//
+// This is the single seam every sendPrompt path routes through so the active-
+// hook path (sessionAccessor.SendPrompt) and the fallback path (the
+// onSendMessage closures wired in start_session.go and prompt_extensions.go)
+// produce identical overrides for identical input. Centralizing it here is the
+// "one pipeline" guarantee — there is no way for one entry point to build
+// overrides differently from another.
+//
+// The bash additions are unioned with the session allowlist for this single
+// run via opts.BashAllowlistAdditionsForThisPrompt (applied in buildRunOptions
+// below) and the run loop's effectiveBashAllowlist; they are never persisted on
+// the engineSession. See extension.Context.SendPrompt for the contract.
+func buildPromptOverrides(model string, bashAllowlistAdditions []string) *PromptOverrides {
+	if model == "" && len(bashAllowlistAdditions) == 0 {
+		return nil
+	}
+	overrides := &PromptOverrides{Model: model}
+	if len(bashAllowlistAdditions) > 0 {
+		overrides.BashAllowlistAdditionsForThisPrompt = bashAllowlistAdditions
+	}
+	return overrides
+}
+
+// dispatchSendPromptPayload is the single onSendMessage callback body shared by
+// every extension-wiring site (start_session.go's loadAndWireExtensions and
+// prompt_extensions.go's lateLoadExtensions). Both sites install this exact
+// method as the host's onSendMessage callback, so a follow-up prompt queued by
+// an extension carries identical run configuration regardless of which wiring
+// path created the host. Extracting it here removes the previously-duplicated
+// closure bodies — the duplication was itself a "two ways to do one thing"
+// hazard that could drift — and creates a directly-testable seam that pins the
+// full payload (text + model + bash-allowlist additions) flows through to
+// m.SendPrompt and is not dropped.
+//
+// origin is a short label ("start_session" / "prompt_extensions") used only in
+// the log line so an operator can tell which wiring site queued the prompt.
+func (m *Manager) dispatchSendPromptPayload(key, origin string, payload extension.SendPromptPayload) {
+	overrides := buildPromptOverrides(payload.Model, payload.BashAllowlistAdditions)
+	if len(payload.BashAllowlistAdditions) > 0 {
+		utils.Info("PlanMode", fmt.Sprintf("onSendMessage(%s): key=%s forwarding %d bash-allowlist additions: %v", origin, key, len(payload.BashAllowlistAdditions), payload.BashAllowlistAdditions))
+	}
+	if err := m.SendPrompt(key, payload.Text, overrides); err != nil {
+		utils.Log("Session", fmt.Sprintf("ext/send_message failed: %v", err))
+	}
+}
+
 func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) types.RunOptions {
 	opts := types.RunOptions{
 		Prompt:      text,
 		ProjectPath: s.config.WorkingDirectory,
+		// ClaudeCompat mirrors the session's Claude-compatibility setting onto
+		// the run so the backend's nested context loader gates Claude files
+		// (CLAUDE.md) the same way the eager walk does. Ion-native files load
+		// regardless of this flag.
+		ClaudeCompat: s.config.ClaudeCompat,
 		// SessionID is Ion's conversation-file identity. The API backend
 		// uses it to load/create ~/.ion/conversations/<id>.* and to resume.
 		SessionID: s.conversationID,
+		// ParentConversationID is forwarded so a fresh conversation created by
+		// this run records its descent from a prior session (client-driven
+		// checkpoint cut). Inert when resuming an existing conversation.
+		ParentConversationID: s.config.ParentConversationID,
 		// CliResumeSessionID is claude's own captured session UUID (empty on
 		// the first CLI run → no --resume). The API backend ignores it; only
 		// the CLI backend reads it. Distinct identity space from SessionID.
@@ -54,6 +114,17 @@ func buildRunOptions(s *engineSession, text string, overrides *PromptOverrides) 
 		// regardless, so the flag has no effect there.
 		if overrides.ImplementationPhase {
 			opts.ImplementationPhase = true
+		}
+		// Per-prompt thinking effort (live per-conversation control). A
+		// non-empty, non-"off" level sets RunOptions.Thinking for this run;
+		// "off"/"" explicitly clears it so the prompt carries no thinking
+		// directive even if a session default existed. This is the single
+		// place the per-prompt effort lands on the run; the provider
+		// body-builders resolve the per-model mechanism downstream.
+		if eff := overrides.ThinkingEffort; eff != "" && eff != "off" {
+			opts.Thinking = &types.ThinkingConfig{Enabled: true, Effort: eff}
+		} else if eff == "off" {
+			opts.Thinking = nil
 		}
 		// Forward the harness-supplied EnterPlanMode tool description.
 		// Empty string means "fall back to engine default" — runloop_setup
@@ -199,8 +270,12 @@ func resolveModelTier(opts *types.RunOptions) {
 	}
 }
 
-// injectContextFiles discovers CLAUDE.md/ION.md files from the working directory
-// and appends them to the system prompt.
+// injectContextFiles discovers Ion-native instruction files (AGENTS.md,
+// ION.md, .ion/*) plus the user's ~/.ion root, and—when the session's
+// ClaudeCompat flag is set—Claude-compat files (CLAUDE.md, .claude/*) and the
+// ~/.claude root, then appends them to the system prompt. The gate mirrors the
+// slash-command / skill subsystem: Ion roots are unconditional, Claude roots
+// are honored only when the consumer enabled ClaudeCompat.
 //
 // Each discovered file is offered to the documented context_discover and
 // context_load hooks (see docs/hooks/reference.md) before it is injected:
@@ -209,15 +284,19 @@ func resolveModelTier(opts *types.RunOptions) {
 //
 // With no handler registered both hooks abstain and every discovered file is
 // injected verbatim, so this is behavior-preserving for consumers that do not
-// opt in. The hooks were previously implemented and unit-tested but never fired
-// on this path; wiring them here makes the engine honor its published contract.
+// opt in.
 func (m *Manager) injectContextFiles(s *engineSession, key string, opts *types.RunOptions) {
 	if s.config.WorkingDirectory == "" {
+		utils.Log("Session", "injectContextFiles: skipped (empty WorkingDirectory)")
 		return
 	}
-	ctxFiles := ioncontext.WalkContextFiles(s.config.WorkingDirectory, ioncontext.IonPreset())
-	if len(ctxFiles) == 0 {
-		return
+	cfg := ioncontext.IonPreset()
+	cfg.ClaudeCompat = s.config.ClaudeCompat
+	ctxFiles := ioncontext.WalkContextFiles(s.config.WorkingDirectory, cfg)
+	if s.config.ClaudeCompat {
+		utils.Log("Session", fmt.Sprintf("injectContextFiles: claudeCompat=true, discovered %d context file(s) (Ion-native + Claude-compat)", len(ctxFiles)))
+	} else {
+		utils.Log("Session", fmt.Sprintf("injectContextFiles: claudeCompat=false, discovered %d context file(s) (Ion-native only)", len(ctxFiles)))
 	}
 
 	// Build an extension context only when at least one host can answer the hook.
@@ -231,6 +310,7 @@ func (m *Manager) injectContextFiles(s *engineSession, key string, opts *types.R
 	var ctxContent strings.Builder
 	injected, rejected := 0, 0
 	for _, cf := range ctxFiles {
+		utils.Debug("Session", fmt.Sprintf("injectContextFiles: including %s (source=%s)", cf.Path, cf.Source))
 		content := cf.Content
 		if extGroup != nil {
 			reject, err := extGroup.FireContextDiscover(extCtx, extension.ContextDiscoverInfo{
@@ -277,10 +357,13 @@ func (m *Manager) injectExtensionContext(s *engineSession, key string, opts *typ
 	}
 	var discoveredPaths []string
 	if s.config.WorkingDirectory != "" {
-		ctxFiles := ioncontext.WalkContextFiles(s.config.WorkingDirectory, ioncontext.IonPreset())
+		cfg := ioncontext.IonPreset()
+		cfg.ClaudeCompat = s.config.ClaudeCompat
+		ctxFiles := ioncontext.WalkContextFiles(s.config.WorkingDirectory, cfg)
 		for _, cf := range ctxFiles {
 			discoveredPaths = append(discoveredPaths, cf.Path)
 		}
+		utils.Debug("Session", fmt.Sprintf("injectExtensionContext: claudeCompat=%v, %d discovered path(s) for context_inject", s.config.ClaudeCompat, len(discoveredPaths)))
 	}
 
 	ctx := m.newExtContext(s, key)

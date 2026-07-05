@@ -17,6 +17,7 @@ import { readSettings } from '../../settings-store'
 import { projectCurrentSettings, projectableSchema, projectableGroups } from '../../projectable-settings'
 import { getRemoteTabStates } from '../snapshot'
 import { readRemoteDisplay } from './display'
+import { getEnterprisePolicyNewConversationDefaults } from '../../engine-bridge-fs'
 
 function log(msg: string): void {
   _log('main', msg)
@@ -42,7 +43,7 @@ export async function sendSync(send: (event: any) => void): Promise<void> {
   const remoteDisplay = readRemoteDisplay()
   log(`SNAP-SEND: tabs=${tabs.length} dirs=${recentDirectories.length} remoteDisplay=${remoteDisplay ? `name=${remoteDisplay.customName === null ? 'null' : 'set'} icon=${remoteDisplay.customIcon ?? 'null'} ts=${remoteDisplay.updatedAt}` : 'unset'}`)
   send({
-    type: 'snapshot',
+    type: 'desktop_snapshot',
     tabs,
     recentDirectories,
     tabGroupMode,
@@ -56,7 +57,7 @@ export async function sendSync(send: (event: any) => void): Promise<void> {
     resources: Object.keys(resourceManifest).length > 0 ? resourceManifest : undefined,
   })
   const engineProfiles = Array.isArray(syncSettings.engineProfiles) ? syncSettings.engineProfiles : []
-  send({ type: 'engine_profiles', profiles: engineProfiles })
+  send({ type: 'desktop_engine_profiles', profiles: engineProfiles })
   // Desktop projectable settings snapshot. Carried alongside the main
   // `snapshot` payload so iOS sees the desktop's user preferences from
   // the moment of pairing. Snapshot semantics — consumers replace their
@@ -65,11 +66,27 @@ export async function sendSync(send: (event: any) => void): Promise<void> {
   // allowlist and the rationale for which settings are projected. The
   // schema + groups ride alongside the values so iOS auto-renders the
   // Settings detail view without hardcoding the projection metadata.
+  //
+  // `newConversationPolicy` projects the resolved enterprise new-tab lock so
+  // remote clients enforce the same constraint as the desktop. The policy
+  // comes from the local engine IPC (`get_enterprise_policy`) and is NOT
+  // a user-editable setting, so it lives as a discrete top-level field
+  // rather than inside the `settings` key-value map.
+  let newConversationPolicy: { baseDirectory: string; engineProfileId: string; locked: boolean } | null = null
+  try {
+    const policy = await getEnterprisePolicyNewConversationDefaults()
+    if (policy) {
+      newConversationPolicy = { baseDirectory: policy.baseDirectory, engineProfileId: policy.engineProfileId, locked: policy.locked }
+    }
+  } catch (err) {
+    log(`SNAP-SEND: getEnterprisePolicyNewConversationDefaults failed (non-fatal): ${err}`)
+  }
   send({
     type: 'desktop_settings_snapshot',
     settings: projectCurrentSettings(),
     schema: projectableSchema(),
     groups: projectableGroups(),
+    newConversationPolicy,
   })
   for (const tab of tabs) {
     if (tab.isTerminalOnly && tab.terminalInstances && tab.terminalInstances.length > 0) {
@@ -100,7 +117,7 @@ export async function sendSync(send: (event: any) => void): Promise<void> {
           }
         }
         send({
-          type: 'terminal_snapshot',
+          type: 'desktop_terminal_snapshot',
           tabId: tab.id,
           instances: tab.terminalInstances,
           activeInstanceId: tab.activeTerminalInstanceId || null,

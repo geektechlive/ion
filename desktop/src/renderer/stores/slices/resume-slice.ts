@@ -1,9 +1,10 @@
 import type { TabState, Message } from '../../../shared/types'
 import { usePreferencesStore } from '../../preferences'
 import type { StoreSet, StoreGet, State } from '../session-store-types'
-import { makeLocalTab, nextMsgId } from '../session-store-helpers'
-import { makeMainPane, commitInstance, activeInstance } from '../conversation-instance'
+import { makeLocalTab, nextMsgId, initialPermissionMode } from '../session-store-helpers'
+import { makeMainPane, commitInstance, activeInstance, effectivePermissionMode } from '../conversation-instance'
 import { lastPendingCardTool, type PendingCardMessage } from '../../../shared/pending-card'
+import { mapSessionHistory, mapSessionMessage } from '../../../shared/session-message-mapper'
 
 /** Parse a JSON toolInput string into a Record, or undefined on failure. */
 function parseToolInput(raw?: string): Record<string, unknown> | undefined {
@@ -62,10 +63,11 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           workingDirectory: source.workingDirectory,
           hasChosenDirectory: source.hasChosenDirectory,
           additionalDirs: [...source.additionalDirs],
-          permissionMode: source.permissionMode,
           pillColor: source.pillColor,
           pillIcon: source.pillIcon,
         }
+        // Carry the source instance's permission mode onto the new pane instance.
+        const forkMode = effectivePermissionMode(source, get().conversationPanes)
         // Seed the forked tab's `main` pane with the carried-over scrollback +
         // restored denial. modelOverride carries from the source instance.
         console.log(`[store] forkTab: source=${sourceTabId.slice(0, 8)} new=${tab.id.slice(0, 8)}:main msgs=${messages.length} restoredDenied=${restoredDenied ? 'yes' : 'no'}`)
@@ -76,11 +78,12 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
             messageCount: messages.length,
             modelOverride: sourceInst.modelOverride,
             permissionDenied: restoredDenied,
+            permissionMode: forkMode,
           })),
           activeTabId: tab.id,
           isExpanded: true,
         }))
-        window.ion.setPermissionMode(tabId, tab.permissionMode, 'tab_create')
+        window.ion.setPermissionMode(tabId, forkMode, 'tab_create')
         return tabId
       } catch {
         return null
@@ -116,6 +119,7 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           ...i,
           messages: rewoundMessages,
           permissionQueue: [],
+          elicitationQueue: [],
           permissionDenied: restoredDenied,
           draftInput: targetMessage.content,
         }))
@@ -174,13 +178,14 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
           workingDirectory: source.workingDirectory,
           hasChosenDirectory: source.hasChosenDirectory,
           additionalDirs: [...source.additionalDirs],
-          permissionMode: source.permissionMode,
           pillColor: source.pillColor,
           pillIcon: source.pillIcon,
           // pendingInput stays on the tab (one-shot InputBar pre-fill); draftInput
           // is seeded onto the instance below.
           pendingInput: targetMessage.content,
         }
+        // Carry the source instance's permission mode onto the new pane instance.
+        const forkMode = effectivePermissionMode(source, get().conversationPanes)
         console.log(`[store] forkFromMessage: source=${tabId.slice(0, 8)} new=${tab.id.slice(0, 8)}:main msgs=${messages.length} restoredDenied=${restoredDenied ? 'yes' : 'no'}`)
         set((s) => ({
           tabs: [...s.tabs, tab],
@@ -190,11 +195,12 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
             modelOverride: sourceInst.modelOverride,
             permissionDenied: restoredDenied,
             draftInput: targetMessage.content,
+            permissionMode: forkMode,
           })),
           activeTabId: tab.id,
           isExpanded: true,
         }))
-        window.ion.setPermissionMode(newTabId, tab.permissionMode, 'tab_create')
+        window.ion.setPermissionMode(newTabId, forkMode, 'tab_create')
         return newTabId
       } catch {
         return null
@@ -218,18 +224,10 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
             await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)))
           }
         }
-        const messages: Message[] = history.filter((m: any) => !m.internal).map((m) => ({
-          id: nextMsgId(),
-          role: m.role as Message['role'],
-          content: m.content || '',
-          toolName: m.toolName,
-          toolId: m.toolId,
-          toolInput: m.toolInput,
-          toolStatus: m.toolName ? 'completed' as const : undefined,
-          userExecuted: m.userExecuted,
-          attachments: m.attachments,
-          timestamp: m.timestamp,
-        }))
+        // Map engine history rows → client Messages via the shared mapper,
+        // which also converts system-role marker rows (compaction/plan/steer)
+        // into the same divider Messages the live handlers produce.
+        const messages: Message[] = mapSessionHistory(history, nextMsgId)
 
         const restoredDenied = buildRestoredDenied(messages)
 
@@ -306,20 +304,9 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
         const allSessionIds = [...tab.historicalSessionIds, tab.conversationId]
         const history = await window.ion.loadChainHistory(allSessionIds)
 
-        const allMessages: Message[] = history
-          .filter((m: any) => !m.internal)
-          .map((m: any) => ({
-            id: nextMsgId(),
-            role: m.role as Message['role'],
-            content: m.content || '',
-            toolName: m.toolName,
-            toolId: m.toolId,
-            toolInput: m.toolInput,
-            toolStatus: m.toolName ? 'completed' as const : undefined,
-            userExecuted: m.userExecuted,
-            attachments: m.attachments,
-            timestamp: m.timestamp,
-          }))
+        // Shared mapper: internal rows filtered, marker rows converted to
+        // system divider Messages (compaction/plan/steer).
+        const allMessages: Message[] = mapSessionHistory(history, nextMsgId)
 
         // Restore permissionDenied from the last tool message (only if the
         // instance doesn't already have one from the persisted state)
@@ -359,36 +346,18 @@ export function createResumeSlice(set: StoreSet, get: StoreGet): Partial<State> 
         const allMessages: Message[] = []
         for (const histId of historicalSessionIds) {
           const history = await window.ion.loadSession(histId, defaultDir, encodedDir || undefined).catch(() => [])
-          for (const m of history.filter((h: any) => !h.internal)) {
-            allMessages.push({
-              id: nextMsgId(),
-              role: m.role as Message['role'],
-              content: m.content || '',
-              toolName: m.toolName,
-              toolId: m.toolId,
-              toolInput: m.toolInput,
-              toolStatus: m.toolName ? 'completed' as const : undefined,
-              userExecuted: m.userExecuted,
-              attachments: m.attachments,
-              timestamp: m.timestamp,
-            })
+          for (const m of history) {
+            if (m.internal) continue
+            const mapped = mapSessionMessage(m, nextMsgId)
+            if (mapped) allMessages.push(mapped)
           }
         }
 
         const currentHistory = await window.ion.loadSession(sessionId, defaultDir, encodedDir || undefined).catch(() => [])
-        for (const m of currentHistory.filter((h: any) => !h.internal)) {
-          allMessages.push({
-            id: nextMsgId(),
-            role: m.role as Message['role'],
-            content: m.content || '',
-            toolName: m.toolName,
-            toolId: m.toolId,
-            toolInput: m.toolInput,
-            toolStatus: m.toolName ? 'completed' as const : undefined,
-            userExecuted: m.userExecuted,
-            attachments: m.attachments,
-            timestamp: m.timestamp,
-          })
+        for (const m of currentHistory) {
+          if (m.internal) continue
+          const mapped = mapSessionMessage(m, nextMsgId)
+          if (mapped) allMessages.push(mapped)
         }
 
         const restoredDenied = buildRestoredDenied(allMessages)

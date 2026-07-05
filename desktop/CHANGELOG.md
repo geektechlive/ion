@@ -10,6 +10,97 @@ Demonstrates the engine's daemon architecture and multi-client broadcast.
 
 Subsequent versions will be auto-generated from conventional commit messages.
 
+## [1.57.0](https://github.com/dsswift/ion/compare/desktop-v1.56.0...desktop-v1.57.0) (2026-07-03)
+
+### Features
+
+* **desktop:** sync nested-context contract types ([8adcc76](https://github.com/dsswift/ion/commit/8adcc768d5bb74df1ed20a1bc09d31a5040ef21d))
+* **desktop:** connect to launchd engine daemon ([3adab1b](https://github.com/dsswift/ion/commit/3adab1bffaacc35d5b424b7e0345af93a03ff3e2))
+* **desktop:** unify plain and extension-hosted conversations (#256) ([6e27d2b](https://github.com/dsswift/ion/commit/6e27d2b11a260e44a32f61834a16cbca62f77439))
+* **desktop:** carry dispatch depth/parentId in telemetry ([ea92afc](https://github.com/dsswift/ion/commit/ea92afc0131bef0237ab9990ab9f735217140331))
+* **desktop:** dispatch telemetry snapshot and protocol ([9fed085](https://github.com/dsswift/ion/commit/9fed08517b6b5d93a6aa90e6a7f74a6c8479d942))
+* **desktop:** move tool-call cluster below assistant messages ([63a122d](https://github.com/dsswift/ion/commit/63a122dbe3d5e2a2fe36fba1abfc2294eb22b281))
+* **desktop:** 8-direction edge/corner resize for floating panels ([5435bf9](https://github.com/dsswift/ion/commit/5435bf9587f83dbb8f1d02a65565380688a3fed9))
+* **desktop:** ion-meta hook integration test ([9fd88e7](https://github.com/dsswift/ion/commit/9fd88e7bca7da05dc536376acef14ab1915653a7))
+* **desktop:** request breakdown command handler and protocol ([72c89a5](https://github.com/dsswift/ion/commit/72c89a549920c81155bf33ba3e47070d9bf07d5b))
+* **ios:** desktop_request_context_breakdown + session ID fix ([9eb4b06](https://github.com/dsswift/ion/commit/9eb4b06a2cb0ba5e5fdb3271ca39c3789cf8ca12))
+
+### Bug Fixes
+
+* **desktop:** drive plan marker from plan_file_written not entry ([0508b36](https://github.com/dsswift/ion/commit/0508b3653d97e72a6ba8b3aa9b2b037327c15283))
+* **desktop:** restore plan divider link across restart ([eb5fde5](https://github.com/dsswift/ion/commit/eb5fde55bff4ea40ba1d8aeb2ac08f794cb95c18))
+* **ios:** restore plan divider Message decode across restart ([f785bca](https://github.com/dsswift/ion/commit/f785bcaa0dfb7d92ddf0b67468cf86c46cb1c3cb))
+* **desktop:** update agent-state dispatch ID tests ([d972b03](https://github.com/dsswift/ion/commit/d972b03a0e89096c84b2eaab7f2580570213e592))
+* **desktop:** sync dispatchId contract ([004f836](https://github.com/dsswift/ion/commit/004f836385a59c09d1bc8092e409c5351574d63c))
+* **ios:** sync dispatchId contract ([76e4d1c](https://github.com/dsswift/ion/commit/76e4d1cd616fba9ebc7cece9837503926a591ebf))
+* **desktop:** render micro-only compaction marker correctly ([baaeaaa](https://github.com/dsswift/ion/commit/baaeaaa751429773bae8cd4a5465cbdce533c5d3))
+* **desktop:** clear instance planFilePath on implement ([86cb499](https://github.com/dsswift/ion/commit/86cb499b8aa62a188e2558d4b5685e3e12541120))
+* **desktop:** use effectiveRunningChildrenCount for background agents ([ee95a8e](https://github.com/dsswift/ion/commit/ee95a8ecbd3dfe989385752689424aabc17d2b51))
+* **desktop:** lower overlay window level below system dialogs ([f98fbdb](https://github.com/dsswift/ion/commit/f98fbdb36f29a60d8a38fd5a12f1c6eb652b9d51))
+* **desktop:** snapshot parity + engine_context_breakdown wire ([eb7affd](https://github.com/dsswift/ion/commit/eb7affd13b5c151afd25d34f6f4a7e4769d9b15c))
+* **desktop:** downgrade plan-mode Layer-2 recovery to observability assertion ([7a63ad2](https://github.com/dsswift/ion/commit/7a63ad28a4b9ad1f6bd60b52fbe4aa99b72ddc55))
+* **desktop:** mock electron for headless main-process tests ([2d9e800](https://github.com/dsswift/ion/commit/2d9e8007d239351831d1fe6ceb2f6755cc8e78b1))
+* **desktop:** pin darwin platform in engine-bootstrap tests ([badaf88](https://github.com/dsswift/ion/commit/badaf8857a020c1ad62f7403b92139e6e677812d))
+* **desktop:** sync turn-grouping-guidance test to current wording ([188461b](https://github.com/dsswift/ion/commit/188461ba15d5ede75560fc88b45addbd55149be0))
+* **desktop:** polyfill scrollIntoView in jsdom test setup ([58ee76d](https://github.com/dsswift/ion/commit/58ee76d31962080fe46e4b62dda3022fe2eba91f))
+
+## [1.56.0](https://github.com/dsswift/ion/compare/desktop-v1.55.0...desktop-v1.56.0) (2026-06-19)
+
+### Features
+
+* **desktop:** add clear-all to global notifications panel ([b7c69c6](https://github.com/dsswift/ion/commit/b7c69c6df0182c7f407940035ff1ec5f0f1a3bfe))
+* **desktop:** delegate slash resolution to engine and render pill ([9f7e14d](https://github.com/dsswift/ion/commit/9f7e14ddc28475cbf968766876ab5479d4d02da3))
+
+## [1.55.0](https://github.com/dsswift/ion/compare/desktop-v1.54.0...desktop-v1.55.0) (2026-06-18)
+
+### Features
+
+* **desktop:** desktop_ wire prefix + plan-content (#240) ([6e6dac4](https://github.com/dsswift/ion/commit/6e6dac49a5276a06023b6cff4c2b653e32279344))
+* **desktop:** extended-thinking UI + projection toggle (#158) ([e43979f](https://github.com/dsswift/ion/commit/e43979fb24e444cd588a914ca0c99a8a283d8125))
+* **desktop:** global thinking toggle + per-conversation effort picker ([4b653c6](https://github.com/dsswift/ion/commit/4b653c6fa41f2f01477a15b5f8f0e1fe05ee82a4))
+
+### Bug Fixes
+
+* **desktop:** self-heal missing electron dist in postinstall ([267d32f](https://github.com/dsswift/ion/commit/267d32f335785dec1328ece99b29dc7a05e7ea48))
+* **desktop:** spawn engine with login-shell PATH env ([04c912d](https://github.com/dsswift/ion/commit/04c912dd02b1824ec094b8f734ccc82221edcb6e))
+* **desktop:** persist streamThinkingToRemote round-trip (#158) ([867c577](https://github.com/dsswift/ion/commit/867c5773d2b9088227190825a06a86019fb3aaf7))
+* **desktop:** update sendPrompt arg count in control-plane test ([61923ef](https://github.com/dsswift/ion/commit/61923ef8ca5dcd30b1fe6831cbd1deb71e6ff828))
+
+## [1.54.0](https://github.com/dsswift/ion/compare/desktop-v1.53.2...desktop-v1.54.0) (2026-06-16)
+
+### Features
+
+* **desktop:** add git-watcher ignored-directories config (#235) ([0bda88d](https://github.com/dsswift/ion/commit/0bda88df73da6093123634bfc9b17a44f66ba42c))
+* **desktop:** kind-agnostic resource delivery and tray filter (#179) ([297ff64](https://github.com/dsswift/ion/commit/297ff6469ea16394416a012617724ad48f6251a3))
+
+### Bug Fixes
+
+* **desktop:** mock settings-store in git-watcher-bridge test (#239) ([a57856a](https://github.com/dsswift/ion/commit/a57856afb03bfc679d6b14b74891aa893d049bfd))
+
+## [1.53.2](https://github.com/dsswift/ion/compare/desktop-v1.53.1...desktop-v1.53.2) (2026-06-15)
+
+## [1.53.1](https://github.com/dsswift/ion/compare/desktop-v1.53.0...desktop-v1.53.1) (2026-06-15)
+
+## [1.53.0](https://github.com/dsswift/ion/compare/desktop-v1.52.0...desktop-v1.53.0) (2026-06-15)
+
+### Features
+
+* **desktop:** add rewind support for engine tab conversations ([bfb82c5](https://github.com/dsswift/ion/commit/bfb82c5cd1ff2f6396b99ef4ff11705b8453e171))
+* **desktop:** carry instanceId on engine_rewind input_prefill reply ([eaa823d](https://github.com/dsswift/ion/commit/eaa823d406e0e56cc6c52d1732b88925915b1232))
+* **desktop:** add ensureSession as single eager durable start site ([ee8f2d6](https://github.com/dsswift/ion/commit/ee8f2d64d297c5f9203de6c34e543fa965eb56c7))
+* **desktop:** restart resilience for reused tab keys (#231) ([a851126](https://github.com/dsswift/ion/commit/a851126e868ed9db56daf122600abf129f69f91d))
+* **desktop:** configurable editor and conversation font sizes ([430cd36](https://github.com/dsswift/ion/commit/430cd36989252719e6f8e44bf858d35f31adaf15))
+* **desktop:** keep literal tab title for slash-command prompts ([e528367](https://github.com/dsswift/ion/commit/e5283671d0b5a39e6b3b52a38444dba9a12c483e))
+
+### Bug Fixes
+
+* **desktop:** stack engine toasts vertically with close buttons ([9b5e250](https://github.com/dsswift/ion/commit/9b5e250b8f294bba8b9ec0468cbae647ccea60af))
+* **desktop:** filter extension picker to supported entry points ([cde55da](https://github.com/dsswift/ion/commit/cde55da50c77a9c90449e3682d61e9e9f19d885e))
+* **desktop:** use engine context window in status bar indicator ([3062a90](https://github.com/dsswift/ion/commit/3062a90bac740f5bc7a1d0838beaa0a9c71571d3))
+* **desktop:** dismiss question/plan card on /clear ([7865879](https://github.com/dsswift/ion/commit/7865879dcdfee203cede4cd7d4639cf17f37cd1b))
+* **desktop:** guard idle pre-mint from clobbering conversationId ([7ba1b70](https://github.com/dsswift/ion/commit/7ba1b700d404e54e037e3b9c68b67848e8e33b60))
+* **desktop:** mock electron in engine-rewind test for ci ([d158dd2](https://github.com/dsswift/ion/commit/d158dd2b32fffc73aaf2f115147f88beab5a77a0))
+
 ## [1.52.0](https://github.com/dsswift/ion/compare/desktop-v1.51.0...desktop-v1.52.0) (2026-06-12)
 
 ### Features

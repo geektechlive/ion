@@ -163,6 +163,9 @@ export const darkColors = {
   tabGlowQuestion: 'rgba(96, 165, 250, 0.5)',
   tabGlowQuestionShadow: 'rgba(96, 165, 250, 0.25)',
 
+  // Worktree branch indicator
+  worktreeGreen: '#4ade80',
+
   // Diff (inline edit diffs + git diff viewer)
   diffAddBg: 'rgba(122, 172, 140, 0.12)',
   diffAddText: '#7aac8c',
@@ -318,6 +321,9 @@ export const lightColors = {
   tabGlowPlanReadyShadow: 'rgba(90, 158, 111, 0.2)',
   tabGlowQuestion: 'rgba(59, 130, 246, 0.5)',
   tabGlowQuestionShadow: 'rgba(59, 130, 246, 0.2)',
+
+  // Worktree branch indicator
+  worktreeGreen: '#22c55e',
 
   // Diff (inline edit diffs + git diff viewer)
   diffAddBg: 'rgba(90, 158, 111, 0.12)',

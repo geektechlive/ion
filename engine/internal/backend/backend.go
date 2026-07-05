@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"context"
+
 	"github.com/dsswift/ion/engine/internal/permissions"
 	"github.com/dsswift/ion/engine/internal/sandbox"
 	"github.com/dsswift/ion/engine/internal/tools"
@@ -285,10 +287,22 @@ type RunConfig struct {
 	SandboxCfg    *sandbox.Config
 	SecurityCfg   *types.SecurityConfig
 	ExternalTools []types.LlmToolDef
-	McpToolRouter func(name string, input map[string]interface{}) (content string, isErr bool, err error)
+	// McpToolRouter routes MCP and extension-registered tool calls. The ctx is
+	// the per-tool-call context: it carries the DeadlineSuspender (see
+	// types.WithDeadlineSuspender) so a tool that synchronously blocks on a
+	// human via ctx.elicit() can suspend its finite deadline for the span of
+	// the wait. (Permission prompts block elsewhere and do not use the
+	// suspender — see DeadlineSuspender's doc.) ctx is also the cancellation
+	// signal for the routed call.
+	McpToolRouter func(ctx context.Context, name string, input map[string]interface{}) (content string, isErr bool, err error)
 	AgentSpawner  tools.AgentSpawner
 	Telemetry     TelemetryCollector
 	Timeouts      *types.TimeoutsConfig
+
+	// Shell carries EngineRuntimeConfig.Shell so the Bash tool can run
+	// commands through the user's login shell when Shell.UseLoginShell is
+	// set. Nil means "use the default non-login bash -c path".
+	Shell *types.ShellConfig
 
 	// DefaultModel is the engine-wide default model from EngineConfig.
 	// Used as a fallback when the requested model doesn't resolve to a
@@ -330,4 +344,20 @@ type RunConfig struct {
 	// Zero means "use built-in default" (conversation.DefaultMaxToolResultChars).
 	// Per-run RunOptions.MaxToolResultChars takes precedence when non-zero.
 	MaxToolResultChars int
+
+	// ChildElicitFn, when non-nil, marks this run as a dispatched child and
+	// provides an elicitation callback for AskUserQuestion. When a dispatched
+	// child calls AskUserQuestion, the runloop calls this function instead of
+	// terminating the run. The function blocks until the dispatcher answers or
+	// the session is torn down. This is the "AskUserQuestion symmetrization"
+	// described in the hierarchical-dispatch plan: a dispatched child's question
+	// blocks-and-resumes like an elicitation to its dispatcher, making behavior
+	// uniform regardless of which primitive the child used.
+	//
+	// The string parameter is the question text from the AskUserQuestion tool
+	// input. The function returns (answer string, cancelled bool, err error).
+	// When cancelled=true or err!=nil, the run terminates as a recall/error.
+	// When cancelled=false and err=nil, the returned answer is injected as the
+	// AskUserQuestion tool result, and the child run CONTINUES (does not terminate).
+	ChildElicitFn func(question string) (answer string, cancelled bool, err error)
 }

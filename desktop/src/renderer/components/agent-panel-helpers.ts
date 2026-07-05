@@ -1,16 +1,8 @@
 import type { AgentStateUpdate } from '../../shared/types'
-import type { Message } from '../../shared/types'
+import type { DispatchInfo, DispatchTelemetryEntry } from '../../shared/types-engine'
 
-/** Structured dispatch info extracted from agent metadata. */
-export interface DispatchInfo {
-  id: string
-  task: string
-  model: string
-  conversationId: string
-  elapsed?: number
-  status: string
-  startTime?: number
-}
+// Re-export so existing renderer imports keep working.
+export type { DispatchInfo }
 
 /** Read a metadata field with fallback */
 export function meta<T>(agent: AgentStateUpdate, key: string, fallback: T): T {
@@ -37,6 +29,17 @@ export function getDispatches(agent: AgentStateUpdate): DispatchInfo[] {
     }))
   }
   return []
+}
+
+/**
+ * The stable key under which per-agent UI state (expand/select/popup) is stored
+ * in AgentPanel. Uses the MOST RECENT dispatch's id so two dispatches of the
+ * same agent name remain distinct rows with independent state. Falls back to
+ * the agent name for agents with no dispatch (extension-roster rows, pre-fix
+ * persisted state).
+ */
+export function dispatchKey(agent: AgentStateUpdate): string {
+  return getDispatches(agent).at(-1)?.id ?? agent.name
 }
 
 const AGENT_COLORS: Record<string, string> = {
@@ -66,6 +69,25 @@ export function getAgentColor(agent: AgentStateUpdate): string {
   if (color) return color
   if (AGENT_COLORS[agent.name]) return AGENT_COLORS[agent.name]
   return hashColor(meta(agent, 'type', agent.name))
+}
+
+/**
+ * Whether an agent is a root-level dispatch (a direct child of the
+ * orchestrator) versus a nested dispatch (a specialist dispatched by another
+ * dispatched agent). The main conversation panel shows only root-level agents
+ * so a lead's specialists appear inside the lead's dispatch preview, not the
+ * main conversation row.
+ *
+ * Attribution is stamped onto the agent-state metadata at dispatch time
+ * (dispatch_agent.go): `dispatchDepth` (1=direct child, 2=grandchild, ...) and
+ * `dispatchParentId` (the parent dispatch's id; empty for orchestrator-direct
+ * dispatches). Back-compat: extension-roster pills and pre-fix persisted state
+ * carry no attribution (depth 0, empty parent) and are treated as root-level.
+ */
+export function isRootLevelAgent(agent: AgentStateUpdate): boolean {
+  const depth = meta<number>(agent, 'dispatchDepth', 0)
+  const parentId = meta<string>(agent, 'dispatchParentId', '')
+  return depth <= 1 || parentId === ''
 }
 
 export function isAgentVisible(agent: AgentStateUpdate): boolean {
@@ -121,30 +143,118 @@ export function formatDuration(secs: number): string {
 }
 
 /**
- * When multiple dispatches share a conversationId (engine reuses the
- * session), slice the conversation messages by the dispatch's startTime
- * boundary so each pager tab shows only its own work. Dispatch startTime
- * is in seconds; message timestamps are in milliseconds.
+ * Derive the dispatch nesting depth for each dispatch from flat telemetry
+ * entries. Returns a Map from dispatchId to its dispatch depth (0 = root).
+ * Keyed by dispatchId (unique per dispatch instance) so two dispatches of the
+ * same agent name do not collapse onto one another — AgentPanel looks up each
+ * agent's own dispatch id, not its name, to indent nested dispatches.
  */
-export function sliceMessagesForDispatch(
-  msgs: Message[],
-  dispatch: DispatchInfo,
-  allDispatches: DispatchInfo[],
-): Message[] {
-  if (!dispatch.startTime) return msgs
-  const startMs = dispatch.startTime * 1000
+export function selectAgentDepths(telemetry: DispatchTelemetryEntry[]): Map<string, number> {
+  const depths = new Map<string, number>()
+  for (const entry of telemetry) {
+    depths.set(entry.dispatchId, entry.dispatchDepth)
+  }
+  return depths
+}
 
-  // Find the next dispatch sharing this conversationId that starts later.
-  const siblings = allDispatches
-    .filter(d => d.conversationId === dispatch.conversationId)
-    .sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0))
-  const next = siblings.find(d => (d.startTime ?? 0) > dispatch.startTime!)
-  const endMs = next?.startTime ? next.startTime * 1000 : undefined
+/**
+ * Return direct children of a given dispatch, keyed by dispatchId.
+ * A child is any entry whose dispatchParentId equals the given dispatchId.
+ */
+export function childrenOfDispatch(
+  telemetry: DispatchTelemetryEntry[],
+  dispatchId: string,
+): DispatchTelemetryEntry[] {
+  return telemetry.filter((e) => e.dispatchParentId === dispatchId)
+}
 
-  return msgs.filter(m => {
-    if (!m.timestamp) return true
-    if (m.timestamp < startMs) return false
-    if (endMs != null && m.timestamp >= endMs) return false
-    return true
-  })
+/**
+ * Return the agent-state pills that are direct children of a given dispatch:
+ * any agent whose `dispatchParentId` metadata equals `parentDispatchId`.
+ *
+ * This is the DURABLE counterpart to `childrenOfDispatch` (which filters the
+ * one-shot `dispatchTelemetry` stream). Agent-state pills carry the same
+ * nesting attribution (`dispatchParentId`, `dispatchDepth`, `dispatches[]`)
+ * and are re-emitted on every `engine_agent_state` heartbeat snapshot, so a
+ * consumer that attaches AFTER a dispatch completed (or reopens the tab) can
+ * still reconstruct the dispatch tree from them — whereas `dispatchTelemetry`
+ * is gone by then. The dispatch-preview panel sources its nested children from
+ * here so a child renders regardless of attach timing. An empty
+ * `parentDispatchId` matches nothing (root-level pills are not "children").
+ */
+export function childAgentsOf(
+  agents: AgentStateUpdate[],
+  parentDispatchId: string,
+): AgentStateUpdate[] {
+  if (!parentDispatchId) return []
+  return agents.filter((a) => meta<string>(a, 'dispatchParentId', '') === parentDispatchId)
+}
+
+/**
+ * Return root-level dispatches (entries with no parent).
+ * Root entries have an empty or missing dispatchParentId.
+ */
+export function rootDispatches(
+  telemetry: DispatchTelemetryEntry[],
+): DispatchTelemetryEntry[] {
+  return telemetry.filter((e) => !e.dispatchParentId)
+}
+
+
+/**
+ * Build the full ancestor breadcrumb stack for a deep-linked dispatch.
+ *
+ * Walks dispatchParentId up through durable agentStates to produce an ordered
+ * chain: root → ... → target. All data is already on agentStates; no network
+ * call required.
+ *
+ * This closes the "missing breadcrumbs on cold open" gap described in plan
+ * modest-leaping-waffle.md §7a: AgentDetailPanel.stack initializes with only
+ * the root frame (AgentDetailPanel.tsx:75-81); intermediate frames only exist
+ * via manual drill-down. Pre-populating with this function lets deep-links from
+ * the StatusDrawer arrive at the correct tier without the user drilling down.
+ *
+ * @param targetDispatchId  - The dispatch the user clicked in the Status Drawer.
+ * @param allAgents         - Flat agentStates from the active instance.
+ * @returns Ordered BreadcrumbFrame[] (root first, target last), or null if the
+ *          target dispatch cannot be found in agentStates.
+ */
+export function buildBreadcrumbStack(
+  targetDispatchId: string,
+  allAgents: AgentStateUpdate[],
+): import('./AgentDetailPanel').BreadcrumbFrame[] | null {
+  // Find the agent that owns this dispatch id
+  const findAgent = (dispatchId: string): AgentStateUpdate | undefined =>
+    allAgents.find((a) => getDispatches(a).some((d) => d.id === dispatchId))
+
+  const targetAgent = findAgent(targetDispatchId)
+  if (!targetAgent) return null
+
+  const targetDispatch = getDispatches(targetAgent).find((d) => d.id === targetDispatchId)
+  if (!targetDispatch) return null
+
+  // Build ancestor chain by walking dispatchParentId
+  const frames: import('./AgentDetailPanel').BreadcrumbFrame[] = []
+  let currentDispatchId = targetDispatchId
+  let currentAgent: AgentStateUpdate | undefined = targetAgent
+
+  // Walk up to root (max 20 levels to guard infinite loops)
+  const visited = new Set<string>()
+  while (currentAgent && !visited.has(currentDispatchId)) {
+    visited.add(currentDispatchId)
+    const dispatch = getDispatches(currentAgent).find((d) => d.id === currentDispatchId)
+    if (!dispatch) break
+    frames.unshift({
+      dispatchId: dispatch.id,
+      conversationId: dispatch.conversationId,
+      agentDisplayName: meta<string>(currentAgent, 'displayName', currentAgent.name),
+    })
+    const parentId = meta<string>(currentAgent, 'dispatchParentId', '')
+    if (!parentId) break
+    currentDispatchId = parentId
+    currentAgent = findAgent(parentId)
+    // findAgent returns the agent owning the PARENT dispatch id
+  }
+
+  return frames.length > 0 ? frames : null
 }

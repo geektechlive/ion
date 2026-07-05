@@ -365,6 +365,50 @@ func TestBuildToolDefs_PlanModeInjectsExitAndAsk(t *testing.T) {
 	}
 }
 
+// TestBuildToolDefs_PlanModeEmitCarriesPathAndSlug pins that the
+// plan-mode-entered emit fired at run setup (when a run STARTS while the
+// session is already in plan mode — a continuation of an existing plan)
+// carries the plan identity: PlanFilePath and the derived PlanSlug.
+//
+// Regression target: this emit previously sent PlanModeChangedEvent{Enabled:
+// true} with NO path/slug, producing a nameless, non-dedupable second
+// divider on the clients ("Plan created" with no plan name, not clickable).
+// run.planFilePath is populated at run creation from options.PlanFilePath, so
+// the path is available here and must be carried. Reverting the
+// runloop_setup.go fix (back to a bare Enabled:true emit) turns this red.
+func TestBuildToolDefs_PlanModeEmitCarriesPathAndSlug(t *testing.T) {
+	b := NewApiBackend()
+	var emitted []types.NormalizedEvent
+	b.OnNormalized(func(_ string, ev types.NormalizedEvent) {
+		emitted = append(emitted, ev)
+	})
+	run := &activeRun{requestID: "test", planMode: true, planFilePath: "/tmp/happy-jumping-rabbit.md"}
+	opts := types.RunOptions{PlanMode: true, PlanFilePath: "/tmp/happy-jumping-rabbit.md"}
+	provider := &mockLlmProvider{id: "anthropic"}
+
+	b.buildToolDefs(run, opts, provider)
+
+	var pmc *types.PlanModeChangedEvent
+	for _, ev := range emitted {
+		if e, ok := ev.Data.(*types.PlanModeChangedEvent); ok {
+			pmc = e
+			break
+		}
+	}
+	if pmc == nil {
+		t.Fatal("expected a PlanModeChangedEvent to be emitted at plan-mode run setup")
+	}
+	if !pmc.Enabled {
+		t.Error("expected PlanModeChangedEvent.Enabled to be true")
+	}
+	if pmc.PlanFilePath != "/tmp/happy-jumping-rabbit.md" {
+		t.Errorf("PlanFilePath = %q, want /tmp/happy-jumping-rabbit.md", pmc.PlanFilePath)
+	}
+	if pmc.PlanSlug != "happy-jumping-rabbit" {
+		t.Errorf("PlanSlug = %q, want happy-jumping-rabbit", pmc.PlanSlug)
+	}
+}
+
 func TestBuildToolDefs_NoPlanModeHasAskButNoExit(t *testing.T) {
 	b := NewApiBackend()
 	run := &activeRun{requestID: "test"}
@@ -727,6 +771,54 @@ func TestLoadOrCreateConversation_NoSessionID_CreatesFresh(t *testing.T) {
 	}
 }
 
+// TestLoadOrCreateConversation_ParentConversationID_SetOnFreshWithSessionID
+// verifies that a client-driven checkpoint cut (ParentConversationID set,
+// SessionID names an unsaved id) records the descent: the new conversation's
+// ParentID equals the supplied parent. Revert the parentId wiring in
+// loadOrCreateConversation and this goes red (ParentID stays empty).
+func TestLoadOrCreateConversation_ParentConversationID_SetOnFreshWithSessionID(t *testing.T) {
+	opts := types.RunOptions{
+		SessionID:            "child-conv-id-99999",
+		ParentConversationID: "parent-conv-id-00001",
+	}
+	conv, err := loadOrCreateConversation(opts, "mock-model")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if conv.ParentID != "parent-conv-id-00001" {
+		t.Errorf("expected ParentID=%q, got %q", "parent-conv-id-00001", conv.ParentID)
+	}
+}
+
+// TestLoadOrCreateConversation_ParentConversationID_SetOnFreshNoSessionID
+// verifies the same descent linkage on the empty-SessionID fresh-mint path.
+func TestLoadOrCreateConversation_ParentConversationID_SetOnFreshNoSessionID(t *testing.T) {
+	opts := types.RunOptions{
+		SessionID:            "",
+		ParentConversationID: "parent-conv-id-fresh",
+	}
+	conv, err := loadOrCreateConversation(opts, "mock-model")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if conv.ParentID != "parent-conv-id-fresh" {
+		t.Errorf("expected ParentID=%q, got %q", "parent-conv-id-fresh", conv.ParentID)
+	}
+}
+
+// TestLoadOrCreateConversation_NoParent_LeavesParentIDEmpty verifies the
+// non-breaking default: absent ParentConversationID leaves ParentID empty.
+func TestLoadOrCreateConversation_NoParent_LeavesParentIDEmpty(t *testing.T) {
+	opts := types.RunOptions{SessionID: "no-parent-conv-id"}
+	conv, err := loadOrCreateConversation(opts, "mock-model")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if conv.ParentID != "" {
+		t.Errorf("expected empty ParentID, got %q", conv.ParentID)
+	}
+}
+
 // --- plan mode Bash allowlist tests ---
 
 // TestBuildToolDefs_PlanModeBashIncludedWhenAllowlistSet verifies that the
@@ -920,6 +1012,51 @@ func TestBuildToolDefs_PerPromptBashAdditionsAppearInRunState(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("entry %d: got %q want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// TestBuildToolDefs_PerPromptBashAdditionsOnly_NoSessionAllowlist is the
+// regression test for the bug where a slash command dispatched as an extension
+// command (e.g. /create-issue) could not run its allowed Bash side effect
+// during plan mode. The session has NO bash allowlist; the only allowances are
+// per-prompt additions carried on RunOptions (the path the extension SDK's
+// sendPrompt now feeds). The engine must, for this run only:
+//   (a) include Bash in the plan-mode tool list, and
+//   (b) install the additions on activeRun.planModeAllowedBashCommands so the
+//       runtime gate enforces exactly those prefixes.
+//
+// Before the fix, an extension-command dispatch carried no additions, so the
+// effective allowlist was empty, Bash was excluded, and the command's
+// `gh issue create` was default-denied until plan mode exited. Reverting the
+// additions plumbing (so RunOptions.BashAllowlistAdditionsForThisPrompt no
+// longer reaches the run) makes this test fail: Bash is absent and the run
+// state is empty.
+func TestBuildToolDefs_PerPromptBashAdditionsOnly_NoSessionAllowlist(t *testing.T) {
+	b := NewApiBackend()
+	run := &activeRun{requestID: "additions-only", planMode: true, planFilePath: "/tmp/plan.md"}
+	opts := types.RunOptions{
+		PlanMode:     true,
+		PlanFilePath: "/tmp/plan.md",
+		// No PlanModeAllowedBashCommands — the session has no allowlist.
+		BashAllowlistAdditionsForThisPrompt: []string{"gh issue create"},
+	}
+	provider := &mockLlmProvider{id: "anthropic"}
+
+	toolDefs, _ := b.buildToolDefs(run, opts, provider)
+	hasBash := false
+	for _, td := range toolDefs {
+		if td.Name == "Bash" {
+			hasBash = true
+			break
+		}
+	}
+	if !hasBash {
+		t.Error("expected Bash in plan-mode tool list when per-prompt additions are the only allowance")
+	}
+
+	got := run.planModeAllowedBashCommands
+	if len(got) != 1 || got[0] != "gh issue create" {
+		t.Fatalf("expected run.planModeAllowedBashCommands=[gh issue create], got %v", got)
 	}
 }
 

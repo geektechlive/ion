@@ -2,8 +2,9 @@ import React, { useRef, useCallback } from 'react'
 import { Reorder, useDragControls } from 'framer-motion'
 import { X, PencilSimple, PushPin } from '@phosphor-icons/react'
 import { useColors } from '../theme'
+import { usePreferencesStore } from '../preferences'
 import type { TabState } from '../../shared/types'
-import { PILL_ICON_MAP, getTabStatusColor, getWaitingState } from './TabStripShared'
+import { PILL_ICON_MAP, getTabStatusColor, getWaitingState, abbreviateProfileName } from './TabStripShared'
 import { InlineRenameInput } from './TabStripInlineRenameInput'
 
 const DROPDOWN_DRAG_THRESHOLD = 8
@@ -78,6 +79,15 @@ export function DropdownTabRow({
   const isEditing = editingTabId === tab.id
   const displayTitle = tab.customTitle || tab.title
   const dirName = tab.workingDirectory?.split('/').pop() || ''
+
+  // Harness badge label — mirrors the pill's subscription. Subscribe narrowly
+  // so the row only re-renders when engine profiles change, not on every
+  // preference write.
+  const harnessBadgeLabel = usePreferencesStore((s) => {
+    if (!tab.engineProfileId) return null
+    const profile = s.engineProfiles.find((p) => p.id === tab.engineProfileId)
+    return abbreviateProfileName(profile?.name)
+  })
 
   const waitingState = getWaitingState(tab)
 
@@ -164,13 +174,36 @@ export function DropdownTabRow({
         )}
       </span>
 
+      {harnessBadgeLabel !== null && (
+        // Harness badge: abbreviated profile name in an accent-tinted chip.
+        // Mirrors the pill's badge element exactly — same style spec:
+        // 4px radius, accent bg/border/text at 25/40/100% opacity, 9px/600 weight.
+        <span
+          className="flex-shrink-0"
+          style={{
+            fontSize: 9,
+            fontWeight: 600,
+            color: colors.accent,
+            background: `${colors.accent}25`,
+            border: `1px solid ${colors.accent}40`,
+            borderRadius: 4,
+            padding: '1px 3px',
+            lineHeight: 1.4,
+            letterSpacing: '0.02em',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {harnessBadgeLabel}
+        </span>
+      )}
+
       {tab.workingDirectory && (
         <span
           className="flex-shrink-0"
           style={{
             fontSize: 10,
             fontWeight: 500,
-            color: tab.worktree ? '#4ade80' : colors.textSecondary,
+            color: tab.worktree ? colors.worktreeGreen : colors.textSecondary,
             opacity: tab.worktree ? 0.6 : 0.5,
             cursor: 'default',
           }}
