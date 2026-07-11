@@ -349,7 +349,11 @@ func (s *Scheduler) fireJob(h *extension.Host, job extension.ScheduleJob, key ho
 	if job.EnabledRefName != "" {
 		enabled, err := s.resolveEnabledPredicate(h, job)
 		if err != nil {
-			utils.Log("scheduler", fmt.Sprintf("fireJob: ext=%s id=%q enabled-predicate failed: %v", h.Name(), job.JobID, err))
+			// A predicate that errors (rather than returning a clean
+			// enabled/disabled bool) means the enable-check itself is
+			// broken -- log at ERROR so log scanners that key on error
+			// level surface it. The job is skipped this tick.
+			utils.Error("scheduler", fmt.Sprintf("fireJob: ext=%s id=%q enabled-predicate failed: %v", h.Name(), job.JobID, err))
 			// Treat predicate failure as "skipped, reason=predicate_error".
 			s.emitScheduleSkipped(job, "predicate_error")
 			return
@@ -371,7 +375,10 @@ func (s *Scheduler) fireJob(h *extension.Host, job extension.ScheduleJob, key ho
 	elapsed := s.now().Sub(startTs)
 	if err != nil {
 		s.emitScheduleFailed(job, err.Error(), elapsed)
-		utils.Log("scheduler", fmt.Sprintf("fireJob: ext=%s id=%q handler error: %v (elapsed=%s)", h.Name(), job.JobID, err, elapsed))
+		// A fire failure means the handler invocation itself failed
+		// (subprocess error, timeout, transport fault) -- log at ERROR
+		// so it is not lost in the INFO stream that log scanners skip.
+		utils.Error("scheduler", fmt.Sprintf("fireJob: ext=%s id=%q handler error: %v (elapsed=%s)", h.Name(), job.JobID, err, elapsed))
 		return
 	}
 	s.recordLastRun(h, job, startTs)
