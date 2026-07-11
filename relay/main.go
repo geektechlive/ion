@@ -105,6 +105,21 @@ func main() {
 		hub.HandleWebSocket(w, r, channelID, role, pusher)
 	})
 
+	mux.HandleFunc("GET /v1/push/status", func(w http.ResponseWriter, r *http.Request) {
+		if !auth.Validate(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var stats PushStats
+		if pusher != nil {
+			stats = pusher.Stats()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			log.Printf("push status: encode error: %v", err)
+		}
+	})
+
 	mux.HandleFunc("GET /v1/channel/{channelId}/status", func(w http.ResponseWriter, r *http.Request) {
 		if !auth.Validate(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

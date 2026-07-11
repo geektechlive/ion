@@ -82,6 +82,30 @@ Authorization: Bearer {apiKey}
 - Control frames (`relay:peer-disconnected`, `relay:peer-reconnected`) are
   injected by the relay to notify each side of the other's connection state
 
+## Push delivery health
+
+APNs delivery is best-effort and asynchronous, so failures are otherwise
+invisible. Two additive observability surfaces expose them:
+
+- **Logs**: every terminal push failure is logged with an `ERROR:` prefix and a
+  stable, low-cardinality leading segment (`status`/`reason` first, volatile
+  device token last) so log-based alerting can fingerprint and dedupe them. A
+  stale device token specifically logs `ERROR: APNs device token stale (410
+  Gone)`. Transient failures (transport errors, 5xx) are retried once and only
+  log at `WARN` while self-healing.
+- **Status endpoint**: authenticated counters for scraping.
+
+```
+GET /v1/push/status
+Authorization: Bearer {apiKey}
+# {"enabled":true,"sent_ok":42,"send_failed":1,"dropped_queue_full":0,
+#  "last_error":"ERROR: APNs send failed status=400 reason=BadDeviceToken",
+#  "last_error_time":"2026-07-11T00:00:00Z"}
+```
+
+`enabled` is `false` when APNs is not configured. Transient failures that
+recover on retry increment `sent_ok`, not `send_failed`.
+
 ## Security
 
 The relay validates the API key on every WebSocket upgrade request. Without

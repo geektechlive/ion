@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -23,6 +24,10 @@ const (
 	apnsSandboxURL    = "https://api.sandbox.push.apple.com"
 	apnsTopic         = "com.geektechlive.ion.mobile"
 	tokenTTL          = 50 * time.Minute // Apple requires refresh within 60 min
+
+	// defaultRetryBackoff is the pause before the single retry attempt granted
+	// to transient failures (network/transport errors and 5xx responses).
+	defaultRetryBackoff = 2 * time.Second
 )
 
 // pushRequest holds the parameters for a single push notification.
@@ -42,11 +47,67 @@ type APNsPusher struct {
 	teamID  string
 	key     *ecdsa.PrivateKey
 
+	// retryBackoff is the pause before the single retry granted to transient
+	// failures. Overridable (primarily so tests need not sleep seconds).
+	retryBackoff time.Duration
+
 	mu          sync.Mutex
 	cachedToken string
 	tokenExpiry time.Time
 
+	// Observable send counters. These are additive telemetry: nothing in the
+	// send path depends on them, so an unread status surface breaks nothing.
+	sentOK           atomic.Int64
+	sendFailed       atomic.Int64
+	droppedQueueFull atomic.Int64
+
+	statsMu       sync.Mutex // guards lastError / lastErrorTime
+	lastError     string
+	lastErrorTime time.Time
+
 	queue chan pushRequest
+}
+
+// PushStats is a point-in-time snapshot of the pusher's observable counters.
+// Exposed via the relay's authenticated GET /v1/push/status endpoint so
+// Jarvis-side health checks can read APNs delivery health without scraping logs.
+type PushStats struct {
+	Enabled          bool       `json:"enabled"`
+	SentOK           int64      `json:"sent_ok"`
+	SendFailed       int64      `json:"send_failed"`
+	DroppedQueueFull int64      `json:"dropped_queue_full"`
+	LastError        string     `json:"last_error,omitempty"`
+	LastErrorTime    *time.Time `json:"last_error_time,omitempty"`
+}
+
+// Stats returns a snapshot of the pusher's counters and last recorded error.
+func (p *APNsPusher) Stats() PushStats {
+	p.statsMu.Lock()
+	lastErr := p.lastError
+	lastErrTime := p.lastErrorTime
+	p.statsMu.Unlock()
+
+	stats := PushStats{
+		Enabled:          true,
+		SentOK:           p.sentOK.Load(),
+		SendFailed:       p.sendFailed.Load(),
+		DroppedQueueFull: p.droppedQueueFull.Load(),
+		LastError:        lastErr,
+	}
+	if !lastErrTime.IsZero() {
+		stats.LastErrorTime = &lastErrTime
+	}
+	return stats
+}
+
+// recordFailure increments the failure counter and records the last error for
+// the status surface. Callers pass the same stable-prefixed message they log.
+func (p *APNsPusher) recordFailure(msg string) {
+	p.sendFailed.Add(1)
+	p.statsMu.Lock()
+	p.lastError = msg
+	p.lastErrorTime = time.Now()
+	p.statsMu.Unlock()
 }
 
 func NewAPNsPusher(keyPath, keyID, teamID string) (*APNsPusher, error) {
@@ -80,12 +141,13 @@ func NewAPNsPusher(keyPath, keyID, teamID string) (*APNsPusher, error) {
 	}
 
 	return &APNsPusher{
-		client:  client,
-		baseURL: baseURL,
-		keyID:   keyID,
-		teamID:  teamID,
-		key:     ecKey,
-		queue:   make(chan pushRequest, 64),
+		client:       client,
+		baseURL:      baseURL,
+		keyID:        keyID,
+		teamID:       teamID,
+		key:          ecKey,
+		retryBackoff: defaultRetryBackoff,
+		queue:        make(chan pushRequest, 64),
 	}, nil
 }
 
@@ -136,7 +198,10 @@ func (p *APNsPusher) Send(deviceToken, title, body, kind, resourceId string) {
 	select {
 	case p.queue <- pushRequest{deviceToken: deviceToken, title: title, body: body, kind: kind, resourceId: resourceId}:
 	default:
-		log.Printf("APNs push queue full, dropping notification")
+		// Backpressure by design: the queue is full, so we drop rather than
+		// block the relay read loop. Loud, so operators see sustained overload.
+		p.droppedQueueFull.Add(1)
+		log.Printf("ERROR: APNs push dropped, queue full")
 	}
 }
 
@@ -152,7 +217,10 @@ func (p *APNsPusher) Start() {
 func (p *APNsPusher) sendAsync(req pushRequest) {
 	token, err := p.getToken()
 	if err != nil {
-		log.Printf("APNs token error: %v", err)
+		// Terminal: without a signed token no send can succeed.
+		msg := fmt.Sprintf("ERROR: APNs token generation failed: %v", err)
+		log.Print(msg)
+		p.recordFailure(msg)
 		return
 	}
 
@@ -172,15 +240,82 @@ func (p *APNsPusher) sendAsync(req pushRequest) {
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("APNs marshal error: %v", err)
+		// Terminal: a malformed payload will never marshal.
+		msg := fmt.Sprintf("ERROR: APNs payload marshal failed: %v", err)
+		log.Print(msg)
+		p.recordFailure(msg)
 		return
 	}
 
 	url := fmt.Sprintf("%s/3/device/%s", p.baseURL, req.deviceToken)
+
+	// Attempt once, then grant a single retry to transient failures only.
+	// Transport (network) errors and 5xx are transient; 4xx (400/403/410) are
+	// terminal and never retried. The first-attempt transient path logs at
+	// WARN (no uppercase ERROR/CRITICAL token) so a self-healing blip does not
+	// trip the log patrol; only a terminal failure emits an ERROR line.
+	const maxAttempts = 2
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		status, reason, transient, err := p.attemptSend(url, token, data)
+		lastAttempt := attempt == maxAttempts
+
+		if err != nil {
+			if transient && !lastAttempt {
+				log.Printf("WARN: APNs send transport error, retrying in %s: %v", p.retryBackoff, err)
+				time.Sleep(p.retryBackoff)
+				continue
+			}
+			// Log the detailed error, but record a stable, token-free string on
+			// the status surface (client.Do's *url.Error embeds the request URL,
+			// which contains the device token).
+			if transient {
+				log.Printf("ERROR: APNs send failed, transport error after retry: %v", err)
+				p.recordFailure("ERROR: APNs send failed, transport error after retry")
+			} else {
+				log.Printf("ERROR: APNs request build failed: %v", err)
+				p.recordFailure("ERROR: APNs request build failed")
+			}
+			return
+		}
+
+		if status == http.StatusOK {
+			p.sentOK.Add(1)
+			return
+		}
+
+		// 410 Gone: the device token is no longer valid. Operator-actionable —
+		// the stale token should be pruned. Keep the volatile token at the end.
+		if status == http.StatusGone {
+			log.Printf("ERROR: APNs device token stale (410 Gone) reason=%s deviceToken=%s", reason, req.deviceToken)
+			p.recordFailure(fmt.Sprintf("ERROR: APNs device token stale (410 Gone) reason=%s", reason))
+			return
+		}
+
+		// 5xx: APNs server-side error, transient — retry once.
+		if status >= 500 && !lastAttempt {
+			log.Printf("WARN: APNs send status=%d (server error), retrying in %s reason=%s", status, p.retryBackoff, reason)
+			time.Sleep(p.retryBackoff)
+			continue
+		}
+
+		// Any other non-200 (terminal 4xx, or 5xx after retry). Stable prefix:
+		// status and reason lead; the volatile device token trails.
+		log.Printf("ERROR: APNs send failed status=%d reason=%s deviceToken=%s", status, reason, req.deviceToken)
+		p.recordFailure(fmt.Sprintf("ERROR: APNs send failed status=%d reason=%s", status, reason))
+		return
+	}
+}
+
+// attemptSend performs a single APNs POST. On a normal HTTP exchange it returns
+// the status code and the APNs "reason" string (parsed from the JSON body,
+// falling back to the raw body) with err==nil. On failure it returns a non-nil
+// err and a transient flag: transient=true for transport-level errors (network,
+// connection reset) which the caller may retry; transient=false for a terminal
+// request-build failure which must not be retried.
+func (p *APNsPusher) attemptSend(url, token string, data []byte) (status int, reason string, transient bool, err error) {
 	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(data))
 	if err != nil {
-		log.Printf("APNs request error: %v", err)
-		return
+		return 0, "", false, err
 	}
 
 	httpReq.Header.Set("Authorization", "bearer "+token)
@@ -190,13 +325,26 @@ func (p *APNsPusher) sendAsync(req pushRequest) {
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		log.Printf("APNs send error: %v", err)
-		return
+		return 0, "", true, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Printf("APNs response %d: %s", resp.StatusCode, string(respBody))
+	if resp.StatusCode == http.StatusOK {
+		return resp.StatusCode, "", false, nil
 	}
+
+	respBody, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, parseAPNsReason(respBody), false, nil
+}
+
+// parseAPNsReason extracts the "reason" field from an APNs error body
+// (e.g. {"reason":"BadDeviceToken"}), falling back to the trimmed raw body.
+func parseAPNsReason(body []byte) string {
+	var parsed struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Reason != "" {
+		return parsed.Reason
+	}
+	return string(bytes.TrimSpace(body))
 }
