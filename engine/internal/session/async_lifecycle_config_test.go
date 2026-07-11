@@ -97,16 +97,25 @@ func TestScheduleConfigFrom_CarriesEngineJSONBlock(t *testing.T) {
 	}
 }
 
-// TestScheduleConfigFrom_NilBlockReturnsZero pins that a nil Scheduling
-// block (and a nil rc) yields the zero scheduling.Config so the package
-// defaults apply.
-func TestScheduleConfigFrom_NilBlockReturnsZero(t *testing.T) {
+// TestScheduleConfigFrom_NilBlockKeepsDefaultPersistDir pins that a nil
+// Scheduling block (and a nil rc) still carries the default PersistDir, so
+// last-run marker persistence and daily/weekly catch-up survive engine
+// restarts even when engine.json has no scheduling block. Every other field
+// stays zero-valued (the block only overlays optional overrides). This is the
+// regression guard for the bug where a nil block returned an all-zero Config,
+// leaving PersistDir empty and silently disabling persistence.
+func TestScheduleConfigFrom_NilBlockKeepsDefaultPersistDir(t *testing.T) {
+	wantDir := defaultSchedulerPersistDir()
+
 	zero := scheduleConfigFrom(&types.EngineRuntimeConfig{}) // Scheduling == nil
-	if zero.DefaultTz != "" || zero.FireTimeout != 0 || zero.CatchUpEnabled != nil || zero.PersistDir != "" {
-		t.Errorf("nil Scheduling block: expected zero Config, got %+v", zero)
+	if zero.PersistDir != wantDir {
+		t.Errorf("nil Scheduling block: PersistDir = %q, want %q (persistence must not depend on the block)", zero.PersistDir, wantDir)
+	}
+	if zero.DefaultTz != "" || zero.FireTimeout != 0 || zero.CatchUpEnabled != nil {
+		t.Errorf("nil Scheduling block: expected zero overrides, got %+v", zero)
 	}
 
-	if nilRC := scheduleConfigFrom(nil); nilRC.DefaultTz != "" || nilRC.PersistDir != "" {
-		t.Errorf("nil rc: expected zero Config, got %+v", nilRC)
+	if nilRC := scheduleConfigFrom(nil); nilRC.PersistDir != wantDir || nilRC.DefaultTz != "" {
+		t.Errorf("nil rc: PersistDir = %q (want %q), DefaultTz = %q (want \"\")", nilRC.PersistDir, wantDir, nilRC.DefaultTz)
 	}
 }

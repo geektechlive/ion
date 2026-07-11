@@ -330,6 +330,14 @@ func webhookConfigFrom(rc *types.EngineRuntimeConfig) webhooks.Config {
 // block into a scheduling.Config.
 func scheduleConfigFrom(rc *types.EngineRuntimeConfig) scheduling.Config {
 	var cfg scheduling.Config
+	// PersistDir defaults to ~/.ion/scheduler regardless of whether an
+	// engine.json Scheduling block is present. Last-run marker persistence
+	// (which powers daily/weekly catch-up across engine restarts, per
+	// docs/extensions/scheduling.md) must not hinge on the operator having
+	// authored a scheduling block. A bare engine.json (no scheduling block)
+	// still gets durable last-run markers; the block only overlays optional
+	// overrides (DefaultTz, FireTimeout, CatchUpEnabled) on top.
+	cfg.PersistDir = defaultSchedulerPersistDir()
 	if rc == nil || rc.Scheduling == nil {
 		return cfg
 	}
@@ -339,7 +347,5 @@ func scheduleConfigFrom(rc *types.EngineRuntimeConfig) scheduling.Config {
 		cfg.FireTimeout = millisToDuration(s.FireTimeoutMs)
 	}
 	cfg.CatchUpEnabled = s.CatchUpEnabled
-	// PersistDir defaults to ~/.ion/scheduler when not overridden.
-	cfg.PersistDir = defaultSchedulerPersistDir()
 	return cfg
 }
