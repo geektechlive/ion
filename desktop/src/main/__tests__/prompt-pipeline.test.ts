@@ -1,3 +1,4 @@
+// @file-size-exception: unified prompt-pipeline test suite; 638 lines at fork adoption (cbc36d0a), split tracked upstream
 /**
  * Tests for the unified prompt pipeline (`desktop/src/main/prompt-pipeline.ts`).
  *
