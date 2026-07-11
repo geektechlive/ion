@@ -237,6 +237,53 @@ func findClaudeBinary() (string, error) {
 	return "", fmt.Errorf("claude CLI not found: checked /usr/local/bin/claude, /opt/homebrew/bin/claude, ~/.npm-global/bin/claude, $PATH, and login shell")
 }
 
+// redactedCliArgFlags names the flags whose values may carry free-form
+// prompt/system-prompt text. Their values are masked in diagnostic logging so
+// an enriched error line stays content-free and concise while still showing
+// the structural argv (model, permission mode, allowlists, resume, etc.).
+var redactedCliArgFlags = map[string]bool{
+	"--system-prompt":        true,
+	"--append-system-prompt": true,
+}
+
+// redactCliArgs renders an argv for diagnostics with the values of
+// prompt-bearing flags masked as "<redacted len=N>". The user prompt is never
+// in argv (it is written over stdin), so this only guards the system-prompt
+// flags; everything else is preserved verbatim to point an operator at the
+// failing invocation's shape.
+func redactCliArgs(args []string) string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		out = append(out, args[i])
+		if redactedCliArgFlags[args[i]] && i+1 < len(args) {
+			out = append(out, fmt.Sprintf("<redacted len=%d>", len(args[i+1])))
+			i++
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// bareExitDiagnostic builds the enriched error message for the case where the
+// CLI exited non-zero but captured no stderr. It reports the exit code, that
+// the process did start (pid + how long it ran), the resolved binary, the
+// working directory (or "<inherited>" when the process inherits the engine's
+// cwd), the model, and a redacted argv. The user prompt is delivered over
+// stdin -- never in argv -- so the redacted argv carries no prompt content;
+// system-prompt flag values are masked to keep the line concise and
+// content-free. The aim: a future "exited with code 1" line tells an operator
+// WHERE to look instead of nothing at all.
+func bareExitDiagnostic(exitCode, pid int, elapsed time.Duration, binary, cwd, model string, args []string) string {
+	if cwd == "" {
+		cwd = "<inherited>"
+	}
+	return fmt.Sprintf(
+		"claude CLI exited with code %d with no stderr output "+
+			"(process started pid=%d, ran %s before exit); binary=%s cwd=%s model=%q args=[%s]",
+		exitCode, pid, elapsed.Round(time.Millisecond),
+		binary, cwd, model, redactCliArgs(args),
+	)
+}
+
 // runProcess is the goroutine that manages the Claude CLI process lifecycle.
 func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.RunOptions) {
 	// Capture plan state so the event loop can enrich ExitPlanMode denials.
@@ -437,6 +484,11 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 
 	utils.Log("CliBackend", fmt.Sprintf("process started: pid=%d requestID=%s", cmd.Process.Pid, run.requestID))
 
+	// Mark when the process actually began running so a later non-zero exit
+	// with no stderr can report how long it ran before dying (diagnostic
+	// context for the enriched error below).
+	procStart := time.Now()
+
 	// Write initial prompt as NDJSON user message over stdin. PDFs/images
 	// referenced by the prompt are inlined as native document/image content
 	// blocks rather than left for the Read tool to expand (#789).
@@ -559,7 +611,17 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 			errMsg := fmt.Sprintf("claude CLI exited with code %d: %s", exitCode, strings.Join(stderrLines, "\n"))
 			b.emitError(run.requestID, fmt.Errorf("%s", errMsg))
 		} else {
-			b.emitError(run.requestID, fmt.Errorf("claude CLI exited with code %d", exitCode))
+			// No stderr was captured, which makes a bare "exited with code N"
+			// undiagnosable. Enrich with the context that IS in scope so an
+			// operator knows WHERE to look: the resolved binary, the working
+			// directory, the model, and how long the process ran before dying.
+			// The process is known to have started (a spawn failure returns
+			// early above, before this point).
+			errMsg := bareExitDiagnostic(
+				exitCode, cmd.Process.Pid, time.Since(procStart),
+				claudePath, cmd.Dir, opts.Model, cmd.Args,
+			)
+			b.emitError(run.requestID, fmt.Errorf("%s", errMsg))
 		}
 	}
 
