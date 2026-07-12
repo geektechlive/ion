@@ -242,15 +242,25 @@ export function wireEngineBridgeEvents(): void {
         resourceDelta: d,
       })
     } else if (event.type === 'engine_notification') {
-      // Log-only in main process; forward to renderer via normalized stream
-      // so the renderer can display a notification indicator.
-      log(`engine_notification: title=${event.notificationTitle} level=${event.notificationLevel}`)
+      // The wire-level engine_notification event (engine/internal/types/
+      // engine_event.go, mirrored in shared/types-engine-event.ts) carries
+      // notifyTitle/notifyBody/notifyKind — NOT notificationTitle/
+      // notificationBody/notificationLevel. This block previously read the
+      // latter, which never existed on the incoming event and were always
+      // `undefined` since the notifications-panel feature (#188) shipped.
+      // notifyKind is an application-defined category string (e.g.
+      // "briefing", "task_complete"), not a severity level — there is no
+      // severity concept in ctx.notify()'s NotifyOpts contract — so it is
+      // the closest real substitute for the NormalizedEvent's
+      // `notificationLevel` field, which is currently only used for this
+      // log line and has no downstream severity logic to mislead.
+      log(`engine_notification: title=${event.notifyTitle} kind=${event.notifyKind}`)
       const tabIdForNotif = tabIdFromKey(key)
       broadcastNormalized(tabIdForNotif, {
         type: 'engine_notification',
-        notificationTitle: event.notificationTitle,
-        notificationBody: event.notificationBody,
-        notificationLevel: event.notificationLevel,
+        notificationTitle: event.notifyTitle,
+        notificationBody: event.notifyBody,
+        notificationLevel: event.notifyKind,
       })
     } else if (event.type === 'engine_dispatch_activity') {
       // Live dispatched-agent transcript delta. Bridge it to the renderer as a
@@ -399,7 +409,26 @@ export function wireEngineBridgeEvents(): void {
         // to decode and the event is silently dropped on the phone. tabId /
         // instanceId likewise come last so an engine-supplied tabId on the
         // payload can't override the wire-key-derived split.
-        state.remoteTransport.send({ ...event, tabId, instanceId, type: engineToWireType(event.type) })
+        const envelope = { ...event, tabId, instanceId, type: engineToWireType(event.type) }
+        // engine_notification carries the engine's own push contract
+        // (BroadcastNotification sets Push:true, PushTitle, PushBody —
+        // engine/internal/types/engine_event.go — expecting the relay to
+        // fire APNs when the mobile peer is absent; relay/relay.go only
+        // pushes when the forwarded frame's `push` flag is set). Every
+        // other branch in this generic forwarder calls `.send(envelope)`
+        // with push defaulted to false, which silently drops that contract
+        // for ctx.notify() output (reminders, briefings, critical
+        // findings) — those notifications only ever reached the phone when
+        // the app was already open and connected. Honor the flag here so
+        // the desktop bridge does not swallow it.
+        if (event.type === 'engine_notification' && event.push === true) {
+          state.remoteTransport.send(envelope, true, {
+            title: event.pushTitle || event.notifyTitle || 'Jarvis',
+            body: event.pushBody || event.notifyBody || '',
+          })
+        } else {
+          state.remoteTransport.send(envelope)
+        }
       }
 
       // Synthesize a `permission_request` envelope for iOS when an

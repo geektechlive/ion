@@ -60,6 +60,7 @@ type APNsPusher struct {
 	sentOK           atomic.Int64
 	sendFailed       atomic.Int64
 	droppedQueueFull atomic.Int64
+	skippedNoToken   atomic.Int64
 
 	statsMu       sync.Mutex // guards lastError / lastErrorTime
 	lastError     string
@@ -76,6 +77,7 @@ type PushStats struct {
 	SentOK           int64      `json:"sent_ok"`
 	SendFailed       int64      `json:"send_failed"`
 	DroppedQueueFull int64      `json:"dropped_queue_full"`
+	SkippedNoToken   int64      `json:"skipped_no_token"`
 	LastError        string     `json:"last_error,omitempty"`
 	LastErrorTime    *time.Time `json:"last_error_time,omitempty"`
 }
@@ -92,12 +94,20 @@ func (p *APNsPusher) Stats() PushStats {
 		SentOK:           p.sentOK.Load(),
 		SendFailed:       p.sendFailed.Load(),
 		DroppedQueueFull: p.droppedQueueFull.Load(),
+		SkippedNoToken:   p.skippedNoToken.Load(),
 		LastError:        lastErr,
 	}
 	if !lastErrTime.IsZero() {
 		stats.LastErrorTime = &lastErrTime
 	}
 	return stats
+}
+
+// RecordSkippedNoToken increments the skipped_no_token counter. Called by the
+// relay read loop when a push-flagged frame arrives but no APNs token is
+// available for the channel (mobile was away and no persisted token existed).
+func (p *APNsPusher) RecordSkippedNoToken() {
+	p.skippedNoToken.Add(1)
 }
 
 // recordFailure increments the failure counter and records the last error for

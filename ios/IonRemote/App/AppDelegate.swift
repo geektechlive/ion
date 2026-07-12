@@ -29,6 +29,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
         print("[push] registered with token: \(token.prefix(8))...")
         sessionViewModel?.apnsToken = token
+        // RelayClient reads the token from UserDefaults on every connect
+        // (?apns_token= query param) — persistence here is the only thing
+        // that lets a rotated token reach the relay. The in-memory copy
+        // above dies with the process.
+        UserDefaults.standard.set(token, forKey: "apnsDeviceToken")
     }
 
     func application(
