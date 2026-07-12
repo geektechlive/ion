@@ -127,8 +127,8 @@ func TestBuildChildToolServer_NilForEmptyTools(t *testing.T) {
 	}
 }
 
-// TestChildNeedsMcpToolServer_TypeSwitch verifies the CliBackend/CodexCliBackend
-// detection that gates ToolServer creation. This is a direct unit test of the
+// TestChildNeedsMcpToolServer_TypeSwitch verifies the CliBackend detection that
+// gates ToolServer creation. This is a direct unit test of the
 // childNeedsMcpToolServer predicate so its logic is independently pinned.
 func TestChildNeedsMcpToolServer_TypeSwitch(t *testing.T) {
 	cases := []struct {
@@ -139,6 +139,9 @@ func TestChildNeedsMcpToolServer_TypeSwitch(t *testing.T) {
 	}{
 		{"CliBackend", backend.NewCliBackend(), "", true},
 		{"ApiBackend", backend.NewApiBackend(), "", false},
+		// CodexCliBackend: StartRun never reads opts.McpConfig, so no server
+		// should be started for Codex-routed children.
+		{"CodexCliBackend", backend.NewCodexCliBackend(), "", false},
 		// HybridBackend with an anthropic model routes to the inner CliBackend
 		// (subprocess) so MCP wiring is required.
 		{"HybridBackend/claude-sonnet-4-6", backend.NewHybridBackend(), "claude-sonnet-4-6", true},

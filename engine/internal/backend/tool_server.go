@@ -20,11 +20,12 @@ const McpServerName = "ion-extensions"
 // ToolServer exposes extension-registered tools as an MCP server
 // that backend processes can connect to.
 type ToolServer struct {
-	mu       sync.Mutex
-	listener net.Listener
-	tools    map[string]toolEntry
-	sockPath string
-	running  bool
+	mu         sync.Mutex
+	listener   net.Listener
+	tools      map[string]toolEntry
+	sockPath   string
+	configPath string // MCP config JSON written by McpConfigPath; removed by Stop.
+	running    bool
 }
 
 // toolEntry stores a tool's handler alongside its MCP metadata so
@@ -107,6 +108,9 @@ func (ts *ToolServer) Stop() {
 		_ = ts.listener.Close()
 	}
 	_ = os.Remove(ts.sockPath)
+	if ts.configPath != "" {
+		_ = os.Remove(ts.configPath)
+	}
 }
 
 // SocketPath returns the path to the Unix socket.
@@ -141,6 +145,9 @@ func (ts *ToolServer) McpConfigPath(sessionID string) (string, error) {
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		return "", err
 	}
+	ts.mu.Lock()
+	ts.configPath = configPath
+	ts.mu.Unlock()
 	return configPath, nil
 }
 

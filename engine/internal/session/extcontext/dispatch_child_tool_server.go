@@ -1,8 +1,8 @@
 package extcontext
 
 // dispatch_child_tool_server.go wires a per-dispatch ToolServer so that
-// subprocess-backed child runs (CliBackend, CodexCliBackend) can call
-// extension-registered tools via --mcp-config. This is the dispatch-path
+// subprocess-backed child runs (CliBackend) can call extension-registered
+// tools via --mcp-config. This is the dispatch-path
 // counterpart of session.Manager.wireToolServer (prompt_cli_hooks.go), which
 // wires the root-session ToolServer from within the session package.
 //
@@ -32,12 +32,17 @@ import (
 // model is the child run's model string. It is only used for HybridBackend
 // routing: a hybrid child delegates to the inner backend selected for that
 // model, so the predicate recurses into the routed inner backend rather than
-// returning false for all hybrid children. For plain CliBackend and
-// CodexCliBackend the model is ignored.
+// returning false for all hybrid children. For plain CliBackend the model is
+// ignored.
 func childNeedsMcpToolServer(child backend.RunBackend, model string) bool {
 	switch c := child.(type) {
-	case *backend.CliBackend, *backend.CodexCliBackend:
+	case *backend.CliBackend:
 		return true
+	// CodexCliBackend: codex_backend.go StartRun does not read opts.McpConfig,
+	// so a ToolServer started for a Codex-routed child would accept no
+	// connections and the alias directives would advertise
+	// mcp__ion-extensions__* tools the subprocess cannot call. Codex MCP
+	// support requires a dedicated follow-up.
 	case *backend.HybridBackend:
 		// Resolve the inner backend for this model (same routing chooseFor uses
 		// in StartRun / StartRunWithConfig) and re-apply the predicate. This

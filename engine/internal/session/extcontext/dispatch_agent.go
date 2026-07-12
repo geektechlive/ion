@@ -522,6 +522,10 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 		// building logic. It is called directly for foreground dispatches
 		// and in a goroutine for background dispatches.
 		runChild := func() *extension.DispatchAgentResult {
+			// Deferred so Stop fires even if startChild or activity.Close panics.
+			if childToolServer != nil {
+				defer childToolServer.Stop()
+			}
 			startChild(child, childReqID, runOpts, childCfg)
 
 			// Wait for the child to finish, but also watch for context
@@ -556,11 +560,6 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 			if childExtHost != nil {
 				childExtHost.Dispose()
 			}
-			// Stop the child ToolServer after the subprocess exits (issue #981).
-			if childToolServer != nil {
-				childToolServer.Stop()
-			}
-
 			// Deregister from the dispatch registry (both foreground and background).
 			if registry != nil {
 				registry.Deregister(agentID)
