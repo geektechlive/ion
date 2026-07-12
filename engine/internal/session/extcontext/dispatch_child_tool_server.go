@@ -28,10 +28,23 @@ import (
 // ToolServer (MCP socket) to expose extension tools. Subprocess-backed
 // backends load tools via --mcp-config; in-process backends (ApiBackend) call
 // tool handlers directly and do not need one.
-func childNeedsMcpToolServer(child backend.RunBackend) bool {
-	switch child.(type) {
+//
+// model is the child run's model string. It is only used for HybridBackend
+// routing: a hybrid child delegates to the inner backend selected for that
+// model, so the predicate recurses into the routed inner backend rather than
+// returning false for all hybrid children. For plain CliBackend and
+// CodexCliBackend the model is ignored.
+func childNeedsMcpToolServer(child backend.RunBackend, model string) bool {
+	switch c := child.(type) {
 	case *backend.CliBackend, *backend.CodexCliBackend:
 		return true
+	case *backend.HybridBackend:
+		// Resolve the inner backend for this model (same routing chooseFor uses
+		// in StartRun / StartRunWithConfig) and re-apply the predicate. This
+		// handles the production case: backend:"hybrid" + defaultModel:
+		// "claude-sonnet-4-6" routes to the inner CliBackend, which reads
+		// runOpts.McpConfig and passes --mcp-config to the subprocess.
+		return childNeedsMcpToolServer(c.InnerBackendFor(model), model)
 	}
 	return false
 }
@@ -59,9 +72,10 @@ func BuildChildToolServer(
 	registry *DispatchRegistry,
 	runOpts *types.RunOptions,
 ) *backend.ToolServer {
-	if !childNeedsMcpToolServer(child) {
+	if !childNeedsMcpToolServer(child, runOpts.Model) {
 		utils.Debug("Dispatch", fmt.Sprintf(
-			"child ToolServer skipped (non-subprocess backend) dispatchId=%s", dispatchID))
+			"child ToolServer skipped (non-subprocess backend) model=%s dispatchId=%s",
+			runOpts.Model, dispatchID))
 		return nil
 	}
 	if len(tools) == 0 {

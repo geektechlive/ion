@@ -5,9 +5,14 @@ package extcontext
 // the regression tests for issue #981 (dispatched agents receive empty
 // McpConfig, making all harness-registered ion tools unresolvable).
 //
-// Revert-check: remove the `runOpts.McpConfig = mcpPath` assignment in
+// Primary revert-check: remove the `runOpts.McpConfig = mcpPath` assignment in
 // BuildChildToolServer and TestBuildChildToolServer_SetsRunOptsMcpConfig goes
 // red with "RunOptions.McpConfig must be non-empty after BuildChildToolServer".
+//
+// Hybrid revert-check: remove the *backend.HybridBackend case from
+// childNeedsMcpToolServer (restoring "return false" for hybrid children) and
+// TestBuildChildToolServer_HybridClaude goes red because McpConfig stays empty
+// even though the claude-sonnet-4-6 model routes to the inner CliBackend.
 
 import (
 	"os"
@@ -129,17 +134,89 @@ func TestChildNeedsMcpToolServer_TypeSwitch(t *testing.T) {
 	cases := []struct {
 		name  string
 		child backend.RunBackend
+		model string
 		want  bool
 	}{
-		{"CliBackend", backend.NewCliBackend(), true},
-		{"ApiBackend", backend.NewApiBackend(), false},
+		{"CliBackend", backend.NewCliBackend(), "", true},
+		{"ApiBackend", backend.NewApiBackend(), "", false},
+		// HybridBackend with an anthropic model routes to the inner CliBackend
+		// (subprocess) so MCP wiring is required.
+		{"HybridBackend/claude-sonnet-4-6", backend.NewHybridBackend(), "claude-sonnet-4-6", true},
+		// HybridBackend with an unknown model routes to the inner ApiBackend
+		// (in-process) so no MCP wiring is needed.
+		{"HybridBackend/unknown-model", backend.NewHybridBackend(), "unknown-test-model", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := childNeedsMcpToolServer(tc.child)
+			got := childNeedsMcpToolServer(tc.child, tc.model)
 			if got != tc.want {
-				t.Errorf("childNeedsMcpToolServer(%T) = %v, want %v", tc.child, got, tc.want)
+				t.Errorf("childNeedsMcpToolServer(%T, %q) = %v, want %v",
+					tc.child, tc.model, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestBuildChildToolServer_HybridClaude is the primary regression test for
+// the hybrid-backend case of issue #981. It verifies that a HybridBackend
+// child whose model routes to the inner CliBackend (claude-sonnet-4-6 →
+// providerID="anthropic" → *CliBackend) receives a non-empty McpConfig.
+//
+// This is the production configuration on the Mini: engine.json sets
+// backend:"hybrid" and defaultModel:"claude-sonnet-4-6". Before the fix,
+// childNeedsMcpToolServer returned false for all HybridBackend children,
+// so every dispatched staff/goal agent on the Mini got an empty McpConfig
+// and could not resolve any harness-registered ion tool.
+//
+// Revert-check: remove the *backend.HybridBackend case from
+// childNeedsMcpToolServer and this test fails at the McpConfig emptiness
+// assertion.
+func TestBuildChildToolServer_HybridClaude(t *testing.T) {
+	child := backend.NewHybridBackend()
+	tools := []extension.ToolDefinition{surfaceToInboxTool()}
+	sa := &depthTestAccessor{}
+	runOpts := types.RunOptions{Model: "claude-sonnet-4-6"}
+
+	ts := BuildChildToolServer(child, tools, sa, "dispatch-hybrid-claude-test", 1, nil, &runOpts)
+	if ts == nil {
+		t.Fatal("expected non-nil ToolServer for HybridBackend child with claude-sonnet-4-6 " +
+			"(routes to inner CliBackend, needs MCP): issue #981 hybrid case")
+	}
+	t.Cleanup(ts.Stop)
+
+	if runOpts.McpConfig == "" {
+		t.Fatal("RunOptions.McpConfig must be non-empty for HybridBackend/claude-sonnet-4-6 " +
+			"child: issue #981 hybrid case")
+	}
+
+	// Verify the MCP config file exists and references the server name.
+	data, err := os.ReadFile(runOpts.McpConfig)
+	if err != nil {
+		t.Fatalf("McpConfig file not readable at %q: %v", runOpts.McpConfig, err)
+	}
+	if !strings.Contains(string(data), backend.McpServerName) {
+		t.Errorf("McpConfig does not reference server %q; content: %s",
+			backend.McpServerName, data)
+	}
+}
+
+// TestBuildChildToolServer_HybridApiModel verifies that a HybridBackend child
+// whose model routes to the inner ApiBackend (in-process tool execution) does
+// not receive a ToolServer.
+func TestBuildChildToolServer_HybridApiModel(t *testing.T) {
+	child := backend.NewHybridBackend()
+	tools := []extension.ToolDefinition{surfaceToInboxTool()}
+	runOpts := types.RunOptions{Model: "unknown-test-model"}
+
+	ts := BuildChildToolServer(child, tools, &depthTestAccessor{},
+		"dispatch-hybrid-api-test", 1, nil, &runOpts)
+	if ts != nil {
+		ts.Stop()
+		t.Fatal("expected nil ToolServer for HybridBackend child with unknown model " +
+			"(routes to inner ApiBackend, no MCP needed)")
+	}
+	if runOpts.McpConfig != "" {
+		t.Errorf("McpConfig must remain empty for HybridBackend/ApiBackend route; got %q",
+			runOpts.McpConfig)
 	}
 }
