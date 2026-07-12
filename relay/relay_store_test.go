@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,7 +132,6 @@ func TestAPNsTokenRestoredAfterRelayRestart(t *testing.T) {
 // server must never be called.
 func TestPushSkippedNoTokenIncrements(t *testing.T) {
 	buf := captureLogs(t)
-	_ = buf // captured to suppress ERROR log noise in test output
 
 	const apiKey = "test-key-skip"
 	const channelID = "chan-skip-notoken"
@@ -165,12 +165,56 @@ func TestPushSkippedNoTokenIncrements(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if pusher.skippedNoToken.Load() == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pusher.skippedNoToken.Load() != 1 {
+		t.Errorf("expected skippedNoToken=1, got sentOK=%d skippedNoToken=%d",
+			pusher.sentOK.Load(), pusher.skippedNoToken.Load())
+	}
+	// Part 2 spec: the ERROR log line must appear.
+	if !strings.Contains(buf.String(), "ERROR: push skipped: no APNs token channel="+channelID) {
+		t.Errorf("expected ERROR log line for skipped push, got: %s", buf.String())
+	}
+}
+
+// TestAPNsTokenCapturedOnMobileConnect verifies that when a mobile peer
+// connects with an apns_token query parameter, the token is written through to
+// the persistent store. This pins the HandleWebSocket capture path so that
+// revering the h.tokenStore.set call causes the test to fail.
+func TestAPNsTokenCapturedOnMobileConnect(t *testing.T) {
+	const apiKey = "test-key-capture"
+	const channelID = "chan-capture"
+	const deviceToken = "captured-device-token-xyz"
+
+	hub := NewHub()
+	hub.tokenStore = newTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+
+	server := startTestRelayFull(t, apiKey, hub, nil)
+
+	// Dial as mobile with the APNs token in the query string, as the iOS app does
+	// on initial connection.
+	rawURL := fmt.Sprintf("ws%s/v1/channel/%s?role=mobile&apns_token=%s",
+		strings.TrimPrefix(server.URL, "http"), channelID, deviceToken)
+	conn, _, err := websocket.Dial(context.Background(), rawURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + apiKey}},
+	})
+	if err != nil {
+		t.Fatalf("dial mobile with apns_token: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+
+	// Poll until the relay handler processes the connection and writes through.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if hub.tokenStore.get(channelID) == deviceToken {
 			return // pass
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Errorf("expected skippedNoToken=1, got sentOK=%d skippedNoToken=%d",
-		pusher.sentOK.Load(), pusher.skippedNoToken.Load())
+	t.Errorf("expected token %q written through to store on mobile connect, got %q",
+		deviceToken, hub.tokenStore.get(channelID))
 }
 
 // TestTokenStoreBounding verifies that the store never exceeds
