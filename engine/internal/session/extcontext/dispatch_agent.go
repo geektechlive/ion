@@ -485,6 +485,16 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 			runOpts.AllowedTools = specTools
 		}
 
+		// Wire a per-dispatch ToolServer for the child CLI subprocess (issue #981).
+		// Without this, McpConfig stays empty and harness-registered tools are
+		// unresolvable. Root sessions use session.Manager.wireToolServer instead.
+		var childToolServer *backend.ToolServer
+		if childExtHost != nil {
+			childToolServer = BuildChildToolServer(
+				child, childExtHost.Tools(), sa, agentID, childDepth, registry, &runOpts,
+			)
+		}
+
 		key = sa.SessionKey()
 		// The child run id must be unique per dispatch INSTANCE. Derive it from
 		// agentID, which already carries a per-dispatch uniqueness suffix
@@ -545,6 +555,10 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 			// Cleanup child extension.
 			if childExtHost != nil {
 				childExtHost.Dispose()
+			}
+			// Stop the child ToolServer after the subprocess exits (issue #981).
+			if childToolServer != nil {
+				childToolServer.Stop()
 			}
 
 			// Deregister from the dispatch registry (both foreground and background).
