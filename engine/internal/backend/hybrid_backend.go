@@ -101,6 +101,16 @@ func (h *HybridBackend) InnerCli() *CliBackend { return h.cli }
 // package's resolvedBackend helper to detect Codex-routed runs.
 func (h *HybridBackend) InnerCodex() *CodexCliBackend { return h.codex }
 
+// InnerBackendFor returns the inner backend that would handle a run for the
+// given model, applying the same routing as StartRun / StartRunWithConfig.
+// Exposed so callers outside this package — notably the dispatch layer, which
+// must decide whether to start an MCP ToolServer before the child run begins —
+// can inspect the routing decision without duplicating the provider-resolution
+// logic.
+func (h *HybridBackend) InnerBackendFor(model string) RunBackend {
+	return h.chooseFor(model)
+}
+
 // chooseFor returns the inner backend that should handle a run for the
 // given model. The lookup tries the model registry first (GetModelInfo),
 // then falls back to prefix-based provider resolution (ProviderNameForModel)
