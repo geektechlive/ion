@@ -28,6 +28,10 @@ type Hub struct {
 	mu       sync.RWMutex
 	channels map[string]*Channel
 
+	// tokenStore persists APNs tokens across in-memory cleanup and restarts.
+	// Nil when not configured; all call sites guard with a nil check.
+	tokenStore *tokenStore
+
 	// Configurable timeouts and limits (set at construction, read-only after).
 	WriteTimeout   time.Duration // forward write deadline (default 10s)
 	PingInterval   time.Duration // keepalive ping interval (default 30s)
@@ -51,6 +55,12 @@ func (h *Hub) getOrCreateChannel(id string) *Channel {
 	ch, ok := h.channels[id]
 	if !ok {
 		ch = &Channel{}
+		// Restore any previously persisted APNs token so push works even when
+		// the in-memory channel was cleaned up by removeIfEmpty while the phone
+		// was away (e.g. desktop restart with mobile absent).
+		if h.tokenStore != nil {
+			ch.apnsToken = h.tokenStore.get(id)
+		}
 		h.channels[id] = ch
 	}
 	return ch
@@ -179,11 +189,15 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 		ch.mobile = conn
 	}
 
-	// Capture the APNs token from mobile query param.
+	// Capture the APNs token from mobile query param and persist it so it
+	// survives channel cleanup and relay restarts.
 	if role == "mobile" {
 		if token := r.URL.Query().Get("apns_token"); token != "" {
 			ch.apnsToken = token
 			writePushChannel(channelID)
+			if h.tokenStore != nil {
+				h.tokenStore.set(channelID, token)
+			}
 		}
 	}
 
@@ -221,19 +235,29 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, channelID,
 				log.Printf("channel=%s forward error: %v", channelID, err)
 			}
 			writeCancel()
-		} else if role == "ion" && pusher != nil && apnsToken != "" {
+		} else if role == "ion" && pusher != nil {
 			// Peer not connected. Check if this message requests a push notification.
 			var msg relayMessage
 			if json.Unmarshal(data, &msg) == nil && msg.Push {
-				title := msg.PushTitle
-				body := msg.PushBody
-				if title == "" {
-					title = "Jarvis"
+				if apnsToken == "" {
+					// Token absent: the channel was cleaned up after mobile
+					// disconnected and no persisted token was available. Log
+					// an actionable error; the skipped_no_token counter on the
+					// push status surface increments so operators can detect
+					// this without scraping logs.
+					log.Printf("ERROR: push skipped: no APNs token channel=%s", channelID)
+					pusher.RecordSkippedNoToken()
+				} else {
+					title := msg.PushTitle
+					body := msg.PushBody
+					if title == "" {
+						title = "Jarvis"
+					}
+					if body == "" {
+						body = "Approval required"
+					}
+					pusher.Send(apnsToken, title, body, msg.NotifyKind, msg.NotifyResourceId)
 				}
-				if body == "" {
-					body = "Approval required"
-				}
-				pusher.Send(apnsToken, title, body, msg.NotifyKind, msg.NotifyResourceId)
 			}
 		}
 	}

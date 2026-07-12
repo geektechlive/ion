@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -44,6 +45,14 @@ func main() {
 	cfg := loadConfig()
 
 	hub := NewHub()
+
+	// Wire the APNs token persistence store so tokens survive in-memory channel
+	// cleanup (removeIfEmpty) and relay restarts.
+	if home, err := os.UserHomeDir(); err == nil {
+		hub.tokenStore = newTokenStore(filepath.Join(home, ".ion", "relay-apns-tokens.json"))
+	} else {
+		log.Printf("tokenStore: home dir unavailable, APNs tokens will not persist across restarts")
+	}
 
 	// Apply optional env var overrides for relay timeouts.
 	if v := os.Getenv("RELAY_WRITE_TIMEOUT_MS"); v != "" {
