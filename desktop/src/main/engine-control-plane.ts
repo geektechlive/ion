@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { EngineBridge } from './engine-bridge'
-import { engineIsRemote, getEngineHostInfo, listEngineDirectory } from './engine-bridge-fs'
+import { engineIsRemote, getEngineHostInfo, probeWorkingDir } from './engine-bridge-fs'
 import { log as _log, warn as _warn, error as _error } from './logger'
 import { handleEngineEvent, type TabEntry, type EventEmitterContext } from './engine-control-plane-events'
 import { makeEmptyTab, registerNewTab, registerAdoptedTab, resetTabEntry, restartTabEntry } from './engine-control-plane-tab'
@@ -360,14 +360,34 @@ export class EngineControlPlane extends EventEmitter {
           config.workingDirectory = wd
         }
       }
-      const probe = await listEngineDirectory(wd, false)
-      if (!probe.ok) {
-        warn(`workingDirectory unreachable on engine: tabId=${tabId} dir=${wd} err=${probe.error}`)
+      // A failed probe is either the directory genuinely not existing on the
+      // engine host, or a transport failure (stale socket, in-flight
+      // reconnect after the engine restarts on deploy) — those two cases
+      // are structurally identical at the { ok: false } level, so
+      // probeWorkingDir distinguishes them and we branch on the result
+      // instead of surfacing a misleading "does not exist" for a transient
+      // reconnect window.
+      const status = await probeWorkingDir(wd)
+      if (status === 'missing') {
+        warn(`workingDirectory missing on engine: tabId=${tabId} dir=${wd}`)
         this._setStatus(tabId, 'failed')
         this.emit('error', tabId, {
           message:
             `Working directory "${wd}" does not exist on the engine host. ` +
             'Choose a directory on the remote engine via the status-bar folder picker, then try again.',
+          stderrTail: [],
+          exitCode: 1,
+          elapsedMs: 0,
+          toolCallCount: 0,
+        } as EnrichedError)
+        return
+      }
+      if (status === 'unreachable') {
+        warn(`workingDirectory probe unreachable (engine reconnecting): tabId=${tabId} dir=${wd}`)
+        this._setStatus(tabId, 'failed')
+        this.emit('error', tabId, {
+          message:
+            'The engine is reconnecting (it restarts on deploy). Your working directory is fine — try again in a moment.',
           stderrTail: [],
           exitCode: 1,
           elapsedMs: 0,

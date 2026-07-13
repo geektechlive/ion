@@ -6,6 +6,7 @@ import { log as _log, debug as _debug, warn as _warn, error as _error } from './
 import { startSession as startSessionImpl, reRegisterSessions as reRegisterSessionsImpl } from './engine-bridge-start-session'
 import { sendReconcileState as sendReconcileStateImpl, sendQuerySessionStatus as sendQuerySessionStatusImpl } from './engine-bridge-state-sync'
 import { stopAll as stopAllImpl, shutdownAndWait as shutdownAndWaitImpl } from './engine-bridge-lifecycle'
+import { whenConnected as whenConnectedImpl } from './engine-bridge-connection'
 import { buildSendPromptMessage, buildSendPromptLogLine } from './engine-bridge-prompts'
 import * as conv from './engine-bridge-conversations'
 import type { EngineConfig, EngineEvent, ImageAttachmentPayload, DiscoveredCommand } from '../shared/types'
@@ -195,10 +196,14 @@ export class EngineBridge extends EventEmitter {
     }, delay)
   }
 
-  /** Reject all pending request callbacks with an error message. */
+  /** Reject all pending request callbacks with an error message. This is a
+   *  bridge-generated failure (socket dropped, never reached the engine), so
+   *  it is tagged `transport: true` — callers that need to distinguish "the
+   *  engine said no" from "we never got an answer" (e.g. the working-dir
+   *  probe in engine-control-plane.ts) key off this flag. */
   private _failPendingRequests(reason: string): void {
     for (const [id, cb] of this.requestCallbacks) {
-      cb({ ok: false, error: reason })
+      cb({ ok: false, error: reason, transport: true })
     }
     this.requestCallbacks.clear()
   }
@@ -336,7 +341,12 @@ export class EngineBridge extends EventEmitter {
    * Treat external callers as a code-review concern, not a compile-time
    * one.
    */
-  _sendWithResult(msg: any): Promise<{ ok: boolean; error?: string }> {
+  // `transport: true` marks a bridge-generated failure (timeout, socket
+  // dropped) as distinct from an engine REPLY carrying `ok: false` — the
+  // latter is a genuine engine-side error, not a connectivity problem. See
+  // `whenConnected` and engine-bridge-fs.ts `probeWorkingDir` for the
+  // consumer that acts on this distinction.
+  _sendWithResult(msg: any): Promise<{ ok: boolean; error?: string; transport?: boolean }> {
     const requestId = `bridge-${++this.requestCounter}-${Date.now()}`
     msg.requestId = requestId
 
@@ -345,7 +355,7 @@ export class EngineBridge extends EventEmitter {
         warn(`request timed out: requestId=${requestId} cmd=${msg.cmd}`)
         this.requestCallbacks.delete(requestId)
         this._onRequestTimeout()
-        resolve({ ok: false, error: 'Request timed out' })
+        resolve({ ok: false, error: 'Request timed out', transport: true })
       }, 30000)
 
       this.requestCallbacks.set(requestId, (result) => {
@@ -360,7 +370,7 @@ export class EngineBridge extends EventEmitter {
 
   // Internal to the engine-bridge.* module group. See _sendWithResult
   // for the rationale on widening from `private` to module-package scope.
-  _sendWithData<T>(msg: any): Promise<{ ok: boolean; error?: string; data?: T }> {
+  _sendWithData<T>(msg: any): Promise<{ ok: boolean; error?: string; data?: T; transport?: boolean }> {
     const requestId = `bridge-${++this.requestCounter}-${Date.now()}`
     msg.requestId = requestId
 
@@ -368,7 +378,7 @@ export class EngineBridge extends EventEmitter {
       const timer = setTimeout(() => {
         this.requestCallbacks.delete(requestId)
         this._onRequestTimeout()
-        resolve({ ok: false, error: 'Request timed out' })
+        resolve({ ok: false, error: 'Request timed out', transport: true })
       }, 30000)
 
       this.requestCallbacks.set(requestId, (result) => {
@@ -388,10 +398,13 @@ export class EngineBridge extends EventEmitter {
   }
 
   /** Send a typed-response command. Sibling helpers (e.g. engine-bridge-fs.ts) layer on top of the bridge via this. */
-  async request<T>(cmd: string, payload: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; data?: T }> {
+  async request<T>(cmd: string, payload: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; data?: T; transport?: boolean }> {
     await this.connect()
     return this._sendWithData<T>({ cmd, ...payload })
   }
+
+  /** See engine-bridge-connection.ts for the implementation and rationale. */
+  whenConnected(timeoutMs: number): Promise<boolean> { return whenConnectedImpl(this, timeoutMs) }
 
   /** Track the conversation ID for a session so it can be restored on reconnect. */
   updateSessionConversationId(key: string, conversationId: string): void {
