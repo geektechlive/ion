@@ -62,9 +62,50 @@ export async function getEngineHostInfo(): Promise<{ ok: boolean; error?: string
 export async function listEngineDirectory(
   path: string,
   showHidden: boolean,
-): Promise<{ ok: boolean; error?: string; data?: EngineDirListing }> {
+): Promise<{ ok: boolean; error?: string; data?: EngineDirListing; transport?: boolean }> {
   log('engine-bridge-fs', 'listEngineDirectory: path=' + path + ' showHidden=' + showHidden)
   return bridge().request<EngineDirListing>('list_directory', { path, showHidden })
+}
+
+/** How long to wait for the bridge to reconnect before giving up and
+ *  retrying the probe anyway. The M2 engine restarts on every deploy,
+ *  closing the socket mid-session; 10s covers the typical reconnect
+ *  window without leaving the user staring at a spinner indefinitely. */
+const RECONNECT_WAIT_MS = 10_000
+
+/**
+ * Probe a working directory on the engine host, distinguishing a genuine
+ * "doesn't exist" from a transient transport failure (stale socket,
+ * in-flight reconnect after an engine restart).
+ *
+ * Returns:
+ *  - `'ok'` — the directory exists on the engine host.
+ *  - `'missing'` — the engine replied and the directory does not exist.
+ *  - `'unreachable'` — the probe could not reach the engine (timeout,
+ *    disconnect, or a rejected `connect()`), even after waiting out one
+ *    reconnect window and retrying once.
+ */
+export async function probeWorkingDir(wd: string): Promise<'ok' | 'missing' | 'unreachable'> {
+  const probeOnce = async (path: string): Promise<'ok' | 'missing' | 'unreachable'> => {
+    let result: { ok: boolean; error?: string; transport?: boolean }
+    try {
+      result = await listEngineDirectory(path, false)
+    } catch (err: any) {
+      log('engine-bridge-fs', 'probeWorkingDir: connect rejected, treating as unreachable: ' + err?.message)
+      return 'unreachable'
+    }
+    if (result.ok) return 'ok'
+    if (result.transport) return 'unreachable'
+    return 'missing'
+  }
+
+  let status = await probeOnce(wd)
+  if (status === 'unreachable') {
+    log('engine-bridge-fs', `probeWorkingDir: unreachable, waiting up to ${RECONNECT_WAIT_MS}ms for reconnect`)
+    await bridge().whenConnected(RECONNECT_WAIT_MS)
+    status = await probeOnce(wd)
+  }
+  return status
 }
 
 /**

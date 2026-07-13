@@ -78,6 +78,7 @@ vi.mock('../engine-bridge-fs', () => ({
   engineIsRemote: vi.fn(() => false),
   getEngineHostInfo: vi.fn(() => Promise.resolve({ ok: false, error: 'not used in tests' })),
   listEngineDirectory: vi.fn(() => Promise.resolve({ ok: false, error: 'not used in tests' })),
+  probeWorkingDir: vi.fn(() => Promise.resolve('ok')),
 }))
 
 vi.mock('../logger', () => ({
@@ -98,7 +99,7 @@ vi.mock('crypto', async () => {
 
 import { EngineControlPlane } from '../engine-control-plane'
 import { EngineBridge } from '../engine-bridge'
-import { engineIsRemote, listEngineDirectory } from '../engine-bridge-fs'
+import { engineIsRemote, probeWorkingDir } from '../engine-bridge-fs'
 
 // ─── Helpers ───
 
@@ -393,9 +394,9 @@ describe('EngineControlPlane', () => {
   })
 
   describe('remote directory validation', () => {
-    it('rejects unreachable remote working directory', async () => {
+    it('rejects a working directory the engine confirms is missing', async () => {
       vi.mocked(engineIsRemote).mockReturnValue(true)
-      vi.mocked(listEngineDirectory).mockResolvedValue({ ok: false, error: 'not found' })
+      vi.mocked(probeWorkingDir).mockResolvedValue('missing')
 
       const tabId = cp.createTab()
       const errors: any[] = []
@@ -410,15 +411,39 @@ describe('EngineControlPlane', () => {
 
     it('proceeds when remote working directory is reachable', async () => {
       vi.mocked(engineIsRemote).mockReturnValue(true)
-      vi.mocked(listEngineDirectory).mockResolvedValue({
-        ok: true,
-        data: { path: '/home/user', entries: [], truncated: false, parent: '/home' },
-      })
+      vi.mocked(probeWorkingDir).mockResolvedValue('ok')
 
       const tabId = cp.createTab()
       await cp.submitPrompt(tabId, 'req-1', makeRunOptions())
 
       expect(mockBridge.startSession).toHaveBeenCalledOnce()
+    })
+
+    // Regression test for the transport/genuine-missing conflation bug: a
+    // probe that fails due to transport (stale socket, mid-reconnect after
+    // the engine restarts on deploy) must NOT be reported as "does not
+    // exist on the engine host" — that message tells the user to pick a
+    // new directory when their existing one is fine and the engine is just
+    // reconnecting. On the unfixed code (`if (!probe.ok)` with no
+    // transport/missing distinction), this test fails: it asserts the
+    // "does not exist" copy is absent, which the old code could not
+    // guarantee since `listEngineDirectory` returning `{ ok: false }` for
+    // ANY reason (timeout, disconnect, or genuine ENOENT) took the same
+    // branch and always emitted that message.
+    it('reports "reconnecting" (not "does not exist") when the probe is unreachable', async () => {
+      vi.mocked(engineIsRemote).mockReturnValue(true)
+      vi.mocked(probeWorkingDir).mockResolvedValue('unreachable')
+
+      const tabId = cp.createTab()
+      const errors: any[] = []
+      cp.on('error', (_tid: string, err: any) => errors.push(err))
+
+      await cp.submitPrompt(tabId, 'req-1', makeRunOptions())
+
+      expect(mockBridge.startSession).not.toHaveBeenCalled()
+      expect(errors).toHaveLength(1)
+      expect(errors[0].message).not.toContain('does not exist on the engine host')
+      expect(errors[0].message).toContain('reconnecting')
     })
   })
   describe('reconnect — conversationId preservation (issue #230 B1/B2)', () => {
