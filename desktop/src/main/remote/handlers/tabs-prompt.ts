@@ -123,7 +123,7 @@ export async function handlePrompt(cmd: Extract<RemoteCommand, { type: 'desktop_
       const ctx = attachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
       fullText = `${ctx}\n\n${fullText}`
     }
-    const { encoded, rewrittenText } = encodeAttachments(fullText, attachments, { isRemote: IS_REMOTE })
+    const { encoded, rewrittenText } = await encodeAttachments(fullText, attachments, { isRemote: IS_REMOTE, key: cmd.tabId })
     const voicePrompt = getVoiceSystemPrompt(deviceId)
     // Reuse the iOS-supplied clientMsgId as the engine request id so the
     // user-message echo (below) carries this exact id back to iOS. iOS reconciles

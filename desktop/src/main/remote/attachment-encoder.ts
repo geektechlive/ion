@@ -3,6 +3,7 @@ import { basename, extname } from 'path'
 import { nativeImage } from 'electron'
 import { log as _log, warn as _warn } from '../logger'
 import { expandHome } from '../utils/expandHome'
+import { stageAttachment } from '../engine-bridge-fs'
 import type { ImageAttachmentPayload } from '../../shared/types'
 
 const TAG = 'attachments'
@@ -42,6 +43,43 @@ const MIME_BY_EXT: Record<string, string> = {
   '.gif': 'image/gif',
 }
 
+// Above this size a text-representable file is staged to the engine host
+// (like any other binary) instead of being decoded and inlined into the
+// prompt text. Keeps a stray multi-MB log from blowing up the prompt --
+// the engine's own attachment-marker Read path handles the large case.
+const INLINE_TEXT_MAX = 256 * 1024
+
+// Extensions treated as UTF-8 decodable text worth inlining directly into
+// the prompt (below INLINE_TEXT_MAX) rather than staging to the engine
+// host: plain text/data formats plus common source-code extensions.
+const TEXT_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.csv', '.tsv', '.yaml', '.yml', '.log', '.json',
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java',
+  '.c', '.h', '.cpp', '.hpp', '.cc', '.cs', '.rb', '.php', '.swift', '.kt',
+  '.sh', '.bash', '.zsh', '.sql', '.html', '.htm', '.css', '.scss', '.xml',
+  '.toml', '.ini', '.cfg', '.conf', '.env', '.gitignore', '.dockerfile',
+])
+
+// Best-effort MIME for the engine's advisory (logged-only) MimeType field
+// on stage_attachment. Falls back to a generic octet-stream for anything
+// not covered by MIME_BY_EXT or the text set below.
+const MIME_BY_TEXT_EXT: Record<string, string> = {
+  '.json': 'application/json',
+  '.yaml': 'text/yaml',
+  '.yml': 'text/yaml',
+  '.csv': 'text/csv',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.css': 'text/css',
+  '.xml': 'application/xml',
+}
+
+function guessMimeType(ext: string, isText: boolean): string {
+  if (MIME_BY_EXT[ext]) return MIME_BY_EXT[ext]
+  if (isText) return MIME_BY_TEXT_EXT[ext] ?? 'text/plain'
+  return 'application/octet-stream'
+}
+
 /** Subset of the inbound remote attachment shape we read from. */
 export interface RawAttachment {
   type: string // "image" | "file" | ...
@@ -58,6 +96,15 @@ export interface EncodeOptions {
    * meaningless on the engine host.
    */
   isRemote: boolean
+  /**
+   * Engine session key (the same value sent as `ClientCommand.Key` on
+   * `send_prompt` for this conversation -- the tab id). Required when
+   * `isRemote` is true and any non-image/PDF or over-threshold attachment is
+   * present, since `stage_attachment` scopes its scratch directory to this
+   * key. Ignored when `isRemote` is false (the local engine reads the
+   * client-local path directly and never stages).
+   */
+  key?: string
 }
 
 export interface EncodeResult {
@@ -123,22 +170,35 @@ function replaceMarker(text: string, marker: string, replacement: string): strin
  *   - a rewritten prompt text.
  *
  * Marker rewriting is the contract that keeps remote engines fast and honest:
- *   - successfully encoded attachments get `[Attachment: <name> (content
- *     attached)]` -- a form that matches NEITHER the harness resolver's
- *     MARKER_RE nor the engine's attachmentMarkerRe, so no component ever
- *     polls or Reads a client-local path for content that already rode the
- *     wire (previously every remote image/PDF burned a ~15s resolver timeout);
+ *   - successfully encoded (inlined) attachments get `[Attachment: <name>
+ *     (content attached)]` -- a form that matches NEITHER the harness
+ *     resolver's MARKER_RE nor the engine's attachmentMarkerRe, so no
+ *     component ever polls or Reads a client-local path for content that
+ *     already rode the wire (previously every remote image/PDF burned a
+ *     ~15s resolver timeout);
  *   - failures fall back per EncodeOptions.isRemote (see above).
  *
- * Non-image, non-PDF `file` attachments keep their original marker: locally
- * the engine's Read fallback handles them; remotely they are a known gap
- * (the model will say it cannot access the file).
+ * Non-image, non-PDF `file` attachments (remote only -- local engines read
+ * the client-local path directly, see #789):
+ *   - text-representable files (by extension) at or under INLINE_TEXT_MAX are
+ *     read and their UTF-8 contents are inlined directly into the prompt
+ *     text, replacing the marker -- no engine round-trip needed;
+ *   - everything else (binaries, and text files over the inline threshold)
+ *     is staged to the engine host via `stageAttachment` and the marker is
+ *     rewritten to `[Attached file: <engine-host-path>]`, deliberately
+ *     KEEPING the same marker grammar so the engine's own attachment-marker
+ *     handling (`cli_attachments.go`) picks it up -- unlike inlined
+ *     attachments, staged files are meant to be re-Read on the engine host,
+ *     which now actually has the bytes;
+ *   - staging failures fall back to the same honest "unavailable" note used
+ *     for image/PDF failures -- never a thrown error, never a silently
+ *     dropped prompt.
  */
-export function encodeAttachments(
+export async function encodeAttachments(
   text: string,
   attachments: RawAttachment[] | undefined,
   opts: EncodeOptions,
-): EncodeResult {
+): Promise<EncodeResult> {
   if (!attachments || attachments.length === 0) {
     return { encoded: [], rewrittenText: text }
   }
@@ -151,7 +211,12 @@ export function encodeAttachments(
     const name = basename(a.path)
     const ext = extname(a.path).toLowerCase()
     const isPdf = a.type === 'file' && ext === '.pdf'
-    if (a.type !== 'image' && !isPdf) continue
+    const isOtherFile = a.type === 'file' && !isPdf
+
+    // Local engines already read the client-local path directly (#789);
+    // only remote engines need staging/inlining for non-image, non-PDF
+    // files. Leave the marker untouched here, exactly as before.
+    if (isOtherFile && !opts.isRemote) continue
 
     const marker = `[Attached ${a.type}: ${a.path}]`
     const kindNoun = a.type === 'image' ? 'image' : 'file'
@@ -197,6 +262,49 @@ export function encodeAttachments(
       encoded.push({ mediaType: 'application/pdf', data: buf.toString('base64'), path: a.path })
       rewritten = replaceMarker(rewritten, marker, `[Attachment: ${name} (content attached)]`)
       log(`encoded pdf: ${name} raw=${buf.length}`)
+      continue
+    }
+
+    if (isOtherFile) {
+      // opts.isRemote is guaranteed true here (local returned above).
+      const isText = TEXT_EXTENSIONS.has(ext)
+
+      if (isText && size <= INLINE_TEXT_MAX) {
+        let buf: Buffer
+        try {
+          buf = readFileSync(srcPath)
+        } catch (err) {
+          fail(`read failed: ${(err as Error).message}`, '')
+          continue
+        }
+        const contents = buf.toString('utf8')
+        rewritten = replaceMarker(rewritten, marker, `Contents of ${name}:\n\n${contents}`)
+        log(`inlined text file: ${name} bytes=${buf.length}`)
+        continue
+      }
+
+      // Binary, or text over the inline threshold: stage to the engine host
+      // and let the engine's existing attachment-marker handling Read it
+      // from there.
+      if (!opts.key) {
+        fail(`stage skipped: missing engine session key`, '')
+        continue
+      }
+      let buf: Buffer
+      try {
+        buf = readFileSync(srcPath)
+      } catch (err) {
+        fail(`read failed: ${(err as Error).message}`, '')
+        continue
+      }
+      const mimeType = guessMimeType(ext, isText)
+      const staged = await stageAttachment(opts.key, name, mimeType, buf.toString('base64'))
+      if (!staged.ok || !staged.path) {
+        fail(`stage failed: ${staged.error ?? 'unknown error'}`, '')
+        continue
+      }
+      rewritten = replaceMarker(rewritten, marker, `[Attached file: ${staged.path}]`)
+      log(`staged file: ${name} raw=${buf.length} enginePath=${staged.path}`)
       continue
     }
 

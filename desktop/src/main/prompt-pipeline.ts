@@ -346,7 +346,7 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
       const ctx = attachments.map((a) => `[Attached ${a.type}: ${a.path}]`).join('\n')
       fullPrompt = `${ctx}\n\n${fullPrompt}`
     }
-    const { encoded, rewrittenText } = encodeAttachments(fullPrompt, attachments, { isRemote: IS_REMOTE })
+    const { encoded, rewrittenText } = await encodeAttachments(fullPrompt, attachments, { isRemote: IS_REMOTE, key: p.tabId })
     log(`pipeline: submit prompt via REMOTE_USER_MESSAGE tab=${p.tabId} textLen=${rewrittenText.length} encodedImages=${encoded.length}`)
     broadcast(IPC.REMOTE_USER_MESSAGE, {
       tabId: p.tabId,
@@ -381,7 +381,7 @@ async function submitAsPrompt(p: IncomingPrompt): Promise<void> {
   // engine as wire bytes instead of client-local path markers.
   const desktopAttachments = p.attachments || []
   if (desktopAttachments.length > 0) {
-    const { encoded, rewrittenText } = encodeAttachments(p.runOptions.prompt, desktopAttachments, { isRemote: IS_REMOTE })
+    const { encoded, rewrittenText } = await encodeAttachments(p.runOptions.prompt, desktopAttachments, { isRemote: IS_REMOTE, key: p.tabId })
     p.runOptions.prompt = rewrittenText
     if (encoded.length > 0) {
       p.runOptions.imageAttachments = [...(p.runOptions.imageAttachments || []), ...encoded]
