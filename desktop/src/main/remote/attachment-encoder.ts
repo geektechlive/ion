@@ -32,8 +32,16 @@ const PDF_MAX_BYTES = 24 * 1024 * 1024
 
 // Cumulative raw-bytes budget across all attachments in one prompt. Base64
 // inflates by ~4/3, so 36MB raw ~= 48MB encoded -- comfortably under the
-// engine's 64MB NDJSON line cap including envelope.
+// engine's 64MB NDJSON line cap including envelope. Only inline (image/PDF
+// content-block) bytes count against this -- staged files ride a separate
+// out-of-band stage_attachment call, not the prompt payload.
 const PROMPT_TOTAL_MAX_BYTES = 36 * 1024 * 1024
+
+// Mirrors the engine's stage_attachment decoded-payload cap
+// (engine/internal/protocol/protocol.go). A file over this size cannot be
+// staged either -- client-side pre-check avoids reading + base64-encoding a
+// file the engine will reject outright.
+const ENGINE_STAGE_MAX_BYTES = 36 * 1024 * 1024
 
 const MIME_BY_EXT: Record<string, string> = {
   '.jpg': 'image/jpeg',
@@ -185,11 +193,16 @@ function replaceMarker(text: string, marker: string, replacement: string): strin
  *     text, replacing the marker -- no engine round-trip needed;
  *   - everything else (binaries, and text files over the inline threshold)
  *     is staged to the engine host via `stageAttachment` and the marker is
- *     rewritten to `[Attached file: <engine-host-path>]`, deliberately
- *     KEEPING the same marker grammar so the engine's own attachment-marker
- *     handling (`cli_attachments.go`) picks it up -- unlike inlined
- *     attachments, staged files are meant to be re-Read on the engine host,
- *     which now actually has the bytes;
+ *     rewritten to `[Attached file: <engine-host-path>]` -- deliberately the
+ *     `file` kind regardless of original type, since that is the only kind
+ *     the engine's attachment-marker handling (`cli_attachments.go`) gives
+ *     special (PDF document-block) treatment to; for every other extension
+ *     it is left as literal text, which the model reads via Read/Bash on
+ *     the engine host now that the bytes actually live there;
+ *   - images and PDFs over their inline caps (RAW_MAX_BYTES /
+ *     PDF_MAX_BYTES) stage the same way remotely, instead of being dropped;
+ *     locally they keep the pre-existing behavior (unrelated client-side
+ *     decode/memory safety caps, not a reachability problem);
  *   - staging failures fall back to the same honest "unavailable" note used
  *     for image/PDF failures -- never a thrown error, never a silently
  *     dropped prompt.
@@ -242,9 +255,54 @@ export async function encodeAttachments(
       continue
     }
 
+    // Shared stage-to-engine-host path for anything that cannot be inlined:
+    // non-image/PDF files (binary, or text over INLINE_TEXT_MAX), and
+    // images/PDFs over their inline caps. Rewrites the marker to
+    // `[Attached file: <engine-host-path>]` -- deliberately the `file` kind
+    // regardless of the original attachment type, since that is the only
+    // kind the engine's attachmentMarkerRe gives special (PDF
+    // document-block) treatment to; for every other extension the engine
+    // leaves a `file` marker as literal text, which is exactly what we want
+    // here -- the model sees a real, Read-able absolute path on its own
+    // host instead of a client-local path that doesn't exist there. Local
+    // engines never reach this path -- non-image/PDF files return above,
+    // and over-cap images/PDFs locally still fail (unchanged, pre-existing
+    // client-side safety caps unrelated to remote reachability).
+    const stageFile = async (mimeType: string): Promise<boolean> => {
+      if (!opts.key) {
+        fail(`stage skipped: missing engine session key`, '')
+        return false
+      }
+      if (size > ENGINE_STAGE_MAX_BYTES) {
+        fail(`too large to stage: ${(size / (1024 * 1024)).toFixed(1)}MB > ${ENGINE_STAGE_MAX_BYTES / (1024 * 1024)}MB`, ` -- too large to send (${(size / (1024 * 1024)).toFixed(0)}MB)`)
+        return false
+      }
+      let buf: Buffer
+      try {
+        buf = readFileSync(srcPath)
+      } catch (err) {
+        fail(`read failed: ${(err as Error).message}`, '')
+        return false
+      }
+      const staged = await stageAttachment(opts.key, name, mimeType, buf.toString('base64'))
+      if (!staged.ok || !staged.path) {
+        fail(`stage failed: ${staged.error ?? 'unknown error'}`, '')
+        return false
+      }
+      rewritten = replaceMarker(rewritten, marker, `[Attached file: ${staged.path}]`)
+      log(`staged ${kindNoun}: ${name} raw=${buf.length} enginePath=${staged.path}`)
+      return true
+    }
+
     if (isPdf) {
       if (size > PDF_MAX_BYTES) {
-        fail(`pdf too large: ${(size / (1024 * 1024)).toFixed(1)}MB`, ` -- too large to send (${(size / (1024 * 1024)).toFixed(0)}MB)`)
+        if (opts.isRemote) {
+          await stageFile('application/pdf')
+        } else {
+          // Local: pre-existing behavior, unchanged -- keep the original
+          // marker so the engine's disk-Read fallback (#789) handles it.
+          fail(`pdf too large: ${(size / (1024 * 1024)).toFixed(1)}MB`, ` -- too large to send (${(size / (1024 * 1024)).toFixed(0)}MB)`)
+        }
         continue
       }
       if (totalBytes + size > PROMPT_TOTAL_MAX_BYTES) {
@@ -284,38 +342,30 @@ export async function encodeAttachments(
       }
 
       // Binary, or text over the inline threshold: stage to the engine host
-      // and let the engine's existing attachment-marker handling Read it
-      // from there.
-      if (!opts.key) {
-        fail(`stage skipped: missing engine session key`, '')
-        continue
-      }
-      let buf: Buffer
-      try {
-        buf = readFileSync(srcPath)
-      } catch (err) {
-        fail(`read failed: ${(err as Error).message}`, '')
-        continue
-      }
-      const mimeType = guessMimeType(ext, isText)
-      const staged = await stageAttachment(opts.key, name, mimeType, buf.toString('base64'))
-      if (!staged.ok || !staged.path) {
-        fail(`stage failed: ${staged.error ?? 'unknown error'}`, '')
-        continue
-      }
-      rewritten = replaceMarker(rewritten, marker, `[Attached file: ${staged.path}]`)
-      log(`staged file: ${name} raw=${buf.length} enginePath=${staged.path}`)
+      // and let the model Read it from there.
+      await stageFile(guessMimeType(ext, isText))
       continue
     }
 
-    // Images: existing compress pipeline, unchanged.
+    // Images: existing compress pipeline, unchanged, except over-cap images
+    // now stage remotely instead of being dropped -- the engine host gets
+    // the bytes even though it cannot turn a bare `file` marker into a
+    // native image content block (no such engine-side path-based image
+    // ingestion exists), so the model reaches it via Read/Bash instead.
     const mediaType = MIME_BY_EXT[ext]
     if (!mediaType) {
       fail(`unsupported image extension: ${ext || '(none)'}`, '')
       continue
     }
     if (size > RAW_MAX_BYTES) {
-      fail(`image too large to load: ${(size / (1024 * 1024)).toFixed(1)}MB > ${RAW_MAX_BYTES / (1024 * 1024)}MB`, '')
+      if (opts.isRemote) {
+        await stageFile(mediaType)
+      } else {
+        // Local: pre-existing behavior, unchanged -- images always fail
+        // with an honest note rather than staging (client-side decode
+        // safety cap, unrelated to remote reachability).
+        fail(`image too large to load: ${(size / (1024 * 1024)).toFixed(1)}MB > ${RAW_MAX_BYTES / (1024 * 1024)}MB`, '')
+      }
       continue
     }
     let buf: Buffer

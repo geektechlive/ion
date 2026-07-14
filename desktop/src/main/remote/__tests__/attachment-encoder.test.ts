@@ -157,12 +157,23 @@ describe('encodeAttachments — PDFs', () => {
     expect(rewrittenText).toBe(text)
   })
 
-  it('over-cap pdf: rewrites to an honest note remotely', async () => {
+  it('over-cap pdf (but under the engine stage cap): stages remotely instead of dropping', async () => {
+    stageAttachmentMock.mockResolvedValue({ ok: true, path: '/home/engine/.ion/attachments/tab-123/uuid-big.pdf' })
     const big = writeSparse('big.pdf', 25)
     const text = `[Attached file: ${big}]`
     const { encoded, rewrittenText } = await encodeAttachments(text, [att(big, 'file')], remote)
     expect(encoded).toEqual([])
-    expect(rewrittenText).toContain('[file unavailable: big.pdf -- too large to send (25MB)]')
+    expect(stageAttachmentMock).toHaveBeenCalledWith('tab-123', 'big.pdf', 'application/pdf', expect.any(String))
+    expect(rewrittenText).toBe('[Attached file: /home/engine/.ion/attachments/tab-123/uuid-big.pdf]')
+  })
+
+  it('over the engine stage cap too: rewrites to an honest note remotely without staging', async () => {
+    const huge = writeSparse('huge.pdf', 40)
+    const text = `[Attached file: ${huge}]`
+    const { encoded, rewrittenText } = await encodeAttachments(text, [att(huge, 'file')], remote)
+    expect(encoded).toEqual([])
+    expect(stageAttachmentMock).not.toHaveBeenCalled()
+    expect(rewrittenText).toContain('[file unavailable: huge.pdf -- too large to send (40MB)]')
   })
 
   it('enforces the cumulative prompt budget across multiple pdfs', async () => {
@@ -223,6 +234,27 @@ describe('encodeAttachments — remote text-representable files (inlined)', () =
     const { rewrittenText } = await encodeAttachments(text, [att(big, 'file')], remote)
     expect(stageAttachmentMock).toHaveBeenCalledTimes(1)
     expect(rewrittenText).toBe('[Attached file: /home/engine/.ion/attachments/tab-123/uuid-big.log]')
+  })
+})
+
+describe('encodeAttachments — over-cap images (remote stages, local unchanged)', () => {
+  it('remote image over RAW_MAX_BYTES stages instead of dropping', async () => {
+    stageAttachmentMock.mockResolvedValue({ ok: true, path: '/home/engine/.ion/attachments/tab-123/uuid-huge.jpg' })
+    const big = writeSparse('huge.jpg', 26)
+    const text = `[Attached image: ${big}]`
+    const { encoded, rewrittenText } = await encodeAttachments(text, [att(big)], remote)
+    expect(encoded).toEqual([])
+    expect(stageAttachmentMock).toHaveBeenCalledWith('tab-123', 'huge.jpg', 'image/jpeg', expect.any(String))
+    expect(rewrittenText).toBe('[Attached file: /home/engine/.ion/attachments/tab-123/uuid-huge.jpg]')
+  })
+
+  it('local image over RAW_MAX_BYTES still fails with an honest note (unchanged, no staging)', async () => {
+    const big = writeSparse('huge.jpg', 26)
+    const text = `[Attached image: ${big}]`
+    const { encoded, rewrittenText } = await encodeAttachments(text, [att(big)], local)
+    expect(encoded).toEqual([])
+    expect(stageAttachmentMock).not.toHaveBeenCalled()
+    expect(rewrittenText).toBe('[image unavailable: huge.jpg]')
   })
 })
 
