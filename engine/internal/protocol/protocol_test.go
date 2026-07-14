@@ -733,6 +733,53 @@ func TestParseClientCommand_ListDirectoryDefaults(t *testing.T) {
 	}
 }
 
+// --- stage_attachment command tests ---
+
+func TestParseClientCommand_StageAttachmentValid(t *testing.T) {
+	raw := `{"cmd":"stage_attachment","requestId":"s1","key":"conv-1","filename":"a.bin","mimeType":"application/octet-stream","data":"aGVsbG8="}`
+	cmd := ParseClientCommand(raw)
+	if cmd == nil {
+		t.Fatal("expected valid stage_attachment command")
+	}
+	if cmd.Cmd != "stage_attachment" {
+		t.Errorf("expected cmd 'stage_attachment', got %q", cmd.Cmd)
+	}
+	if cmd.Key != "conv-1" || cmd.Filename != "a.bin" || cmd.MimeType != "application/octet-stream" || cmd.Data != "aGVsbG8=" {
+		t.Errorf("field mismatch: key=%q filename=%q mimeType=%q data=%q", cmd.Key, cmd.Filename, cmd.MimeType, cmd.Data)
+	}
+}
+
+func TestParseClientCommand_StageAttachmentOptionalMetadata(t *testing.T) {
+	// filename and mimeType are optional advisory strings; key + data suffice.
+	raw := `{"cmd":"stage_attachment","key":"conv-1","data":"aGk="}`
+	if cmd := ParseClientCommand(raw); cmd == nil {
+		t.Fatal("expected valid command with filename/mimeType omitted")
+	}
+}
+
+func TestParseClientCommand_StageAttachmentMissingKey(t *testing.T) {
+	raw := `{"cmd":"stage_attachment","data":"aGk="}`
+	if cmd := ParseClientCommand(raw); cmd != nil {
+		t.Fatal("expected nil: key is required")
+	}
+}
+
+func TestParseClientCommand_StageAttachmentMissingData(t *testing.T) {
+	raw := `{"cmd":"stage_attachment","key":"conv-1","filename":"a.bin"}`
+	if cmd := ParseClientCommand(raw); cmd != nil {
+		t.Fatal("expected nil: data is required")
+	}
+}
+
+func TestParseClientCommand_StageAttachmentEmptyData(t *testing.T) {
+	// Empty-string data must fail at the wire layer; a non-empty-but-invalid
+	// base64 string is what reaches the handler's decode step instead.
+	raw := `{"cmd":"stage_attachment","key":"conv-1","data":""}`
+	if cmd := ParseClientCommand(raw); cmd != nil {
+		t.Fatal("expected nil: empty data string is rejected at validation")
+	}
+}
+
 func TestParseClientCommand_StoreCredentialEmptyCredential(t *testing.T) {
 	// Empty credential is valid — it means "clear this provider's key"
 	raw := `{"cmd":"store_credential","provider":"openai","credential":""}`

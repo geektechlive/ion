@@ -67,6 +67,35 @@ export async function listEngineDirectory(
   return bridge().request<EngineDirListing>('list_directory', { path, showHidden })
 }
 
+/**
+ * Upload a file's bytes to the engine host so an attachment whose bytes only
+ * live on the client machine (e.g. a non-image, non-PDF file on a remote
+ * Desktop) becomes readable there. The engine writes the decoded bytes to a
+ * confined per-conversation scratch dir under `~/.ion/attachments/<key>/`
+ * (`key` is the same session identifier used for `send_prompt`) and returns
+ * the absolute host path. See engine `stage_attachment` command
+ * (`internal/protocol/protocol.go`, `internal/server/fs_browse.go`).
+ *
+ * The engine enforces a 36MB decoded-payload cap and reports failure via
+ * `ok: false` rather than throwing -- callers must treat a `!ok` result as a
+ * graceful fallback case, never a thrown error.
+ */
+export async function stageAttachment(
+  key: string,
+  filename: string,
+  mimeType: string,
+  dataBase64: string,
+): Promise<{ ok: boolean; error?: string; path?: string }> {
+  log('engine-bridge-fs', `stageAttachment: key=${key} filename=${filename} mimeType=${mimeType} b64Len=${dataBase64.length}`)
+  const r = await bridge().request<{ path: string }>('stage_attachment', { key, filename, mimeType, data: dataBase64 })
+  if (r.ok) {
+    log('engine-bridge-fs', `stageAttachment: success key=${key} filename=${filename} path=${r.data?.path}`)
+  } else {
+    log('engine-bridge-fs', `stageAttachment: failed key=${key} filename=${filename} err=${r.error}`)
+  }
+  return { ok: r.ok, error: r.error, path: r.data?.path }
+}
+
 /** How long to wait for the bridge to reconnect before giving up and
  *  retrying the probe anyway. The M2 engine restarts on every deploy,
  *  closing the socket mid-session; 10s covers the typical reconnect

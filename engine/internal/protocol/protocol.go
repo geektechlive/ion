@@ -11,33 +11,33 @@ import (
 // ClientCommand represents any command sent from a client to the engine server.
 // The Cmd field discriminates which fields are relevant.
 type ClientCommand struct {
-	Cmd          string              `json:"cmd"`
-	Key          string              `json:"key,omitempty"`
-	Config       *types.EngineConfig `json:"config,omitempty"`
-	RequestID    string              `json:"requestId,omitempty"`
-	Text         string              `json:"text,omitempty"`
-	Model        string              `json:"model,omitempty"`
-	MaxTurns     int                 `json:"maxTurns,omitempty"`
-	MaxBudgetUsd float64             `json:"maxBudgetUsd,omitempty"`
-	AgentName    string              `json:"agentName,omitempty"`
-	Subtree      *bool               `json:"subtree,omitempty"`
-	Message      string              `json:"message,omitempty"`
-	DialogID     string              `json:"dialogId,omitempty"`
-	Value        any                 `json:"value,omitempty"`
-	Command      string              `json:"command,omitempty"`
-	Args         string              `json:"args,omitempty"`
-	Prefix       string              `json:"prefix,omitempty"`
-	MessageIndex *int                `json:"messageIndex,omitempty"`
-	Enabled      *bool               `json:"enabled,omitempty"`
-	AllowedTools []string            `json:"allowedTools,omitempty"`
-	EntryID      string              `json:"entryId,omitempty"`
-	TargetID     string              `json:"targetId,omitempty"`
-	ExtensionDir string              `json:"extensionDir,omitempty"`
-	Extensions   []string            `json:"extensions,omitempty"`
-	NoExtensions bool                `json:"noExtensions,omitempty"`
-	QuestionID   string              `json:"questionId,omitempty"`
-	OptionID     string              `json:"optionId,omitempty"`
-	SessionIDs   []string            `json:"sessionIds,omitempty"`
+	Cmd                string              `json:"cmd"`
+	Key                string              `json:"key,omitempty"`
+	Config             *types.EngineConfig `json:"config,omitempty"`
+	RequestID          string              `json:"requestId,omitempty"`
+	Text               string              `json:"text,omitempty"`
+	Model              string              `json:"model,omitempty"`
+	MaxTurns           int                 `json:"maxTurns,omitempty"`
+	MaxBudgetUsd       float64             `json:"maxBudgetUsd,omitempty"`
+	AgentName          string              `json:"agentName,omitempty"`
+	Subtree            *bool               `json:"subtree,omitempty"`
+	Message            string              `json:"message,omitempty"`
+	DialogID           string              `json:"dialogId,omitempty"`
+	Value              any                 `json:"value,omitempty"`
+	Command            string              `json:"command,omitempty"`
+	Args               string              `json:"args,omitempty"`
+	Prefix             string              `json:"prefix,omitempty"`
+	MessageIndex       *int                `json:"messageIndex,omitempty"`
+	Enabled            *bool               `json:"enabled,omitempty"`
+	AllowedTools       []string            `json:"allowedTools,omitempty"`
+	EntryID            string              `json:"entryId,omitempty"`
+	TargetID           string              `json:"targetId,omitempty"`
+	ExtensionDir       string              `json:"extensionDir,omitempty"`
+	Extensions         []string            `json:"extensions,omitempty"`
+	NoExtensions       bool                `json:"noExtensions,omitempty"`
+	QuestionID         string              `json:"questionId,omitempty"`
+	OptionID           string              `json:"optionId,omitempty"`
+	SessionIDs         []string            `json:"sessionIds,omitempty"`
 	Label              string              `json:"label,omitempty"`
 	Limit              int                 `json:"limit,omitempty"`
 	Offset             int                 `json:"offset,omitempty"`
@@ -68,6 +68,21 @@ type ClientCommand struct {
 	// includes dotfiles in the result.
 	Path       string `json:"path,omitempty"`
 	ShowHidden bool   `json:"showHidden,omitempty"`
+
+	// stage_attachment: client→engine byte upload for a file the engine host
+	// cannot otherwise reach — the case of a remote client (e.g. Desktop on a
+	// laptop) attaching a non-image / non-PDF file whose bytes live only on the
+	// client machine. The engine decodes Data, writes it to a confined
+	// per-conversation scratch dir under <home>/.ion/attachments/, and returns
+	// the absolute host path; the consumer decides what to do with the staged
+	// file. The conversation/session identifier that scopes the scratch dir is
+	// carried on the existing Key field (reused, not duplicated). Filename and
+	// MimeType are advisory metadata (Filename is sanitized to its basename
+	// with a fallback; MimeType is logged only). Data is the base64-encoded
+	// file bytes. Additive optional fields on the scrutinized engine wire.
+	Filename string `json:"filename,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"`
 
 	// send_prompt: pre-encoded attachments (images, PDF documents) to
 	// attach to the user message as native image/document content blocks.
@@ -212,44 +227,51 @@ type ClientCommand struct {
 }
 
 var validCommands = map[string]bool{
-	"start_session":   true,
-	"send_prompt":     true,
-	"abort":           true,
-	"abort_agent":     true,
-	"steer_agent":     true,
-	"dialog_response": true,
-	"command":         true,
-	"stop_session":    true,
-	"stop_by_prefix":  true,
-	"list_sessions":   true,
-	"fork_session":    true,
-	"set_plan_mode":   true,
-	"branch":          true,
-	"navigate_tree":   true,
-	"get_tree":        true,
-	"shutdown":               true,
-	"permission_response":   true,
-	"list_stored_sessions":  true,
-	"load_session_history":  true,
-	"save_session_label":    true,
-	"get_conversation":      true,
-	"generate_title":        true,
-	"elicitation_response":  true,
+	"start_session":                true,
+	"send_prompt":                  true,
+	"abort":                        true,
+	"abort_agent":                  true,
+	"steer_agent":                  true,
+	"dialog_response":              true,
+	"command":                      true,
+	"stop_session":                 true,
+	"stop_by_prefix":               true,
+	"list_sessions":                true,
+	"fork_session":                 true,
+	"set_plan_mode":                true,
+	"branch":                       true,
+	"navigate_tree":                true,
+	"get_tree":                     true,
+	"shutdown":                     true,
+	"permission_response":          true,
+	"list_stored_sessions":         true,
+	"load_session_history":         true,
+	"save_session_label":           true,
+	"get_conversation":             true,
+	"generate_title":               true,
+	"elicitation_response":         true,
 	"early_stop_decision_response": true,
-	"health":                true,
-	"reconcile_state":       true,
+	"health":                       true,
+	"reconcile_state":              true,
 	// query_session_status: on-demand counterpart to reconcile_state that
 	// emits ONLY the engine_status snapshot (no agent state). Used by
 	// freshly-reconnected clients to learn current status for a key
 	// without waiting for the next heartbeat tick or paying the cost of
 	// a full reconcile. Phase 2 of the state-management overhaul.
-	"query_session_status":   true,
-	"migrate_conversation":  true,
-	"list_models":           true,
-	"store_credential":      true,
-	"refresh_models":        true,
-	"get_host_info":         true,
-	"list_directory":        true,
+	"query_session_status": true,
+	"migrate_conversation": true,
+	"list_models":          true,
+	"store_credential":     true,
+	"refresh_models":       true,
+	"get_host_info":        true,
+	"list_directory":       true,
+	// stage_attachment: client→engine byte upload. Decodes base64 file bytes
+	// and writes them to a confined per-conversation scratch dir under
+	// ~/.ion/attachments/, returning the absolute host path. The FIRST
+	// client-facing host-WRITE command (every other host-FS command is
+	// read-only). Requires key (conversation/session id, reused) + data
+	// (base64). Non-breaking additive command.
+	"stage_attachment": true,
 	// clear_conversation_file: wipes the LLM-visible Messages (and resets
 	// LastInputTokens / LastInputTokensMsgCount) on a stored conversation
 	// file by sessionId, without requiring a live engine session. Used by
@@ -477,6 +499,15 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 	case "list_directory":
 		// path is optional ("" or "~" → engine home); no required fields
 		return true
+	case "stage_attachment":
+		// key carries the conversation/session identifier that scopes the
+		// scratch dir; data is the base64 file payload. Both required and
+		// non-empty. filename and mimeType are OPTIONAL advisory strings — the
+		// handler sanitizes filename to its basename with a fallback, so
+		// requiring it non-empty here would make that fallback branch
+		// unreachable. Malformed base64 in data is caught by the handler's
+		// decode step, not here, so data need only be a non-empty string.
+		return hasNonEmptyString(raw, "key") && hasNonEmptyString(raw, "data")
 	case "discover_slash_commands":
 		// path (working directory) is optional; user-level roots always apply
 		return true
@@ -516,7 +547,7 @@ func validateRaw(cmd string, raw map[string]json.RawMessage) bool {
 
 // ServerEvent carries a session event broadcast to all clients.
 type ServerEvent struct {
-	Key   string             `json:"key"`
+	Key   string               `json:"key"`
 	Event types.RawEngineEvent `json:"event"`
 }
 

@@ -309,6 +309,15 @@ func (s *Server) dispatch(conn net.Conn, cmd *protocol.ClientCommand) {
 		data, err := listDirectory(cmd.Path, cmd.ShowHidden)
 		s.sendResult(conn, cmd, err, data)
 
+	case "stage_attachment":
+		// First client-facing host-WRITE command. Decodes cmd.Data (base64)
+		// and writes it to a confined per-conversation scratch dir under
+		// ~/.ion/attachments/ (scoped by cmd.Key), returning { path } for the
+		// consumer to use. All confinement lives in stageAttachment; the
+		// engine holds no opinion on what the consumer does with the path.
+		data, err := stageAttachment(cmd.Key, cmd.Filename, cmd.MimeType, cmd.Data)
+		s.sendResult(conn, cmd, err, data)
+
 	case "discover_slash_commands":
 		// Stateless filesystem discovery of .md/skill templates. cmd.Path carries
 		// the working directory (optional); user-level roots always apply. The
