@@ -8,7 +8,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
+	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -267,9 +271,12 @@ func TestGetHTTPTransportAfterInit(t *testing.T) {
 	}
 }
 
-// TestInitNetworkTransportSettings verifies that the configured transport has
-// TCP keepalive, timeouts, and HTTP/2 enabled — matching http.DefaultTransport
-// settings so that silently-dropped connections are detected during long streams.
+// TestInitNetworkTransportSettings verifies the configured transport has TCP
+// keepalive, timeouts, and — critically — HTTP/2 DISABLED. The transport is
+// pinned to HTTP/1.1 (ForceAttemptHTTP2:false + a non-nil empty TLSNextProto)
+// because ResponseHeaderTimeout, which bounds the wait for the first response
+// byte, is honored only by Go's HTTP/1.1 transport and never by its HTTP/2
+// transport. See internal/network/network.go for the full rationale.
 func TestInitNetworkTransportSettings(t *testing.T) {
 	resetGlobals()
 
@@ -282,8 +289,17 @@ func TestInitNetworkTransportSettings(t *testing.T) {
 	if transport.TLSHandshakeTimeout != 10*time.Second {
 		t.Errorf("TLSHandshakeTimeout = %v, want 10s", transport.TLSHandshakeTimeout)
 	}
-	if !transport.ForceAttemptHTTP2 {
-		t.Error("ForceAttemptHTTP2 should be true")
+	if transport.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2 should be false so ResponseHeaderTimeout is honored")
+	}
+	// Non-nil empty TLSNextProto is the canonical guarantee that the transport
+	// never negotiates HTTP/2 over ALPN. A nil map would let the transport
+	// upgrade to h2, which would silently neuter ResponseHeaderTimeout.
+	if transport.TLSNextProto == nil {
+		t.Error("TLSNextProto must be a non-nil (empty) map to guarantee HTTP/1.1")
+	}
+	if len(transport.TLSNextProto) != 0 {
+		t.Errorf("TLSNextProto should be empty, got %d entries", len(transport.TLSNextProto))
 	}
 	if transport.MaxIdleConns != 100 {
 		t.Errorf("MaxIdleConns = %d, want 100", transport.MaxIdleConns)
@@ -300,14 +316,85 @@ func TestInitNetworkTransportSettings(t *testing.T) {
 	if transport.ResponseHeaderTimeout != 60*time.Second {
 		t.Errorf("ResponseHeaderTimeout = %v, want 60s (caps first-byte wait for long LLM streams)", transport.ResponseHeaderTimeout)
 	}
-	if transport.HTTP2 == nil {
-		t.Fatal("HTTP2 config must be set so silently half-open h2 streams fail fast via PINGs")
+	// HTTP/2 must be off, so the h2-only PING config must be absent.
+	if transport.HTTP2 != nil {
+		t.Error("HTTP2 config must be nil now that the transport is pinned to HTTP/1.1")
 	}
-	if transport.HTTP2.SendPingTimeout != 15*time.Second {
-		t.Errorf("HTTP2.SendPingTimeout = %v, want 15s", transport.HTTP2.SendPingTimeout)
+}
+
+// TestResponseHeaderTimeoutFiresOnSilentServer proves the fix end to end: a TCP
+// server that ACCEPTS the connection but never writes response headers must
+// cause client.Do() to fail with a "timeout awaiting response headers" error,
+// rather than blocking forever. Under the old ForceAttemptHTTP2:true config the
+// ResponseHeaderTimeout was inert; on HTTP/1.1 it fires. The transport under
+// test is the real configured transport (proving its HTTP/1.1 pinning), cloned
+// only to shorten ResponseHeaderTimeout so the test is fast (~200ms, not 60s).
+func TestResponseHeaderTimeoutFiresOnSilentServer(t *testing.T) {
+	resetGlobals()
+	InitNetwork(nil)
+
+	// Listener that accepts connections and then goes silent — never writing a
+	// response. This reproduces the OpenRouter "headers never arrive" hang.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
 	}
-	if transport.HTTP2.PingTimeout != 15*time.Second {
-		t.Errorf("HTTP2.PingTimeout = %v, want 15s", transport.HTTP2.PingTimeout)
+
+	var connMu sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed on teardown
+			}
+			// Hold the connection open but never respond. Track it (guarded)
+			// so teardown can close it.
+			connMu.Lock()
+			conns = append(conns, conn)
+			connMu.Unlock()
+		}
+	}()
+	defer func() {
+		_ = ln.Close() // unblocks Accept so the goroutine returns
+		connMu.Lock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+		connMu.Unlock()
+	}()
+
+	// Clone the real configured transport and shorten only the header timeout so
+	// the assertion is fast. Everything else (HTTP/1.1 pinning) is unchanged.
+	base := GetHTTPTransport()
+	tr := base.Clone()
+	tr.ResponseHeaderTimeout = 200 * time.Millisecond
+	if tr.ForceAttemptHTTP2 {
+		t.Fatal("cloned transport unexpectedly has ForceAttemptHTTP2=true")
+	}
+
+	client := &http.Client{Transport: tr}
+
+	done := make(chan error, 1)
+	go func() {
+		//nolint:noctx // the transport-owned ResponseHeaderTimeout is the timer under test
+		resp, err := client.Get("http://" + ln.Addr().String())
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a timeout error, got nil")
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "timeout") {
+			t.Errorf("expected a timeout error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("client.Do did not return within 5s — ResponseHeaderTimeout did not fire (HTTP/2 not disabled?)")
 	}
 }
 

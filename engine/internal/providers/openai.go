@@ -115,6 +115,20 @@ func (p *openaiProvider) doStream(ctx context.Context, opts types.LlmStreamOptio
 
 	resp, err := p.client.Do(req)
 	if err != nil {
+		// Route through ClassifyTransportError first (mirroring the sse-read
+		// path below) so a transport-level failure is classified explicitly and
+		// its cause preserved. The important case here is the transport's
+		// ResponseHeaderTimeout firing when the provider accepts the connection
+		// but never sends response headers (the OpenRouter hang): the error text
+		// "timeout awaiting response headers" maps to a retryable ErrTimeout, so
+		// WithRetry re-streams instead of the run blocking until the run-stall
+		// watchdog. FromOpenAIError is the fallback for anything the transport
+		// classifier does not recognise.
+		if pe := ClassifyTransportError(err); pe != nil {
+			utils.Error("OpenAI", fmt.Sprintf("doStream: transport error before response headers: id=%s model=%s code=%s retryable=%v err=%v", p.id, opts.Model, pe.Code, pe.Retryable, err))
+			return pe
+		}
+		utils.Error("OpenAI", fmt.Sprintf("doStream: request failed before response headers: id=%s model=%s err=%v", p.id, opts.Model, err))
 		return FromOpenAIError(err, 0, "")
 	}
 	defer func() {

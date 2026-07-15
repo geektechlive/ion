@@ -10,11 +10,11 @@ import (
 
 // sse_idle.go — the provider stream-idle deadline and heartbeat.
 //
-// Why this exists. The shared HTTP transport (internal/network) already caps
-// the wait for the FIRST response byte (ResponseHeaderTimeout) and forces
-// HTTP/2 PINGs so a silently-dead connection is detected. Neither protects
-// against a stream that returns headers and then stops emitting SSE bytes
-// while the upstream keeps the H2 stream alive at the protocol level: the
+// Why this exists. The shared HTTP transport (internal/network) caps the wait
+// for the FIRST response byte via ResponseHeaderTimeout (effective because the
+// transport is pinned to HTTP/1.1 — see internal/network/network.go). That does
+// not protect against a stream that returns headers and then stops emitting SSE
+// bytes while the upstream keeps the connection alive at the protocol level: the
 // provider read loop (`for sse := range sseCh`) blocks forever with no output
 // and no error. That was the originating failure in the
 // 1782088921498-960b064fe896 incident — ~7 minutes of total silence before an

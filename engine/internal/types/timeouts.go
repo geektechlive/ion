@@ -69,10 +69,11 @@ type TimeoutsConfig struct {
 	// StreamIdleMs is the maximum gap allowed between two Server-Sent Events
 	// while reading a provider's streaming LLM response. The shared HTTP
 	// transport already caps the wait for the FIRST byte (ResponseHeaderTimeout
-	// 60s) and detects a dead HTTP/2 connection (SendPingTimeout + PingTimeout),
-	// but neither catches a stream that returns headers and then stops emitting
-	// SSE bytes while the upstream keeps the H2 stream alive at the protocol
-	// level. Such a stream blocks the provider read loop indefinitely with no
+	// 60s, effective because the transport is pinned to HTTP/1.1 — see
+	// internal/network/network.go), but that does not catch a stream that returns
+	// headers and then stops emitting SSE bytes while the upstream keeps the
+	// connection alive at the protocol level. Such a stream blocks the provider
+	// read loop indefinitely with no
 	// output and no error — the originating failure in the
 	// 1782088921498-960b064fe896 incident (~7 minutes of total silence before a
 	// client watchdog intervened). StreamIdleMs is the per-event deadline that

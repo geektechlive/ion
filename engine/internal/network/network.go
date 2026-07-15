@@ -102,27 +102,41 @@ func InitNetwork(cfg *types.NetworkConfig) {
 	// idle connection management, and HTTP/2 — meaning a silently-dropped connection
 	// (e.g. by a NAT middlebox during a long LLM stream) hangs the read forever.
 	//
-	// ResponseHeaderTimeout caps the wait for the first byte. HTTP2.SendPingTimeout
-	// + PingTimeout force application-level PINGs on idle H2 streams so a silently
-	// half-open connection (NAT/proxy/VPN idle drop) fails fast with a real error
-	// (`http2: client connection lost`) rather than hanging until TCP keepalive
-	// notices ~60s later. Critical for long LLM SSE streams.
+	// HTTP/2 is deliberately disabled (ForceAttemptHTTP2:false plus a non-nil empty
+	// TLSNextProto — the canonical, guaranteed way to stop the transport from ever
+	// negotiating h2 over ALPN; flipping the bool alone is not sufficient because a
+	// TLS config that advertises h2 can still upgrade). The reason is first-byte
+	// safety: ResponseHeaderTimeout — the transport-owned timer that bounds the
+	// wait for the first response byte — is honored ONLY by Go's HTTP/1.1
+	// transport, not by its HTTP/2 transport. Under the previous
+	// ForceAttemptHTTP2:true config the 60s ResponseHeaderTimeout never fired, so a
+	// provider request whose response headers never arrived (the OpenRouter hang)
+	// blocked in client.Do() until the 10-minute run-stall watchdog was the only
+	// backstop. On HTTP/1.1 the timer fires as intended: the wait for the first
+	// byte is bounded, and the resulting "timeout awaiting response headers" error
+	// is classified retryable (ClassifyTransportError → ErrTimeout) so WithRetry
+	// re-streams.
+	//
+	// Losing HTTP/2's application-level PINGs (the old SendPingTimeout/PingTimeout
+	// config) is safe. The only failure PINGs covered was a stream that returns
+	// headers and then goes silent mid-body; that case is now owned outright by
+	// streamWithIdle's protocol-independent 90s per-event idle deadline (see
+	// sse_idle.go), and a genuinely dropped TCP connection still surfaces as a read
+	// error on either protocol.
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		TLSClientConfig:       tlsConfig,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ForceAttemptHTTP2:     true,
+		TLSClientConfig:     tlsConfig,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   false,
+		// Non-nil empty map disables HTTP/2 negotiation for every connection.
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
-		HTTP2: &http.HTTP2Config{
-			SendPingTimeout: 15 * time.Second,
-			PingTimeout:     15 * time.Second,
-		},
 	}
 	if proxyURL != nil {
 		transport.Proxy = func(req *http.Request) (*url.URL, error) {
