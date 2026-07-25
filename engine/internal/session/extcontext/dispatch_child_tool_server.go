@@ -89,6 +89,20 @@ func BuildChildToolServer(
 		return nil
 	}
 
+	// Scope the child's MCP surface to its declared allowlist. runOpts.AllowedTools
+	// is populated from opts.AllowedTools (buildDispatchRunOptions) -- typically a
+	// matched agent spec's `tools:` frontmatter. Registering every extension tool
+	// regardless of that allowlist put the full schema set in the child's system
+	// prompt even when the spec named a handful of tools, and the child could not
+	// call the extras anyway.
+	tools = filterToolsByAllowlist(tools, runOpts.AllowedTools, dispatchID)
+	if len(tools) == 0 {
+		utils.Log("Dispatch", fmt.Sprintf(
+			"child ToolServer skipped (allowlist excludes every extension tool) dispatchId=%s allowedTools=%s",
+			dispatchID, strings.Join(runOpts.AllowedTools, ",")))
+		return nil
+	}
+
 	ts := backend.NewToolServer(dispatchID)
 	for _, tool := range tools {
 		capturedTool := tool
@@ -134,6 +148,60 @@ func BuildChildToolServer(
 		"child ToolServer started (%d tools) dispatchId=%s mcpConfig=%s",
 		len(tools), dispatchID, mcpPath))
 	return ts
+}
+
+// filterToolsByAllowlist returns the subset of extension tools a dispatched
+// child is permitted to call, according to its AllowedTools list.
+//
+// A tool matches when the allowlist names it bare ("surface_to_inbox") or in
+// its MCP-prefixed form ("mcp__ion-extensions__surface_to_inbox"). Built-in
+// names in the allowlist (Read, Bash, ...) match no extension tool and are
+// simply ignored here; the backend applies them separately.
+//
+// Two cases return the full set unchanged, preserving prior behavior:
+//   - an empty allowlist, which means "no restriction" per buildDispatchRunOptions
+//   - an explicit wildcard entry, which is a caller opting into every tool
+//
+// Note the wildcard CliBackend appends for its own --allowedTools flag is added
+// after this point, so it does not leak into this decision.
+func filterToolsByAllowlist(
+	tools []extension.ToolDefinition,
+	allowed []string,
+	dispatchID string,
+) []extension.ToolDefinition {
+	if len(allowed) == 0 {
+		utils.Debug("Dispatch", fmt.Sprintf(
+			"child tool allowlist empty, registering all %d extension tools dispatchId=%s",
+			len(tools), dispatchID))
+		return tools
+	}
+
+	wildcard := "mcp__" + backend.McpServerName + "__*"
+	permitted := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		if name == wildcard {
+			utils.Debug("Dispatch", fmt.Sprintf(
+				"child tool allowlist holds wildcard, registering all %d extension tools dispatchId=%s",
+				len(tools), dispatchID))
+			return tools
+		}
+		permitted[name] = true
+	}
+
+	filtered := make([]extension.ToolDefinition, 0, len(tools))
+	dropped := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if permitted[tool.Name] || permitted["mcp__"+backend.McpServerName+"__"+tool.Name] {
+			filtered = append(filtered, tool)
+			continue
+		}
+		dropped = append(dropped, tool.Name)
+	}
+
+	utils.Log("Dispatch", fmt.Sprintf(
+		"child tool allowlist applied dispatchId=%s kept=%d dropped=%d droppedTools=%s",
+		dispatchID, len(filtered), len(dropped), strings.Join(dropped, ",")))
+	return filtered
 }
 
 // buildChildToolAliasDirective renders the system-prompt directive that maps
