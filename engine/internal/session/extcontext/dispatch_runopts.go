@@ -42,6 +42,23 @@ func buildDispatchRunOptions(opts *extension.DispatchAgentOpts, model, projectPa
 		// the child inherits the engine's default set.
 		runOpts.AllowedTools = opts.AllowedTools
 	}
+	if len(opts.SuppressTools) > 0 {
+		// Deny these tools to the child. This is the hop that was missing: a
+		// root session gets SuppressTools populated from ctx.suppressTool() in
+		// session.dispatchPrompt, but a dispatched child never passes through
+		// that function -- startChild calls backend.StartRun directly -- so
+		// before this field existed a child's SuppressTools was always empty and
+		// no harness could deny it a built-in.
+		//
+		// Downstream: the CLI backend emits `--disallowedTools` from this slice
+		// (backend.CliBackend.runProcess), which the claude CLI honors even under
+		// --permission-mode bypassPermissions -- the mode every dispatched child
+		// runs under, and the reason AllowedTools alone cannot deny a built-in.
+		// The API backend filters these names out of the child's tool schema
+		// (backend.buildToolDefs). Empty leaves both backends unrestricted,
+		// exactly as before.
+		runOpts.SuppressTools = opts.SuppressTools
+	}
 	if len(opts.FallbackChain) > 0 {
 		// Walk these alternative models on overload (typically the tail of a
 		// resolved tier chain). Empty leaves the child relying solely on the

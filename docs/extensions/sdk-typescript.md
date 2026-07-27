@@ -550,6 +550,8 @@ interface DispatchAgentOpts {
   planMode?: boolean        // start child in plan mode
   planFilePath?: string     // override plan file path (default: engine allocates one)
   planModeTools?: string[]  // override allowed tools during plan mode
+  allowedTools?: string[]   // scope the child's tool set (advisory on the CLI backend)
+  suppressTools?: string[]  // deny tools to the child (binding on both backends)
   background?: boolean      // run async; return stub result immediately
   onComplete?: (result: DispatchAgentResult) => void   // background: success
   onError?: (err: DispatchError) => void               // background: failure
@@ -614,6 +616,52 @@ await ctx.dispatchAgent({
 Omitting `cliResumeSessionId` (the default) always starts the child cold. Both
 branches of the decision are logged under the `Dispatch` and `CliBackend` tags in
 `~/.ion/engine.log`.
+
+### Restricting a dispatched child's tools
+
+Two fields shape a child's tool set, and they are not interchangeable:
+
+| Field | Means | On the CLI backend |
+|---|---|---|
+| `allowedTools` | what the child is **offered** | advisory |
+| `suppressTools` | what the child is **denied** | binding |
+
+The asymmetry is not a quirk of the engine, it is a property of the claude CLI.
+Every dispatched child spawns with `--permission-mode bypassPermissions`, and
+under that mode `--allowedTools` does not restrain a built-in: a child given
+`allowedTools: ['Read','Glob','Grep']` can still call `Bash`. `--disallowedTools`,
+which is what `suppressTools` becomes, is honored regardless of permission mode.
+
+**If you need a policy like "this agent must not have Bash" to actually hold,
+`suppressTools` is the field that enforces it.** `allowedTools` alone does not.
+
+```typescript
+// A genuinely read-only child.
+await ctx.dispatchAgent({
+  name: 'researcher',
+  task: 'summarize these files',
+  allowedTools: ['Read', 'Glob', 'Grep'],                     // shapes the offer
+  suppressTools: ['Bash', 'Write', 'Edit', 'NotebookEdit'],   // enforces the denial
+})
+```
+
+**Precedence: deny wins.** A tool named in both lists is denied — on the CLI
+backend it is withheld from the child's schema entirely, not refused at call
+time. Nothing in `allowedTools` can re-grant a suppressed tool.
+
+**Suppression is per-name, not per-capability.** Denying `Bash` removes the Bash
+tool, not the ability to write files. A child denied only `Bash` will reach for
+`Write` to accomplish the same thing, unprompted. When the goal is a capability
+boundary rather than a tool boundary, enumerate every tool in the capability set
+— including any MCP tool that shells out. The engine forwards the denylist it is
+given and takes no view on whether it is complete; completeness is your policy
+decision.
+
+Note that a suppressed tool does **not** appear in the CLI's `permission_denials`
+output. It is a tool-availability denial, not a permission denial. To confirm
+suppression took effect, read the `Dispatch` and `CliBackend` tags in
+`~/.ion/engine.log` — both the "denying N tool(s)" and the "none requested"
+branches are logged.
 
 ## DispatchError
 

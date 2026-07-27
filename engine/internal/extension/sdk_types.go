@@ -409,7 +409,56 @@ type DispatchAgentOpts struct {
 	// tool passes a matched agent spec's Tools through here so a specialist
 	// only sees the tools its spec declares. Distinct from PlanModeTools,
 	// which applies only while the child is in plan mode.
+	//
+	// Scoping, not enforcement, on the CLI backend. A dispatched child spawns
+	// with --permission-mode bypassPermissions, under which the claude CLI
+	// treats --allowedTools as advisory: a built-in omitted from this list is
+	// still callable by the child (verified on Claude Code 2.1.220 — a child
+	// given AllowedTools{"Read","Glob","Grep"} ran Bash anyway). Use this field
+	// to shape what the child is offered; use SuppressTools below to deny a
+	// built-in outright.
 	AllowedTools []string `json:"allowedTools,omitempty"`
+
+	// SuppressTools denies specific tools to the dispatched child. Empty (the
+	// default) suppresses nothing, which is the behavior every caller had
+	// before this field existed.
+	//
+	// This is the only field that can actually take a built-in away from a
+	// dispatched child, and it is the counterpart to AllowedTools above rather
+	// than a duplicate of it:
+	//
+	//	AllowedTools  — what the child is offered.  Advisory on the CLI backend.
+	//	SuppressTools — what the child is denied.   Binding on both backends.
+	//
+	// Honored by BOTH backends, so it is deliberately NOT named with a `cli`
+	// prefix (unlike CliResumeSessionID, which is CLI-only):
+	//
+	//   - CLI backend: forwarded to RunOptions.SuppressTools and emitted as
+	//     `claude --disallowedTools <a,b,c>` by CliBackend.runProcess. The CLI
+	//     honors that flag
+	//     regardless of permission mode, which is what makes suppression bind
+	//     under bypassPermissions.
+	//   - API backend: the named tools are filtered out of the tool schema
+	//     handed to the model (backend.buildToolDefs), so the model never sees
+	//     them.
+	//
+	// Precedence — deny wins. A name appearing in both AllowedTools and this
+	// list is denied. On the CLI backend the tool is not merely refused at call
+	// time, it is withheld from the child's schema entirely; on the API backend
+	// the suppression filter runs after the allowlist filter. There is no
+	// ordering or escape by which an allowlist entry re-grants a suppressed
+	// tool.
+	//
+	// Per-NAME, not per-capability. Suppressing "Bash" denies the Bash tool, not
+	// the ability to affect the filesystem: a child denied Bash can still reach
+	// for Write, Edit, NotebookEdit, or any MCP tool that shells out, and will
+	// do so on its own initiative (verified: a child with Bash suppressed
+	// created the requested file with Write instead). A harness enforcing a
+	// capability boundary must name every tool in the capability set, not just
+	// the obvious one. The engine forwards the denylist it is given and takes no
+	// view on whether that list is complete — deciding the policy is the
+	// harness's job.
+	SuppressTools []string `json:"suppressTools,omitempty"`
 
 	// AllowedSubAgents is the set of agent names this dispatch's agent is
 	// permitted to dispatch in turn. The engine enforces it as an allowlist:
@@ -622,82 +671,6 @@ type RecallAgentOpts struct {
 type SteerDispatchResult struct {
 	Delivered bool   `json:"delivered"`
 	Outcome   string `json:"outcome"`
-}
-
-// --- Phase 2: Lifecycle event callback payloads ---
-
-// DispatchToolStartInfo carries data for the OnToolStart callback.
-type DispatchToolStartInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-	ToolName   string `json:"toolName"`
-	ToolID     string `json:"toolId"`
-}
-
-// DispatchToolEndInfo carries data for the OnToolEnd callback.
-type DispatchToolEndInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-	ToolName   string `json:"toolName"`
-	ToolID     string `json:"toolId"`
-	Content    string `json:"content"`
-}
-
-// DispatchToolErrorInfo carries data for the OnToolError callback.
-type DispatchToolErrorInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-	ToolName   string `json:"toolName"`
-	ToolID     string `json:"toolId"`
-	Content    string `json:"content"`
-}
-
-// DispatchUsageInfo carries per-turn and cumulative usage data.
-type DispatchUsageInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-
-	// Per-turn usage from the current UsageEvent.
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
-
-	// Cumulative totals across all turns in this dispatch.
-	CumulativeInputTokens  int     `json:"cumulativeInputTokens"`
-	CumulativeOutputTokens int     `json:"cumulativeOutputTokens"`
-	CumulativeCost         float64 `json:"cumulativeCost"`
-}
-
-// DispatchTextDeltaInfo carries a text chunk and accumulated text.
-type DispatchTextDeltaInfo struct {
-	Name        string `json:"name"`
-	DispatchID  string `json:"dispatchId,omitempty"`
-	Delta       string `json:"delta"`
-	Accumulated string `json:"accumulated"`
-}
-
-// DispatchPlanProposalInfo carries data for the OnPlanProposal callback.
-type DispatchPlanProposalInfo struct {
-	Name         string `json:"name"`
-	AgentID      string `json:"agentId"`
-	PlanFilePath string `json:"planFilePath"`
-	PlanSlug     string `json:"planSlug"`
-	// PlanRequested is true when the caller explicitly set PlanMode=true
-	// on the dispatch opts. False when the child agent self-initiated
-	// plan mode (called EnterPlanMode without being told to).
-	PlanRequested bool `json:"planRequested"`
-}
-
-// DispatchChildQuestionInfo carries the question raised by a dispatched child
-// via AskUserQuestion. Surfaced to the dispatcher via OnChildQuestion.
-type DispatchChildQuestionInfo struct {
-	// Name is the dispatched agent's name.
-	Name string `json:"name"`
-	// DispatchID is the dispatch's unique identifier.
-	DispatchID string `json:"dispatchId"`
-	// Question is the text from the child's AskUserQuestion call.
-	Question string `json:"question"`
-	// Depth is the dispatch nesting depth of the child (1 = direct child of orchestrator).
-	Depth int `json:"depth"`
 }
 
 // DiscoverAgentsOpts configures which directories to scan for agent definitions

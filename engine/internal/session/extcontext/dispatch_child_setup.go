@@ -2,6 +2,7 @@ package extcontext
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
@@ -91,6 +92,7 @@ type configurableBackend interface {
 // through (carrying DefaultModel, the AgentSpawner for nested dispatch, hooks,
 // etc.); otherwise the run degrades to the plain StartRun path.
 func startChild(child backend.RunBackend, reqID string, runOpts types.RunOptions, cfg *backend.RunConfig) {
+	logChildSuppressTools(runOpts, reqID)
 	if cfg != nil {
 		if cb, ok := child.(configurableBackend); ok {
 			cb.StartRunWithConfig(reqID, runOpts, cfg)
@@ -100,6 +102,45 @@ func startChild(child backend.RunBackend, reqID string, runOpts types.RunOptions
 	// CliBackend, generic test stubs, or any backend that doesn't carry
 	// RunConfig fall through to the plain interface method.
 	child.StartRun(reqID, runOpts)
+}
+
+// logChildSuppressTools records both branches of a dispatched child's tool
+// suppression decision: the tools the harness denied this child, or the fact
+// that it denied none.
+//
+// Deliberately logged from startChild rather than from the dispatch assembly in
+// dispatch_agent.go. startChild is the last hop before backend.StartRun, so the
+// slice logged here is the value that actually reaches the backend — after
+// BuildChildToolServer has run over the same runOpts. Logging at assembly time
+// would record intent; logging here records fact. (It also keeps dispatch_agent.go
+// at its 800-line cap, which has no headroom for another call site.)
+//
+// backend.CliBackend.runProcess logs the other half of the chain — whether --disallowedTools
+// was actually emitted onto the child's argv. Without the no-suppression branch
+// below, a log reader seeing no --disallowedTools cannot distinguish "the harness
+// asked for nothing" from "the engine dropped what it was given", which is the
+// ambiguity that made the original gap invisible: every dispatched child silently
+// ran with an empty denylist and nothing in the log said so.
+//
+// AllowedTools is logged alongside because the two interact and the interaction
+// is counter-intuitive: under the --permission-mode bypassPermissions that every
+// dispatched child runs with, the allowlist is advisory for built-ins while the
+// denylist binds. A reader diagnosing "why could this child still call Bash"
+// needs both lists in one line to see that Bash was absent from the denylist,
+// not merely absent from the allowlist.
+func logChildSuppressTools(runOpts types.RunOptions, reqID string) {
+	if len(runOpts.SuppressTools) > 0 {
+		utils.Log("Dispatch", fmt.Sprintf(
+			"child tool suppression: denying %d tool(s) [%s] reqId=%s allowedTools=[%s]",
+			len(runOpts.SuppressTools), strings.Join(runOpts.SuppressTools, ","),
+			reqID, strings.Join(runOpts.AllowedTools, ","),
+		))
+		return
+	}
+	utils.Log("Dispatch", fmt.Sprintf(
+		"child tool suppression: none requested, child keeps every tool its backend offers reqId=%s allowedTools=[%s]",
+		reqID, strings.Join(runOpts.AllowedTools, ","),
+	))
 }
 
 // logChildCliResume records both branches of a dispatched child's Claude-resume
