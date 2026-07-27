@@ -544,7 +544,8 @@ interface DispatchAgentOpts {
   extensionDir?: string     // extension directory for the child session
   systemPrompt?: string     // injected system prompt
   projectPath?: string      // working directory for the agent
-  sessionId?: string        // resume an existing child session
+  sessionId?: string        // Ion conversation id -- resumes an API-backed child
+  cliResumeSessionId?: string  // Claude session UUID -- resumes a CLI-backed child
   maxTurns?: number         // cap child agent loop turns (omit or <=0 = unlimited)
   planMode?: boolean        // start child in plan mode
   planFilePath?: string     // override plan file path (default: engine allocates one)
@@ -573,11 +574,46 @@ interface DispatchAgentResult {
   cost: number        // USD cost
   inputTokens: number
   outputTokens: number
-  sessionId?: string  // child session ID (for resume)
+  sessionId?: string  // session id the child's backend reported (see below)
   planFilePath?: string  // plan file written by child (when planMode was true)
   planExited?: boolean   // true when child called ExitPlanMode
 }
 ```
+
+### Resuming a dispatched child
+
+Two different identity spaces flow through these interfaces, and mixing them up
+breaks the child run. Get this right by matching the backend:
+
+| Backend that served the child | `result.sessionId` holds | Feed it back as |
+|---|---|---|
+| API (`backend.ApiBackend`) | Ion's conversation-file id, `{unix-millis}-{12hex}` | `sessionId` |
+| CLI (`backend.CliBackend`) | Claude's own session UUID | `cliResumeSessionId` |
+
+`cliResumeSessionId` is the only field the engine turns into `claude --resume`.
+`sessionId` is never passed to the Claude CLI: it names the
+`~/.ion/conversations/<id>.*` files, and the CLI rejects a non-UUID resume id
+with exit code 1.
+
+The engine does not guess which space a given result belongs to. Backend
+selection is a function of the model, and the model is your choice (`model`, or
+the engine default), so the harness already knows which slot the id belongs in.
+
+```typescript
+// First dispatch: no resume id, the child starts a fresh Claude session.
+const first = await ctx.dispatchAgent({ name: 'researcher', task: 'survey the field' })
+
+// Second dispatch: hand the captured UUID back to continue where it left off.
+await ctx.dispatchAgent({
+  name: 'researcher',
+  task: 'now go deeper on the top three',
+  cliResumeSessionId: first.sessionId,   // NOT sessionId
+})
+```
+
+Omitting `cliResumeSessionId` (the default) always starts the child cold. Both
+branches of the decision are logged under the `Dispatch` and `CliBackend` tags in
+`~/.ion/engine.log`.
 
 ## DispatchError
 

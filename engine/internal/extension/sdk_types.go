@@ -334,7 +334,41 @@ type DispatchAgentOpts struct {
 	ExtensionDir string `json:"extensionDir,omitempty"`
 	SystemPrompt string `json:"systemPrompt,omitempty"`
 	ProjectPath  string `json:"projectPath,omitempty"`
-	SessionID    string `json:"sessionId,omitempty"`
+
+	// SessionID is **Ion's conversation-file identity** (`{unix-millis}-{12hex}`,
+	// see conversation.NewConversationID) for the child run. It names the
+	// `~/.ion/conversations/<id>.*` files the API backend loads or creates, and
+	// it is the field an API-backed child resumes from. It is NOT a
+	// Claude-native session UUID and is never passed to `claude --resume` —
+	// the CLI rejects a non-UUID resume id with exit code 1. To resume a
+	// CLI-backed child, use CliResumeSessionID below.
+	SessionID string `json:"sessionId,omitempty"`
+
+	// CliResumeSessionID is **Claude's own session UUID** — a different
+	// identity space from SessionID above. It is forwarded verbatim to
+	// RunOptions.CliResumeSessionID, which the CLI backend turns into
+	// `claude --resume <uuid>` for the child subprocess (see
+	// backend.cliResumeArgs). Empty (the default) means the child starts a
+	// fresh Claude session, which is the behavior every existing caller gets.
+	//
+	// Round-trip contract — how a harness resumes a dispatched child:
+	//
+	//  1. Dispatch normally. Read DispatchAgentResult.SessionID from the
+	//     outcome; for a CLI-backed child that value IS Claude's session UUID
+	//     (the child's backend reported it — see that field's doc).
+	//  2. On the next dispatch of the same logical agent, pass that value here
+	//     as CliResumeSessionID (NOT as SessionID). The child then spawns with
+	//     `--resume <uuid>` and continues its prior Claude session.
+	//
+	// For an API-backed child the mirror-image rule applies: feed
+	// result.SessionID back into SessionID, not into this field. The engine
+	// does not guess which identity space a given result belongs to — the
+	// harness chose the model, so the harness knows which backend served the
+	// run and which slot the id belongs in. Passing an Ion conversation id
+	// here would produce `claude --resume <ion-id>` and kill the child run.
+	//
+	// The API backend ignores this field entirely.
+	CliResumeSessionID string `json:"cliResumeSessionId,omitempty"`
 
 	// MaxTurns caps the child session's agent loop iteration count. <=0 (the
 	// default when omitted) means unlimited -- the engine ships unopinionated.
@@ -509,10 +543,30 @@ type DispatchAgentResult struct {
 	// ThinkingBlockEndEvent.TotalTokens for the estimate caveat. Lets
 	// cost/audit consumers separate reasoning spend from user-facing output.
 	// Zero when the model produced no extended thinking.
-	ThinkingTokens           int    `json:"thinkingTokens,omitempty"`
-	CacheReadInputTokens     int    `json:"cacheReadInputTokens,omitempty"`
-	CacheCreationInputTokens int    `json:"cacheCreationInputTokens,omitempty"`
-	SessionID                string `json:"sessionId,omitempty"`
+	ThinkingTokens           int `json:"thinkingTokens,omitempty"`
+	CacheReadInputTokens     int `json:"cacheReadInputTokens,omitempty"`
+	CacheCreationInputTokens int `json:"cacheCreationInputTokens,omitempty"`
+
+	// SessionID is the session identity the child's backend reported, captured
+	// from the child's SessionInitEvent (and overwritten by TaskCompleteEvent
+	// when that carries one). **Which identity space it belongs to depends on
+	// the backend that served the child run:**
+	//
+	//   - API-backed child (backend.ApiBackend): Ion's conversation-file id
+	//     (`{unix-millis}-{12hex}`), emitted as conv.ID at run start.
+	//   - CLI-backed child (backend.CliBackend): Claude's own session UUID,
+	//     read from the `claude` subprocess's stream-json output.
+	//
+	// The engine deliberately does not discriminate between the two here.
+	// Backend selection is a function of the model, and the model is the
+	// harness's choice (DispatchAgentOpts.Model, resolved against the engine
+	// default) — so the harness already knows which space it is holding.
+	//
+	// To resume the same child on a later dispatch, feed this value back into
+	// the matching DispatchAgentOpts field: CliResumeSessionID for a CLI-backed
+	// child, SessionID for an API-backed one. Crossing them over is a defect:
+	// an Ion conversation id passed as a Claude resume id makes the CLI exit 1.
+	SessionID string `json:"sessionId,omitempty"`
 
 	// PlanFilePath is the absolute path of the plan file written by the
 	// child session. Non-empty only when the child was in plan mode and
