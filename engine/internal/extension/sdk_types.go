@@ -370,6 +370,47 @@ type DispatchAgentOpts struct {
 	// The API backend ignores this field entirely.
 	CliResumeSessionID string `json:"cliResumeSessionId,omitempty"`
 
+	// CliSettingSources selects which of the claude CLI's own settings scopes
+	// (`user`, `project`, `local`) the dispatched child subprocess loads. It is
+	// forwarded verbatim to RunOptions.CliSettingSources, which the CLI backend
+	// renders as `--setting-sources=<joined>` (see backend.cliSettingSourcesArgs).
+	// The API backend ignores it.
+	//
+	// Pointer-to-slice, because "load nothing" and "unset" are different
+	// instructions and a plain []string under omitempty cannot tell them apart:
+	//
+	//   - nil (the default): the flag is omitted; claude does its usual settings
+	//     discovery. Every existing caller gets exactly this, unchanged.
+	//   - &[]string{}: `--setting-sources=` — the child loads NO settings scope.
+	//   - &[]string{"project"}: only the named scopes load.
+	//
+	// Why a harness would empty it. Claude's settings chain is what drags the
+	// instruction-file chain (CLAUDE.md / AGENTS.md and everything they
+	// reference), the agent-spec listing, and user-scope MCP server declarations
+	// into the child's context window. A dispatched specialist that already
+	// carries its persona via SystemPrompt does not need the surrounding repo's
+	// contributor documentation, and pays for it on every hop of a multi-hop
+	// dispatch chain.
+	//
+	// What survives an empty list: ion's permission wiring. The PreToolUse hook
+	// settings ride claude's separate `--settings <file>` flag
+	// (RunOptions.HookSettingsPath), which loads independently of the source
+	// list — verified against claude 2.1.220 with a hook that fires under
+	// `--setting-sources=`.
+	//
+	// What does NOT survive, and is why the engine ships nil rather than
+	// choosing for the consumer:
+	//
+	//   - Agent specs discovered through the settings chain. A child that itself
+	//     dispatches other agents BY NAME may fail to resolve them.
+	//   - MCP servers declared in claude's user scope. Tools the engine wires
+	//     itself (RunOptions.McpConfig, including the ion-extensions server) are
+	//     unaffected, but a child relying on a user-scope MCP server loses it.
+	//
+	// Both consequences are the harness's to weigh per dispatch, which is
+	// precisely why this is an opt-in field and not an engine default.
+	CliSettingSources *[]string `json:"cliSettingSources,omitempty"`
+
 	// MaxTurns caps the child session's agent loop iteration count. <=0 (the
 	// default when omitted) means unlimited -- the engine ships unopinionated.
 	// Lets harness engineers fine-tune dispatched-agent budgets without
@@ -622,82 +663,6 @@ type RecallAgentOpts struct {
 type SteerDispatchResult struct {
 	Delivered bool   `json:"delivered"`
 	Outcome   string `json:"outcome"`
-}
-
-// --- Phase 2: Lifecycle event callback payloads ---
-
-// DispatchToolStartInfo carries data for the OnToolStart callback.
-type DispatchToolStartInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-	ToolName   string `json:"toolName"`
-	ToolID     string `json:"toolId"`
-}
-
-// DispatchToolEndInfo carries data for the OnToolEnd callback.
-type DispatchToolEndInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-	ToolName   string `json:"toolName"`
-	ToolID     string `json:"toolId"`
-	Content    string `json:"content"`
-}
-
-// DispatchToolErrorInfo carries data for the OnToolError callback.
-type DispatchToolErrorInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-	ToolName   string `json:"toolName"`
-	ToolID     string `json:"toolId"`
-	Content    string `json:"content"`
-}
-
-// DispatchUsageInfo carries per-turn and cumulative usage data.
-type DispatchUsageInfo struct {
-	Name       string `json:"name"`
-	DispatchID string `json:"dispatchId,omitempty"`
-
-	// Per-turn usage from the current UsageEvent.
-	InputTokens  int `json:"inputTokens"`
-	OutputTokens int `json:"outputTokens"`
-
-	// Cumulative totals across all turns in this dispatch.
-	CumulativeInputTokens  int     `json:"cumulativeInputTokens"`
-	CumulativeOutputTokens int     `json:"cumulativeOutputTokens"`
-	CumulativeCost         float64 `json:"cumulativeCost"`
-}
-
-// DispatchTextDeltaInfo carries a text chunk and accumulated text.
-type DispatchTextDeltaInfo struct {
-	Name        string `json:"name"`
-	DispatchID  string `json:"dispatchId,omitempty"`
-	Delta       string `json:"delta"`
-	Accumulated string `json:"accumulated"`
-}
-
-// DispatchPlanProposalInfo carries data for the OnPlanProposal callback.
-type DispatchPlanProposalInfo struct {
-	Name         string `json:"name"`
-	AgentID      string `json:"agentId"`
-	PlanFilePath string `json:"planFilePath"`
-	PlanSlug     string `json:"planSlug"`
-	// PlanRequested is true when the caller explicitly set PlanMode=true
-	// on the dispatch opts. False when the child agent self-initiated
-	// plan mode (called EnterPlanMode without being told to).
-	PlanRequested bool `json:"planRequested"`
-}
-
-// DispatchChildQuestionInfo carries the question raised by a dispatched child
-// via AskUserQuestion. Surfaced to the dispatcher via OnChildQuestion.
-type DispatchChildQuestionInfo struct {
-	// Name is the dispatched agent's name.
-	Name string `json:"name"`
-	// DispatchID is the dispatch's unique identifier.
-	DispatchID string `json:"dispatchId"`
-	// Question is the text from the child's AskUserQuestion call.
-	Question string `json:"question"`
-	// Depth is the dispatch nesting depth of the child (1 = direct child of orchestrator).
-	Depth int `json:"depth"`
 }
 
 // DiscoverAgentsOpts configures which directories to scan for agent definitions

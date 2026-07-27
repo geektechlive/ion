@@ -33,6 +33,43 @@ type RunOptions struct {
 	// defect this field fixes — claude rejects non-UUID resume ids with exit
 	// code 1, killing every fresh manager-driven CLI run.
 	CliResumeSessionID string          `json:"cliResumeSessionId,omitempty"`
+	// CliSettingSources controls the claude CLI's `--setting-sources` flag for
+	// this run — which of the CLI's own settings scopes (`user`, `project`,
+	// `local`) the child subprocess loads. It is a **pointer to a slice** so
+	// that "load nothing" is expressible distinctly from "unset":
+	//
+	//   - nil (the default): the engine omits --setting-sources entirely and
+	//     claude applies its own default discovery. Byte-for-byte the behavior
+	//     every caller had before this field existed.
+	//   - non-nil but empty (&[]string{}): the engine emits `--setting-sources=`
+	//     with an empty value, telling claude to load NO settings scopes.
+	//   - populated (&[]string{"project"}): only the named scopes load.
+	//
+	// A plain []string could not carry this distinction: under `omitempty` an
+	// explicitly-empty slice and an absent one serialize identically, so the
+	// "load nothing" case — the whole reason the field exists — would silently
+	// degrade to a no-op across the JSON-RPC boundary.
+	//
+	// Why a consumer would set it: claude's settings chain is what pulls the
+	// CLAUDE.md/AGENTS.md instruction-file chain, the agent-spec listing, and
+	// user-scope MCP server declarations into the subprocess's context. For a
+	// dispatched specialist child that carries its own persona via
+	// AppendSystemPrompt, that inherited context is a large fixed cost paid
+	// before the child reads a byte of its task.
+	//
+	// What is NOT affected: HookSettingsPath is passed as claude's separate
+	// `--settings <file>` flag, which loads regardless of --setting-sources.
+	// The permission-hook wiring in session.wirePermissionHookServer therefore
+	// survives a restricted (or empty) source list — verified against claude
+	// 2.1.220 with a PreToolUse hook that fires under `--setting-sources=`.
+	//
+	// What IS affected, and why this is a harness decision rather than an
+	// engine default: a child that resolves *other* agent specs by name, or
+	// that calls MCP tools registered in claude's user scope (as opposed to
+	// tools the engine wires itself via McpConfig), loses them when the
+	// corresponding scopes are dropped. The engine ships nil — no opinion —
+	// and lets the consumer decide per run.
+	CliSettingSources *[]string `json:"cliSettingSources,omitempty"`
 	// ParentConversationID, when set, is written as the new conversation's
 	// `parentId` IF this run creates a fresh conversation file (SessionID names
 	// an id with no backing file yet). It records that the new session descends
