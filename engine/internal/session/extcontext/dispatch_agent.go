@@ -478,6 +478,7 @@ func BuildDispatchAgentFunc(sa SessionAccessor, registry *DispatchRegistry, curr
 		// Assemble the child run options. Extracted to buildDispatchRunOptions
 		// (dispatch_runopts.go) to keep this file under the 800-line cap.
 		runOpts := buildDispatchRunOptions(&opts, model, projectPath, dispatchParentCtx)
+		logChildCliResume(runOpts.CliResumeSessionID, runOpts.SessionID, opts.Name, agentID, childDepth, key)
 		// When the caller supplied no explicit allowlist, scope the child to
 		// the matched agent spec's declared tools -- the spec `tools:`
 		// frontmatter is the child allowlist contract for staff dispatch.

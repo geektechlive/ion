@@ -51,6 +51,14 @@ func buildDispatchRunOptions(opts *extension.DispatchAgentOpts, model, projectPa
 	if opts.SessionID != "" {
 		runOpts.SessionID = opts.SessionID
 	}
+	if opts.CliResumeSessionID != "" {
+		// Claude's own session UUID, a different identity space from SessionID
+		// above. The CLI backend turns this into `claude --resume <uuid>` for the
+		// child subprocess (backend.cliResumeArgs); the API backend ignores it.
+		// Empty leaves the child spawning a fresh Claude session -- the behavior
+		// every caller had before this field existed.
+		runOpts.CliResumeSessionID = opts.CliResumeSessionID
+	}
 	if opts.MaxTurns > 0 {
 		runOpts.MaxTurns = opts.MaxTurns
 	}

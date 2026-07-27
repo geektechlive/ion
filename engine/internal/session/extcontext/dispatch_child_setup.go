@@ -102,6 +102,37 @@ func startChild(child backend.RunBackend, reqID string, runOpts types.RunOptions
 	child.StartRun(reqID, runOpts)
 }
 
+// logChildCliResume records both branches of a dispatched child's Claude-resume
+// decision: whether the caller supplied a Claude session UUID for the child to
+// resume, or whether the child will spawn a fresh Claude session.
+//
+// backend.cliResumeArgs logs the other half of this chain (whether --resume was
+// actually emitted onto the subprocess argv). Without the line below, a log
+// reader seeing no --resume cannot tell whether the harness supplied no id or
+// the engine dropped one it was given. Together the two make the resume path
+// reconstructible from ~/.ion/engine.log alone.
+//
+// ionSessionID is logged on the no-resume branch specifically because it is the
+// id most likely to be misrouted here: it is Ion's conversation-file identity,
+// NOT a Claude UUID, and `claude --resume <ion-id>` exits 1. Seeing it in the
+// log next to an absent resume id makes that confusion diagnosable.
+//
+// Lives here alongside logDispatchWorkdir (rather than inline in
+// dispatch_agent.go) to keep that file under the 800-line cap.
+func logChildCliResume(cliResumeSessionID, ionSessionID, agentName, dispatchID string, depth int, sessionKey string) {
+	if cliResumeSessionID != "" {
+		utils.Log("Dispatch", fmt.Sprintf(
+			"child cli resume: forwarding claude session uuid=%s agent=%q dispatchId=%s depth=%d session=%s",
+			cliResumeSessionID, agentName, dispatchID, depth, sessionKey,
+		))
+		return
+	}
+	utils.Log("Dispatch", fmt.Sprintf(
+		"child cli resume: none supplied, child starts a fresh claude session agent=%q dispatchId=%s depth=%d ionSessionId=%q session=%s",
+		agentName, dispatchID, depth, ionSessionID, sessionKey,
+	))
+}
+
 // logDispatchWorkdir emits the resolved working directory for a dispatch,
 // including which branch supplied it (source=opts when the caller passed
 // ProjectPath, source=fallback when it was inherited from the parent session).
