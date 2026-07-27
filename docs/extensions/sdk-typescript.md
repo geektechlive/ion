@@ -546,6 +546,7 @@ interface DispatchAgentOpts {
   projectPath?: string      // working directory for the agent
   sessionId?: string        // Ion conversation id -- resumes an API-backed child
   cliResumeSessionId?: string  // Claude session UUID -- resumes a CLI-backed child
+  cliSettingSources?: string[]  // Claude settings scopes the child loads ([] = none)
   maxTurns?: number         // cap child agent loop turns (omit or <=0 = unlimited)
   planMode?: boolean        // start child in plan mode
   planFilePath?: string     // override plan file path (default: engine allocates one)
@@ -614,6 +615,56 @@ await ctx.dispatchAgent({
 Omitting `cliResumeSessionId` (the default) always starts the child cold. Both
 branches of the decision are logged under the `Dispatch` and `CliBackend` tags in
 `~/.ion/engine.log`.
+
+### Scoping a dispatched child's settings sources
+
+`cliSettingSources` selects which of the Claude CLI's own settings scopes the
+child subprocess loads. It becomes `--setting-sources=<joined>` on the child's
+argv (CLI backend only; the API backend ignores it).
+
+| Value | Flag emitted | Child loads |
+|---|---|---|
+| property absent (default) | none | Claude's usual settings discovery |
+| `[]` | `--setting-sources=` | nothing |
+| `['project']` | `--setting-sources=project` | only the named scopes |
+
+The empty array and the absent property are **different instructions**. `[]` is
+an explicit "load no settings scope"; omitting the property leaves today's
+behavior untouched.
+
+```typescript
+// A specialist that carries its whole persona in systemPrompt does not need the
+// surrounding repo's contributor documentation loaded into its context.
+await ctx.dispatchAgent({
+  name: 'researcher',
+  task: 'summarize the findings',
+  systemPrompt: RESEARCHER_PERSONA,
+  cliSettingSources: [],
+})
+```
+
+**What this drops.** Claude's settings chain is what pulls the instruction-file
+chain (CLAUDE.md / AGENTS.md and everything they reference), the agent-spec
+listing, and user-scope MCP server declarations into the child's context. For a
+dispatched specialist that is usually dead weight, and a multi-hop dispatch
+chain pays it on every hop.
+
+**What still works.** Ion's permission wiring is unaffected: the engine passes
+its PreToolUse hook settings through Claude's separate `--settings <file>` flag,
+which loads independently of the source list.
+
+**What to check before enabling.** Two child capabilities ride the settings
+chain, so weigh them per dispatch:
+
+- **Agent-spec discovery** — a child that itself dispatches other agents *by
+  name* may no longer resolve them.
+- **User-scope MCP servers** — tools the engine wires itself (including the
+  `ion-extensions` server, via `mcpConfig`) are unaffected, but a child that
+  depends on an MCP server declared in Claude's user settings loses it.
+
+The engine ships no default here precisely because that trade-off is the
+harness's to make. All three branches are logged under the `Dispatch` and
+`CliBackend` tags in `~/.ion/engine.log`.
 
 ## DispatchError
 

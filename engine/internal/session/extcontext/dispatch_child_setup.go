@@ -2,6 +2,7 @@ package extcontext
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dsswift/ion/engine/internal/backend"
 	"github.com/dsswift/ion/engine/internal/extension"
@@ -131,6 +132,57 @@ func logChildCliResume(cliResumeSessionID, ionSessionID, agentName, dispatchID s
 		"child cli resume: none supplied, child starts a fresh claude session agent=%q dispatchId=%s depth=%d ionSessionId=%q session=%s",
 		agentName, dispatchID, depth, ionSessionID, sessionKey,
 	))
+}
+
+// logChildSettingSources records which branch of a dispatched child's
+// settings-source decision was taken, i.e. which of the claude CLI's own
+// settings scopes the child subprocess will load.
+//
+// backend.cliSettingSourcesArgs logs the other half of this chain (what actually
+// reached argv). This line is what makes the two distinguishable: without it, a
+// log showing no --setting-sources cannot be read as either "the harness asked
+// for default discovery" or "the harness asked for something the dispatch hop
+// dropped".
+//
+// The empty-but-non-nil case gets its own branch because it is the one a reader
+// is most likely to misdiagnose. It looks like an absent value in most log
+// formats, but it is an explicit instruction to load no settings scope at all --
+// and it is the branch that changes the child's context the most, dropping the
+// instruction-file chain, the agent-spec listing, and user-scope MCP servers.
+//
+// Reads from the assembled RunOptions rather than the incoming opts so the log
+// reflects what actually ships to the backend, matching logChildCliResume.
+func logChildSettingSources(sources *[]string, agentName, dispatchID, sessionKey string) {
+	if sources == nil {
+		utils.Log("Dispatch", fmt.Sprintf(
+			"child setting sources: none specified, child inherits claude's default settings discovery agent=%q dispatchId=%s session=%s",
+			agentName, dispatchID, sessionKey,
+		))
+		return
+	}
+	if len(*sources) == 0 {
+		utils.Log("Dispatch", fmt.Sprintf(
+			"child setting sources: explicitly empty, child loads no claude settings scope agent=%q dispatchId=%s session=%s",
+			agentName, dispatchID, sessionKey,
+		))
+		return
+	}
+	utils.Log("Dispatch", fmt.Sprintf(
+		"child setting sources: restricted to [%s] agent=%q dispatchId=%s session=%s",
+		strings.Join(*sources, ","), agentName, dispatchID, sessionKey,
+	))
+}
+
+// logChildDispatchDecisions emits every per-child run-configuration decision the
+// dispatch hop makes, from the assembled RunOptions.
+//
+// It exists as a single aggregating call because dispatch_agent.go sits exactly
+// at the 800-line cap with zero headroom: each new decision to log would
+// otherwise cost that file a line it does not have. Adding the next one belongs
+// here, not at the call site.
+func logChildDispatchDecisions(runOpts types.RunOptions, agentName, dispatchID string, depth int, sessionKey string) {
+	logChildCliResume(runOpts.CliResumeSessionID, runOpts.SessionID, agentName, dispatchID, depth, sessionKey)
+	logChildSettingSources(runOpts.CliSettingSources, agentName, dispatchID, sessionKey)
 }
 
 // logDispatchWorkdir emits the resolved working directory for a dispatch,

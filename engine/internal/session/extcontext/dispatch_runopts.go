@@ -59,6 +59,16 @@ func buildDispatchRunOptions(opts *extension.DispatchAgentOpts, model, projectPa
 		// every caller had before this field existed.
 		runOpts.CliResumeSessionID = opts.CliResumeSessionID
 	}
+	if opts.CliSettingSources != nil {
+		// Which claude settings scopes the child subprocess loads. The CLI
+		// backend renders this as `--setting-sources=<joined>`; the API backend
+		// ignores it. nil (skipping this branch) leaves the flag off entirely,
+		// which is the behavior every caller had before this field existed --
+		// note that a non-nil EMPTY slice is a real instruction ("load nothing"),
+		// not an absent value, which is why the guard tests the pointer rather
+		// than the length.
+		runOpts.CliSettingSources = opts.CliSettingSources
+	}
 	if opts.MaxTurns > 0 {
 		runOpts.MaxTurns = opts.MaxTurns
 	}

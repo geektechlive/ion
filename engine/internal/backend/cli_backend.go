@@ -420,6 +420,11 @@ func (b *CliBackend) runProcess(ctx context.Context, run *cliRun, opts types.Run
 		args = append(args, "--settings", opts.HookSettingsPath)
 	}
 
+	// Which of claude's own settings scopes the subprocess loads. Independent of
+	// the --settings flag appended just above: that one loads ion's hook file
+	// explicitly and is unaffected by the source list. See cliSettingSourcesArgs.
+	args = append(args, cliSettingSourcesArgs(opts)...)
+
 	utils.Log("CliBackend", fmt.Sprintf("spawning: %s %s", claudePath, strings.Join(args, " ")))
 
 	// Emit the state-transition event so consumers can mirror the active

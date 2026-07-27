@@ -56,6 +56,44 @@ export interface DispatchAgentOpts {
    */
   cliResumeSessionId?: string
   /**
+   * Which of the Claude CLI's own settings scopes (`user`, `project`, `local`)
+   * the dispatched child subprocess loads. Rendered by the CLI backend as
+   * `--setting-sources=<joined>`. The API backend ignores it.
+   *
+   * Three distinct instructions, and the distinction matters:
+   *
+   *   - **Property absent** (the default): the flag is omitted and Claude does
+   *     its usual settings discovery. Unchanged behavior for every existing
+   *     caller.
+   *   - **`[]` (empty array)**: `--setting-sources=` -- the child loads **no**
+   *     settings scope. This is a real instruction, not "unset". Pass the empty
+   *     array explicitly; omitting the property does something different.
+   *   - **`['project']`**: only the named scopes load.
+   *
+   * Why empty it. Claude's settings chain is what pulls the instruction-file
+   * chain (CLAUDE.md / AGENTS.md and everything they reference), the agent-spec
+   * listing, and user-scope MCP server declarations into the child's context.
+   * A dispatched specialist that already carries its persona via
+   * {@link DispatchAgentOpts.systemPrompt} does not need the surrounding repo's
+   * contributor documentation -- and in a multi-hop dispatch chain it pays that
+   * fixed cost on every hop.
+   *
+   * What still works with `[]`: Ion's permission wiring. The engine passes its
+   * PreToolUse hook settings via Claude's separate `--settings <file>` flag,
+   * which loads independently of the source list (verified against Claude CLI
+   * 2.1.220 with a hook that fires under `--setting-sources=`).
+   *
+   * What stops working with `[]`, and why the engine has no default here:
+   *
+   *   - Agent specs discovered through the settings chain -- a child that
+   *     itself dispatches other agents **by name** may not resolve them.
+   *   - MCP servers declared in Claude's user scope. Tools the engine wires
+   *     itself (including the `ion-extensions` server) are unaffected.
+   *
+   * Both are the harness's call per dispatch, which is why this is opt-in.
+   */
+  cliSettingSources?: string[]
+  /**
    * Cap the child session's agent loop turn count. Omit or pass <= 0 for
    * unlimited (the engine ships unopinionated). Lets harness engineers bound
    * dispatched agent budgets per-call without touching global engine config.

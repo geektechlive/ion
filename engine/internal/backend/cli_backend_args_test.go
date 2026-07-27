@@ -142,3 +142,83 @@ func TestBareExitDiagnostic_InheritedCwd(t *testing.T) {
 		t.Errorf("empty cwd should render as <inherited>; got %q", msg)
 	}
 }
+
+// TestCliSettingSourcesArgs pins the three-way mapping from
+// RunOptions.CliSettingSources onto the child subprocess's argv.
+//
+// The load-bearing case is the middle one. CliSettingSources is a *[]string
+// rather than a []string precisely so that "load no settings scope" (non-nil,
+// empty) is expressible distinctly from "unset" (nil). Collapse the two and the
+// feature silently becomes a no-op: the flag would never be emitted, the child
+// would keep loading Claude's whole settings chain, and nothing would fail
+// loudly enough to notice.
+//
+// The single-element `--setting-sources=<value>` form is also pinned
+// deliberately. exec.Command passes argv verbatim with no shell in between, so
+// the two-element {"--setting-sources", ""} form risks a flag parser reading the
+// empty value as absent and consuming the following flag as the value instead.
+func TestCliSettingSourcesArgs(t *testing.T) {
+	empty := []string{}
+	single := []string{"project"}
+	multi := []string{"user", "project", "local"}
+
+	cases := []struct {
+		name string
+		opts types.RunOptions
+		want []string
+	}{
+		{
+			name: "unset (nil): omit the flag, claude does its default discovery",
+			opts: types.RunOptions{},
+			want: nil,
+		},
+		{
+			name: "explicitly empty: emit --setting-sources= so claude loads nothing",
+			opts: types.RunOptions{CliSettingSources: &empty},
+			want: []string{"--setting-sources="},
+		},
+		{
+			name: "single scope: only that scope loads",
+			opts: types.RunOptions{CliSettingSources: &single},
+			want: []string{"--setting-sources=project"},
+		},
+		{
+			name: "multiple scopes: comma-joined into one argv element",
+			opts: types.RunOptions{CliSettingSources: &multi},
+			want: []string{"--setting-sources=user,project,local"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cliSettingSourcesArgs(tc.opts)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("cliSettingSourcesArgs() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCliSettingSourcesArgsDistinguishesEmptyFromUnset states the contract the
+// pointer exists to protect, as a standalone assertion rather than a row in the
+// table above: an explicitly-empty slice and an absent value must NOT produce
+// the same argv. A future refactor to a plain []string would compile, would pass
+// a naive "does it join correctly" test, and would break exactly here.
+func TestCliSettingSourcesArgsDistinguishesEmptyFromUnset(t *testing.T) {
+	empty := []string{}
+
+	unsetArgs := cliSettingSourcesArgs(types.RunOptions{})
+	emptyArgs := cliSettingSourcesArgs(types.RunOptions{CliSettingSources: &empty})
+
+	if reflect.DeepEqual(unsetArgs, emptyArgs) {
+		t.Fatalf("unset and explicitly-empty produced identical argv %#v -- the "+
+			"'load nothing' instruction is indistinguishable from 'not specified', "+
+			"which makes the feature a silent no-op", unsetArgs)
+	}
+	if len(unsetArgs) != 0 {
+		t.Errorf("unset produced %#v, want no argv (current behavior must be unchanged)", unsetArgs)
+	}
+	if len(emptyArgs) != 1 || !strings.HasPrefix(emptyArgs[0], "--setting-sources=") {
+		t.Errorf("explicitly-empty produced %#v, want a single --setting-sources= element", emptyArgs)
+	}
+}
