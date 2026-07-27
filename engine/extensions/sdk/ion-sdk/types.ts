@@ -193,8 +193,59 @@ export interface DispatchAgentOpts {
    * when empty the child inherits the engine's default tool set (no
    * restriction). Use it to scope a dispatched agent to a narrow remit.
    * Distinct from planModeTools, which applies only while in plan mode.
+   *
+   * **Scoping, not enforcement, on the CLI backend.** A dispatched child spawns
+   * with `--permission-mode bypassPermissions`, under which the claude CLI
+   * treats `--allowedTools` as advisory: a built-in left out of this list is
+   * still callable by the child (verified on Claude Code 2.1.220 — a child
+   * given `['Read','Glob','Grep']` ran Bash anyway). To actually deny a
+   * built-in, use {@link DispatchAgentOpts.suppressTools}.
    */
   allowedTools?: string[]
+
+  /**
+   * Denies specific tools to the dispatched child. Omit (the default) and
+   * nothing is suppressed — the behavior every caller had before this field
+   * existed.
+   *
+   * This is the only field that can take a built-in away from a dispatched
+   * child. It is the counterpart to {@link DispatchAgentOpts.allowedTools},
+   * not a duplicate of it:
+   *
+   * | Field | Meaning | On the CLI backend |
+   * |---|---|---|
+   * | `allowedTools` | what the child is offered | advisory |
+   * | `suppressTools` | what the child is denied | binding |
+   *
+   * Honored by **both** backends, which is why it carries no `cli` prefix
+   * (unlike `cliResumeSessionId`). The CLI backend emits it as
+   * `claude --disallowedTools a,b,c` — a flag the CLI honors regardless of
+   * permission mode. The API backend filters the named tools out of the schema
+   * handed to the model, so the model never sees them.
+   *
+   * **Precedence — deny wins.** A name in both `allowedTools` and
+   * `suppressTools` is denied; on the CLI backend it is withheld from the
+   * child's schema entirely rather than refused at call time. No allowlist
+   * entry can re-grant a suppressed tool.
+   *
+   * **Per-name, not per-capability.** Suppressing `Bash` denies the Bash tool,
+   * not the ability to touch the filesystem: a child denied Bash can still use
+   * `Write`, `Edit`, `NotebookEdit`, or any MCP tool that shells out — and will
+   * do so unprompted (verified: a child with Bash suppressed created the
+   * requested file with Write instead). If you are enforcing a capability
+   * boundary, name every tool in the capability set. The engine forwards the
+   * denylist it is given and takes no view on whether that list is complete;
+   * the policy is yours.
+   *
+   * ```typescript
+   * await ctx.dispatchAgent({
+   *   name: 'researcher',
+   *   task: 'summarize these files',
+   *   suppressTools: ['Bash', 'Write', 'Edit', 'NotebookEdit'],  // read-only child
+   * })
+   * ```
+   */
+  suppressTools?: string[]
 
   /**
    * The set of agent names this dispatch's agent is permitted to dispatch in

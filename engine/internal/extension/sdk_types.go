@@ -450,7 +450,56 @@ type DispatchAgentOpts struct {
 	// tool passes a matched agent spec's Tools through here so a specialist
 	// only sees the tools its spec declares. Distinct from PlanModeTools,
 	// which applies only while the child is in plan mode.
+	//
+	// Scoping, not enforcement, on the CLI backend. A dispatched child spawns
+	// with --permission-mode bypassPermissions, under which the claude CLI
+	// treats --allowedTools as advisory: a built-in omitted from this list is
+	// still callable by the child (verified on Claude Code 2.1.220 — a child
+	// given AllowedTools{"Read","Glob","Grep"} ran Bash anyway). Use this field
+	// to shape what the child is offered; use SuppressTools below to deny a
+	// built-in outright.
 	AllowedTools []string `json:"allowedTools,omitempty"`
+
+	// SuppressTools denies specific tools to the dispatched child. Empty (the
+	// default) suppresses nothing, which is the behavior every caller had
+	// before this field existed.
+	//
+	// This is the only field that can actually take a built-in away from a
+	// dispatched child, and it is the counterpart to AllowedTools above rather
+	// than a duplicate of it:
+	//
+	//	AllowedTools  — what the child is offered.  Advisory on the CLI backend.
+	//	SuppressTools — what the child is denied.   Binding on both backends.
+	//
+	// Honored by BOTH backends, so it is deliberately NOT named with a `cli`
+	// prefix (unlike CliResumeSessionID, which is CLI-only):
+	//
+	//   - CLI backend: forwarded to RunOptions.SuppressTools and emitted as
+	//     `claude --disallowedTools <a,b,c>` by CliBackend.runProcess. The CLI
+	//     honors that flag
+	//     regardless of permission mode, which is what makes suppression bind
+	//     under bypassPermissions.
+	//   - API backend: the named tools are filtered out of the tool schema
+	//     handed to the model (backend.buildToolDefs), so the model never sees
+	//     them.
+	//
+	// Precedence — deny wins. A name appearing in both AllowedTools and this
+	// list is denied. On the CLI backend the tool is not merely refused at call
+	// time, it is withheld from the child's schema entirely; on the API backend
+	// the suppression filter runs after the allowlist filter. There is no
+	// ordering or escape by which an allowlist entry re-grants a suppressed
+	// tool.
+	//
+	// Per-NAME, not per-capability. Suppressing "Bash" denies the Bash tool, not
+	// the ability to affect the filesystem: a child denied Bash can still reach
+	// for Write, Edit, NotebookEdit, or any MCP tool that shells out, and will
+	// do so on its own initiative (verified: a child with Bash suppressed
+	// created the requested file with Write instead). A harness enforcing a
+	// capability boundary must name every tool in the capability set, not just
+	// the obvious one. The engine forwards the denylist it is given and takes no
+	// view on whether that list is complete — deciding the policy is the
+	// harness's job.
+	SuppressTools []string `json:"suppressTools,omitempty"`
 
 	// AllowedSubAgents is the set of agent names this dispatch's agent is
 	// permitted to dispatch in turn. The engine enforces it as an allowlist:
@@ -663,50 +712,6 @@ type RecallAgentOpts struct {
 type SteerDispatchResult struct {
 	Delivered bool   `json:"delivered"`
 	Outcome   string `json:"outcome"`
-}
-
-// DiscoverAgentsOpts configures which directories to scan for agent definitions
-// and the override precedence. Directories are listed in precedence order:
-// later entries override earlier entries with the same agent name (stem).
-//
-// Named sources:
-//
-//	"extension" -- {extensionDir}/agents/ (agents packaged with the extension)
-//	"user"      -- ~/.ion/agents/ (user-level agents)
-//	"project"   -- {workingDir}/.ion/agents/ (project-scoped agents)
-//
-// Example: ["extension", "user", "project"] means extension agents are defaults,
-// user agents override them, project agents override both.
-type DiscoverAgentsOpts struct {
-	// Sources lists named agent sources in precedence order (later overrides earlier).
-	// Valid values: "extension", "user", "project".
-	// If empty, defaults to ["extension", "user", "project"].
-	Sources []string `json:"sources,omitempty"`
-	// ExtraDirs adds arbitrary directories to scan (appended after named sources).
-	ExtraDirs []string `json:"extraDirs,omitempty"`
-	// BundleName filters to a specific bundle subdirectory (e.g., "cloudops").
-	// If empty, all bundles in each source directory are included.
-	BundleName string `json:"bundleName,omitempty"`
-	// Recursive walks subdirectories within each agent directory. Default true.
-	Recursive *bool `json:"recursive,omitempty"`
-}
-
-// DiscoveredAgent represents a parsed agent definition returned to extensions.
-type DiscoveredAgent struct {
-	Name         string            `json:"name"`
-	Path         string            `json:"path"`
-	Source       string            `json:"source"` // "extension", "user", "project", or "extra"
-	Parent       string            `json:"parent,omitempty"`
-	Description  string            `json:"description,omitempty"`
-	Model        string            `json:"model,omitempty"`
-	Tools        []string          `json:"tools,omitempty"`
-	SystemPrompt string            `json:"systemPrompt,omitempty"`
-	Meta         map[string]string `json:"meta,omitempty"`
-}
-
-// DiscoverAgentsResult holds the discovered agents.
-type DiscoverAgentsResult struct {
-	Agents []DiscoveredAgent `json:"agents"`
 }
 
 // ModelRef identifies the active model and its context window.
